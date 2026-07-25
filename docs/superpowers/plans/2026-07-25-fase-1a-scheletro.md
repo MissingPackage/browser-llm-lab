@@ -812,13 +812,19 @@ import { computeGenMetrics } from "./metrics";
 import { PROMPT_512 } from "./promptset";
 
 export class BenchServer {
-  constructor(
-    private deps: {
-      adapterFactory: () => InferenceAdapter;
-      probe: () => Promise<DeviceProbe>;
-      post: (m: WorkerToMain) => void;
-    },
-  ) {}
+  private deps: {
+    adapterFactory: () => InferenceAdapter;
+    probe: () => Promise<DeviceProbe>;
+    post: (m: WorkerToMain) => void;
+  };
+
+  constructor(deps: {
+    adapterFactory: () => InferenceAdapter;
+    probe: () => Promise<DeviceProbe>;
+    post: (m: WorkerToMain) => void;
+  }) {
+    this.deps = deps;
+  }
 
   async handle(msg: unknown): Promise<void> {
     if (!isMainToWorker(msg)) {
