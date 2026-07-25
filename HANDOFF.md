@@ -4,8 +4,8 @@
 Avviare la **Fase 1b** (piano da scrivere, spec §Fasatura): adapter Transformers.js v3 + wllama,
 modulo qualità-leggera, sweep multi-modello. Primo passo concreto: piano `docs/superpowers/plans/`
 per 1b partendo dai FIX-IN-1B della final review (elencati in `.superpowers/sdd/progress.md`)
-+ probe esteso con `adapter.features` (gap scoperto dal vivo).
-Prima ancora, opzionale e a decisione PI: caccia a `shader-f16` su Chrome branded (docket #2).
++ probe esteso con `adapter.features` + rilevazione software-adapter + repliche multiple per cella
++ campi `browser`/`anomalies` nello schema (v2). La caccia a f16 su Linux è chiusa (docket #2).
 
 ## 2. State delta (this session)
 - Progetto creato da zero: spec approvata, piano fase 1a, 9 task eseguiti SDD (subagent + review avversaria per task).
