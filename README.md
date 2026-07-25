@@ -42,12 +42,15 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   stessa 4090, tre stack:
   | | chromium (playwright) | Firefox 152 release | Firefox (playwright, nightly-based) |
   |---|---|---|---|
-  | `shader-f16` | **assente** → `q4f16_1` crasha (`ShaderModule` invalid) | **presente** → `q4f16_1` gira | presente |
-  | `maxStorageBufferBindingSize` | 2 GiB | **128 MiB** (web-llm chiede 1 GiB → fallback + `Device was lost`) | 1 GiB |
-  | decode 0.5B | 106–118 tok/s (`q4f32_1`) | **1.8 tok/s** (`q4f16_1`) | **9.9 tok/s** (`q4f16_1`, GPU@100% verif. nvidia-smi) |
-  Su chromium il fallback è `q4f32_1`; su Firefox release il collo è il cap dei buffer
-  e/o il path WebGPU — TTFT 20 s, load 82 s (run in `results/*firefox152.json`, con
-  warning `Device was lost` in console: cella onesta ma da trattare con cautela).
+  | adapter reale | NVIDIA (lovelace) | **llvmpipe = CPU!** (verificato via about:support: NVIDIA inattiva, "acceleration blocked by platform") | NVIDIA (GPU@100% verif. nvidia-smi) |
+  | `shader-f16` | **assente** → `q4f16_1` crasha (`ShaderModule` invalid) | presente | presente |
+  | `maxStorageBufferBindingSize` | 2 GiB | 128 MiB (limite llvmpipe) | 1 GiB |
+  | decode 0.5B | 106–118 tok/s (`q4f32_1`) | 1.8 tok/s (`q4f16_1`, **CPU**) | **9.9 tok/s** (`q4f16_1`) |
+  **Finding chiave**: Firefox può fare **silent fallback a software rasterizer**
+  riportando `webgpu: true` con vendor vuoto — l'utente non ha modo di accorgersene
+  dalla pagina. Il probe di 1b deve rilevarlo (fingerprint: cap 128 MiB + vendor
+  vuoto). Il gap GPU-vero: chromium ~110 vs Firefox ~10 tok/s (≈11×, plausibile
+  ruolo di `subgroups`, assente su Firefox).
 - **COEP `require-corp` convive col CDN HF**: shard scaricati senza bisogno del
   fallback `credentialless` (vale anche su Firefox).
 - Primi numeri (Qwen2.5-0.5B `q4f32_1`, schema v1, in `results/`):
