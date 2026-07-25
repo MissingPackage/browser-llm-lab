@@ -33,6 +33,6 @@ Prima ancora, opzionale e a decisione PI: caccia a `shader-f16` su Chrome brande
 
 ## 5. Docket (user decisions pending)
 1. Espansione benchmark pubblico/community: deferred per scelta PI (2026-07-25), ripensare a banco maturo.
-2. Installare Chrome branded (serve sudo) per testare `shader-f16` su NVIDIA — sblocca le quant q4f16_1 sulla 4090.
+2. ~~Installare Chrome branded per testare `shader-f16`~~ FATTO 2026-07-25: f16 assente anche sul branded (pure con dev-features) → è Dawn/driver; q4f16_1 su questa macchina solo via Firefox.
 3. Punteggio decode `null` vs `0` con <2 token: adjudicato dal controller (null); ratificare o ribaltare.
 4. Guardia `completionTokens >= 2` + prosa piano allineata + probe never-throws + erasableSyntaxOnly: tre adjudication del controller in sessione, tutte documentate nel ledger — ratifica implicita se nessuna obiezione.
