@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.71",
+    "playwright": "^1.62.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vitest": "^4.1.10"
