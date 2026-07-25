@@ -13,6 +13,7 @@ export function computeGenMetrics(t: GenTimeline): GenMetrics {
   const last = t.chunkTimestamps[t.chunkTimestamps.length - 1];
   const completionTokens = t.completionTokens ?? t.chunkTimestamps.length;
   const span = last - first;
+  // Steady-state richiede >=2 token generati: con 0/1 token il rate non è misurabile -> null (decisione: null, non 0, per non inquinare le medie).
   const decodeToksPerSec =
     t.chunkTimestamps.length >= 2 && span > 0 && completionTokens >= 2
       ? ((completionTokens - 1) / span) * 1000

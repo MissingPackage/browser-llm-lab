@@ -38,4 +38,15 @@ describe("computeGenMetrics", () => {
   it("throws on empty timeline", () => {
     expect(() => computeGenMetrics({ tRequestStart: 0, chunkTimestamps: [], promptTokens: null, completionTokens: null })).toThrow();
   });
+
+  it("returns null rate when completionTokens is 1 despite multiple chunks", () => {
+    const m = computeGenMetrics({ tRequestStart: 0, chunkTimestamps: [100, 200], promptTokens: null, completionTokens: 1 });
+    expect(m.decodeToksPerSec).toBeNull();
+    expect(m.completionTokens).toBe(1);
+  });
+
+  it("returns null rate when span is zero", () => {
+    const m = computeGenMetrics({ tRequestStart: 0, chunkTimestamps: [100, 100], promptTokens: null, completionTokens: 2 });
+    expect(m.decodeToksPerSec).toBeNull();
+  });
 });

@@ -242,7 +242,7 @@ export function addCell(run: RunFile, cell: BenchCell): RunFile {
 
 Definizioni (dalla spec, qui operative):
 - `ttftMs` = primo chunk − `tRequestStart`.
-- `decodeToksPerSec` = `(completionTokens − 1) / (ultimoChunk − primoChunk) * 1000` (steady-state: primo token escluso). Fallback token count: `chunkTimestamps.length` se `completionTokens` è null. `null` se chunk < 2 o intervallo = 0.
+- `decodeToksPerSec` = `(completionTokens − 1) / (ultimoChunk − primoChunk) * 1000` (steady-state: primo token escluso). Fallback token count: `chunkTimestamps.length` se `completionTokens` è null. `null` se chunk < 2, intervallo = 0, o token generati < 2 (steady-state non misurabile).
 - `totalMs` = ultimo chunk − `tRequestStart`.
 
 - [ ] **Step 1: Test fallente**
