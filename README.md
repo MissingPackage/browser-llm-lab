@@ -30,7 +30,14 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   rasterizer (SwiftShader): un run CPU etichettato come GPU sarebbe un dato falso.
 - Profilo browser persistente in `/tmp/blab-e2e-profile` (override: `E2E_PROFILE`):
   è ciò che rende reale la distinzione **cold vs warm** tra run consecutivi.
-- Flag usati: `--enable-unsafe-webgpu --enable-features=Vulkan,WebGPUService --ignore-gpu-blocklist`.
+- Flag: il minimo che aggancia la GPU su Linux/NVIDIA è **`--ignore-gpu-blocklist` da solo**
+  (verificato su Chrome branded 150: ciascuno dei tre flag storici basta da sé; la blocklist
+  era l'unico ostacolo). Driver parametrizzabile: `CHANNEL=chrome CHROME_ARGS="--ignore-gpu-blocklist"`.
+- Bench manuali sul Chrome branded: `scripts/bench-chrome.sh` (profilo dedicato `blab-bench`).
+  **Mai** impostare i flag Vulkan in `chrome://flags` del profilo quotidiano: `enable-vulkan`
+  corrompe il compositing su NVIDIA/Wayland, `force-enable-webgpu-interop` crasha all'avvio.
+- Chrome 150 branded (flag minimo): cold 61 s / warm 2.4 s, **85–92 tok/s** — ~15-20% sotto
+  chromium-playwright 151 (versione o flag: da isolare in 1b).
 
 ## Cosa abbiamo verificato dal vivo (4090 mobile, Fedora, chromium Playwright)
 

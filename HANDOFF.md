@@ -28,6 +28,9 @@ Prima ancora, opzionale e a decisione PI: caccia a `shader-f16` su Chrome brande
 - tsconfig ha `erasableSyntaxOnly: true`: niente parameter properties nelle classi.
 - `.superpowers/` è gitignorato: il ledger SDD (`.superpowers/sdd/progress.md`) non sopravvive a `git clean -fdx`.
 
+- **Chrome flags & NVIDIA/Wayland**: enable-vulkan nel profilo corrompe il compositing (schermo nero/artefatti); force-enable-webgpu-interop crasha all avvio. Ricetta bench: profilo dedicato + solo --ignore-gpu-blocklist (scripts/bench-chrome.sh). Profilo quotidiano dell utente: flags azzerati il 2026-07-25, NON rimetterli.
+- Chrome 150 branded: 85-92 tok/s vs chromium-playwright 151: 106-118 — delta versione/flag da isolare in 1b.
+
 ## 5. Docket (user decisions pending)
 1. Espansione benchmark pubblico/community: deferred per scelta PI (2026-07-25), ripensare a banco maturo.
 2. Installare Chrome branded (serve sudo) per testare `shader-f16` su NVIDIA — sblocca le quant q4f16_1 sulla 4090.

@@ -6,11 +6,10 @@ import { writeFileSync } from "node:fs";
 const BROWSER = process.env.BROWSER ?? "chromium"; // chromium | firefox (firefox: run effimero, solo cold)
 
 const HEADED = process.env.HEADED === "1";
-const args = [
-  "--enable-unsafe-webgpu",
-  "--enable-features=Vulkan,WebGPUService",
-  "--ignore-gpu-blocklist",
-];
+const CHANNEL = process.env.CHANNEL; // es. "chrome" per il branded; assente = chromium playwright
+const args = process.env.CHROME_ARGS
+  ? process.env.CHROME_ARGS.split(" ")
+  : ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 
 // Profilo persistente (chromium): la Cache API dei pesi sopravvive tra i run (cold vs warm reali).
 const PROFILE = process.env.E2E_PROFILE ?? "/tmp/blab-e2e-profile";
@@ -19,7 +18,7 @@ if (BROWSER === "firefox") {
   browser = await firefox.launch({ headless: !HEADED, firefoxUserPrefs: { "dom.webgpu.enabled": true } });
   page = await browser.newPage();
 } else {
-  browser = await chromium.launchPersistentContext(PROFILE, { headless: !HEADED, args });
+  browser = await chromium.launchPersistentContext(PROFILE, { headless: !HEADED, args, ...(CHANNEL ? { channel: CHANNEL } : {}) });
   page = browser.pages()[0] ?? (await browser.newPage());
 }
 page.on("console", (m) => console.log(`[console:${m.type()}] ${m.text().slice(0, 200)}`));
