@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>browser-llm-lab</title>
+  </head>
+  <body>
+    <h1>browser-llm-lab</h1>
+    <section id="probe-box"><em>probing…</em></section>
+    <section>
+      <label>Model:
+        <select id="model">
+          <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC" data-quant="q4f16_1">Qwen2.5-0.5B q4f16_1</option>
+        </select>
+      </label>
+      <button id="run">Run bench</button>
+      <button id="export" disabled>Export JSON</button>
+    </section>
+    <p id="status"></p>
+    <section id="results"></section>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

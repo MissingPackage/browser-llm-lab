@@ -242,7 +242,7 @@ export function addCell(run: RunFile, cell: BenchCell): RunFile {
 
 Definizioni (dalla spec, qui operative):
 - `ttftMs` = primo chunk − `tRequestStart`.
-- `decodeToksPerSec` = `(completionTokens − 1) / (ultimoChunk − primoChunk) * 1000` (steady-state: primo token escluso). Fallback token count: `chunkTimestamps.length` se `completionTokens` è null. `null` se chunk < 2 o intervallo = 0.
+- `decodeToksPerSec` = `(completionTokens − 1) / (ultimoChunk − primoChunk) * 1000` (steady-state: primo token escluso). Fallback token count: `chunkTimestamps.length` se `completionTokens` è null. `null` se chunk < 2, intervallo = 0, o token generati < 2 (steady-state non misurabile).
 - `totalMs` = ultimo chunk − `tRequestStart`.
 
 - [ ] **Step 1: Test fallente**
@@ -508,7 +508,7 @@ export async function probeWebGPU(
 
   // Chrome recente: adapter.info; fallback legacy: requestAdapterInfo()
   const a = adapter as GPUAdapter & { requestAdapterInfo?: () => Promise<GPUAdapterInfo> };
-  const info = a.info ?? (a.requestAdapterInfo ? await a.requestAdapterInfo() : null);
+  const info = a.info ?? (a.requestAdapterInfo ? await a.requestAdapterInfo().catch(() => null) : null);
 
   const limits: Record<string, number> = {};
   for (const k of LIMIT_KEYS) {
@@ -812,13 +812,19 @@ import { computeGenMetrics } from "./metrics";
 import { PROMPT_512 } from "./promptset";
 
 export class BenchServer {
-  constructor(
-    private deps: {
-      adapterFactory: () => InferenceAdapter;
-      probe: () => Promise<DeviceProbe>;
-      post: (m: WorkerToMain) => void;
-    },
-  ) {}
+  private deps: {
+    adapterFactory: () => InferenceAdapter;
+    probe: () => Promise<DeviceProbe>;
+    post: (m: WorkerToMain) => void;
+  };
+
+  constructor(deps: {
+    adapterFactory: () => InferenceAdapter;
+    probe: () => Promise<DeviceProbe>;
+    post: (m: WorkerToMain) => void;
+  }) {
+    this.deps = deps;
+  }
 
   async handle(msg: unknown): Promise<void> {
     if (!isMainToWorker(msg)) {

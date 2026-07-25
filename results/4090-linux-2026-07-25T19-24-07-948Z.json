@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-25T19:24:07.948Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "nvidia",
+      "architecture": "lovelace",
+      "device": "",
+      "description": ""
+    },
+    "limits": {
+      "maxBufferSize": 4294967292,
+      "maxStorageBufferBindingSize": 2147483644,
+      "maxComputeWorkgroupStorageSize": 49152,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 16
+    },
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "deviceMemoryGB": 32
+  },
+  "cells": [
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 55650.18500006199,
+        "cacheState": "cold"
+      },
+      "gen": {
+        "ttftMs": 947.3700000047684,
+        "decodeToksPerSec": 117.68685104377334,
+        "totalMs": 3105.639999985695,
+        "promptTokens": 469,
+        "completionTokens": 255
+      }
+    }
+  ]
+}
