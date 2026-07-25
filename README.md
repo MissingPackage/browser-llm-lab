@@ -30,9 +30,14 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   rasterizer (SwiftShader): un run CPU etichettato come GPU sarebbe un dato falso.
 - Profilo browser persistente in `/tmp/blab-e2e-profile` (override: `E2E_PROFILE`):
   è ciò che rende reale la distinzione **cold vs warm** tra run consecutivi.
-- Flag: il minimo che aggancia la GPU su Linux/NVIDIA è **`--ignore-gpu-blocklist` da solo**
-  (verificato su Chrome branded 150: ciascuno dei tre flag storici basta da sé; la blocklist
-  era l'unico ostacolo). Driver parametrizzabile: `CHANNEL=chrome CHROME_ARGS="--ignore-gpu-blocklist"`.
+- Flag per la GPU su Linux/NVIDIA: `--ignore-gpu-blocklist` (la blocklist è l'unico ostacolo
+  lato Chrome) **più `--disable-gpu-sandbox` nei lanci nativi**: su Fedora/NVIDIA il sandbox
+  del processo GPU nega gli ICD Vulkan a Dawn ("Found no drivers") — riprodotto col toggle
+  del sandbox. I run playwright non lo soffrono solo perché playwright è no-sandbox di default.
+  Driver parametrizzabile: `CHANNEL=chrome CHROME_ARGS="--ignore-gpu-blocklist"`.
+- Altri env del driver: `BROWSER=firefox` (run Firefox, effimero/solo-cold),
+  `ALLOW_UNVERIFIED=1` (procede quando il vendor è nascosto, es. Firefox — la verifica
+  hardware va fatta fuori banda: nvidia-smi o about:support), `E2E_PROFILE=<dir>`.
 - Bench manuali sul Chrome branded: `scripts/bench-chrome.sh` (profilo dedicato `blab-bench`).
   **Mai** impostare i flag Vulkan in `chrome://flags` del profilo quotidiano: `enable-vulkan`
   corrompe il compositing su NVIDIA/Wayland, `force-enable-webgpu-interop` crasha all'avvio.
