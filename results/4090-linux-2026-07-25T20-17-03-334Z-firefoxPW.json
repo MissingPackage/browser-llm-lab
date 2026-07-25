@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-25T20:17:03.334Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "",
+      "architecture": "",
+      "device": "",
+      "description": ""
+    },
+    "limits": {
+      "maxBufferSize": 1073741824,
+      "maxStorageBufferBindingSize": 1073741824,
+      "maxComputeWorkgroupStorageSize": 49152,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 64
+    },
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0",
+    "deviceMemoryGB": null
+  },
+  "cells": [
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "quant": "q4f16_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 87475.4,
+        "cacheState": "cold"
+      },
+      "gen": {
+        "ttftMs": 2276.7600000000093,
+        "decodeToksPerSec": 9.908993308698692,
+        "totalMs": 27910.040000000008,
+        "promptTokens": 469,
+        "completionTokens": 255
+      }
+    }
+  ]
+}

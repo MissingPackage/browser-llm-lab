@@ -44,7 +44,7 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   |---|---|---|---|
   | `shader-f16` | **assente** → `q4f16_1` crasha (`ShaderModule` invalid) | **presente** → `q4f16_1` gira | presente |
   | `maxStorageBufferBindingSize` | 2 GiB | **128 MiB** (web-llm chiede 1 GiB → fallback + `Device was lost`) | 1 GiB |
-  | decode 0.5B | 106–118 tok/s (`q4f32_1`) | **1.8 tok/s** (`q4f16_1`) | (in misura) |
+  | decode 0.5B | 106–118 tok/s (`q4f32_1`) | **1.8 tok/s** (`q4f16_1`) | **9.9 tok/s** (`q4f16_1`, GPU@100% verif. nvidia-smi) |
   Su chromium il fallback è `q4f32_1`; su Firefox release il collo è il cap dei buffer
   e/o il path WebGPU — TTFT 20 s, load 82 s (run in `results/*firefox152.json`, con
   warning `Device was lost` in console: cella onesta ma da trattare con cautela).
