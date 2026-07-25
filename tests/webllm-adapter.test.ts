@@ -36,7 +36,8 @@ describe("WebLLMAdapter", () => {
       hasCache: async () => true,
       now: () => (t += 100),
     });
-    await a.load("test-model", () => {});
+    const r = await a.load("test-model", () => {});
+    expect(r.cacheState).toBe("warm");
     const tl = await a.generate({ prompt: "hi", maxTokens: 8 });
     expect(tl.chunkTimestamps.length).toBe(2); // 2 chunk con contenuto; il chunk usage-only non conta
     expect(tl.promptTokens).toBe(512);
@@ -46,5 +47,34 @@ describe("WebLLMAdapter", () => {
   it("generate before load throws", async () => {
     const a = new WebLLMAdapter({ engineFactory: async () => fakeEngine() as never });
     await expect(a.generate({ prompt: "x", maxTokens: 1 })).rejects.toThrow("not loaded");
+  });
+
+  it("sends greedy decode params and usage streaming to the engine", async () => {
+    let captured: Record<string, unknown> | null = null;
+    const engine = {
+      chat: {
+        completions: {
+          create: async function* (req: Record<string, unknown>) {
+            captured = req;
+            yield { choices: [{ delta: { content: "x" } }], usage: null };
+          },
+        },
+      },
+      unload: async () => {},
+    };
+    const a = new WebLLMAdapter({
+      engineFactory: async () => engine as never,
+      hasCache: async () => false,
+    });
+    await a.load("test-model", () => {});
+    const tl = await a.generate({ prompt: "hi", maxTokens: 8 });
+    expect(tl.chunkTimestamps.length).toBe(1);
+    expect(captured).toMatchObject({
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0,
+      max_tokens: 8,
+      stream: true,
+      stream_options: { include_usage: true },
+    });
   });
 });
