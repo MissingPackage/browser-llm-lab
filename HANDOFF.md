@@ -20,7 +20,7 @@ Prima ancora, opzionale e a decisione PI: caccia a `shader-f16` su Chrome brande
 - Nessun remote git configurato: repo solo locale.
 
 ## 4. Landmines
-- **`shader-f16` assente** su chromium-playwright NVIDIA/Vulkan → i modelli MLC `q4f16_1` falliscono (ShaderModule invalid). Usare `q4f32_1` finché non ritestato su Chrome branded. La quant servibile dipende dalle *feature browser*.
+- **`shader-f16` è per-browser, non per-GPU**: assente su chromium-playwright (q4f16_1 crasha → usare q4f32_1), presente su Firefox (dove però il 152 release cappa i buffer a 128 MiB → 1.8 tok/s + `Device was lost`). Schema v1 non ha campi `browser`/`anomalies` per cella: gap da colmare in 1b (oggi il browser si desume solo dallo userAgent nel probe).
 - Headless shell = **SwiftShader**: mai accettare risultati come dati GPU (il driver e2e già rifiuta da solo).
 - Playwright `waitForFunction(fn, arg, options)`: le options sono il TERZO argomento (bug già pagato una volta).
 - `chromium.launch()` = profilo effimero → cold/warm richiede `launchPersistentContext` (già nel driver, profilo `/tmp/blab-e2e-profile`).

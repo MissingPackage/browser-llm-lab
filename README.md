@@ -38,12 +38,18 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   `nvidia`, arch `lovelace`). Headless shell → SwiftShader, inutilizzabile per dati.
 - **`maxStorageBufferBindingSize` ≈ 2 GiB** anche su una GPU da 16 GB: il muro
   per-buffer previsto dalla spec, confermato. `maxBufferSize` ≈ 4 GiB.
-- **`shader-f16` NON esposto** da questo chromium su NVIDIA/Vulkan → i modelli
-  MLC `q4f16_1` falliscono la validazione shader (`index_kernel`). Fallback:
-  varianti `q4f32_1`. Finding chiave: *la quant servibile dipende dalle feature
-  del browser, non solo dalla GPU*. (Da ritestare su Chrome branded / flag Dawn.)
+- **Feature e limiti WebGPU sono per-browser (e per-versione), non per-GPU** — la
+  stessa 4090, tre stack:
+  | | chromium (playwright) | Firefox 152 release | Firefox (playwright, nightly-based) |
+  |---|---|---|---|
+  | `shader-f16` | **assente** → `q4f16_1` crasha (`ShaderModule` invalid) | **presente** → `q4f16_1` gira | presente |
+  | `maxStorageBufferBindingSize` | 2 GiB | **128 MiB** (web-llm chiede 1 GiB → fallback + `Device was lost`) | 1 GiB |
+  | decode 0.5B | 106–118 tok/s (`q4f32_1`) | **1.8 tok/s** (`q4f16_1`) | (in misura) |
+  Su chromium il fallback è `q4f32_1`; su Firefox release il collo è il cap dei buffer
+  e/o il path WebGPU — TTFT 20 s, load 82 s (run in `results/*firefox152.json`, con
+  warning `Device was lost` in console: cella onesta ma da trattare con cautela).
 - **COEP `require-corp` convive col CDN HF**: shard scaricati senza bisogno del
-  fallback `credentialless`.
+  fallback `credentialless` (vale anche su Firefox).
 - Primi numeri (Qwen2.5-0.5B `q4f32_1`, schema v1, in `results/`):
   load cold ~56 s → **warm ~1.6 s** (Cache API); TTFT 0.5–0.9 s (warm–cold);
   decode **~106–118 tok/s** (varianza run-to-run ~10%, repliche multiple in 1b).

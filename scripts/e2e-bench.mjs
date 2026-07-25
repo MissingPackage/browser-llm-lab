@@ -1,7 +1,9 @@
 // E2E smoke/bench driver per Task 9 — lancia chromium con flag WebGPU,
 // legge il probe, e se la GPU è reale esegue il bench ed esporta il JSON.
-import { chromium } from "playwright";
+import { chromium, firefox } from "playwright";
 import { writeFileSync } from "node:fs";
+
+const BROWSER = process.env.BROWSER ?? "chromium"; // chromium | firefox (firefox: run effimero, solo cold)
 
 const HEADED = process.env.HEADED === "1";
 const args = [
@@ -10,10 +12,16 @@ const args = [
   "--ignore-gpu-blocklist",
 ];
 
-// Profilo persistente: la Cache API dei pesi sopravvive tra i run (cold vs warm reali).
+// Profilo persistente (chromium): la Cache API dei pesi sopravvive tra i run (cold vs warm reali).
 const PROFILE = process.env.E2E_PROFILE ?? "/tmp/blab-e2e-profile";
-const browser = await chromium.launchPersistentContext(PROFILE, { headless: !HEADED, args });
-const page = browser.pages()[0] ?? (await browser.newPage());
+let browser, page;
+if (BROWSER === "firefox") {
+  browser = await firefox.launch({ headless: !HEADED, firefoxUserPrefs: { "dom.webgpu.enabled": true } });
+  page = await browser.newPage();
+} else {
+  browser = await chromium.launchPersistentContext(PROFILE, { headless: !HEADED, args });
+  page = browser.pages()[0] ?? (await browser.newPage());
+}
 page.on("console", (m) => console.log(`[console:${m.type()}] ${m.text().slice(0, 200)}`));
 page.on("pageerror", (e) => console.log(`[pageerror] ${e.message.slice(0, 300)}`));
 
@@ -36,9 +44,13 @@ const isReal = probe.webgpu && vendor.toLowerCase() === "nvidia" && !/swiftshade
 console.log(`[e2e] GPU reale (nvidia, non-software)? ${isReal}`);
 
 if (!isReal) {
-  console.log("[e2e] STOP: adapter non-NVIDIA o software rasterizer — il run NON vale come 4090-linux.");
-  await browser.close();
-  process.exit(2);
+  if (process.env.ALLOW_UNVERIFIED === "1") {
+    console.log("[e2e] WARN: adapter non verificabile via JS (es. Firefox nasconde vendor) — si procede su richiesta esplicita; verifica hardware demandata (about:support).");
+  } else {
+    console.log("[e2e] STOP: adapter non-NVIDIA o software rasterizer — il run NON vale come 4090-linux.");
+    await browser.close();
+    process.exit(2);
+  }
 }
 
 // Override modello via env (es. quant alternativa se il browser non espone shader-f16)
