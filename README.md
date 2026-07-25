@@ -36,8 +36,9 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
 - Bench manuali sul Chrome branded: `scripts/bench-chrome.sh` (profilo dedicato `blab-bench`).
   **Mai** impostare i flag Vulkan in `chrome://flags` del profilo quotidiano: `enable-vulkan`
   corrompe il compositing su NVIDIA/Wayland, `force-enable-webgpu-interop` crasha all'avvio.
-- Chrome 150 branded (flag minimo): cold 61 s / warm 2.4 s, **85–92 tok/s** — ~15-20% sotto
-  chromium-playwright 151 (versione o flag: da isolare in 1b).
+- Chrome 150 branded (launcher `bench-chrome.sh`): cold 61 s / warm 1.8 s, fino a **116.9 tok/s**
+  (run manuale utente) — in linea con chromium-playwright; la varianza run-to-run (~10-25%)
+  conferma la necessità di repliche multiple in 1b.
 
 ## Cosa abbiamo verificato dal vivo (4090 mobile, Fedora, chromium Playwright)
 
