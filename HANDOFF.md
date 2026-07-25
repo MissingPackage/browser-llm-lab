@@ -12,12 +12,12 @@ per 1b partendo dai FIX-IN-1B della final review (elencati in `.superpowers/sdd/
 - `main` = harness fase 1a completo e merged (`c9e05b4`): SPA Vite+TS, bench worker, adapter WebLLM (CreateMLCEngine in-worker), probe WebGPU, schema v1, metriche pure, UI+export. Suite 26/26, tsc pulito, build ok.
 - Run E2E **reali sulla 4090** via `scripts/e2e-bench.mjs` (playwright headed): cold 55.6s / warm 1.6s load, ~106–118 tok/s decode su Qwen2.5-0.5B q4f32_1. Risultati in `results/*.json`.
 - README con i finding live; final review whole-branch: READY TO MERGE, minors triagiati.
+- `main` pubblicato su `origin`/GitHub; storico locale riscritto una volta per sostituire l'email privata bloccata da GH007 con la `noreply` del profilo. Tracking `origin/main` attivo.
 
 ## 3. Open threads
 - Branch `feat/fase-1a` merged, può essere cancellato (tenuto per ora).
 - FIX-IN-1B dal final review: escaping innerHTML, exhaustiveness guard WorkerToMain, test dispose(), export re-disable, probe features.
 - Varianza tok/s run-to-run ~10% → 1b deve introdurre repliche multiple per cella.
-- Nessun remote git configurato: repo solo locale.
 
 ## 4. Landmines
 - **`shader-f16` è per-browser, non per-GPU**: assente su chromium-playwright (q4f16_1 crasha → usare q4f32_1), presente su Firefox. Schema v1 non ha campi `browser`/`anomalies`: gap per 1b.
