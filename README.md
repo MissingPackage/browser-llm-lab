@@ -43,7 +43,7 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   | | chromium (playwright) | Firefox 152 release | Firefox (playwright, nightly-based) |
   |---|---|---|---|
   | adapter reale | NVIDIA (lovelace) | **llvmpipe = CPU!** (verificato via about:support: NVIDIA inattiva, "acceleration blocked by platform") | NVIDIA (GPU@100% verif. nvidia-smi) |
-  | `shader-f16` | **assente** → `q4f16_1` crasha (`ShaderModule` invalid) | presente | presente |
+  | `shader-f16` | **assente** → `q4f16_1` crasha (`ShaderModule` invalid) — confermato anche su **Chrome branded 150** coi flag Vulkan e persino con `--enable-webgpu-developer-features`: è Dawn/driver, non la build | presente | presente |
   | `maxStorageBufferBindingSize` | 2 GiB | 128 MiB (limite llvmpipe) | 1 GiB |
   | decode 0.5B | 106–118 tok/s (`q4f32_1`) | 1.8 tok/s (`q4f16_1`, **CPU**) | **9.9 tok/s** (`q4f16_1`) |
   **Finding chiave**: Firefox può fare **silent fallback a software rasterizer**
