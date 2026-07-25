@@ -27,4 +27,22 @@ describe("probeWebGPU", () => {
     const p = await probeWebGPU(gpu, { userAgent: "ua" });
     expect(p.webgpu).toBe(false);
   });
+
+  it("handles requestAdapter rejection", async () => {
+    const gpu = { requestAdapter: async () => { throw new Error("gpu lost"); } } as unknown as GPU;
+    const p = await probeWebGPU(gpu, { userAgent: "ua" });
+    expect(p.webgpu).toBe(false);
+  });
+
+  it("degrades to null info when legacy requestAdapterInfo rejects", async () => {
+    const adapter = {
+      requestAdapterInfo: async () => { throw new Error("denied"); },
+      limits: { maxBufferSize: 1024 },
+    };
+    const gpu = { requestAdapter: async () => adapter } as unknown as GPU;
+    const p = await probeWebGPU(gpu, { userAgent: "ua" });
+    expect(p.webgpu).toBe(true);
+    expect(p.adapterInfo).toBeNull();
+    expect(p.limits?.maxBufferSize).toBe(1024);
+  });
 });

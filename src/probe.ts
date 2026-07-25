@@ -27,7 +27,7 @@ export async function probeWebGPU(
 
   // Chrome recente: adapter.info; fallback legacy: requestAdapterInfo()
   const a = adapter as GPUAdapter & { requestAdapterInfo?: () => Promise<GPUAdapterInfo> };
-  const info = a.info ?? (a.requestAdapterInfo ? await a.requestAdapterInfo() : null);
+  const info = a.info ?? (a.requestAdapterInfo ? await a.requestAdapterInfo().catch(() => null) : null);
 
   const limits: Record<string, number> = {};
   for (const k of LIMIT_KEYS) {
