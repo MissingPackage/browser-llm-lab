@@ -8,10 +8,13 @@ subagent-driven: 4 task, review avversaria per task + final review whole-branch 
 `npm test` 47/47, `tsc --noEmit` pulito, `npm run build` ok. Branch **non mergiato, non pushato**
 (entrambi docket-gated — vedi docket #3).
 
-**Primo risultato cross-stack reale** (stessa 4090, stesso base model Qwen2.5-0.5B, stesso Chrome 151,
-stessa sessione, schema v2, 3 repliche): **webllm q4f32_1 = 113.0 ±2.5 tok/s** vs **transformersjs q4
-= 55.5 ±2.1 tok/s → WebLLM ~2.04× più veloce**. Load cold 62.5 s vs 157.6 s (warm 3.2 s), TTFT 408 vs
-444 ms. Entrambe le celle committate in `results/`.
+**Primo risultato cross-stack reale, ma il rapporto NON è ancora dichiarabile.** Misure sulla stessa
+4090, stesso base model Qwen2.5-0.5B, schema v2, 3 repliche: webllm q4f32_1 ~101–116 tok/s,
+transformersjs q4 ~31–55 tok/s. WebLLM è nettamente più veloce (fattore ~2–3×), ma **il valore esatto
+dipende dall'ordine dei run**: vedi **docket #5b**, effetto warm-up tra celle (+55% su transformersjs
+e +14% su webllm nella stessa sessione, stesso probe, in `results/4090-linux-2026-07-26T19-54-55-278Z.json`).
+Le repliche multiple non lo catturano perché sono consecutive dentro la stessa cella. Serve una
+decisione di metodologia prima di pubblicare qualunque rapporto.
 
 **Prossimo decidibile — due decisioni del PI** (docket `.harness/goals/fase-1b-matrice/docket.md`):
 - **#2**: il done-when della Fase 1 chiede un *conformance test* (carica modello tiny, output
@@ -112,8 +115,8 @@ docket #5 per il perché.
 ## 6. Docket (user decisions pending)
 1. Espansione benchmark pubblico/community: deferred per scelta PI (2026-07-25), ripensare a banco maturo.
 2. ~~Installare Chrome branded per testare `shader-f16`~~ FATTO 2026-07-25: f16 assente anche sul branded (pure con dev-features) → è Dawn/driver; q4f16_1 su questa macchina solo via Firefox.
-3. Punteggio decode `null` vs `0` con <2 token: adjudicato dal controller (null); ratificare o ribaltare.
-4. Guardia `completionTokens >= 2` + prosa piano allineata + probe never-throws + erasableSyntaxOnly: tre adjudication del controller in sessione, tutte documentate nel ledger — ratifica implicita se nessuna obiezione.
+3. Punteggio decode `null` vs `0` con <2 token: adjudicato dal controller (null); ratificare o ribaltare. Ratificato
+4. Guardia `completionTokens >= 2` + prosa piano allineata + probe never-throws + erasableSyntaxOnly: tre adjudication del controller in sessione, tutte documentate nel ledger — ratifica implicita se nessuna obiezione. Ratificato
 5. ~~`docs/superpowers/` gitignored vs tracciato~~ **REVISIONATO 2026-07-26** (Cristiano). Prima ratifica: tracciato in git locale ma mai su GitHub (pre-push hook). Conseguenza operativa emersa subito: blocca `git push origin main` per qualunque commit futuro che tocchi anche solo un file sotto `docs/superpowers/` insieme a codice — un cherry-pick "una tantum" non risolve, si ripresenta ad ogni push. Cristiano: "che senso ha se poi non possiamo più pushare... togliamo la regola, pazienza". **Deciso**: hook `.git/hooks/pre-push` rimosso, `docs/superpowers/` (piano fase-1b-fondamenta incluso) è ora pubblico su GitHub (push 2026-07-26, `d2d3c43..4c72fb4`). `.superpowers/` (ledger SDD) resta gitignored, non toccato.
 6. ~~Merge di `fix/fase-1b-fixin1b` in `main`~~ FATTO 2026-07-26 su richiesta esplicita di Cristiano. Gate post-merge verdi.
 7. **Chiuso 2026-07-26**: avvio "1b — matrice" formalizzato via brainstorming → design doc (`docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`) → goal-brief → goal-setup. Ora è il goal attivo `fase-1b-matrice` (vedi §1). Decisioni prese durante il brainstorming: intero pacchetto in un design (non decomposto), ordine Transformers.js → wllama → qualità → sweep, sweep multi-device manuale per ora (automazione deferred), fascia Ceiling resta F3, punteggio qualità senza soglia pass/fail. Ricerca HF Hub ha confermato un gap strutturale: la fascia Large (Qwen2.5-7B, Llama-3.1-8B) non è eseguibile né su Transformers.js (nessun repo ONNX web-runnable) né su wllama (pesi Q4_K_M >4GB, tetto WASM) — documentato nel design, non bloccante. **Nuovo item aperto**: plan-check su `PHASES.md` (vedi `.harness/goals/fase-1b-matrice/docket.md`) — approvazione PI prima dell'iterazione 1.

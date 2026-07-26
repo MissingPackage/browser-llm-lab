@@ -65,4 +65,18 @@ stessa sessione, schema v2, 3 repliche):
 → **WebLLM ~2.04× più veloce di Transformers.js** sulla stessa 4090. Probe: `subgroups` presente,
 `shader-f16` ancora assente (coerente coi landmine noti).
 
+**⚠️ RITRATTAZIONE (stessa data, dopo i dati di Cristiano)**: il "2.04×" **non è affidabile**.
+Cristiano ha fornito un run a 8 celle sul suo Chrome 150 branded
+(`results/4090-linux-2026-07-26T19-54-55-278Z.json`) dove, con un solo probe e nella stessa
+sessione, Transformers.js va da 31.7 a 49.3 tok/s (+55%) e WebLLM da 101.3 a 115.6 (+14%) al
+progredire dei run. Esiste quindi un **effetto warm-up tra celle** che le repliche multiple non
+catturano (sono consecutive dentro la stessa cella; la varianza intra-cella resta ±0.5–5 e il flag
+`high-variance` non scatta mai). Ogni rapporto cross-stack dipende dall'ordine in cui le celle sono
+state eseguite. Vedi **docket #5b**.
+Ritrattata anche l'ipotesi che avevo formulato su un confronto parziale (4 celle su 8), secondo cui
+il divario dipendeva dalle feature WebGPU `chromium-experimental-subgroup-matrix`/
+`subgroup-size-control` assenti su Chrome 150: non può spiegare una variazione *interna* a un file
+con un unico probe. A regime i due browser concordano (transformersjs ~48 vs 55.5, webllm ~111 vs
+113.0).
+
 Gate finale: `npm test` 47/47, `tsc --noEmit` pulito, `npm run build` ok.

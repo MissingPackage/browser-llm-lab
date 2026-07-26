@@ -16,17 +16,46 @@
    GOAL/PHASES per riformulare il done-when su ciò che è stato costruito; (c) rimandare a una fase
    dedicata che copra tutti gli stack insieme.
    **Decisione del PI** — non presa autonomamente perché cambia il contratto del goal.
+   **DECISO 2026-07-26** (Cristiano): scriviamo i conformance test, **opzione (c) — tutti gli stack
+   nel browser**, eseguiti on-demand da uno script Playwright; `npm test` resta la suite unit
+   veloce e offline. Un solo meccanismo, uniforme, già pronto per wllama in Fase 2.
+   **Conseguenza sul contratto**: il done-when "verifiable via `npm test`" di GOAL.md e PHASES.md
+   riga 1 è stato emendato di conseguenza — vedi nota in calce a PHASES.md.
 
 3. **Merge di `feat/fase-1b-matrice` in `main`** (aperto 2026-07-26). `GOAL.md` elenca "merge to `main`"
    e "push to `origin`" sotto *must docket*. Fase 1 completa e verde (47/47, tsc pulito, build ok,
    due datapoint reali committati), ma le Fasi 2-4 del goal sono ancora `ready`. Da decidere se
    mergiare ora la sola Fase 1 o tenere il branch fino a fine goal.
+   Va bene mergiare alla fine di ogni fase del goal. E' una repo dove iteriamo velocemente.
 
 4. **`InferenceAdapter.id` allargato da `"webllm"` a `StackId`** (registrato 2026-07-26 per tracciabilità,
    non richiede azione). `GOAL.md` elenca "change the public `InferenceAdapter` contract" sotto
    *must docket*. Il cambiamento era esplicito nel piano approvato al gate plan-check, quindi è
    coperto dall'approvazione — ma nulla lo registrava, e a un audit successivo la riga di authority
    sarebbe sembrata violata. Registrato qui per chiudere il buco.
+   OK
+
+5b. **EFFETTO WARM-UP TRA CELLE — mina la comparabilità** (aperto 2026-07-26, dai dati reali di
+   Cristiano in `results/4090-linux-2026-07-26T19-54-55-278Z.json`, 8 celle, stesso probe).
+   Ordine di esecuzione e decode tok/s: transformersjs 31.7 → 31.0 → (webllm 101.3 → 105.3) →
+   transformersjs **49.3 → 46.6** → webllm 107.8 → **115.6**. Transformers.js **+55%** e WebLLM
+   **+14%** nella stessa sessione, senza alcun cambiamento nel probe.
+   **Le repliche multiple non lo catturano**: le 3 repliche sono consecutive *dentro* una cella, la
+   varianza intra-cella resta ±0.5–5 e il flag `high-variance` (soglia 0.15) non scatta mai. La
+   soglia guarda la finestra sbagliata.
+   **Conseguenza**: ogni confronto cross-stack dipende dall'ordine dei run. Il "2.04×" registrato
+   in journal/HANDOFF e il "3.3×" derivato dallo screenshot sono entrambi inaffidabili per questo
+   motivo; a regime il rapporto sembra ~2.3× ma senza protocollo non è dichiarabile.
+   **Ipotesi non verificata**: power/clock state della GPU laptop (bassa dopo il download, sale coi
+   run) + eventuale cache di compilazione shader di ONNX Runtime Web. Osservazione che la
+   discriminerebbe: log dei clock via `nvidia-smi` durante una sequenza di celle.
+   **Opzioni**: (a) cella di riscaldamento eseguita e scartata prima di ogni misura; (b) ordine
+   randomizzato/interlacciato con più passate per stack; (c) registrare l'indice di esecuzione e
+   trattare la posizione come covariata; (d) rilevare la deriva confrontando la prima e l'ultima
+   cella dello stesso (stack, modello) e flaggarla come anomalia.
+   **Sotto-problema**: `BenchCell` non ha timestamp — l'ordine è ricostruibile solo dalla posizione
+   nell'array, e si perde se i file vengono uniti o riordinati.
+   **Decisione del PI**: è una scelta di metodologia di misura, non un fix bounded.
 
 5. **`tsconfig.json` non ha `strict`** (pre-esistente, non introdotto da questo branch; segnalato dal
    final review). Ogni `| null` in `schema.ts`/`metrics.ts` e il `!` nell'helper `$()` di `main.ts` non
