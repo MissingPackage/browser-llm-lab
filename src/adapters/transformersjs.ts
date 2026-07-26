@@ -1,11 +1,17 @@
 import { pipeline, TextStreamer, ModelRegistry } from "@huggingface/transformers";
+import type { DataType, DeviceType } from "@huggingface/transformers";
 import type { InferenceAdapter, AdapterCapabilities, GenerateRequest } from "./types";
 import type { LoadReport } from "../schema";
 import type { GenTimeline } from "../metrics";
 import { TRANSFORMERSJS_DTYPE } from "../stacks";
 
-const DTYPE = TRANSFORMERSJS_DTYPE;
-const DEVICE = "webgpu";
+// Default per il bench "reale": vincolato a TRANSFORMERSJS_DTYPE (vedi src/stacks.ts,
+// STACK_FIXED_QUANT) — non allentare questo default. device/dtype sono iniettabili dal
+// costruttore solo per permettere al conformance harness (src/conformance/) di usare una
+// configurazione più leggera (es. modello fixture minuscolo su wasm/fp32) senza toccare
+// la default engine factory usata dal bench vero.
+const DTYPE: DataType = TRANSFORMERSJS_DTYPE;
+const DEVICE: DeviceType = "webgpu";
 const TASK = "text-generation";
 
 // Contratto minimo che usiamo davvero dell'oggetto restituito da pipeline():
@@ -31,40 +37,43 @@ type EngineFactory = (
   onProgress: (text: string, progress: number) => void,
 ) => Promise<TextGenerationEngine>;
 
-const defaultEngineFactory: EngineFactory = async (modelId, onProgress) => {
-  const pipe = (await pipeline(TASK, modelId, {
-    dtype: DTYPE,
-    device: DEVICE,
-    progress_callback: (info: { status: string; file?: string; progress?: number }) => {
-      const pct = typeof info.progress === "number" ? info.progress / 100 : 0;
-      onProgress(info.file ? `${info.status}: ${info.file}` : info.status, pct);
-    },
-  })) as unknown as RawPipeline;
-  return {
-    generate: async (messages, maxTokens, onToken) => {
-      const streamer = new TextStreamer(pipe.tokenizer, {
-        skip_prompt: true,
-        skip_special_tokens: true,
-        // token_callback_function scatta una volta per token generato; callback_function invece
-        // scatta solo sui confini di parola (on_finalized_text taglia al lastIndexOf(' '), quindi
-        // spesso restituisce stringa vuota tra una parola e l'altra) e sottoconterebbe i token,
-        // corrompendo le metriche di TTFT e token/sec che questo adapter esiste per misurare.
-        token_callback_function: () => onToken(),
-        // No-op obbligatorio: se callback_function non viene passata, TextStreamer la
-        // sostituisce di default con stdout_write (vedi streamers.js), stampando ogni
-        // parola generata in console durante la finestra temporizzata del decode — proprio
-        // ciò che questo adapter misura. Senza questo no-op la I/O di console contamina
-        // il benchmark. Non rimuovere pensando sia inutile.
-        callback_function: () => {},
-      });
-      await pipe(messages, { max_new_tokens: maxTokens, do_sample: false, streamer });
-    },
-    dispose: () => pipe.dispose(),
+function makeDefaultEngineFactory(dtype: DataType, device: DeviceType): EngineFactory {
+  return async (modelId, onProgress) => {
+    const pipe = (await pipeline(TASK, modelId, {
+      dtype,
+      device,
+      progress_callback: (info: { status: string; file?: string; progress?: number }) => {
+        const pct = typeof info.progress === "number" ? info.progress / 100 : 0;
+        onProgress(info.file ? `${info.status}: ${info.file}` : info.status, pct);
+      },
+    })) as unknown as RawPipeline;
+    return {
+      generate: async (messages, maxTokens, onToken) => {
+        const streamer = new TextStreamer(pipe.tokenizer, {
+          skip_prompt: true,
+          skip_special_tokens: true,
+          // token_callback_function scatta una volta per token generato; callback_function invece
+          // scatta solo sui confini di parola (on_finalized_text taglia al lastIndexOf(' '), quindi
+          // spesso restituisce stringa vuota tra una parola e l'altra) e sottoconterebbe i token,
+          // corrompendo le metriche di TTFT e token/sec che questo adapter esiste per misurare.
+          token_callback_function: () => onToken(),
+          // No-op obbligatorio: se callback_function non viene passata, TextStreamer la
+          // sostituisce di default con stdout_write (vedi streamers.js), stampando ogni
+          // parola generata in console durante la finestra temporizzata del decode — proprio
+          // ciò che questo adapter misura. Senza questo no-op la I/O di console contamina
+          // il benchmark. Non rimuovere pensando sia inutile.
+          callback_function: () => {},
+        });
+        await pipe(messages, { max_new_tokens: maxTokens, do_sample: false, streamer });
+      },
+      dispose: () => pipe.dispose(),
+    };
   };
-};
+}
 
-const defaultIsCached = (modelId: string) =>
-  ModelRegistry.is_pipeline_cached(TASK, modelId, { dtype: DTYPE }).catch(() => false);
+function makeDefaultIsCached(dtype: DataType): (modelId: string) => Promise<boolean> {
+  return (modelId: string) => ModelRegistry.is_pipeline_cached(TASK, modelId, { dtype }).catch(() => false);
+}
 
 export class TransformersJsAdapter implements InferenceAdapter {
   readonly id = "transformersjs" as const;
@@ -77,9 +86,17 @@ export class TransformersJsAdapter implements InferenceAdapter {
     engineFactory?: EngineFactory;
     isCached?: (modelId: string) => Promise<boolean>;
     now?: () => number;
+    // dtype/device: solo per costruire la default engine factory/isCached qui sotto (usati
+    // per costruire una configurazione più leggera, es. per il conformance harness). Se si
+    // passa engineFactory/isCached esplicitamente, questi due sono ignorati. Default invariati:
+    // DTYPE ("q4", vincolato da STACK_FIXED_QUANT) e DEVICE ("webgpu") — non allentare.
+    dtype?: DataType;
+    device?: DeviceType;
   }) {
-    this.engineFactory = deps?.engineFactory ?? defaultEngineFactory;
-    this.isCached = deps?.isCached ?? defaultIsCached;
+    const dtype = deps?.dtype ?? DTYPE;
+    const device = deps?.device ?? DEVICE;
+    this.engineFactory = deps?.engineFactory ?? makeDefaultEngineFactory(dtype, device);
+    this.isCached = deps?.isCached ?? makeDefaultIsCached(dtype);
     this.now = deps?.now ?? (() => performance.now());
   }
 
