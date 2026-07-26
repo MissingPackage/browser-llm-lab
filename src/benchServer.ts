@@ -1,22 +1,23 @@
 import { isMainToWorker, type WorkerToMain } from "./protocol";
 import type { InferenceAdapter } from "./adapters/types";
-import type { DeviceProbe, BenchCell } from "./schema";
+import type { DeviceProbe, BenchCell, StackId } from "./schema";
 import { computeGenMetrics, aggregateReplicates } from "./metrics";
 import { PROMPT_512 } from "./promptset";
+import { STACK_FIXED_QUANT } from "./stacks";
 
 const DEFAULT_REPLICATE_COUNT = 3;
 const HIGH_VARIANCE_THRESHOLD = 0.15; // stdev/mean sul tok/s aggregato
 
 export class BenchServer {
   private deps: {
-    adapterFactory: () => InferenceAdapter;
+    adapters: Record<StackId, () => InferenceAdapter>;
     probe: () => Promise<DeviceProbe>;
     post: (m: WorkerToMain) => void;
     replicateCount?: number;
   };
 
   constructor(deps: {
-    adapterFactory: () => InferenceAdapter;
+    adapters: Record<StackId, () => InferenceAdapter>;
     probe: () => Promise<DeviceProbe>;
     post: (m: WorkerToMain) => void;
     replicateCount?: number;
@@ -33,7 +34,15 @@ export class BenchServer {
       if (msg.type === "probe") {
         this.deps.post({ type: "probe:result", probe: await this.deps.probe() });
       } else if (msg.type === "bench") {
-        const adapter = this.deps.adapterFactory();
+        const fixedQuant = STACK_FIXED_QUANT[msg.stack];
+        if (fixedQuant !== undefined && fixedQuant !== msg.quant) {
+          this.deps.post({
+            type: "error",
+            message: `quant mismatch for stack "${msg.stack}": requested "${msg.quant}" but this stack is pinned to "${fixedQuant}"`,
+          });
+          return;
+        }
+        const adapter = this.deps.adapters[msg.stack]();
         const replicateCount = this.deps.replicateCount ?? DEFAULT_REPLICATE_COUNT;
         try {
           const load = await adapter.load(msg.modelId, (text, progress) =>

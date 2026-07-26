@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>browser-llm-lab — conformance</title>
+  </head>
+  <body>
+    <h1>browser-llm-lab — conformance harness</h1>
+    <p>
+      Dev/test entry point only — runs the shared conformance contract (src/conformance/contract.ts)
+      against real adapter engines. Not part of the production build; driven by
+      <code>npm run test:conformance</code> (scripts/conformance.mjs).
+    </p>
+    <p>Status: <span id="status">idle</span></p>
+    <div id="results"></div>
+    <script type="module" src="/src/conformance/page.ts"></script>
+  </body>
+</html>

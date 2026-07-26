@@ -2,6 +2,8 @@ import type { GenMetricsAgg } from "./metrics";
 
 export const SCHEMA_VERSION = 2 as const;
 
+export type StackId = "webllm" | "transformersjs";
+
 export interface DeviceProbe {
   webgpu: boolean;
   adapterInfo: { vendor: string; architecture: string; device: string; description: string } | null;
@@ -27,7 +29,7 @@ export interface GenMetrics {
 }
 
 export interface BenchCell {
-  stack: "webllm"; // union estesa nel piano "1b — matrice"
+  stack: StackId;
   modelId: string;
   quant: string;
   promptId: string;

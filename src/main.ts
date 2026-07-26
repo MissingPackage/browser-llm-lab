@@ -1,4 +1,5 @@
 import type { WorkerToMain, MainToWorker } from "./protocol";
+import type { StackId } from "./schema";
 import { newRunFile, addCell, type RunFile } from "./schema";
 import { renderResultsTable } from "./render";
 
@@ -7,6 +8,21 @@ const $ = (id: string) => document.getElementById(id)!;
 
 let run: RunFile | null = null;
 const send = (m: MainToWorker) => worker.postMessage(m);
+
+function applyStackFilter(): void {
+  const stack = ($("stack") as HTMLSelectElement).value;
+  const modelSel = $("model") as HTMLSelectElement;
+  for (const opt of Array.from(modelSel.options)) {
+    const compatible = opt.dataset.stack === stack;
+    opt.hidden = !compatible;
+    opt.disabled = !compatible;
+  }
+  const selected = modelSel.selectedOptions[0];
+  if (!selected || selected.hidden) {
+    const firstVisible = Array.from(modelSel.options).find((o) => !o.hidden);
+    if (firstVisible) modelSel.value = firstVisible.value;
+  }
+}
 
 worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   const m = e.data;
@@ -31,12 +47,16 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   }
 };
 
+$("stack").addEventListener("change", applyStackFilter);
+applyStackFilter();
+
 $("run").addEventListener("click", () => {
   const sel = $("model") as HTMLSelectElement;
+  const stackSel = $("stack") as HTMLSelectElement;
   const quant = sel.selectedOptions[0].dataset.quant ?? "unknown";
   ($("run") as HTMLButtonElement).disabled = true;
   ($("export") as HTMLButtonElement).disabled = true;
-  send({ type: "bench", modelId: sel.value, quant });
+  send({ type: "bench", stack: stackSel.value as StackId, modelId: sel.value, quant });
 });
 
 $("export").addEventListener("click", () => {

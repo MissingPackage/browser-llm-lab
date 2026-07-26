@@ -1,7 +1,7 @@
 GOAL: Extend browser-llm-lab with the "1b — matrice" harness — Transformers.js and wllama inference adapters, a quality-scoring module, and schema v3 — verified end-to-end on the existing 4090 rig, so the codebase is ready for the (separately scheduled) manual multi-device sweep.
 
 DONE WHEN (all measurable):
-- `src/adapters/transformersjs.ts` and `src/adapters/wllama.ts` exist, implement `InferenceAdapter`, and each passes a conformance test (load a tiny model, generate deterministic output, `capabilities()` matches real behavior) — verifiable via `npm test`.
+- `src/adapters/transformersjs.ts` and `src/adapters/wllama.ts` exist, implement `InferenceAdapter`, and each passes a conformance test (load a model, generate deterministic output, `capabilities()` matches real behavior) — **[EMENDATO 2026-07-26, ruling PI docket #2]** verifiable via `npm run test:conformance`, a Playwright script that exercises the same contract against every stack **in a real browser**. The original wording said `npm test`; that is not realizable for WebLLM, which requires WebGPU and cannot run in Node. `npm test` remains the fast, offline unit suite.
 - `src/quality.ts` + `src/qualityPrompts.ts` implemented, with unit tests covering both the perplexity path and the 12-prompt exact-match fallback — verifiable via `npm test`.
 - Schema bumped to v3: `BenchCell.stack` union extended to `"webllm" | "transformersjs" | "wllama"`, `BenchCell.qualityScore` field added per the design doc's discriminated union — verifiable via `tsc --noEmit` clean + schema-level tests.
 - UI stack selector added, filtering the model dropdown to combinations that actually exist (excludes the documented Large-tier gap) — verified manually via a playwright smoke pass.
