@@ -4,8 +4,11 @@
 **Goal attivo**: `fase-1b-matrice` (`.harness/goals/fase-1b-matrice/`) — GOAL.md + PHASES.md
 scritti 2026-07-26 da brainstorming → goal-brief → goal-setup, chiudendo il docket #7. Design
 di riferimento: `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`. **Gate
-plan-check approvato** (2026-07-26, Cristiano: "approvato") — via libera per iterazione 1.
-Prossimo target: Fase 1 (adapter Transformers.js).
+plan-check approvato** (2026-07-26, Cristiano: "approvato"). **Iterazione 1 fatta**: piano di
+implementazione per la Fase 1 (adapter Transformers.js) scritto e committato su
+`feat/fase-1b-matrice` — `docs/superpowers/plans/2026-07-26-fase-1b-matrice-adapter-transformersjs.md`
+(4 task: adapter+StackId, BenchServer multi-stack, UI selector, driver e2e + run reale 4090).
+Non ancora eseguito: in attesa della scelta di esecuzione (subagent-driven vs inline).
 
 Contesto precedente: Fase 1b — Fondamenta **mergiata in `main`** (2026-07-26, merge commit su
 richiesta esplicita di Cristiano): piano `docs/superpowers/plans/2026-07-26-fase-1b-fondamenta.md`
