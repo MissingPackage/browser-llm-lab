@@ -234,7 +234,11 @@ const defaultEngineFactory: EngineFactory = async (modelId, onProgress) => {
       const streamer = new TextStreamer(pipe.tokenizer, {
         skip_prompt: true,
         skip_special_tokens: true,
-        callback_function: () => onToken(),
+        // token_callback_function scatta una volta per token generato; callback_function invece
+        // scatta solo sui confini di parola (on_finalized_text taglia al lastIndexOf(' '), quindi
+        // spesso restituisce stringa vuota tra una parola e l'altra) e sottoconterebbe i token,
+        // corrompendo le metriche di TTFT e token/sec che questo adapter esiste per misurare.
+        token_callback_function: () => onToken(),
       });
       await pipe(messages, { max_new_tokens: maxTokens, do_sample: false, streamer });
     },
