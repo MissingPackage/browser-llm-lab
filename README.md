@@ -125,6 +125,18 @@ Per wllama il `modelId` è `<owner>/<repo>/<file.gguf>`, con il file GGUF **nomi
 `loadModelFromHF({quant})` farebbe fallback silenzioso (Q4_K_M → Q8_0 → non quantizzato), e una
 cella etichettata `Q4_K_M` potrebbe contenere una misura Q8_0 senza che nulla lo dica.
 
+Prima misura sulla 4090 (Qwen2.5-0.5B, stesso prompt, 3 repliche, warm-up scartato): webllm ~110
+tok/s, transformersjs ~46–48, **wllama ~26** — wllama gira su CPU via WASM, non su GPU, quindi il
+confronto dice quanto costa non avere accelerazione, non che la libreria sia lenta. Il suo TTFT
+(~8.4 s) è dominato dal prefill dei 512 token del prompt su CPU.
+
+**wllama dentro un Web Worker richiede uno shim**: `absoluteUrl()` di wllama risolve i path con
+`document.baseURI`, che nel worker non esiste (`ReferenceError: document is not defined`, e la
+cella di bench fallisce interamente). `ensureWorkerDocumentShim()` in `src/adapters/wllama.ts`
+definisce `document.baseURI = self.location.href` prima di istanziare `Wllama`. È sicuro perché
+`document.baseURI` è l'unico uso di `document` nel sorgente di wllama 3.5.1. Il conformance
+harness non lo esercita — gira nel main thread, dove `document` c'è.
+
 ### Difetto noto di wllama 3.5.1 — l'ultimo token di ogni risposta arriva in ritardo
 
 `npm run test:conformance` dà **wllama 7/8** (gli altri due 8/8): il check di determinismo del
@@ -135,6 +147,10 @@ quella risposta conteneva ancora dati, così la **coda di ogni risposta resta in
 consegnata all'inizio della chiamata successiva**. Conseguenza sulle misure: l'ultimo timestamp di
 ogni `generate()` manca, quindi il decode rate è calcolato su n−1 token (~0.4% su 256, sistematico
 e sempre nello stesso verso — non si media via fra repliche).
+
+Si vede anche nei dati: la cella wllama in
+`results/4090-linux-2026-07-26T22-51-39-379Z.json` riporta `completionTokens: 255` a fronte di
+`maxTokens: 256`.
 
 Già segnalato upstream da terzi: [issue #263](https://github.com/ngxson/wllama/issues/263) e
 [PR #264](https://github.com/ngxson/wllama/pull/264), entrambe aperte al 2026-07-27; la 3.5.1 è

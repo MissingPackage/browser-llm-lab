@@ -13,9 +13,15 @@ const args = process.env.CHROME_ARGS
   ? process.env.CHROME_ARGS.split(" ")
   : ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 
+const BASE_URL = process.env.BENCH_URL ?? "http://localhost:5173";
+
 const MODELS = {
   transformersjs: { id: "onnx-community/Qwen2.5-0.5B-Instruct", quant: "q4" },
   webllm: { id: "Qwen2.5-0.5B-Instruct-q4f32_1-MLC", quant: "q4f32_1" },
+  wllama: {
+    id: "Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    quant: "Q4_K_M",
+  },
 };
 const SEQUENCE = (process.env.SEQ ?? "transformersjs,webllm,transformersjs,webllm").split(",");
 
@@ -34,7 +40,7 @@ const browser = await chromium.launchPersistentContext(PROFILE, {
 const page = browser.pages()[0] ?? (await browser.newPage());
 page.on("pageerror", (e) => console.log(`[pageerror] ${e.message.slice(0, 300)}`));
 
-await page.goto("http://localhost:5174", { waitUntil: "load" });
+await page.goto(BASE_URL, { waitUntil: "load" });
 await page.waitForFunction(() => document.querySelector("#probe-box")?.textContent?.includes("webgpu"), null, { timeout: 30000 });
 const probe = JSON.parse(await page.evaluate(() => document.querySelector("#probe-box").textContent));
 const vendor = (probe.adapterInfo?.vendor ?? "").toLowerCase();

@@ -194,6 +194,17 @@
    workaround nel nostro codice, niente materiale da preparare per l'upstream (la segnalazione
    esiste già ed è migliore di quella che avremmo scritto). Controllo automatico ogni 3 giorni se
    il fix è arrivato; quando lo sarà, aggiornare la dipendenza e rimuovere questa deroga.
+   **Sorveglianza attiva**: routine cloud `trig_018i6ZnQpZHF1tg6egjTsyST`
+   ("browser-llm-lab — watch wllama streaming fix"), cron `23 7 */3 * *` UTC, ambiente
+   `fedora:browser-llm-lab`. Controlla PR #264, issue #263 e la versione npm; **non fa nulla** se
+   niente è cambiato, apre una PR quando il fix è rilasciato. Non può verificare il conformance
+   (serve GPU reale, l'ambiente cloud non ce l'ha) e il suo prompt lo dice esplicitamente.
+
+   **CONFERMATO ANCHE NEL BENCH REALE** (2026-07-26, `results/4090-linux-2026-07-26T22-51-39-379Z.json`):
+   la cella wllama registra `completionTokens: 255` a fronte di `maxTokens: 256`. È lo stesso
+   difetto visto dal contratto, ora misurato sul percorso di produzione: manca esattamente un
+   token per `generate()`. Il decode risultante (25.97 tok/s, stdev 0.05) è quindi calcolato su
+   254 intervalli invece di 255 — sottostima di ~0.4%, sistematica.
    **Ipotesi falsificate lungo la strada** (registrate per non rifarle):
    (a) non-determinismo numerico multi-thread — falsificata: con `n_threads: 1` il fallimento è
    identico; (b) penalità di ripetizione con storia condivisa — falsificata: con

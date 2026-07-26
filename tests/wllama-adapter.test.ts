@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { WllamaAdapter, hfUrlFromModelId, chunkIsToken } from "../src/adapters/wllama";
+import { WllamaAdapter, hfUrlFromModelId, chunkIsToken, ensureWorkerDocumentShim } from "../src/adapters/wllama";
 import type { ChatCompletionChunk } from "@wllama/wllama/esm/types/oai-compat.js";
 
 function chunk(delta: { content?: string | null }, extra?: Partial<ChatCompletionChunk>): ChatCompletionChunk {
@@ -53,6 +53,29 @@ describe("hfUrlFromModelId", () => {
 
   it("rifiuta un file che non è .gguf", () => {
     expect(() => hfUrlFromModelId("org/repo/model.safetensors")).toThrow(/\.gguf/);
+  });
+});
+
+describe("ensureWorkerDocumentShim", () => {
+  it("definisce document.baseURI quando manca (contesto Web Worker)", () => {
+    const scope: { document?: unknown; location?: { href: string } } = {
+      location: { href: "https://example.test/bench/" },
+    };
+    ensureWorkerDocumentShim(scope);
+    expect(scope.document).toEqual({ baseURI: "https://example.test/bench/" });
+  });
+
+  it("non tocca un document già esistente (main thread)", () => {
+    const real = { baseURI: "https://real.test/" };
+    const scope = { document: real, location: { href: "https://other.test/" } };
+    ensureWorkerDocumentShim(scope);
+    expect(scope.document).toBe(real);
+  });
+
+  it("non fa nulla se manca anche location", () => {
+    const scope: { document?: unknown; location?: { href: string } } = {};
+    ensureWorkerDocumentShim(scope);
+    expect(scope.document).toBeUndefined();
   });
 });
 

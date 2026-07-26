@@ -82,8 +82,34 @@ type EngineFactory = (
   onProgress: (text: string, progress: number) => void,
 ) => Promise<WllamaEngine>;
 
+/**
+ * wllama non gira dentro un Web Worker senza questo shim.
+ *
+ * `absoluteUrl()` (node_modules/@wllama/wllama/src/utils.ts) risolve i path con
+ * `document.baseURI`, e viene chiamata quando wllama crea il proprio worker interno.
+ * In un Web Worker `document` non esiste → `ReferenceError: document is not defined`,
+ * e l'intera cella di bench fallisce. Non è aggirabile passando già un URL assoluto:
+ * `document.baseURI` viene letto comunque.
+ *
+ * Lo shim è sicuro perché `document.baseURI` è **l'unico** uso di `document` in tutto il
+ * sorgente di wllama (verificato su 3.5.1), e nel worker `self.location.href` è
+ * esattamente la base che serve a risolvere l'URL del wasm.
+ *
+ * Il conformance harness non lo esercita: gira nel main thread, dove `document` c'è.
+ * È il bench reale — che vive nel worker — a dipenderne.
+ */
+export function ensureWorkerDocumentShim(scope: {
+  document?: unknown;
+  location?: { href: string };
+}): void {
+  if (scope.document === undefined && scope.location) {
+    scope.document = { baseURI: scope.location.href };
+  }
+}
+
 function defaultEngineFactory(): EngineFactory {
   return async (modelUrl, onProgress) => {
+    ensureWorkerDocumentShim(self as unknown as { document?: unknown; location?: { href: string } });
     const wllama = new Wllama({ default: wllamaWasmUrl });
     await wllama.loadModelFromUrl(modelUrl, {
       n_ctx: N_CTX,
@@ -129,6 +155,7 @@ function defaultEngineFactory(): EngineFactory {
 function defaultIsCached(modelUrl: string): Promise<boolean> {
   // Istanza usata solo per interrogare la cache: `new Wllama` non carica nulla finché non
   // gli si chiede un modello, quindi non c'è WASM da liberare qui.
+  ensureWorkerDocumentShim(self as unknown as { document?: unknown; location?: { href: string } });
   const probe = new Wllama({ default: wllamaWasmUrl });
   return probe.cacheManager
     .getNameFromURL(modelUrl)

@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 2,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-26T22:51:39.379Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "nvidia",
+      "architecture": "lovelace",
+      "device": "",
+      "description": ""
+    },
+    "limits": {
+      "maxBufferSize": 4294967292,
+      "maxStorageBufferBindingSize": 2147483644,
+      "maxComputeWorkgroupStorageSize": 49152,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 16
+    },
+    "features": [
+      "depth32float-stencil8",
+      "rg11b10ufloat-renderable",
+      "texture-formats-tier1",
+      "bgra8unorm-storage",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "float32-filterable",
+      "indirect-first-instance",
+      "float32-blendable",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "texture-formats-tier2",
+      "timestamp-query",
+      "clip-distances",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ],
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    "deviceMemoryGB": 32,
+    "browser": {
+      "name": "chrome",
+      "version": "150.0.0.0"
+    },
+    "anomalies": []
+  },
+  "cells": [
+    {
+      "stack": "wllama",
+      "modelId": "Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "quant": "Q4_K_M",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 1493.429999999702,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 8406.22500000149,
+          "stdev": 131.73588415648305,
+          "samples": [
+            8541.935000002384,
+            8278.860000006855,
+            8397.879999995232
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 25.965705931686603,
+          "stdev": 0.0453782502349071,
+          "samples": [
+            25.927878645295113,
+            26.01602033757331,
+            25.95321881219139
+          ]
+        },
+        "totalMs": {
+          "mean": 18188.37833333264,
+          "stdev": 148.16637643986803,
+          "samples": [
+            18338.339999996126,
+            18042.07500000298,
+            18184.719999998808
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 8541.935000002384,
+          "decodeToksPerSec": 25.927878645295113,
+          "totalMs": 18338.339999996126,
+          "promptTokens": null,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 8278.860000006855,
+          "decodeToksPerSec": 26.01602033757331,
+          "totalMs": 18042.07500000298,
+          "promptTokens": null,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 8397.879999995232,
+          "decodeToksPerSec": 25.95321881219139,
+          "totalMs": 18184.719999998808,
+          "promptTokens": null,
+          "completionTokens": 255
+        }
+      ],
+      "anomalies": [
+        "protocol: warm-up run discarded (policy=always, cacheState=warm)"
+      ]
+    }
+  ]
+}
