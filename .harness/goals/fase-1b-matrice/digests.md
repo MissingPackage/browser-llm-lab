@@ -20,3 +20,14 @@ verificate asse per asse dal review.
 
 **Fermo per decisione PI**: docket #2 (il done-when chiede un conformance test che non è stato
 scritto — gap simmetrico anche su WebLLM) e docket #3 (mergiare la sola Fase 1 o attendere fine goal).
+
+## Iterazione (2026-07-27) — Fase 3
+Fase 3 completata: modulo qualità (`src/quality.ts` + `src/qualityPrompts.ts`, 12 prompt
+deterministici in 4 categorie + perplexity), schema bump a v3 con `BenchCell.qualityScore`
+(opzionale, non ancora collegato a un run reale — vedi docket #10) e `BenchCell.protocol`
+(docket #7, sostituisce l'abuso di `anomalies` per la nota di warm-up). Gate verdi: `npm test`
+87/87, `tsc --noEmit` pulito, `npm run build` ok.
+
+**Prossimo**: Fase 4 (README + verifica finale). Prima di dichiararla completa, decidere se
+collegare `quality.ts` alla pipeline reale (docket #10) — altrimenti il README riporterà solo
+metriche di velocità, come oggi.

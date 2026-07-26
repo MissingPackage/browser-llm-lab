@@ -1,6 +1,6 @@
 import { isMainToWorker, type WorkerToMain } from "./protocol";
 import type { InferenceAdapter } from "./adapters/types";
-import type { DeviceProbe, BenchCell, LoadReport, StackId } from "./schema";
+import type { DeviceProbe, BenchCell, LoadReport, StackId, WarmupPolicy } from "./schema";
 import { computeGenMetrics, aggregateReplicates } from "./metrics";
 import { PROMPT_512 } from "./promptset";
 import { STACK_FIXED_QUANT } from "./stacks";
@@ -23,9 +23,8 @@ const HIGH_VARIANCE_THRESHOLD = 0.15; // stdev/mean sul tok/s aggregato
  *   conservata perché è ciò che ha prodotto i dati in `results/methodology/`.
  *
  * `cacheState: "unknown"` è trattato come freddo: non sapendo, si riscalda.
+ * (`WarmupPolicy` vive in `schema.ts`: è parte della forma di `BenchCell.protocol`, v3 docket #7.)
  */
-export type WarmupPolicy = "always" | "cold-only" | "never";
-
 export const DEFAULT_WARMUP_POLICY: WarmupPolicy = "always";
 
 function needsWarmup(policy: WarmupPolicy, cacheState: LoadReport["cacheState"]): boolean {
@@ -80,10 +79,10 @@ export class BenchServer {
           // Per-run (dal messaggio) prevale sulla politica del server: la pagina pubblica
           // sceglierà per singolo run fra steady-state e prima-esperienza.
           const policy = msg.warmup ?? this.deps.warmup ?? DEFAULT_WARMUP_POLICY;
-          if (needsWarmup(policy, load.cacheState)) {
+          const warmupApplied = needsWarmup(policy, load.cacheState);
+          if (warmupApplied) {
             this.deps.post({ type: "progress", text: "warm-up (discarded)…", progress: 0 });
             await adapter.generate({ prompt: PROMPT_512.text, maxTokens: 256 });
-            anomalies.push(`protocol: warm-up run discarded (policy=${policy}, cacheState=${load.cacheState})`);
           }
           const replicates = [];
           for (let i = 0; i < replicateCount; i++) {
@@ -113,6 +112,7 @@ export class BenchServer {
             load,
             gen,
             replicates,
+            protocol: { warmupPolicy: policy, warmupApplied, replicateCount },
             anomalies,
           };
           this.deps.post({ type: "bench:result", cell });

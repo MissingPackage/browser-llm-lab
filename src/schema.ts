@@ -1,8 +1,13 @@
 import type { GenMetricsAgg } from "./metrics";
+import type { QualityScore } from "./quality";
 
-export const SCHEMA_VERSION = 2 as const;
+export const SCHEMA_VERSION = 3 as const;
 
 export type StackId = "webllm" | "transformersjs" | "wllama";
+
+// Politica di riscaldamento fra celle (ruling PI, docket #5b) — vive in schema.ts perché è
+// parte della forma dei dati (BenchCell.protocol), non del comportamento del server.
+export type WarmupPolicy = "always" | "cold-only" | "never";
 
 export interface DeviceProbe {
   webgpu: boolean;
@@ -28,6 +33,15 @@ export interface GenMetrics {
   completionTokens: number | null;
 }
 
+// v3 (docket #7): registra la politica di misura applicata alla cella, esplicitamente —
+// prima era una nota testuale dentro `anomalies`, che significa "cosa è andato storto".
+// Un warm-up applicato è il protocollo che funziona come previsto, non un'anomalia.
+export interface BenchProtocol {
+  warmupPolicy: WarmupPolicy;
+  warmupApplied: boolean;
+  replicateCount: number;
+}
+
 export interface BenchCell {
   stack: StackId;
   modelId: string;
@@ -36,6 +50,10 @@ export interface BenchCell {
   load: LoadReport;
   gen: GenMetricsAgg;
   replicates: GenMetrics[];
+  protocol: BenchProtocol; // v3, docket #7
+  // v3: non ancora popolato dalla pipeline di bench reale (vedi docket #10) — il modulo
+  // qualità è pronto e testato, il collegamento a benchServer.ts è un passo separato.
+  qualityScore?: QualityScore;
   anomalies: string[]; // es. "high-variance"
 }
 

@@ -217,3 +217,37 @@ divario dice quanto costa non avere accelerazione, non che la libreria sia lenta
 Gate: `npm test` 75/75, `tsc --noEmit` pulito, `npm run build` ok, conformance **8/8 + 8/8 + 7/8**,
 run reale in `results/4090-linux-2026-07-26T22-51-39-379Z.json`. Mergiata in `main` (`277609e`) e
 pushata.
+
+## Iterazione (2026-07-27) — Fase 3 eseguita (inline, /loop /product-loop)
+
+Branch `feat/fase-3-quality-schema-v3` creato da `main`. Prossimo decidibile per HANDOFF.md §1
+era Fase 3 (PHASES.md riga 3), nessun gate a bloccarla.
+
+- `src/quality.ts`: `computePerplexity` (`exp(-mean(logprobs))`, throw su array vuoto —
+  stesso stile di `aggregateReplicates`), `evaluateExactMatch` (12 prompt, prompt senza risposta
+  contano come sbagliati, non lanciano), `selectQualityMethod` (decide perplexity vs
+  exact-match da `capabilities().logprobs`).
+- `src/qualityPrompts.ts`: 12 prompt deterministici, 4 categorie (arithmetic/factual/format/json),
+  matcher via regex o JSON.parse + shape-check, tolleranti a whitespace/punto finale.
+- `src/schema.ts`: `SCHEMA_VERSION = 3`. `BenchCell.qualityScore?: QualityScore` — **opzionale**,
+  perché il modulo non è ancora collegato a `benchServer.ts` (registrato in docket #10: wiring
+  reale = 12 generate extra per cella o percorso logprobs, un costo/comportamento della pipeline
+  che nessun docket ha ancora approvato esplicitamente — L1 docket+continue, non un blocco).
+- **docket #7 eseguito nella stessa iterazione** (HANDOFF diceva esplicitamente di farlo qui,
+  perché è dove lo schema si tocca comunque): `BenchCell.protocol { warmupPolicy, warmupApplied,
+  replicateCount }` sostituisce la stringa `"protocol: warm-up run discarded…"` che abusava
+  `anomalies`. `benchServer.ts` aggiornato per popolarlo. `WarmupPolicy` spostato da
+  `benchServer.ts` a `schema.ts` (è forma dei dati, non comportamento) — elimina anche il
+  cross-import inverso che `protocol.ts` aveva verso `benchServer.ts` per quel tipo.
+  `GOAL.md` CONSTRAINTS emendato per includere `protocol` accanto a `qualityScore` nella clausola
+  "no ad hoc field additions".
+- Test aggiornati: `schema.test.ts`, `render.test.ts` (fixture con `protocol`),
+  `benchServer.test.ts` (6 asserzioni riscritte da "anomalies contiene la stringa protocol" a
+  "cell.protocol uguale a {...}" — più preciso, verifica tutti e tre i campi invece di un
+  sottostringa). Nuovo `tests/quality.test.ts`, 12 test.
+
+Gate: `npm test` 87/87 (75 + 12 nuovi), `tsc --noEmit` pulito, `npm run build` ok.
+
+**Scope non incluso, registrato non deciso da solo**: wiring di `quality.ts` dentro la pipeline
+di bench reale (docket #10) — `PHASES.md` riga 3 non lo richiede, e cambiare il costo/tempo di
+ogni run reale sulle GPU fisiche è una decisione che eccede l'autorità di questa iterazione.

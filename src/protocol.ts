@@ -1,5 +1,4 @@
-import type { DeviceProbe, BenchCell, StackId } from "./schema";
-import type { WarmupPolicy } from "./benchServer";
+import type { DeviceProbe, BenchCell, StackId, WarmupPolicy } from "./schema";
 
 export type MainToWorker =
   | { type: "probe" }

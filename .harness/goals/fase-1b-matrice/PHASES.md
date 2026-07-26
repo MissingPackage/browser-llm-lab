@@ -8,7 +8,7 @@ implementazione. Fasi sequenziali (nessun `parallel-group`: le fasi 1-3 toccano 
 |---|-------|------------------------|-----------------|------|--------|
 | 1 | Adapter Transformers.js | `npm test` verde (incl. nuovo conformance test transformersjs) + `tsc --noEmit` pulito + `npm run build` ok + almeno 1 run reale (non-SwiftShader) in `results/*.json` con `stack:"transformersjs"` | none | `src/adapters/transformersjs.ts`, relativo test, `src/schema.ts` (solo union `id`/`stack`), `src/main.ts`/`src/render.ts` (selettore stack minimo), `package.json` (dep `@huggingface/transformers`) | **done*** |
 | 2 | Adapter wllama | `npm test` verde (incl. nuovo conformance test wllama) + `tsc --noEmit` pulito + `npm run build` ok + almeno 1 run reale in `results/*.json` con `stack:"wllama"` | none | `src/adapters/wllama.ts`, relativo test, `src/schema.ts` (estensione union), `package.json` (dep `@wllama/wllama`) | **done†** |
-| 3 | Modulo qualità + schema v3 completo | `npm test` verde (unit test perplexity + fallback 12-prompt) + `tsc --noEmit` pulito + `BenchCell.qualityScore` presente e tipato nello schema | none | `src/quality.ts`, `src/qualityPrompts.ts`, `src/schema.ts` (campo `qualityScore`, bump `SCHEMA_VERSION=3`), relativi test | ready |
+| 3 | Modulo qualità + schema v3 completo | `npm test` verde (unit test perplexity + fallback 12-prompt) + `tsc --noEmit` pulito + `BenchCell.qualityScore` presente e tipato nello schema | none | `src/quality.ts`, `src/qualityPrompts.ts`, `src/schema.ts` (campo `qualityScore`, campo `protocol`/docket #7, bump `SCHEMA_VERSION=3`), `src/benchServer.ts` + `src/protocol.ts` (solo per popolare/tipare `protocol`), relativi test | **done‡** |
 | 4 | README + verifica finale whole-branch | Sezione "Fase 1b — matrice" nel README con gap Large documentato + suite completa verde (baseline 39 + nuovi test) + `tsc`/`build` puliti + entrambi i run (transformersjs, wllama) presenti in `results/` | none | `README.md` | ready |
 
 **\* Fase 1 — COMPLETA** (2026-07-26), riserva chiusa. Condizioni verdi: `npm test` 47/47,
@@ -51,3 +51,15 @@ Controllo automatico ogni 3 giorni; quando il fix è rilasciato, aggiornare e to
 Nota: l'esecuzione dello sweep manuale sui 3 device (M4/S22) resta **fuori da queste fasi**
 (fuori scope del goal, per costruzione — vedi GOAL.md "must docket"). Il merge di
 `feat/fase-1b-matrice` in `main` è docket-gated, non una fase autonoma.
+
+**‡ Fase 3 — COMPLETA** (2026-07-27). Condizioni verdi: `npm test` 87/87, `tsc --noEmit`
+pulito, `npm run build` ok. `src/quality.ts` (`computePerplexity`, `evaluateExactMatch`,
+`selectQualityMethod`) + `src/qualityPrompts.ts` (12 prompt deterministici, 4 categorie: arithmetic,
+factual, format, json). `BenchCell.qualityScore` opzionale — il modulo è pronto e testato ma
+**non ancora collegato** a `benchServer.ts`: nessun run reale calcola oggi un punteggio, per non
+espandere il costo/comportamento della pipeline di bench senza un ruling esplicito (vedi docket
+#10). Anche implementato **docket #7**: `BenchCell.protocol { warmupPolicy, warmupApplied,
+replicateCount }`, che sostituisce la nota testuale `"protocol: warm-up run discarded…"` che prima
+abusava `anomalies`. `WarmupPolicy` spostato da `benchServer.ts` a `schema.ts` (è forma dei dati,
+non comportamento) — elimina anche la dipendenza incrociata che `protocol.ts` aveva verso
+`benchServer.ts` per quel tipo.

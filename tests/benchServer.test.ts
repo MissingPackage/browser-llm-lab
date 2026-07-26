@@ -49,9 +49,8 @@ describe("BenchServer", () => {
       expect(result.cell.gen.ttftMs.mean).toBe(10);
       expect(result.cell.load.cacheState).toBe("cold");
       expect(result.cell.promptId).toBe("bench-512-v1");
-      expect(result.cell.anomalies).toEqual([
-        "protocol: warm-up run discarded (policy=always, cacheState=cold)",
-      ]);
+      expect(result.cell.anomalies).toEqual([]);
+      expect(result.cell.protocol).toEqual({ warmupPolicy: "always", warmupApplied: true, replicateCount: 2 });
     }
   });
 
@@ -71,6 +70,12 @@ describe("BenchServer", () => {
     });
     await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q" });
     expect(calls).toBe(4); // 3 misurate + 1 di riscaldamento, anche a cache calda
+    const result = out.find((m) => m.type === "bench:result");
+    if (result?.type === "bench:result") {
+      expect(result.cell.protocol).toEqual({ warmupPolicy: "always", warmupApplied: true, replicateCount: 3 });
+    } else {
+      throw new Error("expected bench:result");
+    }
   });
 
   it('policy "never" → nessun riscaldamento, misura la prima esperienza reale', async () => {
@@ -90,7 +95,7 @@ describe("BenchServer", () => {
     expect(calls).toBe(3);
     const result = out.find((m) => m.type === "bench:result");
     if (result?.type === "bench:result") {
-      expect(result.cell.anomalies.some((a) => a.startsWith("protocol: warm-up"))).toBe(false);
+      expect(result.cell.protocol).toEqual({ warmupPolicy: "never", warmupApplied: false, replicateCount: 3 });
     } else {
       throw new Error("expected bench:result");
     }
@@ -132,15 +137,13 @@ describe("BenchServer", () => {
     const result = out.find((m) => m.type === "bench:result");
     if (result?.type === "bench:result") {
       expect(result.cell.replicates.length).toBe(3);
-      expect(result.cell.anomalies).toContain(
-        "protocol: warm-up run discarded (policy=always, cacheState=cold)",
-      );
+      expect(result.cell.protocol).toEqual({ warmupPolicy: "always", warmupApplied: true, replicateCount: 3 });
     } else {
       throw new Error("expected bench:result");
     }
   });
 
-  it('policy "cold-only" + cache calda → nessun riscaldamento, nessuna nota di protocollo', async () => {
+  it('policy "cold-only" + cache calda → nessun riscaldamento, protocol.warmupApplied false', async () => {
     let calls = 0;
     const warm: InferenceAdapter = {
       ...fakeAdapter(),
@@ -158,7 +161,7 @@ describe("BenchServer", () => {
     expect(calls).toBe(3);
     const result = out.find((m) => m.type === "bench:result");
     if (result?.type === "bench:result") {
-      expect(result.cell.anomalies.some((a) => a.startsWith("protocol: warm-up"))).toBe(false);
+      expect(result.cell.protocol).toEqual({ warmupPolicy: "cold-only", warmupApplied: false, replicateCount: 3 });
     } else {
       throw new Error("expected bench:result");
     }
