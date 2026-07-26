@@ -2,7 +2,16 @@ import { describe, it, expect } from "vitest";
 import { renderResultsTable } from "../src/render";
 import { newRunFile, addCell } from "../src/schema";
 
-const probe = { webgpu: true, adapterInfo: null, limits: null, userAgent: "ua", deviceMemoryGB: null };
+const probe = {
+  webgpu: true,
+  adapterInfo: null,
+  limits: null,
+  features: [],
+  userAgent: "ua",
+  deviceMemoryGB: null,
+  browser: { name: "chrome", version: "150.0" },
+  anomalies: [],
+};
 
 describe("renderResultsTable", () => {
   it("renders one row per cell with key metrics", () => {

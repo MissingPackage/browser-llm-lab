@@ -5,8 +5,11 @@ const probe: DeviceProbe = {
   webgpu: true,
   adapterInfo: { vendor: "nvidia", architecture: "", device: "", description: "" },
   limits: { maxStorageBufferBindingSize: 2147483644 },
+  features: ["shader-f16"],
   userAgent: "test-ua",
   deviceMemoryGB: 8,
+  browser: { name: "chrome", version: "150.0" },
+  anomalies: [],
 };
 
 const cell: BenchCell = {

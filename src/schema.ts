@@ -1,11 +1,14 @@
-export const SCHEMA_VERSION = 1 as const;
+export const SCHEMA_VERSION = 2 as const;
 
 export interface DeviceProbe {
   webgpu: boolean;
   adapterInfo: { vendor: string; architecture: string; device: string; description: string } | null;
   limits: Record<string, number> | null;
+  features: string[]; // v2: GPUSupportedFeatures enumerate (es. "shader-f16")
   userAgent: string;
   deviceMemoryGB: number | null;
+  browser: { name: string; version: string }; // v2: parsed da userAgent
+  anomalies: string[]; // v2: es. rilevazione software-adapter
 }
 
 export interface LoadReport {

@@ -4,7 +4,14 @@ import type { WorkerToMain } from "../src/protocol";
 import type { InferenceAdapter } from "../src/adapters/types";
 
 const fakeProbe = async () => ({
-  webgpu: true, adapterInfo: null, limits: null, userAgent: "ua", deviceMemoryGB: null,
+  webgpu: true,
+  adapterInfo: null,
+  limits: null,
+  features: [],
+  userAgent: "ua",
+  deviceMemoryGB: null,
+  browser: { name: "chrome", version: "150.0" },
+  anomalies: [],
 });
 
 function fakeAdapter(): InferenceAdapter {
