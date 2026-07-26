@@ -43,11 +43,12 @@ describe("renderResultsTable", () => {
     expect(html).toContain("cold");
   });
 
-  it("renders anomaly badges when present", () => {
+  it("renders anomaly badges when present, escaped", () => {
     let run = newRunFile("4090-linux", probe, "2026-07-25T12:00:00Z");
     run = addCell(run, cellWith({ anomalies: ["high-variance: stdev/mean=0.20 > 0.15"] }));
     const html = renderResultsTable(run);
-    expect(html).toContain("high-variance");
+    expect(html).toContain('<span class="anomaly">high-variance: stdev/mean=0.20 &gt; 0.15</span>');
+    expect(html).not.toContain("0.20 > 0.15"); // il '>' letterale nell'anomalia deve uscire escaped
   });
 
   it("renders empty state", () => {
