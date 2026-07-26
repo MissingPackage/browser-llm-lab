@@ -1,0 +1,571 @@
+{
+  "schemaVersion": 2,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-26T19:31:55.278Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "nvidia",
+      "architecture": "lovelace",
+      "device": "",
+      "description": ""
+    },
+    "limits": {
+      "maxBufferSize": 4294967292,
+      "maxStorageBufferBindingSize": 2147483644,
+      "maxComputeWorkgroupStorageSize": 49152,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 16
+    },
+    "features": [
+      "depth32float-stencil8",
+      "rg11b10ufloat-renderable",
+      "texture-formats-tier1",
+      "bgra8unorm-storage",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "float32-filterable",
+      "indirect-first-instance",
+      "float32-blendable",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "clip-distances",
+      "timestamp-query",
+      "texture-formats-tier2",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ],
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    "deviceMemoryGB": 32,
+    "browser": {
+      "name": "chrome",
+      "version": "150.0.0.0"
+    },
+    "anomalies": []
+  },
+  "cells": [
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 204269.5700000003,
+        "cacheState": "cold"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 412.8683333347241,
+          "stdev": 259.6945447202238,
+          "samples": [
+            712.734999999404,
+            264.05000000447035,
+            261.820000000298
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 31.744634474561007,
+          "stdev": 1.0353911330740861,
+          "samples": [
+            30.600287642693992,
+            32.01699537450261,
+            32.616620406486405
+          ]
+        },
+        "totalMs": {
+          "mean": 8451.493333334724,
+          "stdev": 520.1864287290113,
+          "samples": [
+            9045.990000002086,
+            8228.570000000298,
+            8079.920000001788
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 712.734999999404,
+          "decodeToksPerSec": 30.600287642693992,
+          "totalMs": 9045.990000002086,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 264.05000000447035,
+          "decodeToksPerSec": 32.01699537450261,
+          "totalMs": 8228.570000000298,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 261.820000000298,
+          "decodeToksPerSec": 32.616620406486405,
+          "totalMs": 8079.920000001788,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 3031.9349999949336,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 375.5483333344261,
+          "stdev": 189.99272554260318,
+          "samples": [
+            593.7700000032783,
+            246.89999999850988,
+            285.9750000014901
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 30.97409225893683,
+          "stdev": 0.5356856630609423,
+          "samples": [
+            31.566770218073067,
+            30.831078936630043,
+            30.52442762210738
+          ]
+        },
+        "totalMs": {
+          "mean": 8609.86666666468,
+          "stdev": 81.33742716775274,
+          "samples": [
+            8671.884999997914,
+            8517.77499999851,
+            8639.939999997616
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 593.7700000032783,
+          "decodeToksPerSec": 31.566770218073067,
+          "totalMs": 8671.884999997914,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 246.89999999850988,
+          "decodeToksPerSec": 30.831078936630043,
+          "totalMs": 8517.77499999851,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 285.9750000014901,
+          "decodeToksPerSec": 30.52442762210738,
+          "totalMs": 8639.939999997616,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 1899.4200000017881,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 344.1166666671634,
+          "stdev": 177.30186831862247,
+          "samples": [
+            548.8400000035763,
+            240.26500000059605,
+            243.2449999973178
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 101.32175659425718,
+          "stdev": 0.26366407148858456,
+          "samples": [
+            101.03822745540815,
+            101.36746303981084,
+            101.55957928755252
+          ]
+        },
+        "totalMs": {
+          "mean": 2850.9933333322406,
+          "stdev": 183.3801039762704,
+          "samples": [
+            3062.740000002086,
+            2746,
+            2744.2399999946356
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 548.8400000035763,
+          "decodeToksPerSec": 101.03822745540815,
+          "totalMs": 3062.740000002086,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 240.26500000059605,
+          "decodeToksPerSec": 101.36746303981084,
+          "totalMs": 2746,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 243.2449999973178,
+          "decodeToksPerSec": 101.55957928755252,
+          "totalMs": 2744.2399999946356,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 1676.5249999985099,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 336.0816666657726,
+          "stdev": 161.4021267959369,
+          "samples": [
+            522.4350000023842,
+            240.67499999701977,
+            245.13499999791384
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 105.30728188196464,
+          "stdev": 3.740809386534362,
+          "samples": [
+            101.15713406704242,
+            106.34511921944485,
+            108.41959235940668
+          ]
+        },
+        "totalMs": {
+          "mean": 2750.130000000199,
+          "stdev": 246.16682610802417,
+          "samples": [
+            3033.380000002682,
+            2629.125,
+            2587.884999997914
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 522.4350000023842,
+          "decodeToksPerSec": 101.15713406704242,
+          "totalMs": 3033.380000002682,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 240.67499999701977,
+          "decodeToksPerSec": 106.34511921944485,
+          "totalMs": 2629.125,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 245.13499999791384,
+          "decodeToksPerSec": 108.41959235940668,
+          "totalMs": 2587.884999997914,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 2715.920000001788,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 420.99666666736204,
+          "stdev": 275.81457296059415,
+          "samples": [
+            739.4699999988079,
+            259.58500000089407,
+            263.9350000023842
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 49.342065153558245,
+          "stdev": 0.4945248239016242,
+          "samples": [
+            49.08197459670414,
+            49.03186109566389,
+            49.91235976830668
+          ]
+        },
+        "totalMs": {
+          "mean": 5589.344999998808,
+          "stdev": 302.39863247892936,
+          "samples": [
+            5934.859999999404,
+            5460.284999996424,
+            5372.890000000596
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 739.4699999988079,
+          "decodeToksPerSec": 49.08197459670414,
+          "totalMs": 5934.859999999404,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 259.58500000089407,
+          "decodeToksPerSec": 49.03186109566389,
+          "totalMs": 5460.284999996424,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 263.9350000023842,
+          "decodeToksPerSec": 49.91235976830668,
+          "totalMs": 5372.890000000596,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 2279.2700000032783,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 373.9733333364129,
+          "stdev": 217.42824369706577,
+          "samples": [
+            625,
+            252.23500000685453,
+            244.6850000023842
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 46.62821039572419,
+          "stdev": 2.3096842181778734,
+          "samples": [
+            49.27740959289636,
+            45.569973140529,
+            45.03724845374722
+          ]
+        },
+        "totalMs": {
+          "mean": 5851.491666667163,
+          "stdev": 53.52426490338993,
+          "samples": [
+            5799.784999996424,
+            5848.0250000059605,
+            5906.664999999106
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 625,
+          "decodeToksPerSec": 49.27740959289636,
+          "totalMs": 5799.784999996424,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 252.23500000685453,
+          "decodeToksPerSec": 45.569973140529,
+          "totalMs": 5848.0250000059605,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 244.6850000023842,
+          "decodeToksPerSec": 45.03724845374722,
+          "totalMs": 5906.664999999106,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 1460.9500000029802,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 297.12666666756076,
+          "stdev": 164.73335555575318,
+          "samples": [
+            487.1499999985099,
+            209.5600000023842,
+            194.67000000178814
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 107.81042391637556,
+          "stdev": 4.868137888407973,
+          "samples": [
+            102.49870867745175,
+            108.87316276562868,
+            112.05940030604627
+          ]
+        },
+        "totalMs": {
+          "mean": 2656.3683333322406,
+          "stdev": 270.54763353397334,
+          "samples": [
+            2965.2300000041723,
+            2542.5499999970198,
+            2461.3249999955297
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 487.1499999985099,
+          "decodeToksPerSec": 102.49870867745175,
+          "totalMs": 2965.2300000041723,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 209.5600000023842,
+          "decodeToksPerSec": 108.87316276562868,
+          "totalMs": 2542.5499999970198,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 194.67000000178814,
+          "decodeToksPerSec": 112.05940030604627,
+          "totalMs": 2461.3249999955297,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 1473.7599999979138,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 290.106666666766,
+          "stdev": 169.62844884847536,
+          "samples": [
+            485.9750000014901,
+            191.46000000089407,
+            192.88499999791384
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 115.63664205382638,
+          "stdev": 5.791998745349844,
+          "samples": [
+            118.46324258147263,
+            119.47262712792943,
+            108.9740564520771
+          ]
+        },
+        "totalMs": {
+          "mean": 2490.4283333321414,
+          "stdev": 158.95087561450765,
+          "samples": [
+            2630.10000000149,
+            2317.469999998808,
+            2523.7149999961257
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 485.9750000014901,
+          "decodeToksPerSec": 118.46324258147263,
+          "totalMs": 2630.10000000149,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 191.46000000089407,
+          "decodeToksPerSec": 119.47262712792943,
+          "totalMs": 2317.469999998808,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 192.88499999791384,
+          "decodeToksPerSec": 108.9740564520771,
+          "totalMs": 2523.7149999961257,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "anomalies": []
+    }
+  ]
+}
