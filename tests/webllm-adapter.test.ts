@@ -77,4 +77,25 @@ describe("WebLLMAdapter", () => {
       stream_options: { include_usage: true },
     });
   });
+
+  it("dispose unloads the engine; generate after dispose throws not loaded", async () => {
+    let unloaded = false;
+    const engine = {
+      chat: {
+        completions: {
+          create: async function* () {
+            yield { choices: [{ delta: { content: "x" } }], usage: null };
+          },
+        },
+      },
+      unload: async () => {
+        unloaded = true;
+      },
+    };
+    const a = new WebLLMAdapter({ engineFactory: async () => engine as never, hasCache: async () => false });
+    await a.load("test-model", () => {});
+    await a.dispose();
+    expect(unloaded).toBe(true);
+    await expect(a.generate({ prompt: "x", maxTokens: 1 })).rejects.toThrow("not loaded");
+  });
 });
