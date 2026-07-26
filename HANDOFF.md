@@ -13,8 +13,9 @@ sostanziale (due nuovi stack, non un fix incrementale): probabile candidato per 
 brainstorming/spec-first dedicato prima di un piano di implementazione. Fermo qui in attesa di
 ruling (docket #7).
 
-Nota: `git push origin main` resta bloccato dal pre-push hook (docket #5) finché i commit che
-toccano `docs/superpowers/` restano in `main` — non pushare senza prima leggere quel docket item.
+**Pushato su `origin/main`** (2026-07-26, `d2d3c43..4c72fb4`): `docs/superpowers/` è ora pubblico
+su GitHub — la policy "solo locale" (docket #5) è stata rivista e il pre-push hook rimosso, vedi
+docket #5 per il perché.
 
 ## 2. State delta (session 2, 2026-07-26)
 - Scritto il piano Fase 1b — Fondamenta (8 task, TDD), verificato da loop-verifier: PASS su
@@ -96,6 +97,6 @@ toccano `docs/superpowers/` restano in `main` — non pushare senza prima legger
 2. ~~Installare Chrome branded per testare `shader-f16`~~ FATTO 2026-07-25: f16 assente anche sul branded (pure con dev-features) → è Dawn/driver; q4f16_1 su questa macchina solo via Firefox.
 3. Punteggio decode `null` vs `0` con <2 token: adjudicato dal controller (null); ratificare o ribaltare.
 4. Guardia `completionTokens >= 2` + prosa piano allineata + probe never-throws + erasableSyntaxOnly: tre adjudication del controller in sessione, tutte documentate nel ledger — ratifica implicita se nessuna obiezione.
-5. ~~`docs/superpowers/` gitignored vs tracciato~~ RATIFICATO 2026-07-26 (Cristiano): "versioniamolo sul git locale ma teniamolo fuori da github". Fatto: rimosso da `.gitignore` (ora tracciato normalmente, commit incluso il piano fase-1b-fondamenta), aggiunto `.git/hooks/pre-push` che blocca qualunque push la cui tree introduca contenuto `docs/superpowers/` **oltre quello già presente in `origin/main`** (baseline = `origin/main`, non tree assoluta — altrimenti i 2 file storici già pubblici, spec e piano fase-1a, bloccherebbero ogni push futuro; testato con un remote fittizio prima di fidarsene). Hook locale, non tracciato — enforcement per-macchina, coerente con "solo locale". `.superpowers/` (ledger SDD) resta gitignored come da decisione precedente, non toccato da questa ratifica. **Conseguenza operativa**: da `ed36881` in poi, `git push origin main` fallirà finché il commit col piano fase-1b-fondamenta resta in `main` — per pubblicare serve prima un cherry-pick/rebase dei soli commit di codice su un branch pulito.
+5. ~~`docs/superpowers/` gitignored vs tracciato~~ **REVISIONATO 2026-07-26** (Cristiano). Prima ratifica: tracciato in git locale ma mai su GitHub (pre-push hook). Conseguenza operativa emersa subito: blocca `git push origin main` per qualunque commit futuro che tocchi anche solo un file sotto `docs/superpowers/` insieme a codice — un cherry-pick "una tantum" non risolve, si ripresenta ad ogni push. Cristiano: "che senso ha se poi non possiamo più pushare... togliamo la regola, pazienza". **Deciso**: hook `.git/hooks/pre-push` rimosso, `docs/superpowers/` (piano fase-1b-fondamenta incluso) è ora pubblico su GitHub (push 2026-07-26, `d2d3c43..4c72fb4`). `.superpowers/` (ledger SDD) resta gitignored, non toccato.
 6. ~~Merge di `fix/fase-1b-fixin1b` in `main`~~ FATTO 2026-07-26 su richiesta esplicita di Cristiano. Gate post-merge verdi.
 7. **Nuovo (2026-07-26)**: avvio del piano "1b — matrice" (adapter Transformers.js v3 + wllama, sweep multi-device M4/S22, modulo qualità-leggera — spec §Fasatura). A differenza delle fondamenta appena chiuse, introduce due stack interi nuovi: probabile candidato per un passaggio brainstorming/spec-first dedicato prima del piano di implementazione, non solo "il prossimo piano scritto in autonomia". In attesa di ruling PI su scope/priorità prima di procedere.
