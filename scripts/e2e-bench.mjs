@@ -52,19 +52,30 @@ if (!isReal) {
   }
 }
 
+// Override stack via env (default: primo stack nel select, cioè "webllm")
+if (process.env.STACK) {
+  await page.evaluate((stack) => {
+    const stackSel = document.querySelector("#stack");
+    stackSel.value = stack;
+    stackSel.dispatchEvent(new Event("change"));
+  }, process.env.STACK);
+  console.log(`[e2e] stack override: ${process.env.STACK}`);
+}
+
 // Override modello via env (es. quant alternativa se il browser non espone shader-f16)
 if (process.env.MODEL_ID) {
   await page.evaluate(
-    ([id, q]) => {
+    ([id, q, stack]) => {
       const sel = document.querySelector("#model");
       const o = document.createElement("option");
       o.value = id;
       o.dataset.quant = q;
+      o.dataset.stack = stack;
       o.textContent = id;
       sel.appendChild(o);
       sel.value = id;
     },
-    [process.env.MODEL_ID, process.env.QUANT ?? "unknown"],
+    [process.env.MODEL_ID, process.env.QUANT ?? "unknown", process.env.STACK ?? "webllm"],
   );
   console.log(`[e2e] modello override: ${process.env.MODEL_ID}`);
 }
