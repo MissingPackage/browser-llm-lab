@@ -3,10 +3,17 @@
 ## 1. Next decidable
 **Goal attivo**: `fase-1b-matrice` (`.harness/goals/fase-1b-matrice/`) — GOAL.md + PHASES.md
 scritti 2026-07-26 da brainstorming → goal-brief → goal-setup, chiudendo il docket #7. Design
-di riferimento: `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`. **Fase 1 (adapter Transformers.js) ESEGUITA E COMPLETA** su `feat/fase-1b-matrice` (2026-07-26,
-subagent-driven: 4 task, review avversaria per task + final review whole-branch su opus). Gate:
-`npm test` 47/47, `tsc --noEmit` pulito, `npm run build` ok. Branch **non mergiato, non pushato**
-(entrambi docket-gated — vedi docket #3).
+di riferimento: `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`. **Fase 1 (adapter Transformers.js) COMPLETA E MERGIATA IN `main`** (2026-07-26, merge commit
+`66672bd`, per ruling docket #3: merge a fine di ogni fase). Subagent-driven: 4 task, review
+avversaria per task, final review whole-branch su opus, più un giro di conformance harness.
+Gate post-merge su `main`, tutti rilanciati: `npm test` 47/47, `tsc --noEmit` pulito,
+`npm run build` ok, **`npm run test:conformance` 8/8 + 8/8 exit 0** (browser reale, 4090).
+**NON pushato**: il ruling copre il merge, non il push verso `origin` — resta da chiedere.
+
+`main` ora ha: adapter Transformers.js, routing multi-stack (`StackId`, registry per-stack,
+guard di protocollo), selettore stack in UI, guard anti-mislabel su `quant` (`src/stacks.ts`),
+e l'harness di conformance in browser (`npm run test:conformance`) con contratto condiviso tra
+tutti gli adapter — **verificato con un mutation test** che sa davvero fallire.
 
 **Primo risultato cross-stack reale, ma il rapporto NON è ancora dichiarabile.** Misure sulla stessa
 4090, stesso base model Qwen2.5-0.5B, schema v2, 3 repliche: webllm q4f32_1 ~101–116 tok/s,
@@ -16,15 +23,19 @@ e +14% su webllm nella stessa sessione, stesso probe, in `results/4090-linux-202
 Le repliche multiple non lo catturano perché sono consecutive dentro la stessa cella. Serve una
 decisione di metodologia prima di pubblicare qualunque rapporto.
 
-**Prossimo decidibile — due decisioni del PI** (docket `.harness/goals/fase-1b-matrice/docket.md`):
-- **#2**: il done-when della Fase 1 chiede un *conformance test* (carica modello tiny, output
-  deterministico, `capabilities()` reali); i test scritti iniettano tutti un engine fake, quindi la
-  clausola non è soddisfatta. Lo stesso gap esiste per WebLLM, che non ha mai avuto un conformance
-  test — renderlo bloccante solo qui sarebbe asimmetrico. Tre opzioni nel docket.
-- **#3**: mergiare ora la sola Fase 1 in `main`, o tenere il branch fino a fine goal (Fasi 2-4 ancora
-  `ready`).
+**Prossimo decidibile**: **Fase 2 — adapter wllama** (PHASES.md riga 2). Il conformance harness è
+già pronto ad accoglierlo: aggiungere il terzo stack al contratto è una riga nella pagina di
+conformance.
 
-Poi: Fase 2 (adapter wllama), Fase 3 (modulo qualità + schema v3), Fase 4 (README + verifica finale).
+**Aperto e bloccante per qualunque pubblicazione di numeri — docket #5b**: effetto warm-up tra
+celle. Serve una decisione di metodologia (cella di riscaldamento scartata / ordine randomizzato /
+indice di esecuzione come covariata / rilevazione della deriva). Finché non è chiuso, nessun
+rapporto cross-stack è dichiarabile.
+
+Altri aperti: **#5** (`strict` in tsconfig, mai risposto), **push su `origin`** (non coperto dal
+ruling sul merge).
+
+Poi: Fase 3 (modulo qualità + schema v3), Fase 4 (README + verifica finale).
 
 Contesto precedente: Fase 1b — Fondamenta **mergiata in `main`** (2026-07-26, merge commit su
 richiesta esplicita di Cristiano): piano `docs/superpowers/plans/2026-07-26-fase-1b-fondamenta.md`
