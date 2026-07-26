@@ -9,13 +9,28 @@ const DEFAULT_REPLICATE_COUNT = 3;
 const HIGH_VARIANCE_THRESHOLD = 0.15; // stdev/mean sul tok/s aggregato
 
 /**
- * Protocollo di misura (ruling PI, docket #5b): una cella che parte a cache fredda
- * misura sistematicamente più lento delle celle successive nella stessa sessione
- * (+55% osservato su transformersjs). Si esegue quindi una generazione di
- * riscaldamento — carico identico a quello misurato — e la si scarta.
+ * Politica di riscaldamento (ruling PI, docket #5b). Le due modalità **misurano cose
+ * diverse e non vanno confrontate fra loro**:
+ *
+ * - `"always"` (default, uso benchmark) — una generazione di riscaldamento a carico
+ *   identico viene eseguita e scartata prima di ogni cella. Misura lo *steady state*.
+ *   Senza, la prima cella di ogni sessione browser è ~7-14% più veloce delle successive
+ *   e il confronto cross-stack dipende dall'ordine dei run (misurato su 4090, vedi
+ *   `results/methodology/`). Residuo dichiarato: ~3% di dipendenza dall'ordine.
+ * - `"never"` (uso divulgativo) — nessun riscaldamento. È ciò che un utente vero
+ *   sperimenta al primo colpo, che è l'informazione utile su una pagina pubblica.
+ * - `"cold-only"` — riscalda solo a cache fredda. Prima formulazione del ruling,
+ *   conservata perché è ciò che ha prodotto i dati in `results/methodology/`.
+ *
  * `cacheState: "unknown"` è trattato come freddo: non sapendo, si riscalda.
  */
-function needsWarmup(cacheState: LoadReport["cacheState"]): boolean {
+export type WarmupPolicy = "always" | "cold-only" | "never";
+
+export const DEFAULT_WARMUP_POLICY: WarmupPolicy = "always";
+
+function needsWarmup(policy: WarmupPolicy, cacheState: LoadReport["cacheState"]): boolean {
+  if (policy === "never") return false;
+  if (policy === "always") return true;
   return cacheState !== "warm";
 }
 
@@ -25,6 +40,7 @@ export class BenchServer {
     probe: () => Promise<DeviceProbe>;
     post: (m: WorkerToMain) => void;
     replicateCount?: number;
+    warmup?: WarmupPolicy;
   };
 
   constructor(deps: {
@@ -32,6 +48,7 @@ export class BenchServer {
     probe: () => Promise<DeviceProbe>;
     post: (m: WorkerToMain) => void;
     replicateCount?: number;
+    warmup?: WarmupPolicy;
   }) {
     this.deps = deps;
   }
@@ -60,11 +77,13 @@ export class BenchServer {
             this.deps.post({ type: "progress", text, progress }),
           );
           const anomalies: string[] = [];
-          const warmup = needsWarmup(load.cacheState);
-          if (warmup) {
+          // Per-run (dal messaggio) prevale sulla politica del server: la pagina pubblica
+          // sceglierà per singolo run fra steady-state e prima-esperienza.
+          const policy = msg.warmup ?? this.deps.warmup ?? DEFAULT_WARMUP_POLICY;
+          if (needsWarmup(policy, load.cacheState)) {
             this.deps.post({ type: "progress", text: "warm-up (discarded)…", progress: 0 });
             await adapter.generate({ prompt: PROMPT_512.text, maxTokens: 256 });
-            anomalies.push(`protocol: warm-up run discarded (cacheState=${load.cacheState})`);
+            anomalies.push(`protocol: warm-up run discarded (policy=${policy}, cacheState=${load.cacheState})`);
           }
           const replicates = [];
           for (let i = 0; i < replicateCount; i++) {

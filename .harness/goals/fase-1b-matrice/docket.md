@@ -105,6 +105,19 @@
    ≈ 2.0–2.3×** sulla stessa 4090 (2.01 in posizione 1, 2.27 in posizione 2) — coerenti col ~2.3×
    stimato, ma ancora ordine-dipendenti finché il ruling qui sopra non è preso.
 
+   OK va bene l'estensione del warm-up a tutte le celle. Teniamo presente però che potrebbe non essere una situazione che non sempre si verificherebbe nella realtà. Quindi direi che conviene lasciarlo come opzione quando costruiremo la pagina pubblica (runnare con warm up o no). Il warm up per ogni cella è utile per i benchmark, mentre senza warm up è forse più utile alle persone per capire in applicazioni reali che comportamento potrebbero aspettarsi.
+
+   **CHIUSO — implementato 2026-07-26.** `WarmupPolicy` in `src/benchServer.ts`:
+   `"always"` (default, benchmark/steady-state) · `"never"` (prima esperienza reale, uso
+   divulgativo) · `"cold-only"` (prima formulazione del ruling, conservata perché è ciò che ha
+   prodotto i dati in `results/methodology/`). Selezionabile per singolo run via
+   `MainToWorker.bench.warmup` (validato in `isMainToWorker`), con fallback sulla politica del
+   server. **Nessuna UI**: la pagina pubblica dovrà solo esporre il controllo, il motore è pronto.
+   Il commento sopra `WarmupPolicy` registra il punto del PI: le due modalità **misurano cose
+   diverse e non vanno confrontate fra loro** — è una distinzione che va difesa anche nella UI,
+   non solo nel codice, o la pagina inviterà a confronti scorretti.
+   Gate: `tsc --noEmit` pulito, `npm test` 53/53, `npm run build` ok.
+
 5. **`tsconfig.json` non ha `strict`** (pre-esistente, non introdotto da questo branch; segnalato dal
    final review). Ogni `| null` in `schema.ts`/`metrics.ts` e il `!` nell'helper `$()` di `main.ts` non
    sono controllati. Per un codebase la cui correttezza poggia sulla distinzione null-vs-zero
@@ -130,6 +143,15 @@
    `anomalies` documentato nel README (`protocol:` = informativo, non anomalia).
    **Raccomandazione**: (b) — Fase 3 tocca già lo schema, e un campo esplicito è ciò che rende il
    protocollo verificabile a posteriori da chi legge i JSON senza conoscere la convenzione.
+
+   **AGGIORNAMENTO 2026-07-26 — il ruling su #5b alza la posta: ora è correttezza dei dati, non
+   estetica.** Con `WarmupPolicy` esistono due modalità che misurano cose diverse, e la nota in
+   `anomalies` viene emessa **solo quando il warm-up avviene**. Conseguenza: un file senza note è
+   ambiguo fra `policy="never"` (misura deliberata della prima esperienza) e `policy="cold-only"`
+   su cache calda. Due run con numeri legittimamente diversi diventano indistinguibili nel JSON.
+   Fintanto che la pagina pubblica non espone la scelta il rischio resta teorico; **nel momento in
+   cui la espone, diventa reale** — chiunque scarichi due export non saprà quale confronto è
+   lecito. Questo sposta la raccomandazione da "opportuna" a "da fare prima della pagina pubblica".
 
 6. **Minor accettati come sono** (dal final review, registrati per non perderli):
    `STACK_IDS` castato a `string[]` per `.includes` (cosmetico); `stackSel.value as StackId` non

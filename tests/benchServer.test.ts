@@ -49,8 +49,69 @@ describe("BenchServer", () => {
       expect(result.cell.gen.ttftMs.mean).toBe(10);
       expect(result.cell.load.cacheState).toBe("cold");
       expect(result.cell.promptId).toBe("bench-512-v1");
-      expect(result.cell.anomalies).toEqual(["protocol: warm-up run discarded (cacheState=cold)"]);
+      expect(result.cell.anomalies).toEqual([
+        "protocol: warm-up run discarded (policy=always, cacheState=cold)",
+      ]);
     }
+  });
+
+  it("default policy warms up even on a warm cache (steady-state measurement)", async () => {
+    let calls = 0;
+    const warm: InferenceAdapter = {
+      ...fakeAdapter(),
+      load: async () => ({ loadMs: 100, cacheState: "warm" as const }),
+      generate: async () => { calls++; return { tRequestStart: 0, chunkTimestamps: [10, 20, 30], promptTokens: 512, completionTokens: 3 }; },
+    };
+    const out: WorkerToMain[] = [];
+    const s = new BenchServer({
+      adapters: { webllm: () => warm, transformersjs: () => warm },
+      probe: fakeProbe,
+      post: (m) => out.push(m),
+      replicateCount: 3,
+    });
+    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q" });
+    expect(calls).toBe(4); // 3 misurate + 1 di riscaldamento, anche a cache calda
+  });
+
+  it('policy "never" → nessun riscaldamento, misura la prima esperienza reale', async () => {
+    let calls = 0;
+    const counting: InferenceAdapter = {
+      ...fakeAdapter(),
+      generate: async () => { calls++; return { tRequestStart: 0, chunkTimestamps: [10, 20, 30], promptTokens: 512, completionTokens: 3 }; },
+    };
+    const out: WorkerToMain[] = [];
+    const s = new BenchServer({
+      adapters: { webllm: () => counting, transformersjs: () => counting },
+      probe: fakeProbe,
+      post: (m) => out.push(m),
+      replicateCount: 3,
+    });
+    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q", warmup: "never" });
+    expect(calls).toBe(3);
+    const result = out.find((m) => m.type === "bench:result");
+    if (result?.type === "bench:result") {
+      expect(result.cell.anomalies.some((a) => a.startsWith("protocol: warm-up"))).toBe(false);
+    } else {
+      throw new Error("expected bench:result");
+    }
+  });
+
+  it("la policy del messaggio prevale su quella del server", async () => {
+    let calls = 0;
+    const counting: InferenceAdapter = {
+      ...fakeAdapter(),
+      generate: async () => { calls++; return { tRequestStart: 0, chunkTimestamps: [10, 20, 30], promptTokens: 512, completionTokens: 3 }; },
+    };
+    const out: WorkerToMain[] = [];
+    const s = new BenchServer({
+      adapters: { webllm: () => counting, transformersjs: () => counting },
+      probe: fakeProbe,
+      post: (m) => out.push(m),
+      replicateCount: 1,
+      warmup: "always",
+    });
+    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q", warmup: "never" });
+    expect(calls).toBe(1);
   });
 
   it("cold cache → runs one extra warm-up generation and discards it", async () => {
@@ -71,13 +132,15 @@ describe("BenchServer", () => {
     const result = out.find((m) => m.type === "bench:result");
     if (result?.type === "bench:result") {
       expect(result.cell.replicates.length).toBe(3);
-      expect(result.cell.anomalies).toContain("protocol: warm-up run discarded (cacheState=cold)");
+      expect(result.cell.anomalies).toContain(
+        "protocol: warm-up run discarded (policy=always, cacheState=cold)",
+      );
     } else {
       throw new Error("expected bench:result");
     }
   });
 
-  it("warm cache → no warm-up run, no protocol note", async () => {
+  it('policy "cold-only" + cache calda → nessun riscaldamento, nessuna nota di protocollo', async () => {
     let calls = 0;
     const warm: InferenceAdapter = {
       ...fakeAdapter(),
@@ -91,7 +154,7 @@ describe("BenchServer", () => {
       post: (m) => out.push(m),
       replicateCount: 3,
     });
-    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q" });
+    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q", warmup: "cold-only" });
     expect(calls).toBe(3);
     const result = out.find((m) => m.type === "bench:result");
     if (result?.type === "bench:result") {
@@ -148,8 +211,6 @@ describe("BenchServer", () => {
     let call = 0;
     const varyingAdapter: InferenceAdapter = {
       ...fakeAdapter(),
-      // cache warm: nessun run di riscaldamento, così lo spread cade sulle repliche misurate
-      load: async () => ({ loadMs: 100, cacheState: "warm" as const }),
       generate: async () => {
         call++;
         const chunks = call === 1 ? [0, 100] : [0, 25];
@@ -163,7 +224,9 @@ describe("BenchServer", () => {
       post: (m) => out.push(m),
       replicateCount: 2,
     });
-    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q" });
+    // warmup "never": senza, il run di riscaldamento assorbirebbe la generazione lenta
+    // che è proprio la sorgente di spread che questo test verifica.
+    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q", warmup: "never" });
     const result = out.find((m) => m.type === "bench:result");
     if (result?.type === "bench:result") {
       expect(result.cell.anomalies.some((a) => a.includes("high-variance"))).toBe(true);

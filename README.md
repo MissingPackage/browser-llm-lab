@@ -48,10 +48,19 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
     node scripts/seq-bench.mjs
   ```
   Run archiviati in `results/methodology/` (evidenza del protocollo di misura, non benchmark).
-- **Protocollo di misura**: prima delle repliche misurate, una cella a cache fredda esegue una
-  generazione di riscaldamento che viene **scartata** (`needsWarmup()` in `src/benchServer.ts`).
-  Senza, la prima cella di una sessione misura fino al 55% più lenta. La cella lo dichiara in
-  `anomalies` come `protocol: warm-up run discarded`.
+- **Protocollo di misura** (`WarmupPolicy` in `src/benchServer.ts`): prima delle repliche
+  misurate si esegue una generazione di riscaldamento che viene **scartata**. Tre modalità, e
+  **le prime due misurano cose diverse: non vanno confrontate fra loro**.
+  - `always` (default) — riscalda sempre. Misura lo **steady state**: è ciò che serve per un
+    benchmark comparabile. Senza, la prima cella di ogni sessione browser è ~7–14% più veloce
+    delle successive e il confronto cross-stack dipende dall'ordine dei run. Residuo dichiarato:
+    ~3% di dipendenza dall'ordine anche con il riscaldamento attivo.
+  - `never` — nessun riscaldamento. È ciò che un utente vero sperimenta **al primo colpo**, che
+    è l'informazione utile per capire come si comporterebbe un'applicazione reale.
+  - `cold-only` — riscalda solo a cache fredda.
+
+  Selezionabile per singolo run (`MainToWorker.bench.warmup`). Quando avviene, la cella lo
+  dichiara in `anomalies` come `protocol: warm-up run discarded (policy=…, cacheState=…)`.
 - Bench manuali sul Chrome branded: `scripts/bench-chrome.sh` (profilo dedicato `blab-bench`).
   **Mai** impostare i flag Vulkan in `chrome://flags` del profilo quotidiano: `enable-vulkan`
   corrompe il compositing su NVIDIA/Wayland, `force-enable-webgpu-interop` crasha all'avvio.
