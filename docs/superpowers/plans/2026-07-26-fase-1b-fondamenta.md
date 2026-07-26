@@ -596,7 +596,7 @@ git commit -m "feat: schema v2 (browser/features/anomalies) + software-adapter d
 
 Riferimento: HANDOFF §1 ("repliche multiple per cella") + §3 ("Varianza tok/s run-to-run ~10% → 1b deve introdurre repliche multiple per cella") + README ("varianza run-to-run (~10-25%) conferma la necessità di repliche multiple in 1b").
 
-- [ ] **Step 1: Test fallente — `aggregateReplicates`**
+- [x] **Step 1: Test fallente — `aggregateReplicates`**
 
 Aggiungere a `tests/metrics.test.ts`:
 ```typescript
@@ -632,9 +632,9 @@ describe("aggregateReplicates", () => {
 });
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
-- [ ] **Step 3: Implementazione — `metrics.ts`**
+- [x] **Step 3: Implementazione — `metrics.ts`**
 
 Aggiungere in coda a `src/metrics.ts` (dopo `computeGenMetrics`):
 ```typescript
@@ -679,9 +679,9 @@ export function aggregateReplicates(reps: GenMetrics[]): GenMetricsAgg {
 }
 ```
 
-- [ ] **Step 4: Run → PASS** (`npm test`)
+- [x] **Step 4: Run → PASS** (`npm test`)
 
-- [ ] **Step 5: Aggiornare `schema.ts`**
+- [x] **Step 5: Aggiornare `schema.ts`**
 
 In `src/schema.ts`, import in testa:
 ```typescript
@@ -701,7 +701,7 @@ export interface BenchCell {
 }
 ```
 
-- [ ] **Step 6: Test fallente — fixture `schema.test.ts`**
+- [x] **Step 6: Test fallente — fixture `schema.test.ts`**
 
 Sostituire la fixture `cell` in `tests/schema.test.ts`:
 ```typescript
@@ -732,9 +732,9 @@ expect(run2.cells[0].gen.decodeToksPerSec?.mean).toBe(42.5);
 ```
 (`GenMetrics` resta definita in `schema.ts` come in 1a — nessun nuovo import necessario in `tests/schema.test.ts` per tipizzare `replicates`)
 
-- [ ] **Step 7: Run → FAIL poi PASS** dopo l'aggiustamento fixture (`npm test`)
+- [x] **Step 7: Run → FAIL poi PASS** dopo l'aggiustamento fixture (`npm test`)
 
-- [ ] **Step 8: Wiring `benchServer.ts` — repliche + flag high-variance**
+- [x] **Step 8: Wiring `benchServer.ts` — repliche + flag high-variance**
 
 Sostituire `src/benchServer.ts`:
 ```typescript
@@ -814,7 +814,7 @@ export class BenchServer {
 }
 ```
 
-- [ ] **Step 9: Test fallenti/aggiornati — `benchServer.test.ts`**
+- [x] **Step 9: Test fallenti/aggiornati — `benchServer.test.ts`**
 
 Sostituire il test "bench message → progress then bench:result with metrics" in `tests/benchServer.test.ts` (usare `replicateCount: 2` per velocità):
 ```typescript
@@ -859,13 +859,13 @@ it("flags high-variance when decode rate spreads across replicates beyond thresh
 });
 ```
 
-- [ ] **Step 10: Run → PASS** (`npm test`)
+- [x] **Step 10: Run → PASS** (`npm test`)
 
-- [ ] **Step 11: Verifica compilazione**
+- [x] **Step 11: Verifica compilazione**
 
 Run: `npx tsc --noEmit` → Expected: 0 errori.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add src/metrics.ts src/schema.ts src/benchServer.ts tests/metrics.test.ts tests/schema.test.ts tests/benchServer.test.ts
