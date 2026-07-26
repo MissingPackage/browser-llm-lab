@@ -22,11 +22,14 @@
    **Conseguenza sul contratto**: il done-when "verifiable via `npm test`" di GOAL.md e PHASES.md
    riga 1 è stato emendato di conseguenza — vedi nota in calce a PHASES.md.
 
-3. **Merge di `feat/fase-1b-matrice` in `main`** (aperto 2026-07-26). `GOAL.md` elenca "merge to `main`"
-   e "push to `origin`" sotto *must docket*. Fase 1 completa e verde (47/47, tsc pulito, build ok,
-   due datapoint reali committati), ma le Fasi 2-4 del goal sono ancora `ready`. Da decidere se
-   mergiare ora la sola Fase 1 o tenere il branch fino a fine goal.
-   Va bene mergiare alla fine di ogni fase del goal. E' una repo dove iteriamo velocemente.
+3. ~~**Merge di `feat/fase-1b-matrice` in `main`**~~ **DECISO 2026-07-26** (Cristiano): "Va bene
+   mergiare alla fine di ogni fase del goal. È una repo dove iteriamo velocemente."
+   → Fase 1 mergiata in `main` con merge commit (convenzione del progetto: non fast-forward, come
+   per `feat/fase-1a` e `fix/fase-1b-fixin1b`). La stessa regola vale per le Fasi 2-4: merge a fine
+   fase, senza ri-chiedere.
+   **`push to origin` NON è coperto da questo ruling** — Cristiano ha detto "mergiare", non
+   "pushare", e `GOAL.md` li elenca come due voci distinte sotto *must docket*. Il push resta da
+   chiedere (è azione verso l'esterno: la repo è pubblica su GitHub).
 
 4. **`InferenceAdapter.id` allargato da `"webllm"` a `StackId`** (registrato 2026-07-26 per tracciabilità,
    non richiede azione). `GOAL.md` elenca "change the public `InferenceAdapter` contract" sotto

@@ -11,11 +11,18 @@ implementazione. Fasi sequenziali (nessun `parallel-group`: le fasi 1-3 toccano 
 | 3 | Modulo qualità + schema v3 completo | `npm test` verde (unit test perplexity + fallback 12-prompt) + `tsc --noEmit` pulito + `BenchCell.qualityScore` presente e tipato nello schema | none | `src/quality.ts`, `src/qualityPrompts.ts`, `src/schema.ts` (campo `qualityScore`, bump `SCHEMA_VERSION=3`), relativi test | ready |
 | 4 | README + verifica finale whole-branch | Sezione "Fase 1b — matrice" nel README con gap Large documentato + suite completa verde (baseline 39 + nuovi test) + `tsc`/`build` puliti + entrambi i run (transformersjs, wllama) presenti in `results/` | none | `README.md` | ready |
 
-**\* Fase 1 — riserva in chiusura** (2026-07-26): tutte le condizioni meccaniche sono verdi
-(`npm test` 47/47, `tsc --noEmit` pulito, `npm run build` ok, run reale `stack:"transformersjs"` in
-`results/` più il pariglia WebLLM in condizioni equivalenti). Restava aperta la clausola "incl. nuovo
-conformance test transformersjs": i test unit iniettano tutti un engine fake, quindi non caricano un
-modello né asseriscono su `capabilities()`.
+**\* Fase 1 — COMPLETA** (2026-07-26), riserva chiusa. Condizioni verdi: `npm test` 47/47,
+`tsc --noEmit` pulito, `npm run build` ok, run reali `stack:"transformersjs"` e `stack:"webllm"` in
+`results/`, e **`npm run test:conformance` 8/8 + 8/8 (exit 0)** in browser reale sulla 4090.
+
+La riserva era la clausola "incl. nuovo conformance test": i test unit iniettano tutti un engine
+fake, quindi non caricavano un modello né asserivano su `capabilities()`. Ora c'è il contratto
+condiviso (`src/conformance/contract.ts`) eseguito nel browser su entrambi gli adapter.
+**Verificato che sappia fallire** (mutation test, 2026-07-26): reintrodotto a mano il bug
+`callback_function`/`token_callback_function` → il contratto FALLISCE come deve
+(`expected 16 timestamps, got 10`, exit 1) e isola l'adapter giusto (webllm resta 8/8). Mutazione
+revertata e riverificato verde. Cattura in ~1 minuto il difetto che in Fase 1 era costato un run
+GPU completo per essere scoperto.
 
 **DONE-WHEN EMENDATO** (2026-07-26, ruling PI in docket #2): la clausola "verifiable via `npm test`"
 di GOAL.md e di questa riga non è realizzabile per tutti gli adapter — WebLLM richiede WebGPU e non

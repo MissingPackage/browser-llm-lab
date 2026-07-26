@@ -80,3 +80,31 @@ con un unico probe. A regime i due browser concordano (transformersjs ~48 vs 55.
 113.0).
 
 Gate finale: `npm test` 47/47, `tsc --noEmit` pulito, `npm run build` ok.
+
+## Iterazione 3 (2026-07-26) — conformance harness, chiusura Fase 1
+
+Ruling PI su docket #2: conformance test per **tutti** gli stack **nel browser**, on-demand via
+Playwright; `npm test` resta unit veloce e offline. Done-when di GOAL.md/PHASES.md emendato di
+conseguenza (la formulazione "verifiable via `npm test`" non era realizzabile: WebLLM richiede
+WebGPU e non gira in Node).
+
+Costruito: `src/conformance/contract.ts` (8 check condivisi), `conformance.html` + `src/conformance/page.ts`
+(entrypoint browser, escluso dal build di produzione), `scripts/conformance.mjs` (driver Playwright
+col rifiuto del software-rasterizer), script `npm run test:conformance`. Il `TransformersJsAdapter`
+ha ora `dtype`/`device` iniettabili (default invariati `q4`/`webgpu`, vincolati da `STACK_FIXED_QUANT`)
+così il contratto esercita la **vera** `defaultEngineFactory` invece di un engine fake — è proprio il
+punto cieco che stiamo chiudendo.
+
+Modelli: transformersjs usa il fixture `Xenova/tiny-random-Phi3ForCausalLM` (~4 MB, ha un chat
+template quindi esercita il percorso messages-array); webllm usa `Qwen2.5-0.5B-Instruct-q4f32_1-MLC`
+— per MLC non esiste un fixture "tiny", va detto.
+
+**Risultato reale**: 8/8 transformersjs + 8/8 webllm, exit 0, su 4090.
+
+**Mutation test** (eseguito dal controller, non delegato): reintrodotto a mano il bug
+`callback_function` al posto di `token_callback_function` → `[FAIL] one timestamp per generated
+token — expected 16, got 10` (conteggio a parole, 62%, esattamente la banda prevista), exit 1,
+webllm resta 8/8. Mutazione revertata, tree pulito, riverificato 8/8+8/8 exit 0. **Il contratto sa
+fallire** e isola l'adapter giusto.
+Verificato dal vivo anche il guard sul software rasterizer: primo lancio senza `HEADED=1` → finito su
+SwiftShader → driver ha rifiutato con exit 2 invece di riportare un pass non attendibile.
