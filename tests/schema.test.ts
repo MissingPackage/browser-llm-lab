@@ -30,6 +30,7 @@ const cell: BenchCell = {
     { ttftMs: 100, decodeToksPerSec: 42.5, totalMs: 6000, promptTokens: 512, completionTokens: 256 },
     { ttftMs: 105, decodeToksPerSec: 44, totalMs: 6100, promptTokens: 512, completionTokens: 256 },
   ],
+  protocol: { warmupPolicy: "always", warmupApplied: true, replicateCount: 3 },
   anomalies: [],
 };
 

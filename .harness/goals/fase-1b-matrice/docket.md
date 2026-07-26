@@ -155,6 +155,11 @@
 
    OK sono d'accordo con la raccomandazione. Facciamolo in fase 3.
 
+   **CHIUSO — implementato 2026-07-27 (Fase 3).** `BenchCell.protocol: { warmupPolicy,
+   warmupApplied, replicateCount }` in `src/schema.ts`; `benchServer.ts` lo popola per ogni cella
+   al posto della nota testuale in `anomalies`. Constraint di `GOAL.md` emendato di conseguenza
+   (vedi riga CONSTRAINTS). Gate: `npm test` 87/87, `tsc --noEmit` pulito, `npm run build` ok.
+
 8. **wllama: il chunk di chiusura sfora nella generate successiva — 1 check di conformance
    FALLISCE** (aperto 2026-07-27, Fase 2. Richiede una decisione: non è un bug del nostro codice).
    **Stato**: `npm run test:conformance` dà **transformersjs 8/8, webllm 8/8, wllama 7/8**, exit 1.
@@ -257,3 +262,24 @@
    comparabilità del TTFT; `completionTokens` ha provenienza diversa per stack (usage autorevole vs
    conteggio dei chunk) senza che lo schema lo dichiari; `bench.worker.ts` importa staticamente
    entrambi gli adapter (bundle worker 6.55 MB, fuori da ogni finestra cronometrata).
+
+10. **`quality.ts` costruito e testato ma non collegato a `benchServer.ts`** (registrato
+    2026-07-27, Fase 3 — ambiguità risolta con un default sicuro, non richiede ruling per
+    procedere, ma la scelta va conosciuta prima di dichiarare la Fase 4).
+    `PHASES.md` riga 3 chiede solo "unit test perplexity + fallback 12-prompt, `tsc` pulito,
+    `qualityScore` tipato" — non chiede che una cella reale porti un punteggio. Ho quindi reso
+    `BenchCell.qualityScore` **opzionale** e non ho toccato la pipeline di generazione in
+    `benchServer.ts` per calcolarlo.
+    **Perché non l'ho deciso da solo come "wiring incluso"**: collegare `quality.ts` a una cella
+    reale significa eseguire 12 `generate()` extra (fallback exact-match) o un passaggio a
+    logprobs per ogni bench — un aumento non banale del costo/tempo di ogni run reale sulle GPU
+    fisiche, che nessun docket ha ancora approvato esplicitamente.
+    **Conseguenza**: i run reali (Fase 4, sweep sui 3 device) **non includeranno
+    `qualityScore`** finché questo collegamento non viene fatto. Se l'intento è che il README di
+    Fase 4 riporti anche un confronto di qualità, questo va deciso e implementato prima o durante
+    Fase 4 — altrimenti Fase 4 procede riportando solo le metriche di velocità, come oggi.
+    **Opzioni per quando serve**: (a) invocare `evaluateExactMatch`/`computePerplexity` dentro
+    `benchServer.ts` dopo le repliche cronometrate (costo: tempo extra per cella, ma fuori dalla
+    finestra cronometrata delle metriche di velocità); (b) farlo come passo manuale separato,
+    fuori dal driver di bench, se il costo per cella è ritenuto eccessivo per lo sweep sui 3
+    device.

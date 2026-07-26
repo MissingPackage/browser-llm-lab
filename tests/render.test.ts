@@ -28,6 +28,7 @@ function cellWith(overrides: { modelId?: string; anomalies?: string[] } = {}) {
       completionTokens: 256,
     },
     replicates: [],
+    protocol: { warmupPolicy: "always" as const, warmupApplied: true, replicateCount: 3 },
     anomalies: overrides.anomalies ?? [],
   };
 }

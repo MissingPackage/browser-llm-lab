@@ -16,7 +16,7 @@ AUTHORITY GRANTED:
 - may do autonomously: work on a feature branch `feat/fase-1b-matrice`, install the two new npm deps (`@huggingface/transformers`, `wllama`), write/edit code and tests, run `npm test`/`tsc`/`npm run build`, run the existing e2e driver headed on the local 4090, log open questions to the docket.
 - must docket (never do): merge to `main`, push to `origin`, delete existing branches/results, change the public `InferenceAdapter` contract, touch `docs/superpowers/` policy, execute or simulate the M4/S22 sweep (physically out of reach — separate goal/manual step), drop model quant below what's specced to force the Large tier to fit.
 
-CONSTRAINTS: no AI attribution in commits or PRs; schema v3 implemented exactly as specced (no ad hoc field additions beyond `qualityScore`); Large-tier gap stays documented, never silently "fixed"; existing WebLLM adapter/tests must keep passing throughout; `erasableSyntaxOnly` tsconfig — no parameter properties in classes (known landmine, see HANDOFF.md §5).
+CONSTRAINTS: no AI attribution in commits or PRs; schema v3 implemented exactly as specced (no ad hoc field additions beyond `qualityScore` and `protocol` — the latter added by ruling, docket #7, to register warm-up policy/replica count explicitly instead of abusing `anomalies`); Large-tier gap stays documented, never silently "fixed"; existing WebLLM adapter/tests must keep passing throughout; `erasableSyntaxOnly` tsconfig — no parameter properties in classes (known landmine, see HANDOFF.md §5).
 
 WORKING PROTOCOL: follow skills loop-iteration + done; verifier gate per cycle; digest every cycle; stop-by-design when remaining work is docket-gated (merge decision, or the manual device sweep).
 
