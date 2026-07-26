@@ -15,7 +15,7 @@ npm test           # unit suite (vitest), nessuna GPU richiesta
 Nella pagina: il **probe box** mostra l'adapter WebGPU reale visto dal worker
 (vendor, `maxStorageBufferBindingSize`, …) — è la riga-dati #0. **Run bench**
 scarica il modello (prima volta), esegue prefill 512-tok + 256 tok greedy e
-mostra load/TTFT/tok-s. **Export JSON** scarica il run file (schema v2) da
+mostra load/TTFT/tok-s. **Export JSON** scarica il run file (schema v3) da
 salvare in `results/`.
 
 ## Run automatizzato (Playwright)
@@ -59,8 +59,10 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
     è l'informazione utile per capire come si comporterebbe un'applicazione reale.
   - `cold-only` — riscalda solo a cache fredda.
 
-  Selezionabile per singolo run (`MainToWorker.bench.warmup`). Quando avviene, la cella lo
-  dichiara in `anomalies` come `protocol: warm-up run discarded (policy=…, cacheState=…)`.
+  Selezionabile per singolo run (`MainToWorker.bench.warmup`). Ogni cella registra la politica
+  applicata in `BenchCell.protocol` (`{ warmupPolicy, warmupApplied, replicateCount }`, schema
+  v3) — non più in `anomalies`, perché un warm-up applicato è il protocollo che funziona come
+  previsto, non un'anomalia.
 - Bench manuali sul Chrome branded: `scripts/bench-chrome.sh` (profilo dedicato `blab-bench`).
   **Mai** impostare i flag Vulkan in `chrome://flags` del profilo quotidiano: `enable-vulkan`
   corrompe il compositing su NVIDIA/Wayland, `force-enable-webgpu-interop` crasha all'avvio.
@@ -158,10 +160,50 @@ precedente alla PR. **Nessun workaround nel nostro codice**: silenziarlo nascond
 comportamento che chiunque usi wllama per misurare incontrerà. Quando il fix viene rilasciato,
 aggiornare la dipendenza e rimuovere questa deroga.
 
+### Fasce modello — il gap strutturale della fascia Large
+
+| fascia | modello | WebLLM | Transformers.js | wllama |
+|---|---|---|---|---|
+| Tiny | Qwen2.5-0.5B-Instruct | ✓ | ✓ | ✓ (Q4_K_M ≈0.37GB) |
+| Small | Llama-3.2-1B / Qwen2.5-1.5B-Instruct | ✓ | ✓ | ✓ (≈0.75–0.92GB) |
+| Mid | Llama-3.2-3B / Phi-3.5-mini-instruct | ✓ | ✓ (Phi-3.5-mini: solo quant `q4f16`) | ✓ (≈1.9–2.2GB) |
+| **Large** | Qwen2.5-7B-Instruct / Llama-3.1-8B-Instruct | ✓ | **✗** | **✗** |
+
+**Fascia Large: solo WebLLM può servirla.** Non è un problema di tuning — è un gap strutturale,
+verificato su Hugging Face Hub (2026-07-26):
+- **Transformers.js**: nessun repo ONNX web-runnable per questi due modelli — esistono solo
+  varianti vendor-locked (AMD/NVIDIA/DirectML), non eseguibili nel browser via ONNX Runtime Web.
+- **wllama**: il Q4_K_M di entrambi supera il tetto WASM di 4 GB sui soli pesi (Qwen2.5-7B
+  ≈4.36GB, Llama-3.1-8B ≈4.58GB, quest'ultimo con margine peggiore).
+
+Non forziamo quant più aggressivi per farceli entrare: degraderebbe la qualità sotto la soglia
+utile, il che scambierebbe un gap onesto per un numero fasullo. Il gap resta documentato qui,
+mai "risolto" in silenzio.
+
+## Fase 3 — modulo qualità + schema v3
+
+- **Schema v3** (`SCHEMA_VERSION = 3`, non retro-compatibile con i file v2 in `results/`, che
+  restano storici): `BenchCell` guadagna `protocol` (v. sopra, docket #7) e `qualityScore`
+  (opzionale — vedi sotto).
+- **`src/quality.ts` + `src/qualityPrompts.ts`**: modulo puro, nessuna dipendenza da DOM/worker,
+  copertura completa da unit test. Due percorsi, scelti da `capabilities().logprobs`:
+  - **perplexity** (`computePerplexity`) quando l'adapter espone i logprobs — `exp` della
+    log-probabilità media negata sul passaggio di testo generato.
+  - **fallback exact-match** (`evaluateExactMatch`) altrimenti: 12 prompt deterministici greedy
+    in 4 categorie (aritmetica, factual breve, format-following, task JSON), valutati via
+    regex/parsing — nessuna soglia di pass/fail, il punteggio grezzo (n/12) è quello riportato.
+- **`BenchCell.qualityScore` è opzionale e oggi non è popolato da nessun run reale**: il modulo
+  è pronto e testato ma non ancora collegato a `benchServer.ts`. Collegarlo alla pipeline di
+  bench vera significherebbe eseguire fino a 12 `generate()` extra per cella (percorso
+  exact-match) o un passaggio dedicato ai logprobs — un costo/tempo aggiuntivo per ogni run
+  fisico che nessuna decisione ha ancora approvato esplicitamente. I run in `results/` restano
+  quindi solo metriche di velocità, come prima di questa fase.
+
 ## Note
 
 - I risultati in `results/` sono i dati del progetto: committati, schema
   versionato (`schemaVersion`), niente fingerprinting (label device manuale).
-- Fase 1b — matrice piena: adapter Transformers.js (Fase 1) e wllama (Fase 2) fatti;
-  sweep multi-device e modulo qualità non ancora in scope (vedi sezione sopra)
-  — e fase 2 (deep-dive kernel MLC): vedi spec, sezione Fasatura.
+- Fase 1b — matrice piena: adapter Transformers.js (Fase 1), wllama (Fase 2) e modulo qualità +
+  schema v3 (Fase 3) fatti. Resta lo sweep manuale sui 3 device (M4 Pro, Samsung S22 Ultra) — fuori
+  da queste fasi per costruzione, passo separato quando i device sono fisicamente disponibili.
+  Fase 2 della Fasatura originale (deep-dive kernel MLC): vedi spec, sezione Fasatura.

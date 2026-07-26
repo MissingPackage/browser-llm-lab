@@ -1,32 +1,53 @@
-# HANDOFF — browser-llm-lab   (updated 2026-07-27, session 4)
+# HANDOFF — browser-llm-lab   (updated 2026-07-27, session 5)
 
-## 1. Next decidable
+## 1. Next decidable — STOP-BY-DESIGN, tutte le 4 fasi complete
 
 **Goal attivo**: `fase-1b-matrice` (`.harness/goals/fase-1b-matrice/` — GOAL.md, PHASES.md,
 docket.md, journal.md). Design: `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`.
-**Fasi 1, 2 e 3 complete e mergiate in `main`**, pushate su `origin`.
+**Fasi 1, 2, 3 e 4 tutte complete e mergiate in `main`**, pushate su `origin`.
 
-**Prossimo decidibile: Fase 4 — README + verifica finale whole-branch** (PHASES.md riga 4,
-`docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md` §Ordine di implementazione, punto 4):
-sezione "Fase 1b — matrice" nel README con il gap Large documentato + suite completa verde
-(baseline + nuovi test) + `tsc`/`build` puliti + run reali `transformersjs` e `wllama` già
-presenti in `results/` (fatto in Fase 1/2). **Nota**: `PHASES.md` riga 4 non menziona lo sweep
-manuale sui 3 device (M4/S22) — quello resta fuori da queste fasi per costruzione (vedi GOAL.md
-"must docket"), quindi Fase 4 è documentazione + verifica, non l'esecuzione dello sweep.
+**Ogni riga di `GOAL.md` DONE WHEN risulta ora soddisfatta meccanicamente** (vedi STATUS NOTE in
+`GOAL.md`). Il loop si è fermato qui by design — non perché il lavoro sia esaurito per caso, ma
+perché quello che resta è o **docket-gated** o **esplicitamente fuori scope**:
 
-**Prima di dichiarare Fase 4 completa, decidere docket #10**: `quality.ts` è pronto e testato
-(Fase 3) ma **non collegato** a `benchServer.ts` — nessun run reale porta oggi un `qualityScore`.
-Se il README di Fase 4 deve riportare anche un confronto di qualità, il collegamento va fatto
-prima; altrimenti Fase 4 riporta solo le metriche di velocità già esistenti.
+- **docket #10 (registrato, non bloccante)**: `src/quality.ts` è pronto e testato ma non
+  collegato a `benchServer.ts` — nessun run reale porta un `qualityScore`. Decisione PI: se/quando
+  collegarlo (costo: fino a 12 `generate()` extra per cella, o un passaggio logprobs).
+- **docket #8 (sorveglianza attiva, auto-risolvente)**: conformance wllama 7/8, routine cloud
+  ogni 3 giorni che apre una PR da sola quando il fix upstream arriva. Nessuna azione ora.
+- **Sweep manuale sui 3 device (M4 Pro, Samsung S22 Ultra)**: esplicitamente fuori da queste fasi
+  (GOAL.md "must docket") — un passo manuale separato quando i device sono disponibili, non
+  qualcosa che questo loop può eseguire o simulare.
+- **Decisione PI residua**: se/quando chiudere formalmente il goal `fase-1b-matrice` (o aprirne
+  uno nuovo per lo sweep sui 3 device) — non è una scelta che una fase possa prendere da sola.
 
-## 2. State delta (session 4, 2026-07-27)
+**Nessun lavoro autonomamente decidibile resta sotto questo goal.** Se riprendi il loop senza una
+di queste decisioni, aspettati che si fermi di nuovo qui.
+
+## 2. State delta (session 5, 2026-07-27) — Fase 4
+
+- **README**: nuova sezione "Fasce modello — il gap strutturale della fascia Large"
+  (Qwen2.5-7B-Instruct / Llama-3.1-8B-Instruct: solo WebLLM può servirle — nessun repo ONNX
+  web-runnable per Transformers.js, GGUF Q4_K_M sopra il tetto WASM 4GB per wllama). Nuova
+  sezione "Fase 3 — modulo qualità + schema v3" che dichiara onestamente che `qualityScore` non
+  è ancora popolato da run reali (docket #10).
+- **Due righe README corrette perché rese stale dalla Fase 3** (trovate rileggendo il file, non
+  nello scope dichiarato ma conseguenza diretta di quel lavoro): la label schema in "Quick
+  start" diceva ancora v2; la nota di warm-up diceva che finiva in `anomalies`, non più vero da
+  quando esiste `BenchCell.protocol`.
+- Nessun codice toccato in questa iterazione — solo README + goal spine. Test 87/87 invariati,
+  `tsc --noEmit` pulito, `npm run build` ok.
+- **`GOAL.md` DONE WHEN risulta ora soddisfatto riga per riga** (STATUS NOTE aggiunta in
+  `GOAL.md`). Loop fermato **by design** — vedi §1.
+
+## Session 4 (2026-07-27) — Fase 3, per riferimento
 
 - **Fase 3 — modulo qualità + schema v3** (`src/quality.ts`, `src/qualityPrompts.ts`):
   `computePerplexity` (perplexity via `exp(-mean(logprobs))`), `evaluateExactMatch` (12 prompt
   deterministici, 4 categorie: arithmetic/factual/format/json), `selectQualityMethod` (sceglie il
   percorso da `capabilities().logprobs`). `SCHEMA_VERSION = 3`. `BenchCell.qualityScore`
   **opzionale** — modulo pronto e testato ma non collegato a `benchServer.ts` (nessuna cella reale
-  calcola oggi un punteggio; vedi docket #10, decisione da confermare prima di Fase 4).
+  calcola oggi un punteggio; vedi docket #10).
 - **docket #7 implementato**: `BenchCell.protocol { warmupPolicy, warmupApplied,
   replicateCount }` sostituisce la nota testuale `"protocol: warm-up run discarded…"` che abusava
   `anomalies`. `WarmupPolicy` spostato da `benchServer.ts` a `schema.ts` (forma dei dati) —
@@ -53,10 +74,9 @@ prima; altrimenti Fase 4 riporta solo le metriche di velocità già esistenti.
 
 ## 3. Open threads
 
-- **Fase 4** (README + verifica finale) da fare — vedi §1.
+- **Nessuna fase residua** — tutte e 4 fatte. Vedi §1 per cosa resta (docket-gated/fuori scope).
 - **docket #10 — decisione registrata, non un ruling bloccante**: `quality.ts` non è collegato a
-  `benchServer.ts`. Nessun run reale (Fase 1/2, né lo sweep manuale di Fase 4) porta un
-  `qualityScore`. Va deciso se/quando collegarlo prima di considerare il goal completo.
+  `benchServer.ts`. Nessun run reale porta un `qualityScore`. Va deciso se/quando collegarlo.
 - **docket #8 — deroga attiva**: conformance wllama **7/8**. Difetto di wllama, non nostro
   (ogni risposta perde la coda, che arriva al giro dopo). Upstream ngxson/wllama#263 + PR #264,
   entrambe aperte; 3.5.1 è precedente alla PR. **Routine di sorveglianza attiva**
@@ -106,8 +126,8 @@ Vedi `.harness/goals/fase-1b-matrice/docket.md` per il testo integrale.
 - **#8 — deciso, deroga attiva**: conformance wllama 7/8, documentato, sorveglianza schedulata.
   Nessuna azione finché la routine non segnala il fix (vedi §3).
 - **#10 — registrato, non richiede ruling per procedere**: `qualityScore` non collegato alla
-  pipeline di bench. Va confermato/deciso prima di dichiarare il goal completo (vedi §1, §3).
-- Chiusi in questa sessione: **#7** (`BenchCell.protocol` implementato, constraint emendato).
+  pipeline di bench. Decisione PI residua (vedi §1).
+- Chiusi in sessione 4: **#7** (`BenchCell.protocol` implementato, constraint emendato).
 - Chiusi in sessione 3: **#3** (push approvato), **#4** (registrazione), **#5** (strict),
   **#5b** (warm-up selezionabile), **#9** (nome pacchetto `@wllama/wllama`).
 - Nessun item aperto in attesa di ruling PI.
