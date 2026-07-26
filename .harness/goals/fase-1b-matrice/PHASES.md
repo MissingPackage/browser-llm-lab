@@ -7,7 +7,7 @@ implementazione. Fasi sequenziali (nessun `parallel-group`: le fasi 1-3 toccano 
 | # | phase | done-when (mechanical) | authority delta | owns | status |
 |---|-------|------------------------|-----------------|------|--------|
 | 1 | Adapter Transformers.js | `npm test` verde (incl. nuovo conformance test transformersjs) + `tsc --noEmit` pulito + `npm run build` ok + almeno 1 run reale (non-SwiftShader) in `results/*.json` con `stack:"transformersjs"` | none | `src/adapters/transformersjs.ts`, relativo test, `src/schema.ts` (solo union `id`/`stack`), `src/main.ts`/`src/render.ts` (selettore stack minimo), `package.json` (dep `@huggingface/transformers`) | **done*** |
-| 2 | Adapter wllama | `npm test` verde (incl. nuovo conformance test wllama) + `tsc --noEmit` pulito + `npm run build` ok + almeno 1 run reale in `results/*.json` con `stack:"wllama"` | none | `src/adapters/wllama.ts`, relativo test, `src/schema.ts` (estensione union), `package.json` (dep `wllama`) | ready |
+| 2 | Adapter wllama | `npm test` verde (incl. nuovo conformance test wllama) + `tsc --noEmit` pulito + `npm run build` ok + almeno 1 run reale in `results/*.json` con `stack:"wllama"` | none | `src/adapters/wllama.ts`, relativo test, `src/schema.ts` (estensione union), `package.json` (dep `@wllama/wllama`) | **done†** |
 | 3 | Modulo qualità + schema v3 completo | `npm test` verde (unit test perplexity + fallback 12-prompt) + `tsc --noEmit` pulito + `BenchCell.qualityScore` presente e tipato nello schema | none | `src/quality.ts`, `src/qualityPrompts.ts`, `src/schema.ts` (campo `qualityScore`, bump `SCHEMA_VERSION=3`), relativi test | ready |
 | 4 | README + verifica finale whole-branch | Sezione "Fase 1b — matrice" nel README con gap Large documentato + suite completa verde (baseline 39 + nuovi test) + `tsc`/`build` puliti + entrambi i run (transformersjs, wllama) presenti in `results/` | none | `README.md` | ready |
 
@@ -29,6 +29,14 @@ di GOAL.md e di questa riga non è realizzabile per tutti gli adapter — WebLLM
 gira in Node. Sostituita da: *ogni adapter passa lo stesso contratto di conformance eseguito **nel
 browser** da uno script Playwright on-demand (`npm run test:conformance`)*; `npm test` resta la suite
 unit veloce e offline. Un solo meccanismo per tutti gli stack, già pronto per wllama in Fase 2.
+
+**† Fase 2 — COMPLETA** (2026-07-27). Condizioni verdi: `npm test` 75/75, `tsc --noEmit` pulito,
+`npm run build` ok, run reale `stack:"wllama"` in `results/4090-linux-2026-07-26T22-51-39-379Z.json`
+(25.97 tok/s, stdev 0.05, CPU/WASM), conformance **7/8** per la deroga qui sotto (transformersjs e
+webllm restano 8/8). Due difetti trovati dal contratto e uno dal run reale, tutti corretti:
+chunk senza contenuto contati come token, prompt cache che falsava il TTFT delle repliche, e
+`document.baseURI` assente nel Web Worker (l'adapter passava il conformance — main thread — ma
+falliva ogni cella di bench).
 
 **DONE-WHEN DI FASE 2 EMENDATO** (2026-07-27, ruling PI in docket #8): la clausola "incl. nuovo
 conformance test wllama" è soddisfatta a **7/8 check**, non 8/8. Il check che resta rosso —
