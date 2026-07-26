@@ -24,6 +24,9 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   } else if (m.type === "error") {
     $("status").textContent = `ERROR: ${m.message}`;
     ($("run") as HTMLButtonElement).disabled = false;
+  } else {
+    const _exhaustive: never = m;
+    throw new Error(`unhandled WorkerToMain variant: ${JSON.stringify(_exhaustive)}`);
   }
 };
 
