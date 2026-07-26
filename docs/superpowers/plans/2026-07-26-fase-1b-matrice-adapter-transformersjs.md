@@ -239,6 +239,12 @@ const defaultEngineFactory: EngineFactory = async (modelId, onProgress) => {
         // spesso restituisce stringa vuota tra una parola e l'altra) e sottoconterebbe i token,
         // corrompendo le metriche di TTFT e token/sec che questo adapter esiste per misurare.
         token_callback_function: () => onToken(),
+        // No-op obbligatorio: se callback_function non viene passata, TextStreamer la
+        // sostituisce di default con stdout_write (vedi streamers.js), stampando ogni
+        // parola generata in console durante la finestra temporizzata del decode — proprio
+        // ciò che questo adapter misura. Senza questo no-op la I/O di console contamina
+        // il benchmark. Non rimuovere pensando sia inutile.
+        callback_function: () => {},
       });
       await pipe(messages, { max_new_tokens: maxTokens, do_sample: false, streamer });
     },
