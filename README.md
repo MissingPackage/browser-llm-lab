@@ -92,6 +92,6 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
 
 - I risultati in `results/` sono i dati del progetto: committati, schema
   versionato (`schemaVersion`), niente fingerprinting (label device manuale).
-- Fase 1b — matrice piena (adapter Transformers.js/wllama, sweep multi-device,
-  modulo qualità — non ancora in scope, vedi sezione sopra) e fase 2
-  (deep-dive kernel MLC): vedi spec, sezione Fasatura.
+- Fase 1b — matrice piena: adapter Transformers.js fatto (Fase 1); wllama,
+  sweep multi-device e modulo qualità non ancora in scope (vedi sezione sopra)
+  — e fase 2 (deep-dive kernel MLC): vedi spec, sezione Fasatura.
