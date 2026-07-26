@@ -22,4 +22,19 @@ describe("renderResultsTable", () => {
     const html = renderResultsTable(newRunFile("x", probe, "2026-07-25T12:00:00Z"));
     expect(html).toContain("Nessun risultato");
   });
+
+  it("escapes html-unsafe characters in modelId", () => {
+    let run = newRunFile("4090-linux", probe, "2026-07-25T12:00:00Z");
+    run = addCell(run, {
+      stack: "webllm",
+      modelId: "<img src=x onerror=alert(1)>",
+      quant: "q4f16_1",
+      promptId: "bench-512-v1",
+      load: { loadMs: 1, cacheState: "cold" },
+      gen: { ttftMs: 1, decodeToksPerSec: 1, totalMs: 1, promptTokens: 1, completionTokens: 1 },
+    });
+    const html = renderResultsTable(run);
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
 });
