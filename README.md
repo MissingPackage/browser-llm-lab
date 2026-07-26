@@ -15,7 +15,7 @@ npm test           # unit suite (vitest), nessuna GPU richiesta
 Nella pagina: il **probe box** mostra l'adapter WebGPU reale visto dal worker
 (vendor, `maxStorageBufferBindingSize`, …) — è la riga-dati #0. **Run bench**
 scarica il modello (prima volta), esegue prefill 512-tok + 256 tok greedy e
-mostra load/TTFT/tok-s. **Export JSON** scarica il run file (schema v1) da
+mostra load/TTFT/tok-s. **Export JSON** scarica il run file (schema v2) da
 salvare in `results/`.
 
 ## Run automatizzato (Playwright)
@@ -43,7 +43,7 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   corrompe il compositing su NVIDIA/Wayland, `force-enable-webgpu-interop` crasha all'avvio.
 - Chrome 150 branded (launcher `bench-chrome.sh`): cold 61 s / warm 1.8 s, fino a **116.9 tok/s**
   (run manuale utente) — in linea con chromium-playwright; la varianza run-to-run (~10-25%)
-  conferma la necessità di repliche multiple in 1b.
+  conferma la necessità di repliche multiple (introdotte in Fase 1b — fondamenta, vedi sotto).
 
 ## Cosa abbiamo verificato dal vivo (4090 mobile, Fedora, chromium Playwright)
 
@@ -61,18 +61,37 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   | decode 0.5B | 106–118 tok/s (`q4f32_1`) | 1.8 tok/s (`q4f16_1`, **CPU**) | **9.9 tok/s** (`q4f16_1`) |
   **Finding chiave**: Firefox può fare **silent fallback a software rasterizer**
   riportando `webgpu: true` con vendor vuoto — l'utente non ha modo di accorgersene
-  dalla pagina. Il probe di 1b deve rilevarlo (fingerprint: cap 128 MiB + vendor
-  vuoto). Il gap GPU-vero: chromium ~110 vs Firefox ~10 tok/s (≈11×, plausibile
+  dalla pagina. Il probe ora lo rileva (fingerprint: cap 128 MiB + vendor vuoto,
+  vedi Fase 1b — fondamenta sotto). Il gap GPU-vero: chromium ~110 vs Firefox ~10 tok/s (≈11×, plausibile
   ruolo di `subgroups`, assente su Firefox).
 - **COEP `require-corp` convive col CDN HF**: shard scaricati senza bisogno del
   fallback `credentialless` (vale anche su Firefox).
 - Primi numeri (Qwen2.5-0.5B `q4f32_1`, schema v1, in `results/`):
   load cold ~56 s → **warm ~1.6 s** (Cache API); TTFT 0.5–0.9 s (warm–cold);
-  decode **~106–118 tok/s** (varianza run-to-run ~10%, repliche multiple in 1b).
+  decode **~106–118 tok/s** (varianza run-to-run ~10%, repliche multiple ora in Fase 1b — fondamenta).
+
+## Fase 1b — fondamenta (schema v2)
+
+- **Schema v2** (`SCHEMA_VERSION = 2`, non retro-compatibile con i file v1 in `results/`,
+  che restano storici): `DeviceProbe` guadagna `browser` (nome/versione parsati dalla UA),
+  `features` (elenco `adapter.features`, es. `shader-f16`), `anomalies` (flag rilevati dal probe).
+  `BenchCell` guadagna `replicates` (le repliche grezze) e `anomalies` (flag per-cella);
+  `gen` non è più una singola misura ma un aggregato `{ mean, stdev, samples }` per metrica.
+- **Repliche multiple**: ogni cella esegue 3 `generate()` sullo stesso modello già caricato
+  (nessun ricaricamento tra repliche) e aggrega tok/s, TTFT, tempo totale con media e
+  deviazione standard. Una cella con `stdev/mean > 0.15` sul tok/s riceve l'anomalia
+  `high-variance` — risponde al finding "varianza run-to-run ~10-25%" osservato in 1a.
+- **Rilevazione software-adapter**: il probe marca `anomalies: ["software-adapter: ..."]`
+  quando l'adapter dichiara `vendor` vuoto **e** `maxBufferSize <= 128 MiB` — la firma
+  osservata su Firefox 152 in silent-fallback a llvmpipe (vedi sopra). Un run con questa
+  anomalia è un datapoint CPU, non GPU: va escluso da confronti tok/s cross-device.
+- **Fuori scope qui** (piano successivo "1b — matrice"): adapter Transformers.js/wllama,
+  sweep sui 3 device, modulo qualità-leggera.
 
 ## Note
 
 - I risultati in `results/` sono i dati del progetto: committati, schema
   versionato (`schemaVersion`), niente fingerprinting (label device manuale).
-- Fase 1b (matrice piena: Transformers.js, wllama, più modelli/quant/device) e
-  fase 2 (deep-dive kernel MLC): vedi spec, sezione Fasatura.
+- Fase 1b — matrice piena (adapter Transformers.js/wllama, sweep multi-device,
+  modulo qualità — non ancora in scope, vedi sezione sopra) e fase 2
+  (deep-dive kernel MLC): vedi spec, sezione Fasatura.

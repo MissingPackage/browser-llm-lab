@@ -24,6 +24,10 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   } else if (m.type === "error") {
     $("status").textContent = `ERROR: ${m.message}`;
     ($("run") as HTMLButtonElement).disabled = false;
+    ($("export") as HTMLButtonElement).disabled = run === null || run.cells.length === 0;
+  } else {
+    const _exhaustive: never = m;
+    throw new Error(`unhandled WorkerToMain variant: ${JSON.stringify(_exhaustive)}`);
   }
 };
 
@@ -31,6 +35,7 @@ $("run").addEventListener("click", () => {
   const sel = $("model") as HTMLSelectElement;
   const quant = sel.selectedOptions[0].dataset.quant ?? "unknown";
   ($("run") as HTMLButtonElement).disabled = true;
+  ($("export") as HTMLButtonElement).disabled = true;
   send({ type: "bench", modelId: sel.value, quant });
 });
 

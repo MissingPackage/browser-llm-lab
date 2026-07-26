@@ -1,21 +1,35 @@
 import type { RunFile } from "./schema";
 
-const fmt = (n: number | null, digits = 1) => (n === null ? "—" : n.toFixed(digits));
+const fmt = (n: number, digits = 1) => n.toFixed(digits);
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function fmtRate(agg: { mean: number; stdev: number } | null): string {
+  return agg === null ? "—" : `${fmt(agg.mean)} ±${fmt(agg.stdev)}`;
+}
 
 export function renderResultsTable(run: RunFile): string {
   if (run.cells.length === 0) return "<p>Nessun risultato ancora.</p>";
   const rows = run.cells
     .map(
       (c) => `<tr>
-        <td>${c.stack}</td><td>${c.modelId}</td><td>${c.quant}</td>
+        <td>${escapeHtml(c.stack)}</td><td>${escapeHtml(c.modelId)}</td><td>${escapeHtml(c.quant)}</td>
         <td>${fmt(c.load.loadMs, 0)}</td><td>${c.load.cacheState}</td>
-        <td>${fmt(c.gen.ttftMs, 0)}</td><td>${fmt(c.gen.decodeToksPerSec)}</td>
+        <td>${fmt(c.gen.ttftMs.mean, 0)}</td><td>${fmtRate(c.gen.decodeToksPerSec)}</td>
         <td>${c.gen.promptTokens ?? "—"}/${c.gen.completionTokens ?? "—"}</td>
+        <td>${c.anomalies.map((a) => `<span class="anomaly">${escapeHtml(a)}</span>`).join(" ")}</td>
       </tr>`,
     )
     .join("");
   return `<table>
-    <thead><tr><th>stack</th><th>model</th><th>quant</th><th>load ms</th><th>cache</th><th>TTFT ms</th><th>tok/s</th><th>tok in/out</th></tr></thead>
+    <thead><tr><th>stack</th><th>model</th><th>quant</th><th>load ms</th><th>cache</th><th>TTFT ms</th><th>tok/s (mean±stdev)</th><th>tok in/out</th><th>anomalie</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }

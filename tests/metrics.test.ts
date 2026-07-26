@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeGenMetrics, type GenTimeline } from "../src/metrics";
+import { computeGenMetrics, aggregateReplicates, type GenTimeline } from "../src/metrics";
 
 describe("computeGenMetrics", () => {
   it("computes ttft, steady-state decode rate, total", () => {
@@ -48,5 +48,34 @@ describe("computeGenMetrics", () => {
   it("returns null rate when span is zero", () => {
     const m = computeGenMetrics({ tRequestStart: 0, chunkTimestamps: [100, 100], promptTokens: null, completionTokens: 2 });
     expect(m.decodeToksPerSec).toBeNull();
+  });
+});
+
+describe("aggregateReplicates", () => {
+  it("computes mean/stdev over replicate GenMetrics", () => {
+    const reps = [
+      { ttftMs: 100, decodeToksPerSec: 40, totalMs: 6000, promptTokens: 512, completionTokens: 256 },
+      { ttftMs: 110, decodeToksPerSec: 44, totalMs: 6100, promptTokens: 512, completionTokens: 256 },
+      { ttftMs: 90, decodeToksPerSec: 42, totalMs: 5900, promptTokens: 512, completionTokens: 256 },
+    ];
+    const agg = aggregateReplicates(reps);
+    expect(agg.ttftMs.mean).toBeCloseTo(100, 5);
+    expect(agg.decodeToksPerSec?.mean).toBeCloseTo(42, 5);
+    expect(agg.decodeToksPerSec?.samples).toEqual([40, 44, 42]);
+    expect(agg.promptTokens).toBe(512);
+    expect(agg.completionTokens).toBe(256);
+  });
+
+  it("returns decodeToksPerSec: null when every replicate rate is null", () => {
+    const reps = [
+      { ttftMs: 50, decodeToksPerSec: null, totalMs: 50, promptTokens: null, completionTokens: 1 },
+      { ttftMs: 55, decodeToksPerSec: null, totalMs: 55, promptTokens: null, completionTokens: 1 },
+    ];
+    const agg = aggregateReplicates(reps);
+    expect(agg.decodeToksPerSec).toBeNull();
+  });
+
+  it("throws on empty replicate list", () => {
+    expect(() => aggregateReplicates([])).toThrow();
   });
 });

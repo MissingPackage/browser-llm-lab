@@ -9,6 +9,32 @@ const LIMIT_KEYS = [
   "maxStorageBuffersPerShaderStage",
 ] as const;
 
+// 128 MiB: cap osservato su llvmpipe (Firefox 152 silent-fallback a CPU, verificato via
+// about:support). Confermato in README §"Cosa abbiamo verificato dal vivo".
+const SOFTWARE_ADAPTER_MAX_BUFFER_BYTES = 134217728;
+
+export function parseBrowser(userAgent: string): { name: string; version: string } {
+  const firefox = userAgent.match(/Firefox\/([\d.]+)/);
+  if (firefox) return { name: "firefox", version: firefox[1] };
+  const edge = userAgent.match(/Edg\/([\d.]+)/);
+  if (edge) return { name: "edge", version: edge[1] };
+  const chrome = userAgent.match(/Chrome\/([\d.]+)/);
+  if (chrome) return { name: "chrome", version: chrome[1] };
+  const safari = userAgent.match(/Version\/([\d.]+).*Safari/);
+  if (safari) return { name: "safari", version: safari[1] };
+  return { name: "unknown", version: "" };
+}
+
+function detectSoftwareAdapter(vendor: string, architecture: string, limits: Record<string, number>): string[] {
+  const maxBuffer = limits.maxBufferSize;
+  if (vendor === "" && architecture === "" && typeof maxBuffer === "number" && maxBuffer <= SOFTWARE_ADAPTER_MAX_BUFFER_BYTES) {
+    return [
+      `software-adapter: vendor vuoto + maxBufferSize<=128MiB (${maxBuffer} B) — probabile fallback CPU (llvmpipe/SwiftShader)`,
+    ];
+  }
+  return [];
+}
+
 export async function probeWebGPU(
   gpu: GPU | undefined,
   nav: { userAgent: string; deviceMemory?: number },
@@ -17,8 +43,11 @@ export async function probeWebGPU(
     webgpu: false,
     adapterInfo: null,
     limits: null,
+    features: [],
     userAgent: nav.userAgent,
     deviceMemoryGB: nav.deviceMemory ?? null,
+    browser: parseBrowser(nav.userAgent),
+    anomalies: [],
   };
   if (!gpu) return base;
 
@@ -35,17 +64,18 @@ export async function probeWebGPU(
     if (typeof v === "number") limits[k] = v;
   }
 
+  const features = adapter.features ? Array.from(adapter.features as unknown as Iterable<string>) : [];
+  const vendor = info?.vendor ?? "";
+  const architecture = info?.architecture ?? "";
+
   return {
     ...base,
     webgpu: true,
     adapterInfo: info
-      ? {
-          vendor: info.vendor ?? "",
-          architecture: info.architecture ?? "",
-          device: info.device ?? "",
-          description: info.description ?? "",
-        }
+      ? { vendor, architecture, device: info.device ?? "", description: info.description ?? "" }
       : null,
     limits,
+    features,
+    anomalies: detectSoftwareAdapter(vendor, architecture, limits),
   };
 }
