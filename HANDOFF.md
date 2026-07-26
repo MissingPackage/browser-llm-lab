@@ -3,12 +3,25 @@
 ## 1. Next decidable
 **Goal attivo**: `fase-1b-matrice` (`.harness/goals/fase-1b-matrice/`) — GOAL.md + PHASES.md
 scritti 2026-07-26 da brainstorming → goal-brief → goal-setup, chiudendo il docket #7. Design
-di riferimento: `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`. **Gate
-plan-check approvato** (2026-07-26, Cristiano: "approvato"). **Iterazione 1 fatta**: piano di
-implementazione per la Fase 1 (adapter Transformers.js) scritto e committato su
-`feat/fase-1b-matrice` — `docs/superpowers/plans/2026-07-26-fase-1b-matrice-adapter-transformersjs.md`
-(4 task: adapter+StackId, BenchServer multi-stack, UI selector, driver e2e + run reale 4090).
-Non ancora eseguito: in attesa della scelta di esecuzione (subagent-driven vs inline).
+di riferimento: `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`. **Fase 1 (adapter Transformers.js) ESEGUITA E COMPLETA** su `feat/fase-1b-matrice` (2026-07-26,
+subagent-driven: 4 task, review avversaria per task + final review whole-branch su opus). Gate:
+`npm test` 47/47, `tsc --noEmit` pulito, `npm run build` ok. Branch **non mergiato, non pushato**
+(entrambi docket-gated — vedi docket #3).
+
+**Primo risultato cross-stack reale** (stessa 4090, stesso base model Qwen2.5-0.5B, stesso Chrome 151,
+stessa sessione, schema v2, 3 repliche): **webllm q4f32_1 = 113.0 ±2.5 tok/s** vs **transformersjs q4
+= 55.5 ±2.1 tok/s → WebLLM ~2.04× più veloce**. Load cold 62.5 s vs 157.6 s (warm 3.2 s), TTFT 408 vs
+444 ms. Entrambe le celle committate in `results/`.
+
+**Prossimo decidibile — due decisioni del PI** (docket `.harness/goals/fase-1b-matrice/docket.md`):
+- **#2**: il done-when della Fase 1 chiede un *conformance test* (carica modello tiny, output
+  deterministico, `capabilities()` reali); i test scritti iniettano tutti un engine fake, quindi la
+  clausola non è soddisfatta. Lo stesso gap esiste per WebLLM, che non ha mai avuto un conformance
+  test — renderlo bloccante solo qui sarebbe asimmetrico. Tre opzioni nel docket.
+- **#3**: mergiare ora la sola Fase 1 in `main`, o tenere il branch fino a fine goal (Fasi 2-4 ancora
+  `ready`).
+
+Poi: Fase 2 (adapter wllama), Fase 3 (modulo qualità + schema v3), Fase 4 (README + verifica finale).
 
 Contesto precedente: Fase 1b — Fondamenta **mergiata in `main`** (2026-07-26, merge commit su
 richiesta esplicita di Cristiano): piano `docs/superpowers/plans/2026-07-26-fase-1b-fondamenta.md`
