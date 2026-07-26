@@ -1,4 +1,4 @@
-import type { LoadReport } from "../schema";
+import type { LoadReport, StackId } from "../schema";
 import type { GenTimeline } from "../metrics";
 
 export interface AdapterCapabilities {
@@ -13,7 +13,7 @@ export interface GenerateRequest {
 }
 
 export interface InferenceAdapter {
-  readonly id: "webllm"; // union estesa in 1b
+  readonly id: StackId;
   capabilities(): AdapterCapabilities;
   load(modelId: string, onProgress: (text: string, progress: number) => void): Promise<LoadReport>;
   generate(req: GenerateRequest): Promise<GenTimeline>;
