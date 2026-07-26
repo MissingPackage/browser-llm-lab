@@ -166,3 +166,54 @@ Rapporto cross-stack dalle misure pulite: **webllm/transformersjs ≈ 2.0-2.3×*
 
 Gate: `tsc --noEmit` pulito, `npm test` 50/50, `npm run build` ok. Commit `579c9e4`, pushato su
 `origin/main` (`825e2b5..579c9e4`, 22 commit — `origin` era fermo a prima di tutta la Fase 1).
+
+---
+
+## 2026-07-27 — Fase 2: adapter wllama
+
+Ruling applicati: warm-up esteso a tutte le celle ma **selezionabile** (`WarmupPolicy`), perché —
+osservazione del PI — senza warm-up si misura ciò che un utente vero sperimenta al primo colpo,
+che su una pagina pubblica è l'informazione più utile. Default `always` (benchmark/steady-state),
+`never` per l'uso divulgativo, `cold-only` conservata perché è ciò che ha prodotto i dati in
+`results/methodology/`. Nessuna UI: il motore è pronto, la pagina pubblica dovrà solo esporre il
+controllo. Le due modalità **misurano cose diverse e non vanno confrontate fra loro** — vale anche
+per come la UI le presenterà.
+
+**Adapter wllama** (`@wllama/wllama` 3.5.1 — il nome `wllama` in GOAL.md non esiste su npm).
+`modelId` = `owner/repo/file.gguf` col GGUF nominato per esteso: `loadModelFromHF({quant})` fa
+fallback silenzioso Q4_K_M → Q8_0 → non quantizzato, e una cella etichettata Q4_K_M avrebbe potuto
+contenere una misura Q8_0. Con il file esplicito il quant è nel modelId e non c'è fallback.
+
+**Tre difetti trovati, tre strumenti diversi.** Vale la pena notare quale ha preso cosa:
+
+1. *Il contratto di conformance* ha preso i chunk senza contenuto contati come token (17 timestamp
+   per 16 token). Regola estratta in `chunkIsToken()` e ora coperta anche dai test unitari.
+2. *Il ragionamento sul confronto cross-stack* ha preso il prompt cache: le repliche 2 e 3
+   avrebbero saltato il prefill dei 512 token, con TTFT artificialmente basso, mentre gli altri due
+   stack il prefill lo rifanno. Avremmo misurato il caching di uno stack invece della sua velocità.
+   `cache_prompt: false`, verificato attivo dal log llama.cpp.
+3. *Il run reale* ha preso `document is not defined`: l'adapter passava il conformance e falliva
+   ogni cella di bench. Il conformance gira nel **main thread**, il bench nel **worker**, e
+   `absoluteUrl()` di wllama usa `document.baseURI`. Il conformance non poteva vederlo per
+   costruzione — un buco di copertura del harness, non un suo fallimento.
+
+**Il difetto che resta (docket #8)**: il chunk di chiusura di ogni `generate()` viene consegnato
+all'inizio della successiva, quindi ogni risposta perde la coda. Diagnosticato per conto nostro
+strumentando i chunk, poi trovata la stessa causa radice in ngxson/wllama#263 (+ PR #264, entrambe
+aperte). Due ipotesi falsificate lungo la strada e registrate nel docket per non rifarle:
+non-determinismo multi-thread (identico con `n_threads: 1`) e penalità di ripetizione (identico con
+penalità azzerate e seed fisso). Confermato anche sul percorso di produzione:
+`completionTokens: 255` su `maxTokens: 256`. Ruling: documentare, nessun workaround nostro,
+routine di sorveglianza ogni 3 giorni (`trig_018i6ZnQpZHF1tg6egjTsyST`).
+
+Ho anche corretto una mia caratterizzazione imprecisa: avevo scritto "il testo è identico, è solo
+il conteggio". Non è così — è la coda della risposta che si perde, e il decode rate esce calcolato
+su n−1 token, sistematicamente.
+
+**Prima misura a tre stack** (4090, Qwen2.5-0.5B, 3 repliche, warm-up scartato): webllm ~110 tok/s,
+transformersjs ~46–48, wllama **25.97** (stdev 0.05, TTFT 8406 ms). wllama è CPU via WASM: il
+divario dice quanto costa non avere accelerazione, non che la libreria sia lenta.
+
+Gate: `npm test` 75/75, `tsc --noEmit` pulito, `npm run build` ok, conformance **8/8 + 8/8 + 7/8**,
+run reale in `results/4090-linux-2026-07-26T22-51-39-379Z.json`. Mergiata in `main` (`277609e`) e
+pushata.
