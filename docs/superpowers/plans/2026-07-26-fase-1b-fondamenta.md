@@ -885,7 +885,7 @@ git commit -m "feat: multi-replicate bench cells with mean/stdev aggregation + h
 - Consumes: `RunFile`/`BenchCell` (Task 6 — `gen` è ora `GenMetricsAgg`), `DeviceProbe.{browser,anomalies}` (Task 5).
 - Produces: `renderResultsTable` invariata nella firma, output aggiornato (colonna tok/s mostra `mean ± stdev`; colonna anomalie).
 
-- [ ] **Step 1: Test fallente**
+- [x] **Step 1: Test fallente**
 
 Sostituire `tests/render.test.ts` con:
 ```typescript
@@ -934,11 +934,12 @@ describe("renderResultsTable", () => {
     expect(html).toContain("cold");
   });
 
-  it("renders anomaly badges when present", () => {
+  it("renders anomaly badges when present, escaped", () => {
     let run = newRunFile("4090-linux", probe, "2026-07-25T12:00:00Z");
     run = addCell(run, cellWith({ anomalies: ["high-variance: stdev/mean=0.20 > 0.15"] }));
     const html = renderResultsTable(run);
-    expect(html).toContain("high-variance");
+    expect(html).toContain('<span class="anomaly">high-variance: stdev/mean=0.20 &gt; 0.15</span>');
+    expect(html).not.toContain("0.20 > 0.15"); // il '>' letterale nell'anomalia deve uscire escaped
   });
 
   it("renders empty state", () => {
@@ -956,9 +957,9 @@ describe("renderResultsTable", () => {
 });
 ```
 
-- [ ] **Step 2: Run → FAIL**
+- [x] **Step 2: Run → FAIL**
 
-- [ ] **Step 3: Implementazione — `render.ts`**
+- [x] **Step 3: Implementazione — `render.ts`**
 
 ```typescript
 import type { RunFile } from "./schema";
@@ -998,21 +999,21 @@ export function renderResultsTable(run: RunFile): string {
 }
 ```
 
-- [ ] **Step 4: Run → PASS** (`npm test`)
+- [x] **Step 4: Run → PASS** (`npm test`)
 
-- [ ] **Step 5: `main.ts` — mostrare browser/anomalie nel probe-box**
+- [x] **Step 5: `main.ts` — mostrare browser/anomalie nel probe-box**
 
 In `src/main.ts`, il ramo `probe:result` già serializza l'intero oggetto `m.probe` via `JSON.stringify` — `browser`/`features`/`anomalies` compaiono automaticamente senza modifiche di codice (il probe box mostra il JSON raw). Nessuno step di codice qui: verificare manualmente allo Step 6.
 
-- [ ] **Step 6: Verifica manuale**
+- [x] **Step 6: Verifica manuale**
 
 Run: `npm run dev` → aprire la pagina → Expected: il probe-box mostra `browser: { name, version }` e `anomalies: []` (o popolato, se il browser di test è in fallback software) nel JSON.
 
-- [ ] **Step 7: Verifica compilazione**
+- [x] **Step 7: Verifica compilazione**
 
 Run: `npx tsc --noEmit` → Expected: 0 errori.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/render.ts tests/render.test.ts
@@ -1028,7 +1029,7 @@ git commit -m "feat: render mean±stdev tok/s and anomaly badges in results tabl
 
 Questo task è documentazione pura (docs procedure): nessun test, verifica per lettura.
 
-- [ ] **Step 1: Aggiornare README**
+- [x] **Step 1: Aggiornare README**
 
 Aggiungere una sezione dopo "Cosa abbiamo verificato dal vivo" (prima di "## Note"):
 ```markdown
@@ -1052,11 +1053,11 @@ Aggiungere una sezione dopo "Cosa abbiamo verificato dal vivo" (prima di "## Not
 ```
 Aggiornare anche la riga "**Export JSON** ... schema v1" in "## Quick start" in "schema v2".
 
-- [ ] **Step 2: Verifica per lettura**
+- [x] **Step 2: Verifica per lettura**
 
 Rileggere il README aggiornato end-to-end → Expected: nessuna contraddizione con `docs/superpowers/specs/2026-07-25-browser-llm-serving-design.md` §Fasatura né con `HANDOFF.md`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md
