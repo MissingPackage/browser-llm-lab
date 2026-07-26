@@ -11,7 +11,7 @@ export type WorkerToMain =
   | { type: "bench:result"; cell: BenchCell }
   | { type: "error"; message: string };
 
-const STACK_IDS: readonly StackId[] = ["webllm", "transformersjs"];
+const STACK_IDS: readonly StackId[] = ["webllm", "transformersjs", "wllama"];
 const WARMUP_POLICIES: readonly WarmupPolicy[] = ["always", "cold-only", "never"];
 
 export function isMainToWorker(x: unknown): x is MainToWorker {

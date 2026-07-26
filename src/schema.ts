@@ -2,7 +2,7 @@ import type { GenMetricsAgg } from "./metrics";
 
 export const SCHEMA_VERSION = 2 as const;
 
-export type StackId = "webllm" | "transformersjs";
+export type StackId = "webllm" | "transformersjs" | "wllama";
 
 export interface DeviceProbe {
   webgpu: boolean;

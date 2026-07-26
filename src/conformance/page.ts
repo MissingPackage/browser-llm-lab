@@ -10,6 +10,7 @@
 // apre la pagina).
 import { WebLLMAdapter } from "../adapters/webllm";
 import { TransformersJsAdapter } from "../adapters/transformersjs";
+import { WllamaAdapter } from "../adapters/wllama";
 import { runConformanceContract, type ContractResult } from "./contract";
 import type { DataType, DeviceType } from "@huggingface/transformers";
 
@@ -23,6 +24,11 @@ const TRANSFORMERSJS_MODEL_ID = "Xenova/tiny-random-Phi3ForCausalLM";
 // dovrebbe caricare "warm" e velocemente. "Tiny model" non è letteralmente raggiungibile
 // per questo stack — lo segnaliamo qui e nel report, non lo nascondiamo.
 const WEBLLM_MODEL_ID = "Qwen2.5-0.5B-Instruct-q4f32_1-MLC";
+// Stessa situazione di WebLLM: i GGUF davvero minuscoli (es. stories260K) non hanno chat
+// template, quindi non esercitano il percorso `messages` che l'adapter usa davvero. Si usa
+// perciò lo stesso 0.5B del bench — dichiarato, non nascosto. Il profilo Playwright è
+// persistente, quindi il download da 491 MB avviene una sola volta.
+const WLLAMA_MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 
 interface ConformanceRun {
   status: "running" | "done" | "error";
@@ -114,6 +120,20 @@ async function main(): Promise<void> {
     run.results.push({
       adapterId: "webllm",
       modelId: WEBLLM_MODEL_ID,
+      checks: [{ name: "contract execution", pass: false, detail: e instanceof Error ? e.message : String(e) }],
+    });
+  }
+
+  render(run);
+
+  try {
+    const wllamaAdapter = new WllamaAdapter();
+    const r = await runConformanceContract(wllamaAdapter, WLLAMA_MODEL_ID, TOKEN_BUDGET);
+    run.results.push(r);
+  } catch (e) {
+    run.results.push({
+      adapterId: "wllama",
+      modelId: WLLAMA_MODEL_ID,
       checks: [{ name: "contract execution", pass: false, detail: e instanceof Error ? e.message : String(e) }],
     });
   }

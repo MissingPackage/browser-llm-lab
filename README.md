@@ -111,10 +111,57 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
 - **Fuori scope qui** (piano successivo "1b — matrice"): adapter Transformers.js/wllama,
   sweep sui 3 device, modulo qualità-leggera.
 
+## Fase 1b — matrice: stack supportati
+
+Tre stack dietro la stessa interfaccia `InferenceAdapter`, selezionabili da UI:
+
+| stack | runtime | modello di riferimento (Tiny) | quant |
+|---|---|---|---|
+| `webllm` | MLC / WebGPU | `Qwen2.5-0.5B-Instruct-q4f32_1-MLC` | q4f32_1 |
+| `transformersjs` | ONNX Runtime Web / WebGPU | `onnx-community/Qwen2.5-0.5B-Instruct` | q4 |
+| `wllama` | llama.cpp → WASM (**CPU**) | `Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf` | Q4_K_M |
+
+Per wllama il `modelId` è `<owner>/<repo>/<file.gguf>`, con il file GGUF **nominato per esteso**:
+`loadModelFromHF({quant})` farebbe fallback silenzioso (Q4_K_M → Q8_0 → non quantizzato), e una
+cella etichettata `Q4_K_M` potrebbe contenere una misura Q8_0 senza che nulla lo dica.
+
+Prima misura sulla 4090 (Qwen2.5-0.5B, stesso prompt, 3 repliche, warm-up scartato): webllm ~110
+tok/s, transformersjs ~46–48, **wllama ~26** — wllama gira su CPU via WASM, non su GPU, quindi il
+confronto dice quanto costa non avere accelerazione, non che la libreria sia lenta. Il suo TTFT
+(~8.4 s) è dominato dal prefill dei 512 token del prompt su CPU.
+
+**wllama dentro un Web Worker richiede uno shim**: `absoluteUrl()` di wllama risolve i path con
+`document.baseURI`, che nel worker non esiste (`ReferenceError: document is not defined`, e la
+cella di bench fallisce interamente). `ensureWorkerDocumentShim()` in `src/adapters/wllama.ts`
+definisce `document.baseURI = self.location.href` prima di istanziare `Wllama`. È sicuro perché
+`document.baseURI` è l'unico uso di `document` nel sorgente di wllama 3.5.1. Il conformance
+harness non lo esercita — gira nel main thread, dove `document` c'è.
+
+### Difetto noto di wllama 3.5.1 — l'ultimo token di ogni risposta arriva in ritardo
+
+`npm run test:conformance` dà **wllama 7/8** (gli altri due 8/8): il check di determinismo del
+conteggio token fallisce, 16 token al primo `generate()` e 15 al secondo.
+
+Non è l'adapter: wllama interrompe il polling dei risultati quando `has_more` è `false` anche se
+quella risposta conteneva ancora dati, così la **coda di ogni risposta resta in coda e viene
+consegnata all'inizio della chiamata successiva**. Conseguenza sulle misure: l'ultimo timestamp di
+ogni `generate()` manca, quindi il decode rate è calcolato su n−1 token (~0.4% su 256, sistematico
+e sempre nello stesso verso — non si media via fra repliche).
+
+Si vede anche nei dati: la cella wllama in
+`results/4090-linux-2026-07-26T22-51-39-379Z.json` riporta `completionTokens: 255` a fronte di
+`maxTokens: 256`.
+
+Già segnalato upstream da terzi: [issue #263](https://github.com/ngxson/wllama/issues/263) e
+[PR #264](https://github.com/ngxson/wllama/pull/264), entrambe aperte al 2026-07-27; la 3.5.1 è
+precedente alla PR. **Nessun workaround nel nostro codice**: silenziarlo nasconderebbe un
+comportamento che chiunque usi wllama per misurare incontrerà. Quando il fix viene rilasciato,
+aggiornare la dipendenza e rimuovere questa deroga.
+
 ## Note
 
 - I risultati in `results/` sono i dati del progetto: committati, schema
   versionato (`schemaVersion`), niente fingerprinting (label device manuale).
-- Fase 1b — matrice piena: adapter Transformers.js fatto (Fase 1); wllama,
+- Fase 1b — matrice piena: adapter Transformers.js (Fase 1) e wllama (Fase 2) fatti;
   sweep multi-device e modulo qualità non ancora in scope (vedi sezione sopra)
   — e fase 2 (deep-dive kernel MLC): vedi spec, sezione Fasatura.
