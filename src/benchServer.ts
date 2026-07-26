@@ -3,6 +3,7 @@ import type { InferenceAdapter } from "./adapters/types";
 import type { DeviceProbe, BenchCell, StackId } from "./schema";
 import { computeGenMetrics, aggregateReplicates } from "./metrics";
 import { PROMPT_512 } from "./promptset";
+import { STACK_FIXED_QUANT } from "./stacks";
 
 const DEFAULT_REPLICATE_COUNT = 3;
 const HIGH_VARIANCE_THRESHOLD = 0.15; // stdev/mean sul tok/s aggregato
@@ -33,6 +34,14 @@ export class BenchServer {
       if (msg.type === "probe") {
         this.deps.post({ type: "probe:result", probe: await this.deps.probe() });
       } else if (msg.type === "bench") {
+        const fixedQuant = STACK_FIXED_QUANT[msg.stack];
+        if (fixedQuant !== undefined && fixedQuant !== msg.quant) {
+          this.deps.post({
+            type: "error",
+            message: `quant mismatch for stack "${msg.stack}": requested "${msg.quant}" but this stack is pinned to "${fixedQuant}"`,
+          });
+          return;
+        }
         const adapter = this.deps.adapters[msg.stack]();
         const replicateCount = this.deps.replicateCount ?? DEFAULT_REPLICATE_COUNT;
         try {

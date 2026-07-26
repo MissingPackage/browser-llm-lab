@@ -111,4 +111,21 @@ describe("BenchServer", () => {
     await s.handle({ garbage: true });
     expect(out[0].type).toBe("error");
   });
+
+  it("quant mismatch for a stack pinned to a fixed quant → error, no bench:result", async () => {
+    const out: WorkerToMain[] = [];
+    const s = new BenchServer({ adapters: fakeAdapters(), probe: fakeProbe, post: (m) => out.push(m) });
+    await s.handle({ type: "bench", stack: "transformersjs", modelId: "m", quant: "q4f16" });
+    expect(out.some((m) => m.type === "error" && m.message.includes("q4f16") && m.message.includes("q4"))).toBe(true);
+    expect(out.some((m) => m.type === "bench:result")).toBe(false);
+  });
+
+  it("quant matching the pinned value for transformersjs → runs normally", async () => {
+    const out: WorkerToMain[] = [];
+    const s = new BenchServer({ adapters: fakeAdapters(), probe: fakeProbe, post: (m) => out.push(m), replicateCount: 1 });
+    await s.handle({ type: "bench", stack: "transformersjs", modelId: "m", quant: "q4" });
+    const result = out.find((m) => m.type === "bench:result");
+    expect(result).toBeDefined();
+    if (result?.type === "bench:result") expect(result.cell.quant).toBe("q4");
+  });
 });

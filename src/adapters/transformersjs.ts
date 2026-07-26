@@ -2,8 +2,9 @@ import { pipeline, TextStreamer, ModelRegistry } from "@huggingface/transformers
 import type { InferenceAdapter, AdapterCapabilities, GenerateRequest } from "./types";
 import type { LoadReport } from "../schema";
 import type { GenTimeline } from "../metrics";
+import { TRANSFORMERSJS_DTYPE } from "../stacks";
 
-const DTYPE = "q4";
+const DTYPE = TRANSFORMERSJS_DTYPE;
 const DEVICE = "webgpu";
 const TASK = "text-generation";
 
