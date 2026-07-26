@@ -1,18 +1,19 @@
 # HANDOFF — browser-llm-lab   (updated 2026-07-26, session 2)
 
 ## 1. Next decidable
-Piano `docs/superpowers/plans/2026-07-26-fase-1b-fondamenta.md`: Task 1-5 **completi** su branch
+Piano `docs/superpowers/plans/2026-07-26-fase-1b-fondamenta.md`: Task 1-6 **completi** su branch
 `fix/fase-1b-fixin1b` (locale, non pushato, non mergiato; rebasato su `main` corrente). Prossimo
-passo concreto: Task 6 del piano (repliche multiple per cella + aggregazione mean/stdev, flag
-high-variance), poi Task 7 (render/UI), Task 8 (README) — stesso branch. **Non tocca** adapter
-Transformers.js/wllama, sweep multi-device, modulo qualità: quello resta un piano "1b — matrice"
-separato, da scrivere dopo che le fondamenta sono eseguite.
+passo concreto: Task 7 del piano (render/UI — mostrare mean±stdev, badge anomalie, browser info —
+il rework completo, oltre al fix minimale di sola compilazione già applicato nel Task 6), poi
+Task 8 (README) — stesso branch. **Non tocca** adapter Transformers.js/wllama, sweep multi-device,
+modulo qualità: quello resta un piano "1b — matrice" separato, da scrivere dopo che le fondamenta
+sono eseguite.
 
 ## 2. State delta (session 2, 2026-07-26)
 - Scritto il piano Fase 1b — Fondamenta (8 task, TDD), verificato da loop-verifier: PASS su
   copertura FIX-IN-1B, coerenza tipi tra task, assenza placeholder, aderenza al formato
-  writing-plans. Vive sotto `docs/superpowers/` (gitignored dal commit `347a7fe`, quindi non
-  tracciato in git — vedi docket item 5).
+  writing-plans. **Ratificato 2026-07-26** (docket #5): `docs/superpowers/` ora tracciato in git
+  locale, mai su GitHub (pre-push hook, vedi docket #5 per dettagli).
 - **Eseguiti Task 1-4** (FIX-IN-1B backlog) su branch `fix/fase-1b-fixin1b`: escaping HTML in
   `render.ts`, exhaustiveness guard `WorkerToMain` in `main.ts` (guard verificato empiricamente
   con variante fittizia + tsc), test `dispose()` (verde al primo run — nessun bug preesistente),
@@ -27,10 +28,18 @@ separato, da scrivere dopo che le fondamenta sono eseguite.
   `tests/render.test.ts` tra i file da aggiornare (aveva una propria fixture `DeviceProbe` dal
   Task 1). Review avversaria: clean (solo 2 minor non azionabili — misclassificazione UA Edge
   mobile fuori scope, stringa anomalia in italiano coerente col resto del codebase).
-- Stato branch dopo Task 1-5: `npm test` 34/34, `tsc --noEmit` pulito, `npm run build` ok.
-  Branch `fix/fase-1b-fixin1b` rebasato su `main` (che ha ricevuto separatamente i refresh
-  HANDOFF/gitignore, essendo bookkeeping non feature-work). Non pushato/mergiato (PR-ready,
-  merge resta docket).
+- **Eseguito Task 6** (repliche multiple — `metrics.ts`: `aggregateReplicates`/`MetricAggregate`/
+  `GenMetricsAgg`; `schema.ts`: `BenchCell.gen` diventa aggregato + `.replicates`/`.anomalies`;
+  `benchServer.ts`: load una volta + generate x `replicateCount` default 3, flag `high-variance`
+  a soglia stdev/mean 0.15). Stesso tipo di gap trovato in Task 5: il piano non elencava
+  `src/render.ts` tra i file da toccare, ma il cambio di tipo lo rompe — applicato un fix
+  **minimale di sola compilazione** (`.ttftMs.mean`, `.decodeToksPerSec?.mean`), senza toccare
+  lo scope UI del Task 7 (badge anomalie, mean±stdev in vista). Review avversaria: clean, 2 minor
+  non azionabili.
+- Stato branch dopo Task 1-6: `npm test` 38/38, `tsc --noEmit` pulito, `npm run build` ok.
+  Branch `fix/fase-1b-fixin1b` rebasato su `main` (che riceve separatamente i refresh
+  HANDOFF/gitignore/ledger, essendo bookkeeping non feature-work). Non pushato/mergiato
+  (PR-ready, merge resta docket).
 
 ## 3. State delta (session 1, 2026-07-25)
 - Progetto creato da zero: spec approvata, piano fase 1a, 9 task eseguiti SDD (subagent + review avversaria per task).
@@ -42,7 +51,7 @@ separato, da scrivere dopo che le fondamenta sono eseguite.
 ## 4. Open threads
 - Branch `feat/fase-1a` merged, può essere cancellato (tenuto per ora).
 - FIX-IN-1B dal final review: **fatto** (Task 1-4, branch `fix/fase-1b-fixin1b`, non mergiato).
-- Varianza tok/s run-to-run ~10% → repliche multiple **pianificate** (§1, Task 6 del piano fondamenta), non ancora eseguite.
+- Varianza tok/s run-to-run ~10% → repliche multiple **fatte** (Task 6, branch `fix/fase-1b-fixin1b`, non mergiato) con flag `high-variance` a soglia 0.15.
 
 ## 5. Landmines
 - **`shader-f16` è per-browser, non per-GPU**: assente su chromium-playwright (q4f16_1 crasha → usare q4f32_1), presente su Firefox. Schema v2 ha ora `browser`/`anomalies`/`features` (Task 5, branch `fix/fase-1b-fixin1b`, non ancora mergiato in main).
