@@ -15,7 +15,7 @@ npm test           # unit suite (vitest), nessuna GPU richiesta
 Nella pagina: il **probe box** mostra l'adapter WebGPU reale visto dal worker
 (vendor, `maxStorageBufferBindingSize`, …) — è la riga-dati #0. **Run bench**
 scarica il modello (prima volta), esegue prefill 512-tok + 256 tok greedy e
-mostra load/TTFT/tok-s. **Export JSON** scarica il run file (schema v1) da
+mostra load/TTFT/tok-s. **Export JSON** scarica il run file (schema v2) da
 salvare in `results/`.
 
 ## Run automatizzato (Playwright)
@@ -69,6 +69,24 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
 - Primi numeri (Qwen2.5-0.5B `q4f32_1`, schema v1, in `results/`):
   load cold ~56 s → **warm ~1.6 s** (Cache API); TTFT 0.5–0.9 s (warm–cold);
   decode **~106–118 tok/s** (varianza run-to-run ~10%, repliche multiple in 1b).
+
+## Fase 1b — fondamenta (schema v2)
+
+- **Schema v2** (`SCHEMA_VERSION = 2`, non retro-compatibile con i file v1 in `results/`,
+  che restano storici): `DeviceProbe` guadagna `browser` (nome/versione parsati dalla UA),
+  `features` (elenco `adapter.features`, es. `shader-f16`), `anomalies` (flag rilevati dal probe).
+  `BenchCell` guadagna `replicates` (le repliche grezze) e `anomalies` (flag per-cella);
+  `gen` non è più una singola misura ma un aggregato `{ mean, stdev, samples }` per metrica.
+- **Repliche multiple**: ogni cella esegue 3 `generate()` sullo stesso modello già caricato
+  (nessun ricaricamento tra repliche) e aggrega tok/s, TTFT, tempo totale con media e
+  deviazione standard. Una cella con `stdev/mean > 0.15` sul tok/s riceve l'anomalia
+  `high-variance` — risponde al finding "varianza run-to-run ~10-25%" osservato in 1a.
+- **Rilevazione software-adapter**: il probe marca `anomalies: ["software-adapter: ..."]`
+  quando l'adapter dichiara `vendor` vuoto **e** `maxBufferSize <= 128 MiB` — la firma
+  osservata su Firefox 152 in silent-fallback a llvmpipe (vedi sopra). Un run con questa
+  anomalia è un datapoint CPU, non GPU: va escluso da confronti tok/s cross-device.
+- **Fuori scope qui** (piano successivo "1b — matrice"): adapter Transformers.js/wllama,
+  sweep sui 3 device, modulo qualità-leggera.
 
 ## Note
 
