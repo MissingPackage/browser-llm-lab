@@ -44,6 +44,25 @@ export function hfUrlFromModelId(modelId: string): string {
   return `https://huggingface.co/${owner}/${repo}/resolve/main/${file}`;
 }
 
+/**
+ * Un chunk di stream conta come token generato solo se porta contenuto.
+ *
+ * wllama emette due tipi di chunk senza contenuto: quello di apertura
+ * (`delta.role="assistant"`, `content=null`) e quello di chiusura (`content=undefined`,
+ * `finish_reason` valorizzato). Contarli produce timestamp in più del dovuto (17 per 16
+ * token — rilevato dal contratto di conformance, non dai test unitari) e gonfia le
+ * metriche di decode che questo adapter esiste per misurare.
+ *
+ * Nota: il chunk di chiusura viene consegnato **all'inizio della chiamata successiva**
+ * (wllama lo emette dopo aver già segnalato `has_more=false`). Questo filtro lo scarta,
+ * quindi non contamina i timestamp; resta però il conteggio a scalare fra generate
+ * consecutive — vedi docket #8.
+ */
+export function chunkIsToken(chunk: ChatCompletionChunk): boolean {
+  const content = chunk.choices[0]?.delta?.content;
+  return typeof content === "string" && content.length > 0;
+}
+
 export interface WllamaGenerateResult {
   promptTokens: number | null;
   completionTokens: number | null;
@@ -82,9 +101,18 @@ function defaultEngineFactory(): EngineFactory {
           messages,
           max_tokens: maxTokens,
           temperature: 0, // greedy: il bench misura la velocità, non il campionamento
+          // Il prompt cache di llama.cpp riuserebbe la KV cache del prompt fra chiamate
+          // successive: le repliche 2 e 3 di una cella salterebbero il prefill dei ~512
+          // token del prompt di bench, con un TTFT artificialmente basso — mentre WebLLM e
+          // Transformers.js il prefill lo rifanno ogni volta. Il confronto cross-stack
+          // misurerebbe il caching di uno stack, non la sua velocità.
+          // (Verificato attivo: con `true` il log llama.cpp mostra `n_past was set to …`,
+          // con `false` no. NON è invece la causa del check di determinismo che fallisce —
+          // quella è lo sforamento del chunk di chiusura, vedi docket #8.)
+          cache_prompt: false,
           stream: true,
           onData: (chunk: ChatCompletionChunk) => {
-            onToken();
+            if (chunkIsToken(chunk)) onToken();
             if (chunk.usage) captured.usage = chunk.usage;
           },
         });

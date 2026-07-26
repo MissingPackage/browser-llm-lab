@@ -1,5 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { WllamaAdapter, hfUrlFromModelId } from "../src/adapters/wllama";
+import { WllamaAdapter, hfUrlFromModelId, chunkIsToken } from "../src/adapters/wllama";
+import type { ChatCompletionChunk } from "@wllama/wllama/esm/types/oai-compat.js";
+
+function chunk(delta: { content?: string | null }, extra?: Partial<ChatCompletionChunk>): ChatCompletionChunk {
+  return {
+    id: "c",
+    object: "chat.completion.chunk",
+    created: 0,
+    model: "m",
+    choices: [{ index: 0, delta, finish_reason: null, logprobs: null }],
+    ...extra,
+  };
+}
 
 // Engine finto: gli unit test verificano la forma della DI e il cablaggio dell'adapter.
 // Che l'adapter sia cablato *correttamente* alla libreria reale lo verifica il contratto
@@ -41,6 +53,31 @@ describe("hfUrlFromModelId", () => {
 
   it("rifiuta un file che non è .gguf", () => {
     expect(() => hfUrlFromModelId("org/repo/model.safetensors")).toThrow(/\.gguf/);
+  });
+});
+
+describe("chunkIsToken", () => {
+  it("conta un chunk che porta contenuto", () => {
+    expect(chunkIsToken(chunk({ content: "ciao" }))).toBe(true);
+  });
+
+  it("NON conta il chunk finale di chiusura (delta vuoto + usage)", () => {
+    // Il caso reale: wllama chiude lo stream con un chunk senza contenuto che porta usage.
+    // Contarlo dava 17 timestamp per 16 token — rilevato dal contratto di conformance.
+    const closing = chunk({}, {
+      choices: [{ index: 0, delta: {}, finish_reason: "length", logprobs: null }],
+      usage: { prompt_tokens: 46, completion_tokens: 16, total_tokens: 62 },
+    });
+    expect(chunkIsToken(closing)).toBe(false);
+  });
+
+  it("NON conta content null o stringa vuota", () => {
+    expect(chunkIsToken(chunk({ content: null }))).toBe(false);
+    expect(chunkIsToken(chunk({ content: "" }))).toBe(false);
+  });
+
+  it("NON conta un chunk senza choices", () => {
+    expect(chunkIsToken(chunk({}, { choices: [] }))).toBe(false);
   });
 });
 

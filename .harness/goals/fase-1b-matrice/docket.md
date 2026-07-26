@@ -153,6 +153,50 @@
    cui la espone, diventa reale** — chiunque scarichi due export non saprà quale confronto è
    lecito. Questo sposta la raccomandazione da "opportuna" a "da fare prima della pagina pubblica".
 
+8. **wllama: il chunk di chiusura sfora nella generate successiva — 1 check di conformance
+   FALLISCE** (aperto 2026-07-27, Fase 2. Richiede una decisione: non è un bug del nostro codice).
+   **Stato**: `npm run test:conformance` dà **transformersjs 8/8, webllm 8/8, wllama 7/8**, exit 1.
+   Il check che fallisce è *determinism (token count) across two identical generate() calls*:
+   run1=16 token, run2=15.
+   **Causa radice, misurata (non ipotizzata)** — strumentando i chunk dello stream:
+   - run 1: `[content=null role=assistant]` + 16 chunk con contenuto = 17 chunk
+   - run 2: **`[content=undefined fin=length]`** + `[content=null role=assistant]` + 15 con
+     contenuto = 17 chunk
+   Il primo chunk del run 2 è il **chunk di chiusura del run 1**: wllama lo emette dopo aver già
+   segnalato `has_more=false`, quindi resta in coda e viene consegnato alla chiamata successiva.
+   **Il modello è deterministico**: il testo generato è identico nei due run (`1\n2\n3…8`).
+   A scalare non è la generazione, è la contabilità dei chunk.
+   **Ipotesi falsificate lungo la strada** (registrate per non rifarle):
+   (a) non-determinismo numerico multi-thread — falsificata: con `n_threads: 1` il fallimento è
+   identico; (b) penalità di ripetizione con storia condivisa — falsificata: con
+   `penalty_last_n: 0`, `penalty_repeat: 1.0`, `seed: 42` il fallimento è identico;
+   (c) prompt cache — falsificata come causa del determinismo, ma `cache_prompt: false` **è stato
+   tenuto** per una ragione indipendente e più importante (vedi sotto).
+   **Mitigazione già in essere**: `chunkIsToken()` scarta i chunk senza contenuto, quindi il chunk
+   sforato **non contamina i timestamp né il TTFT** — l'effetto residuo è solo sul conteggio.
+   **Opzioni**: (a) accettare 7/8 per wllama documentandolo, e ricordare che l'ultimo token di
+   ogni generate è contabilizzato al giro dopo; (b) drenare lo stream con una lettura extra al
+   termine di ogni `generate()` (costo: una chiamata in più per replica, dentro o fuori dalla
+   finestra cronometrata — da decidere, perché se finisce dentro falsa la misura); (c) usare
+   `usage.completion_tokens` come fonte del conteggio invece della lunghezza dei timestamp —
+   ma arriva proprio sul chunk che sfora, quindi nella stessa chiamata non è disponibile;
+   (d) segnalare upstream a ngxson/wllama e nel frattempo tenere (a).
+   **Raccomandazione**: (a) + (d). Il contratto sta riportando un fatto vero sullo stack, e
+   silenziarlo con un workaround nel nostro codice nasconderebbe un comportamento che chiunque
+   usi wllama per misurare incontrerà.
+   **Nota di scope**: `PHASES.md` riga 2 chiede "conformance test wllama" nel done-when. Con 7/8
+   la fase **non è dichiarabile completa** finché non decidi fra le opzioni sopra.
+
+9. **`@wllama/wllama` è il nome reale del pacchetto, non `wllama`** (registrato 2026-07-27,
+   non richiede azione). `GOAL.md` autorizza a installare "`wllama`" e il design doc usa lo stesso
+   nome, ma su npm `wllama` **non esiste** (404); il pacchetto è `@wllama/wllama` (3.5.1).
+   Installato quello, che è chiaramente ciò che era inteso. Registrato perché a un audit la riga
+   di authority sembrerebbe non corrispondere.
+   **Difetto di packaging da conoscere**: la 3.5.1 dichiara `main: "index.js"` ma non pubblica
+   nessun `index.js` alla root (solo `index.ts`) e non ha campo `exports`. Col bare specifier
+   TypeScript ripiega sul sorgente `.ts` e `erasableSyntaxOnly` fallisce. L'adapter importa quindi
+   da `@wllama/wllama/esm/index.js` — stessa forma che il README upstream usa per altri moduli.
+
 6. **Minor accettati come sono** (dal final review, registrati per non perderli):
    `STACK_IDS` castato a `string[]` per `.includes` (cosmetico); `stackSel.value as StackId` non
    validato (safe: `isMainToWorker` ri-valida lato worker — il fix vero è renderizzare `#stack` da
