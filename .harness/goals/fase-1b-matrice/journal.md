@@ -108,3 +108,61 @@ webllm resta 8/8. Mutazione revertata, tree pulito, riverificato 8/8+8/8 exit 0.
 fallire** e isola l'adapter giusto.
 Verificato dal vivo anche il guard sul software rasterizer: primo lancio senza `HEADED=1` → finito su
 SwiftShader → driver ha rifiutato con exit 2 invece di riportare un pass non attendibile.
+
+---
+
+## 2026-07-26 — sessione 3: ruling del PI applicati, protocollo di misura verificato
+
+Cristiano ha risposto nel docket a 4 voci: #3 (push su `origin` approvato), #4 (OK, nessuna
+azione), #5 (strict), #5b (cella di riscaldamento + media su 3-5 passate).
+
+**#5 strict** — `"strict": true` in `tsconfig.json`. Il codebase era già conforme: `npx tsc
+--noEmit --strict` dava zero errori *prima* di toccare qualsiasi cosa. Nessun `| null` da
+sistemare, nessun `!` da difendere. Costo reale del ruling: una riga.
+
+**#5b warm-up** — `needsWarmup()` in `src/benchServer.ts`: se `cacheState !== "warm"` si esegue
+una generate a carico identico (PROMPT_512, 256 token) e la si scarta prima delle 3 repliche
+misurate. `"unknown"` trattato come freddo.
+
+Un test preesistente è caduto: "flags high-variance when decode rate spreads across replicates"
+usava proprio il primo run lento come sorgente di spread, e il warm-up ora se lo mangia. Isolato
+con `cacheState: "warm"`. **Che sia caduto è la prova che lo scarto funziona** — non è stato un
+fastidio da silenziare.
+
+**Verifica su GPU reale.** Serviva un driver multi-cella: `scripts/e2e-bench.mjs` fa una cella per
+invocazione e l'effetto vive *tra* celle. Scritto `scripts/seq-bench.mjs` (sequenza via `SEQ`,
+contatori `nvidia-smi` a ogni confine di cella). Due bug pagati nel driver: `playwright` non
+risolve da `/tmp` (spostato in `scripts/`), e `#status` resta `"done"` dalla cella precedente →
+la wait ritornava subito e il click successivo arrivava a bench in corso (ora azzerato prima del
+click).
+
+4 run sulla 4090, dati e log in `results/methodology/`:
+
+| run | sequenza | decode tok/s | deriva |
+|-----|----------|--------------|--------|
+| alternato | tjs, webllm, tjs, webllm | tjs 56.5 → 48.6 / webllm 113.4 → 110.5 | tjs −13.9%, webllm −2.6% |
+| mono ×3 | tjs ×3 | 49.9 → 45.6 → 45.1 | −9.5% |
+| mono ×4 strumentato | tjs ×4 | 49.2 → 45.0 → 45.4 → 46.0 | −6.6% |
+| warm-up **sempre** (esperimento) | tjs ×4 | 48.0 → 48.2 → 47.2 → 46.6 | −2.9% |
+
+**Il +55% non è più riproducibile**: il ruling ha risolto il problema che mirava a risolvere.
+Ma ha scoperto una deriva di segno opposto: la prima cella di *ogni sessione browser* fa 49-50,
+le successive 45-46, su 3 sessioni indipendenti.
+
+**Non è hardware, e l'ho misurato invece di ipotizzarlo**: temperatura 48→56 °C (throttling di una
+4090 laptop è ~87 °C), memoria GPU piatta (2177→2197 MiB), clock stabile a 2265 MHz,
+`clocks_throttle_reasons` = 0x0 durante le celle. L'ipotesi power/clock-state del docket è
+confermata **solo per il primo run assoluto** (1455 MHz a freddo → 2265 dopo la prima cella); il
+residuo è stato del processo, presumibilmente compilazione shader / cache di kernel di ONNX
+Runtime Web.
+
+Causa del residuo: il warm-up si applica solo alle celle cold, quindi ogni cella warm successiva
+ripaga il primo-run lento. Controprova eseguita (warm-up forzato su tutte le celle): deriva a
+−2.9% e TTFT stabilizzato (275/270/279/290 contro 347/403/459/429). **Esperimento revertato**: la
+lettera del ruling dice "se il modello è cold", estenderlo è decisione del PI → docket #5b.
+
+Rapporto cross-stack dalle misure pulite: **webllm/transformersjs ≈ 2.0-2.3×** (2.01 in posizione
+1, 2.27 in posizione 2). Coerente col ~2.3× stimato, ancora ordine-dipendente.
+
+Gate: `tsc --noEmit` pulito, `npm test` 50/50, `npm run build` ok. Commit `579c9e4`, pushato su
+`origin/main` (`825e2b5..579c9e4`, 22 commit — `origin` era fermo a prima di tutta la Fase 1).

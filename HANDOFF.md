@@ -1,133 +1,79 @@
-# HANDOFF — browser-llm-lab   (updated 2026-07-26, session 2)
+# HANDOFF — browser-llm-lab   (updated 2026-07-26, session 3)
 
 ## 1. Next decidable
-**Goal attivo**: `fase-1b-matrice` (`.harness/goals/fase-1b-matrice/`) — GOAL.md + PHASES.md
-scritti 2026-07-26 da brainstorming → goal-brief → goal-setup, chiudendo il docket #7. Design
-di riferimento: `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`. **Fase 1 (adapter Transformers.js) COMPLETA E MERGIATA IN `main`** (2026-07-26, merge commit
-`66672bd`, per ruling docket #3: merge a fine di ogni fase). Subagent-driven: 4 task, review
-avversaria per task, final review whole-branch su opus, più un giro di conformance harness.
-Gate post-merge su `main`, tutti rilanciati: `npm test` 47/47, `tsc --noEmit` pulito,
-`npm run build` ok, **`npm run test:conformance` 8/8 + 8/8 exit 0** (browser reale, 4090).
-**NON pushato**: il ruling copre il merge, non il push verso `origin` — resta da chiedere.
 
-`main` ora ha: adapter Transformers.js, routing multi-stack (`StackId`, registry per-stack,
-guard di protocollo), selettore stack in UI, guard anti-mislabel su `quant` (`src/stacks.ts`),
-e l'harness di conformance in browser (`npm run test:conformance`) con contratto condiviso tra
-tutti gli adapter — **verificato con un mutation test** che sa davvero fallire.
+**Goal attivo**: `fase-1b-matrice` (`.harness/goals/fase-1b-matrice/` — GOAL.md, PHASES.md,
+docket.md, journal.md). Design: `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`.
+**Fase 1 completa e mergiata in `main`**; `main` è **pushato su `origin`** (`579c9e4`).
 
-**Primo risultato cross-stack reale, ma il rapporto NON è ancora dichiarabile.** Misure sulla stessa
-4090, stesso base model Qwen2.5-0.5B, schema v2, 3 repliche: webllm q4f32_1 ~101–116 tok/s,
-transformersjs q4 ~31–55 tok/s. WebLLM è nettamente più veloce (fattore ~2–3×), ma **il valore esatto
-dipende dall'ordine dei run**: vedi **docket #5b**, effetto warm-up tra celle (+55% su transformersjs
-e +14% su webllm nella stessa sessione, stesso probe, in `results/4090-linux-2026-07-26T19-54-55-278Z.json`).
-Le repliche multiple non lo catturano perché sono consecutive dentro la stessa cella. Serve una
-decisione di metodologia prima di pubblicare qualunque rapporto.
+**Prossimo decidibile: Fase 2 — adapter wllama** (PHASES.md riga 2). Nessun gate lo blocca: il
+push è approvato (docket #3), il merge a fine fase è approvato, il conformance harness accoglie il
+terzo stack con una riga in `src/conformance/page.ts`.
 
-**Prossimo decidibile**: **Fase 2 — adapter wllama** (PHASES.md riga 2). Il conformance harness è
-già pronto ad accoglierlo: aggiungere il terzo stack al contratto è una riga nella pagina di
-conformance.
+**Ma prima, una risposta rapida che cambia i numeri di Fase 2** — docket #5b chiede se estendere
+il warm-up a **tutte** le celle invece che alle sole cold. Misurato: porta la deriva ordine-
+dipendente da −6.6% a −2.9% e stabilizza il TTFT. È una riga (`needsWarmup` → `return true`),
+già isolata. Se la risposta arriva prima di Fase 2, i run wllama nascono con il protocollo giusto.
 
-**Aperto e bloccante per qualunque pubblicazione di numeri — docket #5b**: effetto warm-up tra
-celle. Serve una decisione di metodologia (cella di riscaldamento scartata / ordine randomizzato /
-indice di esecuzione come covariata / rilevazione della deriva). Finché non è chiuso, nessun
-rapporto cross-stack è dichiarabile.
+## 2. State delta (session 3, 2026-07-26)
 
-Altri aperti: **#5** (`strict` in tsconfig, mai risposto), **push su `origin`** (non coperto dal
-ruling sul merge).
+- **Ruling #5 (strict)**: `"strict": true` in `tsconfig.json`. Il codebase era già conforme —
+  zero errori da correggere.
+- **Ruling #5b (warm-up)**: `needsWarmup()` in `src/benchServer.ts` — se `cacheState !== "warm"`,
+  una generate a carico identico viene eseguita e scartata prima delle 3 repliche. La cella lo
+  dichiara in `anomalies` come `protocol: warm-up run discarded`.
+- **Nuovo `scripts/seq-bench.mjs`**: driver multi-cella (env `SEQ`) con contatori `nvidia-smi` a
+  ogni confine di cella. Serviva perché `e2e-bench.mjs` fa una cella per invocazione, e l'effetto
+  di docket #5b vive *tra* celle. Documentato in README.
+- **4 run di verifica sulla 4090**, dati + log in `results/methodology/`: il **+55% non è più
+  riproducibile**. Resta una deriva −7…−14% (prima cella di ogni sessione più veloce), **non
+  hardware** — temperatura, memoria GPU, clock e throttle reasons misurati e tutti negativi.
+- Test 50/50 (4 nuovi). Un test preesistente sull'high-variance è caduto perché il warm-up
+  assorbe il primo run lento che usava come sorgente di spread — isolato con `cacheState: "warm"`.
+- **Pushato `origin/main`** `825e2b5..579c9e4` (22 commit: `origin` era fermo a prima di Fase 1).
 
-Poi: Fase 3 (modulo qualità + schema v3), Fase 4 (README + verifica finale).
+## 3. Open threads
 
-Contesto precedente: Fase 1b — Fondamenta **mergiata in `main`** (2026-07-26, merge commit su
-richiesta esplicita di Cristiano): piano `docs/superpowers/plans/2026-07-26-fase-1b-fondamenta.md`
-completo (8/8 task), branch `fix/fase-1b-fixin1b` integrato. Verificato post-merge: `npm test`
-39/39, `tsc --noEmit` pulito, `npm run build` ok. `main` ora ha schema v2, probe esteso
-(browser/features/anomalies, rilevazione software-adapter), repliche multiple con aggregazione,
-UI aggiornata.
+- **Fase 2 (wllama)** non iniziata. Poi Fase 3 (qualità + schema v3), Fase 4 (README + verifica).
+- Branch `feat/fase-1a` e `fix/fase-1b-fixin1b` merged, non cancellati.
+- Rapporto cross-stack: **webllm/transformersjs ≈ 2.0–2.3×** sulla 4090 dalle misure pulite di
+  oggi. Ancora ordine-dipendente (~3% anche col warm-up esteso) → **non dichiarabile** in un
+  rapporto finché docket #5b non chiude.
+- I run in `results/*.json` precedenti a oggi sono ordine-dipendenti e nulla nel file lo dice.
 
-**Pushato su `origin/main`** (2026-07-26, `d2d3c43..4c72fb4`): `docs/superpowers/` è ora pubblico
-su GitHub — la policy "solo locale" (docket #5) è stata rivista e il pre-push hook rimosso, vedi
-docket #5 per il perché.
+## 4. Landmines
 
-## 2. State delta (session 2, 2026-07-26)
-- Scritto il piano Fase 1b — Fondamenta (8 task, TDD), verificato da loop-verifier: PASS su
-  copertura FIX-IN-1B, coerenza tipi tra task, assenza placeholder, aderenza al formato
-  writing-plans. **Ratificato 2026-07-26** (docket #5): `docs/superpowers/` ora tracciato in git
-  locale, mai su GitHub (pre-push hook, vedi docket #5 per dettagli).
-- **Eseguiti Task 1-4** (FIX-IN-1B backlog) su branch `fix/fase-1b-fixin1b`: escaping HTML in
-  `render.ts`, exhaustiveness guard `WorkerToMain` in `main.ts` (guard verificato empiricamente
-  con variante fittizia + tsc), test `dispose()` (verde al primo run — nessun bug preesistente),
-  export disabilitato durante bench in corso. **Review avversaria** ha trovato un bug reale nella
-  guardia di re-enable-on-error (`run === null` non copriva "primo bench fallisce prima di
-  produrre celle", perché `run` è già non-null da subito dopo il probe) — corretto in
-  `run === null || run.cells.length === 0`, stesso difetto anche nel piano, corretto lì pure.
-  Verifica manuale in browser (playwright) del toggle Export.
-- **Eseguito Task 5** (schema v2 — `DeviceProbe.browser/features/anomalies`, `SCHEMA_VERSION=2`
-  + `probe.ts`: `parseBrowser`, enumerazione `adapter.features`, `detectSoftwareAdapter` a soglia
-  128 MiB/vendor vuoto). Gap nel piano trovato ed emendato in-commit: Task 5 non elencava
-  `tests/render.test.ts` tra i file da aggiornare (aveva una propria fixture `DeviceProbe` dal
-  Task 1). Review avversaria: clean (solo 2 minor non azionabili — misclassificazione UA Edge
-  mobile fuori scope, stringa anomalia in italiano coerente col resto del codebase).
-- **Eseguito Task 6** (repliche multiple — `metrics.ts`: `aggregateReplicates`/`MetricAggregate`/
-  `GenMetricsAgg`; `schema.ts`: `BenchCell.gen` diventa aggregato + `.replicates`/`.anomalies`;
-  `benchServer.ts`: load una volta + generate x `replicateCount` default 3, flag `high-variance`
-  a soglia stdev/mean 0.15). Stesso tipo di gap trovato in Task 5: il piano non elencava
-  `src/render.ts` tra i file da toccare, ma il cambio di tipo lo rompe — applicato un fix
-  **minimale di sola compilazione** (`.ttftMs.mean`, `.decodeToksPerSec?.mean`), senza toccare
-  lo scope UI del Task 7 (badge anomalie, mean±stdev in vista). Review avversaria: clean, 2 minor
-  non azionabili.
-- **Eseguito Task 7** (render/UI — `fmtRate` mean±stdev, colonna anomalie con badge escaped;
-  `main.ts` non toccato, il probe-box mostra già browser/features/anomalies via
-  `JSON.stringify` esistente — **verificato dal vivo su GPU reale** (4090, vendor nvidia/
-  lovelace, browser chrome 150.0.0.0, features senza `shader-f16` coerente coi landmine noti,
-  anomalies: []). Review avversaria: trovato test anomaly-badge vacuo (asseriva solo substring,
-  non il markup `<span class="anomaly">` né l'escaping) — rinforzato e verificato che il test
-  rinforzato fallisce davvero su una regressione simulata.
-- **Eseguito Task 8** (README — sezione "Fase 1b — fondamenta": schema v2, repliche, euristica
-  software-adapter).
-- **FINAL REVIEW whole-branch** (worktree isolato): trovata e corretta una contraddizione
-  terminologica nel README — la sezione "## Note" preesistente definiva "Fase 1b" come sola
-  matrice-piena, in conflitto con la nuova sezione Task 8 "Fase 1b — fondamenta"; corretta
-  insieme a 2 riferimenti stale ("repliche multiple in 1b" → ora fatte). Nessun altro finding:
-  coerenza cross-task confermata, nessun codice orfano dai gap del piano (Task 5/6 non
-  elencavano render.ts), tipi `BenchCell` end-to-end puliti, nessuno scope creep.
-- Stato branch pre-merge: `npm test` 39/39, `tsc --noEmit` pulito, `npm run build` ok.
-- **Mergiato in `main`** su richiesta esplicita ("merge fix/fase-1b-fixin1b in main"): merge
-  commit (non fast-forward, per lasciare traccia esplicita del punto di integrazione, come
-  già fatto per `feat/fase-1a`). Gate post-merge rilanciati e verdi. Branch `fix/fase-1b-fixin1b`
-  non cancellato (tenuto per ora, come `feat/fase-1a`).
+- **`shader-f16` è per-browser, non per-GPU**: assente su chromium-playwright (q4f16_1 crasha →
+  usare q4f32_1), presente su Firefox.
+- **Firefox silent-fallback a CPU**: FF 152 girava su llvmpipe dichiarando `webgpu:true`. Il probe
+  ora rileva il software adapter (128 MiB + vendor vuoto).
+- **Headless = SwiftShader**: mai accettare quei risultati come dati GPU. I driver e2e/conformance
+  rifiutano da soli; `seq-bench.mjs` pure. Per la GPU reale serve
+  `HEADED=1 CHANNEL=chrome CHROME_ARGS="--ignore-gpu-blocklist --disable-gpu-sandbox"`.
+- **Chrome GPU sandbox vs Vulkan ICD (Fedora/NVIDIA)**: col sandbox attivo il GPU process non
+  legge gli ICD ("Found no drivers") → niente adapter WebGPU. Ritestare a ogni update di Chrome.
+- **Chrome flags & NVIDIA/Wayland**: `enable-vulkan` nel profilo corrompe il compositing,
+  `force-enable-webgpu-interop` crasha all'avvio. NON rimetterli nel profilo quotidiano.
+- **`#status` resta `"done"` tra una cella e l'altra**: qualunque driver multi-cella deve azzerarlo
+  prima del click, o la wait ritorna subito e clicca a bench in corso (già pagato).
+- Playwright `waitForFunction(fn, arg, options)`: le options sono il TERZO argomento.
+- `chromium.launch()` = profilo effimero → cold/warm richiede `launchPersistentContext`.
+- tsconfig: `erasableSyntaxOnly` (niente parameter properties) e ora `strict`.
+- `.superpowers/` è gitignorato: il ledger SDD non sopravvive a `git clean -fdx`.
+- Il dev server su :5173 può essere già acceso da un'altra sessione — `npm run dev` ripiega su
+  :5174 e i driver puntano a :5173 di default.
 
-## 3. State delta (session 1, 2026-07-25)
-- Progetto creato da zero: spec approvata, piano fase 1a, 9 task eseguiti SDD (subagent + review avversaria per task).
-- `main` = harness fase 1a completo e merged (`c9e05b4`): SPA Vite+TS, bench worker, adapter WebLLM (CreateMLCEngine in-worker), probe WebGPU, schema v1, metriche pure, UI+export. Suite 26/26, tsc pulito, build ok.
-- Run E2E **reali sulla 4090** via `scripts/e2e-bench.mjs` (playwright headed): cold 55.6s / warm 1.6s load, ~106–118 tok/s decode su Qwen2.5-0.5B q4f32_1. Risultati in `results/*.json`.
-- README con i finding live; final review whole-branch: READY TO MERGE, minors triagiati.
-- `main` pubblicato su `origin`/GitHub; storico locale riscritto una volta per sostituire l'email privata bloccata da GH007 con la `noreply` del profilo. Tracking `origin/main` attivo.
+## 5. Docket (user decisions pending)
 
-## 4. Open threads
-- Branch `feat/fase-1a` merged, può essere cancellato (tenuto per ora).
-- Branch `fix/fase-1b-fixin1b` merged in `main`, può essere cancellato (tenuto per ora).
-- FIX-IN-1B dal final review: **fatto**, in `main`.
-- Varianza tok/s run-to-run ~10% → repliche multiple **fatte**, in `main`, con flag `high-variance` a soglia 0.15.
-- Piano fase-1b-fondamenta **completo e mergiato** — vedi §1 per la decisione pendente (avvio "1b — matrice").
+Vedi `.harness/goals/fase-1b-matrice/docket.md` per il testo integrale.
 
-## 5. Landmines
-- **`shader-f16` è per-browser, non per-GPU**: assente su chromium-playwright (q4f16_1 crasha → usare q4f32_1), presente su Firefox. Schema v2 ha ora `browser`/`anomalies`/`features` (in `main`) — verificato dal vivo: `features` su questa macchina/chromium non include `shader-f16`, coerente col finding sotto.
-- **Firefox silent-fallback a CPU**: il FF 152 dell'utente girava su **llvmpipe** dichiarando `webgpu:true` (about:support: NVIDIA inattiva, acceleration blocked by platform) → la cella `*firefox152-LLVMPIPE-CPU.json` è un datapoint CPU, NON 4090. Il probe ora rileva il software adapter (128 MiB + vendor vuoto, in `main`). Run playwright-FF invece su GPU vera (nvidia-smi 100%): 9.9 tok/s.
-- Headless shell = **SwiftShader**: mai accettare risultati come dati GPU (il driver e2e già rifiuta da solo).
-- Playwright `waitForFunction(fn, arg, options)`: le options sono il TERZO argomento (bug già pagato una volta).
-- `chromium.launch()` = profilo effimero → cold/warm richiede `launchPersistentContext` (già nel driver, profilo `/tmp/blab-e2e-profile`).
-- tsconfig ha `erasableSyntaxOnly: true`: niente parameter properties nelle classi.
-- `.superpowers/` è gitignorato: il ledger SDD (`.superpowers/sdd/progress.md`) non sopravvive a `git clean -fdx`.
-
-- **Chrome flags & NVIDIA/Wayland**: enable-vulkan nel profilo corrompe il compositing (schermo nero/artefatti); force-enable-webgpu-interop crasha all avvio. Profilo quotidiano dell utente: flags azzerati il 2026-07-25, NON rimetterli.
-- **Chrome GPU sandbox vs Vulkan ICD (Fedora/NVIDIA)**: col sandbox attivo il GPU process non legge gli ICD ("vkCreateInstance: Found no drivers", Permission denied su file leggibili) → WebGPU niente adapter. Riprodotto deterministicamente col toggle chromiumSandbox. Ricetta bench manuale: profilo dedicato + --ignore-gpu-blocklist + --disable-gpu-sandbox (scripts/bench-chrome.sh). I run playwright non lo soffrono (no-sandbox di default). Ritestare a ogni update di Chrome.
-- Delta branded-vs-playwright RISOLTO: run manuale utente su branded = 116.9 tok/s (in linea). Era varianza; repliche multiple ora fatte (Fase 1b — fondamenta).
-
-## 6. Docket (user decisions pending)
-1. Espansione benchmark pubblico/community: deferred per scelta PI (2026-07-25), ripensare a banco maturo.
-2. ~~Installare Chrome branded per testare `shader-f16`~~ FATTO 2026-07-25: f16 assente anche sul branded (pure con dev-features) → è Dawn/driver; q4f16_1 su questa macchina solo via Firefox.
-3. Punteggio decode `null` vs `0` con <2 token: adjudicato dal controller (null); ratificare o ribaltare. Ratificato
-4. Guardia `completionTokens >= 2` + prosa piano allineata + probe never-throws + erasableSyntaxOnly: tre adjudication del controller in sessione, tutte documentate nel ledger — ratifica implicita se nessuna obiezione. Ratificato
-5. ~~`docs/superpowers/` gitignored vs tracciato~~ **REVISIONATO 2026-07-26** (Cristiano). Prima ratifica: tracciato in git locale ma mai su GitHub (pre-push hook). Conseguenza operativa emersa subito: blocca `git push origin main` per qualunque commit futuro che tocchi anche solo un file sotto `docs/superpowers/` insieme a codice — un cherry-pick "una tantum" non risolve, si ripresenta ad ogni push. Cristiano: "che senso ha se poi non possiamo più pushare... togliamo la regola, pazienza". **Deciso**: hook `.git/hooks/pre-push` rimosso, `docs/superpowers/` (piano fase-1b-fondamenta incluso) è ora pubblico su GitHub (push 2026-07-26, `d2d3c43..4c72fb4`). `.superpowers/` (ledger SDD) resta gitignored, non toccato.
-6. ~~Merge di `fix/fase-1b-fixin1b` in `main`~~ FATTO 2026-07-26 su richiesta esplicita di Cristiano. Gate post-merge verdi.
-7. **Chiuso 2026-07-26**: avvio "1b — matrice" formalizzato via brainstorming → design doc (`docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`) → goal-brief → goal-setup. Ora è il goal attivo `fase-1b-matrice` (vedi §1). Decisioni prese durante il brainstorming: intero pacchetto in un design (non decomposto), ordine Transformers.js → wllama → qualità → sweep, sweep multi-device manuale per ora (automazione deferred), fascia Ceiling resta F3, punteggio qualità senza soglia pass/fail. Ricerca HF Hub ha confermato un gap strutturale: la fascia Large (Qwen2.5-7B, Llama-3.1-8B) non è eseguibile né su Transformers.js (nessun repo ONNX web-runnable) né su wllama (pesi Q4_K_M >4GB, tetto WASM) — documentato nel design, non bloccante. **Nuovo item aperto**: plan-check su `PHASES.md` (vedi `.harness/goals/fase-1b-matrice/docket.md`) — approvazione PI prima dell'iterazione 1.
+- **#5b — APERTO, richiede ruling**: estendere il warm-up a tutte le celle (non solo cold)?
+  Evidenza e raccomandazione nel docket. Bloccante per dichiarare qualunque rapporto cross-stack.
+- **#7 — APERTO, richiede ruling**: il warm-up applicato è registrato in `BenchCell.anomalies`,
+  ma `anomalies` significa "cosa è andato storto" — chi filtra `anomalies.length > 0` scarterebbe
+  le celle misurate bene. Il campo pulito (`BenchCell.protocol`) è vietato dal constraint
+  "no ad hoc field additions beyond `qualityScore`" in GOAL.md. Raccomandato: emendare e
+  aggiungerlo in Fase 3, che tocca già lo schema per il bump a v3.
+- Chiusi in questa sessione: **#3** (push approvato), **#4** (registrazione, nessuna azione),
+  **#5** (strict applicato).
+- Storico dei docket delle fasi precedenti: nel journal del goal.
