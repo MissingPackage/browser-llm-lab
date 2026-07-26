@@ -24,7 +24,7 @@ function fakeAdapter(): InferenceAdapter {
   };
 }
 
-const fakeAdapters = () => ({ webllm: fakeAdapter, transformersjs: fakeAdapter });
+const fakeAdapters = () => ({ webllm: fakeAdapter, transformersjs: fakeAdapter, wllama: fakeAdapter });
 
 describe("BenchServer", () => {
   it("probe message → probe:result", async () => {
@@ -64,7 +64,7 @@ describe("BenchServer", () => {
     };
     const out: WorkerToMain[] = [];
     const s = new BenchServer({
-      adapters: { webllm: () => warm, transformersjs: () => warm },
+      adapters: { webllm: () => warm, transformersjs: () => warm, wllama: () => warm },
       probe: fakeProbe,
       post: (m) => out.push(m),
       replicateCount: 3,
@@ -81,7 +81,7 @@ describe("BenchServer", () => {
     };
     const out: WorkerToMain[] = [];
     const s = new BenchServer({
-      adapters: { webllm: () => counting, transformersjs: () => counting },
+      adapters: { webllm: () => counting, transformersjs: () => counting, wllama: () => counting },
       probe: fakeProbe,
       post: (m) => out.push(m),
       replicateCount: 3,
@@ -104,7 +104,7 @@ describe("BenchServer", () => {
     };
     const out: WorkerToMain[] = [];
     const s = new BenchServer({
-      adapters: { webllm: () => counting, transformersjs: () => counting },
+      adapters: { webllm: () => counting, transformersjs: () => counting, wllama: () => counting },
       probe: fakeProbe,
       post: (m) => out.push(m),
       replicateCount: 1,
@@ -122,7 +122,7 @@ describe("BenchServer", () => {
     };
     const out: WorkerToMain[] = [];
     const s = new BenchServer({
-      adapters: { webllm: () => counting, transformersjs: () => counting },
+      adapters: { webllm: () => counting, transformersjs: () => counting, wllama: () => counting },
       probe: fakeProbe,
       post: (m) => out.push(m),
       replicateCount: 3,
@@ -149,7 +149,7 @@ describe("BenchServer", () => {
     };
     const out: WorkerToMain[] = [];
     const s = new BenchServer({
-      adapters: { webllm: () => warm, transformersjs: () => warm },
+      adapters: { webllm: () => warm, transformersjs: () => warm, wllama: () => warm },
       probe: fakeProbe,
       post: (m) => out.push(m),
       replicateCount: 3,
@@ -177,7 +177,7 @@ describe("BenchServer", () => {
     };
     const out: WorkerToMain[] = [];
     const s = new BenchServer({
-      adapters: { webllm: () => rampUp, transformersjs: () => rampUp },
+      adapters: { webllm: () => rampUp, transformersjs: () => rampUp, wllama: () => rampUp },
       probe: fakeProbe,
       post: (m) => out.push(m),
       replicateCount: 2,
@@ -199,12 +199,38 @@ describe("BenchServer", () => {
     const adapters = {
       webllm: () => { calls.push("webllm"); return fakeAdapter(); },
       transformersjs: () => { calls.push("transformersjs"); return { ...fakeAdapter(), id: "transformersjs" as const }; },
+      wllama: () => { calls.push("wllama"); return { ...fakeAdapter(), id: "wllama" as const }; },
     };
     const s = new BenchServer({ adapters, probe: fakeProbe, post: (m) => out.push(m), replicateCount: 1 });
     await s.handle({ type: "bench", stack: "transformersjs", modelId: "m", quant: "q4" });
     expect(calls).toEqual(["transformersjs"]);
     const result = out.find((m) => m.type === "bench:result");
     if (result?.type === "bench:result") expect(result.cell.stack).toBe("transformersjs");
+  });
+
+  it("dispatches to the wllama adapter and labels the cell with its stack", async () => {
+    const out: WorkerToMain[] = [];
+    const calls: string[] = [];
+    const adapters = {
+      webllm: () => { calls.push("webllm"); return fakeAdapter(); },
+      transformersjs: () => { calls.push("transformersjs"); return { ...fakeAdapter(), id: "transformersjs" as const }; },
+      wllama: () => { calls.push("wllama"); return { ...fakeAdapter(), id: "wllama" as const }; },
+    };
+    const s = new BenchServer({ adapters, probe: fakeProbe, post: (m) => out.push(m), replicateCount: 1 });
+    await s.handle({
+      type: "bench",
+      stack: "wllama",
+      modelId: "Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      quant: "Q4_K_M",
+    });
+    expect(calls).toEqual(["wllama"]);
+    const result = out.find((m) => m.type === "bench:result");
+    if (result?.type === "bench:result") {
+      expect(result.cell.stack).toBe("wllama");
+      expect(result.cell.quant).toBe("Q4_K_M");
+    } else {
+      throw new Error("expected bench:result");
+    }
   });
 
   it("flags high-variance when decode rate spreads across replicates beyond threshold", async () => {
@@ -219,7 +245,7 @@ describe("BenchServer", () => {
     };
     const out: WorkerToMain[] = [];
     const s = new BenchServer({
-      adapters: { webllm: () => varyingAdapter, transformersjs: () => varyingAdapter },
+      adapters: { webllm: () => varyingAdapter, transformersjs: () => varyingAdapter, wllama: () => varyingAdapter },
       probe: fakeProbe,
       post: (m) => out.push(m),
       replicateCount: 2,
@@ -239,7 +265,7 @@ describe("BenchServer", () => {
     const broken = { ...fakeAdapter(), load: async () => { throw new Error("boom"); } };
     const out: WorkerToMain[] = [];
     const s = new BenchServer({
-      adapters: { webllm: () => broken, transformersjs: () => broken },
+      adapters: { webllm: () => broken, transformersjs: () => broken, wllama: () => broken },
       probe: fakeProbe,
       post: (m) => out.push(m),
     });

@@ -13,6 +13,7 @@
         <select id="stack">
           <option value="webllm">WebLLM (MLC)</option>
           <option value="transformersjs">Transformers.js</option>
+          <option value="wllama">wllama (llama.cpp/WASM)</option>
         </select>
       </label>
       <label>Model:
@@ -20,6 +21,7 @@
           <option value="Qwen2.5-0.5B-Instruct-q4f32_1-MLC" data-quant="q4f32_1" data-stack="webllm">Qwen2.5-0.5B q4f32_1 (Chrome/Linux: niente shader-f16)</option>
           <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC" data-quant="q4f16_1" data-stack="webllm">Qwen2.5-0.5B q4f16_1 (richiede shader-f16)</option>
           <option value="onnx-community/Qwen2.5-0.5B-Instruct" data-quant="q4" data-stack="transformersjs">Qwen2.5-0.5B q4 (Transformers.js/WebGPU)</option>
+          <option value="Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf" data-quant="Q4_K_M" data-stack="wllama">Qwen2.5-0.5B Q4_K_M (wllama/WASM, CPU)</option>
         </select>
       </label>
       <button id="run">Run bench</button>
