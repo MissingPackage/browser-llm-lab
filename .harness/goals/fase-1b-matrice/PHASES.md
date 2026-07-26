@@ -11,12 +11,17 @@ implementazione. Fasi sequenziali (nessun `parallel-group`: le fasi 1-3 toccano 
 | 3 | Modulo qualità + schema v3 completo | `npm test` verde (unit test perplexity + fallback 12-prompt) + `tsc --noEmit` pulito + `BenchCell.qualityScore` presente e tipato nello schema | none | `src/quality.ts`, `src/qualityPrompts.ts`, `src/schema.ts` (campo `qualityScore`, bump `SCHEMA_VERSION=3`), relativi test | ready |
 | 4 | README + verifica finale whole-branch | Sezione "Fase 1b — matrice" nel README con gap Large documentato + suite completa verde (baseline 39 + nuovi test) + `tsc`/`build` puliti + entrambi i run (transformersjs, wllama) presenti in `results/` | none | `README.md` | ready |
 
-**\* Fase 1 — done con una riserva** (2026-07-26): tutte le condizioni meccaniche sono verdi
+**\* Fase 1 — riserva in chiusura** (2026-07-26): tutte le condizioni meccaniche sono verdi
 (`npm test` 47/47, `tsc --noEmit` pulito, `npm run build` ok, run reale `stack:"transformersjs"` in
-`results/` più il pariglia WebLLM in condizioni equivalenti) **tranne** la clausola "incl. nuovo
-conformance test transformersjs": i test scritti iniettano tutti un engine fake, quindi non caricano
-un modello tiny né asseriscono su `capabilities()` come il done-when richiede. Vedi **docket #2** —
-è una decisione del PI, non chiusa autonomamente. Le Fasi 2-4 non dipendono da quella clausola.
+`results/` più il pariglia WebLLM in condizioni equivalenti). Restava aperta la clausola "incl. nuovo
+conformance test transformersjs": i test unit iniettano tutti un engine fake, quindi non caricano un
+modello né asseriscono su `capabilities()`.
+
+**DONE-WHEN EMENDATO** (2026-07-26, ruling PI in docket #2): la clausola "verifiable via `npm test`"
+di GOAL.md e di questa riga non è realizzabile per tutti gli adapter — WebLLM richiede WebGPU e non
+gira in Node. Sostituita da: *ogni adapter passa lo stesso contratto di conformance eseguito **nel
+browser** da uno script Playwright on-demand (`npm run test:conformance`)*; `npm test` resta la suite
+unit veloce e offline. Un solo meccanismo per tutti gli stack, già pronto per wllama in Fase 2.
 
 Nota: l'esecuzione dello sweep manuale sui 3 device (M4/S22) resta **fuori da queste fasi**
 (fuori scope del goal, per costruzione — vedi GOAL.md "must docket"). Il merge di
