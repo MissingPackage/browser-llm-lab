@@ -18,7 +18,19 @@ const cell: BenchCell = {
   quant: "q4f16_1",
   promptId: "bench-512-v1",
   load: { loadMs: 1234, cacheState: "cold" },
-  gen: { ttftMs: 100, decodeToksPerSec: 42.5, totalMs: 6000, promptTokens: 512, completionTokens: 256 },
+  gen: {
+    ttftMs: { mean: 100, stdev: 5, samples: [95, 100, 105] },
+    decodeToksPerSec: { mean: 42.5, stdev: 1.2, samples: [41, 42.5, 44] },
+    totalMs: { mean: 6000, stdev: 100, samples: [5900, 6000, 6100] },
+    promptTokens: 512,
+    completionTokens: 256,
+  },
+  replicates: [
+    { ttftMs: 95, decodeToksPerSec: 41, totalMs: 5900, promptTokens: 512, completionTokens: 256 },
+    { ttftMs: 100, decodeToksPerSec: 42.5, totalMs: 6000, promptTokens: 512, completionTokens: 256 },
+    { ttftMs: 105, decodeToksPerSec: 44, totalMs: 6100, promptTokens: 512, completionTokens: 256 },
+  ],
+  anomalies: [],
 };
 
 describe("schema", () => {
@@ -34,6 +46,6 @@ describe("schema", () => {
     const run2 = addCell(run, cell);
     expect(run.cells.length).toBe(0);
     expect(run2.cells.length).toBe(1);
-    expect(run2.cells[0].gen.decodeToksPerSec).toBe(42.5);
+    expect(run2.cells[0].gen.decodeToksPerSec?.mean).toBe(42.5);
   });
 });

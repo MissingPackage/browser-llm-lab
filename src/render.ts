@@ -18,7 +18,7 @@ export function renderResultsTable(run: RunFile): string {
       (c) => `<tr>
         <td>${escapeHtml(c.stack)}</td><td>${escapeHtml(c.modelId)}</td><td>${escapeHtml(c.quant)}</td>
         <td>${fmt(c.load.loadMs, 0)}</td><td>${c.load.cacheState}</td>
-        <td>${fmt(c.gen.ttftMs, 0)}</td><td>${fmt(c.gen.decodeToksPerSec)}</td>
+        <td>${fmt(c.gen.ttftMs.mean, 0)}</td><td>${fmt(c.gen.decodeToksPerSec?.mean ?? null)}</td>
         <td>${c.gen.promptTokens ?? "—"}/${c.gen.completionTokens ?? "—"}</td>
       </tr>`,
     )

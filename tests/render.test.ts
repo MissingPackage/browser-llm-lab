@@ -19,7 +19,15 @@ describe("renderResultsTable", () => {
     run = addCell(run, {
       stack: "webllm", modelId: "M", quant: "q4f16_1", promptId: "bench-512-v1",
       load: { loadMs: 1500, cacheState: "cold" },
-      gen: { ttftMs: 123.4, decodeToksPerSec: 41.7, totalMs: 6000, promptTokens: 512, completionTokens: 256 },
+      gen: {
+        ttftMs: { mean: 123.4, stdev: 3, samples: [120, 123.4, 127] },
+        decodeToksPerSec: { mean: 41.7, stdev: 2.1, samples: [40, 41.7, 43.4] },
+        totalMs: { mean: 6000, stdev: 50, samples: [5950, 6000, 6050] },
+        promptTokens: 512,
+        completionTokens: 256,
+      },
+      replicates: [],
+      anomalies: [],
     });
     const html = renderResultsTable(run);
     expect(html).toContain("M");
@@ -40,7 +48,15 @@ describe("renderResultsTable", () => {
       quant: "q4f16_1",
       promptId: "bench-512-v1",
       load: { loadMs: 1, cacheState: "cold" },
-      gen: { ttftMs: 1, decodeToksPerSec: 1, totalMs: 1, promptTokens: 1, completionTokens: 1 },
+      gen: {
+        ttftMs: { mean: 1, stdev: 0, samples: [1] },
+        decodeToksPerSec: { mean: 1, stdev: 0, samples: [1] },
+        totalMs: { mean: 1, stdev: 0, samples: [1] },
+        promptTokens: 1,
+        completionTokens: 1,
+      },
+      replicates: [],
+      anomalies: [],
     });
     const html = renderResultsTable(run);
     expect(html).not.toContain("<img src=x");

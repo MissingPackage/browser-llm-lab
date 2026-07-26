@@ -1,3 +1,5 @@
+import type { GenMetricsAgg } from "./metrics";
+
 export const SCHEMA_VERSION = 2 as const;
 
 export interface DeviceProbe {
@@ -25,12 +27,14 @@ export interface GenMetrics {
 }
 
 export interface BenchCell {
-  stack: "webllm"; // union estesa in 1b
+  stack: "webllm"; // union estesa nel piano "1b — matrice"
   modelId: string;
   quant: string;
   promptId: string;
   load: LoadReport;
-  gen: GenMetrics;
+  gen: GenMetricsAgg;
+  replicates: GenMetrics[];
+  anomalies: string[]; // es. "high-variance"
 }
 
 export interface RunFile {
