@@ -1,0 +1,23 @@
+GOAL: Extend browser-llm-lab with the "1b — matrice" harness — Transformers.js and wllama inference adapters, a quality-scoring module, and schema v3 — verified end-to-end on the existing 4090 rig, so the codebase is ready for the (separately scheduled) manual multi-device sweep.
+
+DONE WHEN (all measurable):
+- `src/adapters/transformersjs.ts` and `src/adapters/wllama.ts` exist, implement `InferenceAdapter`, and each passes a conformance test (load a tiny model, generate deterministic output, `capabilities()` matches real behavior) — verifiable via `npm test`.
+- `src/quality.ts` + `src/qualityPrompts.ts` implemented, with unit tests covering both the perplexity path and the 12-prompt exact-match fallback — verifiable via `npm test`.
+- Schema bumped to v3: `BenchCell.stack` union extended to `"webllm" | "transformersjs" | "wllama"`, `BenchCell.qualityScore` field added per the design doc's discriminated union — verifiable via `tsc --noEmit` clean + schema-level tests.
+- UI stack selector added, filtering the model dropdown to combinations that actually exist (excludes the documented Large-tier gap) — verified manually via a playwright smoke pass.
+- `npm run build` succeeds.
+- At least one real (non-SwiftShader) run per new adapter recorded under `results/` on the 4090, each a valid schema-v3 JSON — verifiable via `ls results/*.json` + schema validation, using the existing e2e driver (`scripts/e2e-bench.mjs`).
+- README gains a "Fase 1b — matrice" section documenting the Large-tier gap finding (no ONNX/wllama path for 7B/8B).
+- Full existing suite still green (39/39 baseline before this work) — no regression to the WebLLM adapter.
+
+EVIDENCE OF DONE: `npm test` output (N/N passing), `tsc --noEmit` clean, `npm run build` exit 0, `ls results/*.json` showing new `stack: "transformersjs"` / `stack: "wllama"` entries, `git log`/README diff showing the new section.
+
+AUTHORITY GRANTED:
+- may do autonomously: work on a feature branch `feat/fase-1b-matrice`, install the two new npm deps (`@huggingface/transformers`, `wllama`), write/edit code and tests, run `npm test`/`tsc`/`npm run build`, run the existing e2e driver headed on the local 4090, log open questions to the docket.
+- must docket (never do): merge to `main`, push to `origin`, delete existing branches/results, change the public `InferenceAdapter` contract, touch `docs/superpowers/` policy, execute or simulate the M4/S22 sweep (physically out of reach — separate goal/manual step), drop model quant below what's specced to force the Large tier to fit.
+
+CONSTRAINTS: no AI attribution in commits or PRs; schema v3 implemented exactly as specced (no ad hoc field additions beyond `qualityScore`); Large-tier gap stays documented, never silently "fixed"; existing WebLLM adapter/tests must keep passing throughout; `erasableSyntaxOnly` tsconfig — no parameter properties in classes (known landmine, see HANDOFF.md §5).
+
+WORKING PROTOCOL: follow skills loop-iteration + done; verifier gate per cycle; digest every cycle; stop-by-design when remaining work is docket-gated (merge decision, or the manual device sweep).
+
+CONTEXT ANCHORS: HANDOFF.md; `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md` (this goal's spec); `docs/superpowers/specs/2026-07-25-browser-llm-serving-design.md` §Fasatura; `src/adapters/types.ts` + `src/adapters/webllm.ts` (reference adapter); `src/schema.ts`; `src/metrics.ts`.
