@@ -43,7 +43,7 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   corrompe il compositing su NVIDIA/Wayland, `force-enable-webgpu-interop` crasha all'avvio.
 - Chrome 150 branded (launcher `bench-chrome.sh`): cold 61 s / warm 1.8 s, fino a **116.9 tok/s**
   (run manuale utente) — in linea con chromium-playwright; la varianza run-to-run (~10-25%)
-  conferma la necessità di repliche multiple in 1b.
+  conferma la necessità di repliche multiple (introdotte in Fase 1b — fondamenta, vedi sotto).
 
 ## Cosa abbiamo verificato dal vivo (4090 mobile, Fedora, chromium Playwright)
 
@@ -61,14 +61,14 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   | decode 0.5B | 106–118 tok/s (`q4f32_1`) | 1.8 tok/s (`q4f16_1`, **CPU**) | **9.9 tok/s** (`q4f16_1`) |
   **Finding chiave**: Firefox può fare **silent fallback a software rasterizer**
   riportando `webgpu: true` con vendor vuoto — l'utente non ha modo di accorgersene
-  dalla pagina. Il probe di 1b deve rilevarlo (fingerprint: cap 128 MiB + vendor
-  vuoto). Il gap GPU-vero: chromium ~110 vs Firefox ~10 tok/s (≈11×, plausibile
+  dalla pagina. Il probe ora lo rileva (fingerprint: cap 128 MiB + vendor vuoto,
+  vedi Fase 1b — fondamenta sotto). Il gap GPU-vero: chromium ~110 vs Firefox ~10 tok/s (≈11×, plausibile
   ruolo di `subgroups`, assente su Firefox).
 - **COEP `require-corp` convive col CDN HF**: shard scaricati senza bisogno del
   fallback `credentialless` (vale anche su Firefox).
 - Primi numeri (Qwen2.5-0.5B `q4f32_1`, schema v1, in `results/`):
   load cold ~56 s → **warm ~1.6 s** (Cache API); TTFT 0.5–0.9 s (warm–cold);
-  decode **~106–118 tok/s** (varianza run-to-run ~10%, repliche multiple in 1b).
+  decode **~106–118 tok/s** (varianza run-to-run ~10%, repliche multiple ora in Fase 1b — fondamenta).
 
 ## Fase 1b — fondamenta (schema v2)
 
@@ -92,5 +92,6 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
 
 - I risultati in `results/` sono i dati del progetto: committati, schema
   versionato (`schemaVersion`), niente fingerprinting (label device manuale).
-- Fase 1b (matrice piena: Transformers.js, wllama, più modelli/quant/device) e
-  fase 2 (deep-dive kernel MLC): vedi spec, sezione Fasatura.
+- Fase 1b — matrice piena (adapter Transformers.js/wllama, sweep multi-device,
+  modulo qualità — non ancora in scope, vedi sezione sopra) e fase 2
+  (deep-dive kernel MLC): vedi spec, sezione Fasatura.
