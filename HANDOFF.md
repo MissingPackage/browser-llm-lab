@@ -1,21 +1,29 @@
 # HANDOFF — browser-llm-lab   (updated 2026-07-26, session 2)
 
 ## 1. Next decidable
-Piano scritto: `docs/superpowers/plans/2026-07-26-fase-1b-fondamenta.md` (8 task, TDD,
-copre FIX-IN-1B + probe esteso `adapter.features` + rilevazione software-adapter (soglia
-128 MiB + vendor vuoto) + repliche multiple con aggregazione mean/stdev + schema v2
-`browser`/`anomalies`). **Non tocca** adapter Transformers.js/wllama, sweep multi-device,
-modulo qualità: quello resta un piano "1b — matrice" separato, da scrivere dopo che le
-fondamenta sono eseguite. Prossimo passo concreto: eseguire il piano fase-1b-fondamenta
-task-by-task (subagent-driven-development consigliato dal piano stesso), su branch feature
-dedicato — nessun task tocca deploy/auth/migrazioni.
+Piano `docs/superpowers/plans/2026-07-26-fase-1b-fondamenta.md`: Task 1-4 (FIX-IN-1B) **completi**
+su branch `fix/fase-1b-fixin1b` (locale, non pushato, non mergiato). Prossimo passo concreto:
+Task 5 del piano (schema v2 — `DeviceProbe.{browser,features,anomalies}` + probe esteso con
+`adapter.features`/rilevazione software-adapter), poi Task 6 (repliche multiple + aggregazione),
+Task 7 (render/UI), Task 8 (README) — nello stesso branch o uno nuovo, a scelta di chi esegue.
+**Non tocca** adapter Transformers.js/wllama, sweep multi-device, modulo qualità: quello resta
+un piano "1b — matrice" separato, da scrivere dopo che le fondamenta sono eseguite.
 
 ## 2. State delta (session 2, 2026-07-26)
-- Scritto il piano Fase 1b — Fondamenta (vedi §1), verificato da loop-verifier: PASS su
+- Scritto il piano Fase 1b — Fondamenta (8 task, TDD), verificato da loop-verifier: PASS su
   copertura FIX-IN-1B, coerenza tipi tra task, assenza placeholder, aderenza al formato
-  writing-plans; nessuna modifica a `src/`/`tests/` in questa iterazione (`npm test` 26/26,
-  `tsc --noEmit` pulito, invariati prima/dopo). Il piano vive sotto `docs/superpowers/`
-  (gitignored dal commit `347a7fe`, quindi non tracciato in git — vedi docket item nuovo).
+  writing-plans. Vive sotto `docs/superpowers/` (gitignored dal commit `347a7fe`, quindi non
+  tracciato in git — vedi docket item 5).
+- **Eseguiti Task 1-4** (FIX-IN-1B backlog) su branch `fix/fase-1b-fixin1b`: escaping HTML in
+  `render.ts` (1bde4ee), exhaustiveness guard `WorkerToMain` in `main.ts` (188c886, guard
+  verificato empiricamente con variante fittizia + tsc), test `dispose()` (b47abd7, verde al
+  primo run — nessun bug preesistente), export disabilitato durante bench in corso (4378710).
+  **Review avversaria** ha trovato un bug reale nella guardia di re-enable-on-error (`run ===
+  null` non copriva "primo bench fallisce prima di produrre celle", perché `run` è già
+  non-null da subito dopo il probe) — corretto in `run === null || run.cells.length === 0`
+  (c319081), stesso difetto anche nel piano, corretto lì pure. `npm test` 28/28, `tsc --noEmit`
+  pulito, `npm run build` ok, verifica manuale in browser (playwright) del toggle Export.
+  Branch non pushato/mergiato (PR-ready, merge resta docket).
 
 ## 3. State delta (session 1, 2026-07-25)
 - Progetto creato da zero: spec approvata, piano fase 1a, 9 task eseguiti SDD (subagent + review avversaria per task).
