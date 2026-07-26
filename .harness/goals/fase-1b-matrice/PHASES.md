@@ -30,6 +30,16 @@ gira in Node. Sostituita da: *ogni adapter passa lo stesso contratto di conforma
 browser** da uno script Playwright on-demand (`npm run test:conformance`)*; `npm test` resta la suite
 unit veloce e offline. Un solo meccanismo per tutti gli stack, già pronto per wllama in Fase 2.
 
+**DONE-WHEN DI FASE 2 EMENDATO** (2026-07-27, ruling PI in docket #8): la clausola "incl. nuovo
+conformance test wllama" è soddisfatta a **7/8 check**, non 8/8. Il check che resta rosso —
+*determinism (token count) across two identical generate() calls* — riporta un difetto **di
+wllama, non del nostro adapter**: il chunk di chiusura di una `generate()` viene consegnato
+all'inizio della successiva, quindi ogni risposta perde la propria coda. Già segnalato upstream da
+terzi (issue ngxson/wllama#263, PR #264, entrambe OPEN al 2026-07-27; ultima release 3.5.1 è
+precedente alla PR). Decisione: documentare e accettare, nessun workaround nel nostro codice —
+silenziarlo nasconderebbe un comportamento che chiunque usi wllama per misurare incontrerà.
+Controllo automatico ogni 3 giorni; quando il fix è rilasciato, aggiornare e togliere la deroga.
+
 Nota: l'esecuzione dello sweep manuale sui 3 device (M4/S22) resta **fuori da queste fasi**
 (fuori scope del goal, per costruzione — vedi GOAL.md "must docket"). Il merge di
 `feat/fase-1b-matrice` in `main` è docket-gated, non una fase autonoma.

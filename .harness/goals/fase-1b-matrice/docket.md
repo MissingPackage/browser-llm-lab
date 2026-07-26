@@ -153,6 +153,8 @@
    cui la espone, diventa reale** — chiunque scarichi due export non saprà quale confronto è
    lecito. Questo sposta la raccomandazione da "opportuna" a "da fare prima della pagina pubblica".
 
+   OK sono d'accordo con la raccomandazione. Facciamolo in fase 3.
+
 8. **wllama: il chunk di chiusura sfora nella generate successiva — 1 check di conformance
    FALLISCE** (aperto 2026-07-27, Fase 2. Richiede una decisione: non è un bug del nostro codice).
    **Stato**: `npm run test:conformance` dà **transformersjs 8/8, webllm 8/8, wllama 7/8**, exit 1.
@@ -164,8 +166,34 @@
      contenuto = 17 chunk
    Il primo chunk del run 2 è il **chunk di chiusura del run 1**: wllama lo emette dopo aver già
    segnalato `has_more=false`, quindi resta in coda e viene consegnato alla chiamata successiva.
-   **Il modello è deterministico**: il testo generato è identico nei due run (`1\n2\n3…8`).
-   A scalare non è la generazione, è la contabilità dei chunk.
+   **Il modello è deterministico**: la sequenza generata è la stessa nei due run.
+
+   **CORREZIONE alla caratterizzazione qui sopra** (2026-07-27, dopo aver letto l'issue upstream —
+   vedi sotto). Avevo scritto che "il testo generato è identico" e che l'effetto è solo sul
+   conteggio: **è impreciso, e in modo che sottostima il problema**. Rileggendo i dati, il run 1
+   finisce con `"8" "\n"` e il run 2 con `"8"`: il run 2 ha **perso il suo ultimo token**, che
+   verrà consegnato al giro successivo. Non è solo contabilità — è la **coda della risposta che
+   viene persa** e riemessa nella chiamata dopo. Per il bench significa che l'ultimo timestamp di
+   ogni `generate()` manca: il decode rate è calcolato su n−1 token. Su 256 token l'effetto è
+   ~0.4%, sistematico e sempre nella stessa direzione, quindi non si media via fra repliche.
+
+   **GIÀ SEGNALATO UPSTREAM — non da noi** (verificato 2026-07-27):
+   - Issue **ngxson/wllama#263** (aperta 2026-07-19, **OPEN**): "Streaming completions lose their
+     final tokens; the lost tail is emitted at the start of the next completion". Descrive lo
+     stesso difetto con la **stessa causa radice** che avevamo trovato per conto nostro: in
+     `Wllama.getResponse()` il `break` su `has_more:false` scatta anche quando quella stessa
+     risposta conteneva dati, e lato wasm `has_more` è calcolato sulla coda dei *task*, non su
+     quella dei *risultati*.
+   - PR **ngxson/wllama#264** (`fix/getresponse-stranded-results`, **OPEN, non merged**): rimuove
+     quel `break`, continuando a pollare finché un `get_result` vuoto conferma la coda drenata.
+     Costo: un round-trip vuoto per completion.
+   - Ultima release: **3.5.1** (2026-06-15), precedente alla PR → **il fix non è ancora
+     distribuito**, restiamo su 3.5.1 col difetto.
+
+   **DECISO 2026-07-27** (Cristiano): opzione (a) — documentare e accettare 7/8 per ora. Niente
+   workaround nel nostro codice, niente materiale da preparare per l'upstream (la segnalazione
+   esiste già ed è migliore di quella che avremmo scritto). Controllo automatico ogni 3 giorni se
+   il fix è arrivato; quando lo sarà, aggiornare la dipendenza e rimuovere questa deroga.
    **Ipotesi falsificate lungo la strada** (registrate per non rifarle):
    (a) non-determinismo numerico multi-thread — falsificata: con `n_threads: 1` il fallimento è
    identico; (b) penalità di ripetizione con storia condivisa — falsificata: con
@@ -186,6 +214,14 @@
    usi wllama per misurare incontrerà.
    **Nota di scope**: `PHASES.md` riga 2 chiede "conformance test wllama" nel done-when. Con 7/8
    la fase **non è dichiarabile completa** finché non decidi fra le opzioni sopra.
+
+   OK. Un subagent dedicato dovrà documentare tutto e preparare un esempio replicabile, così abbiamo il materiale per segnalarlo a wllama upstream
+
+   **Nota successiva del PI (chat, 2026-07-27), che supera quella qui sopra**: "ti avevo scritto di
+   preparare il materiale per segnalarlo upstream ma ho visto poi che lo hanno già fatto […] Lato
+   nostro per il momento documentiamolo come hai suggerito." → **nessun subagent, nessun materiale
+   upstream da preparare**: issue #263 e PR #264 coprono già il caso meglio di quanto avremmo
+   fatto. Il done-when di Fase 2 è emendato di conseguenza — vedi nota in calce a `PHASES.md`.
 
 9. **`@wllama/wllama` è il nome reale del pacchetto, non `wllama`** (registrato 2026-07-27,
    non richiede azione). `GOAL.md` autorizza a installare "`wllama`" e il design doc usa lo stesso
