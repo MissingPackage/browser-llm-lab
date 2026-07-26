@@ -49,7 +49,84 @@ describe("BenchServer", () => {
       expect(result.cell.gen.ttftMs.mean).toBe(10);
       expect(result.cell.load.cacheState).toBe("cold");
       expect(result.cell.promptId).toBe("bench-512-v1");
-      expect(result.cell.anomalies).toEqual([]);
+      expect(result.cell.anomalies).toEqual(["protocol: warm-up run discarded (cacheState=cold)"]);
+    }
+  });
+
+  it("cold cache → runs one extra warm-up generation and discards it", async () => {
+    let calls = 0;
+    const counting: InferenceAdapter = {
+      ...fakeAdapter(),
+      generate: async () => { calls++; return { tRequestStart: 0, chunkTimestamps: [10, 20, 30], promptTokens: 512, completionTokens: 3 }; },
+    };
+    const out: WorkerToMain[] = [];
+    const s = new BenchServer({
+      adapters: { webllm: () => counting, transformersjs: () => counting },
+      probe: fakeProbe,
+      post: (m) => out.push(m),
+      replicateCount: 3,
+    });
+    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q" });
+    expect(calls).toBe(4); // 3 misurate + 1 di riscaldamento
+    const result = out.find((m) => m.type === "bench:result");
+    if (result?.type === "bench:result") {
+      expect(result.cell.replicates.length).toBe(3);
+      expect(result.cell.anomalies).toContain("protocol: warm-up run discarded (cacheState=cold)");
+    } else {
+      throw new Error("expected bench:result");
+    }
+  });
+
+  it("warm cache → no warm-up run, no protocol note", async () => {
+    let calls = 0;
+    const warm: InferenceAdapter = {
+      ...fakeAdapter(),
+      load: async () => ({ loadMs: 100, cacheState: "warm" as const }),
+      generate: async () => { calls++; return { tRequestStart: 0, chunkTimestamps: [10, 20, 30], promptTokens: 512, completionTokens: 3 }; },
+    };
+    const out: WorkerToMain[] = [];
+    const s = new BenchServer({
+      adapters: { webllm: () => warm, transformersjs: () => warm },
+      probe: fakeProbe,
+      post: (m) => out.push(m),
+      replicateCount: 3,
+    });
+    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q" });
+    expect(calls).toBe(3);
+    const result = out.find((m) => m.type === "bench:result");
+    if (result?.type === "bench:result") {
+      expect(result.cell.anomalies.some((a) => a.startsWith("protocol: warm-up"))).toBe(false);
+    } else {
+      throw new Error("expected bench:result");
+    }
+  });
+
+  it("the slow first-run penalty lands on the warm-up, not on the reported metrics", async () => {
+    let call = 0;
+    // Prima generazione lenta (2 chunk in 200ms), successive veloci (2 chunk in 20ms):
+    // riproduce l'effetto di docket #5b. Senza lo scarto, la media sarebbe contaminata.
+    const rampUp: InferenceAdapter = {
+      ...fakeAdapter(),
+      generate: async () => {
+        call++;
+        return { tRequestStart: 0, chunkTimestamps: call === 1 ? [10, 210] : [10, 30], promptTokens: 512, completionTokens: 2 };
+      },
+    };
+    const out: WorkerToMain[] = [];
+    const s = new BenchServer({
+      adapters: { webllm: () => rampUp, transformersjs: () => rampUp },
+      probe: fakeProbe,
+      post: (m) => out.push(m),
+      replicateCount: 2,
+    });
+    await s.handle({ type: "bench", stack: "webllm", modelId: "m", quant: "q" });
+    const result = out.find((m) => m.type === "bench:result");
+    if (result?.type === "bench:result") {
+      // ogni replica misurata vede la finestra veloce: nessuna varianza residua
+      expect(result.cell.replicates.every((r) => r.totalMs === 30)).toBe(true);
+      expect(result.cell.anomalies.some((a) => a.includes("high-variance"))).toBe(false);
+    } else {
+      throw new Error("expected bench:result");
     }
   });
 
@@ -71,6 +148,8 @@ describe("BenchServer", () => {
     let call = 0;
     const varyingAdapter: InferenceAdapter = {
       ...fakeAdapter(),
+      // cache warm: nessun run di riscaldamento, così lo spread cade sulle repliche misurate
+      load: async () => ({ loadMs: 100, cacheState: "warm" as const }),
       generate: async () => {
         call++;
         const chunks = call === 1 ? [0, 100] : [0, 25];

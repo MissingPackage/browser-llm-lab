@@ -38,6 +38,20 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
 - Altri env del driver: `BROWSER=firefox` (run Firefox, effimero/solo-cold),
   `ALLOW_UNVERIFIED=1` (procede quando il vendor è nascosto, es. Firefox — la verifica
   hardware va fatta fuori banda: nvidia-smi o about:support), `E2E_PROFILE=<dir>`.
+- **Sequenze multi-cella**: `scripts/seq-bench.mjs` esegue più celle nella stessa sessione
+  browser e logga i contatori `nvidia-smi` a ogni confine di cella — serve a misurare la
+  dipendenza dall'ordine dei run, che una cella sola non può mostrare. Stessi env di
+  `e2e-bench.mjs`, più `SEQ` (default `transformersjs,webllm,transformersjs,webllm`):
+  ```bash
+  SEQ=transformersjs,transformersjs,transformersjs \
+    HEADED=1 CHANNEL=chrome CHROME_ARGS="--ignore-gpu-blocklist --disable-gpu-sandbox" \
+    node scripts/seq-bench.mjs
+  ```
+  Run archiviati in `results/methodology/` (evidenza del protocollo di misura, non benchmark).
+- **Protocollo di misura**: prima delle repliche misurate, una cella a cache fredda esegue una
+  generazione di riscaldamento che viene **scartata** (`needsWarmup()` in `src/benchServer.ts`).
+  Senza, la prima cella di una sessione misura fino al 55% più lenta. La cella lo dichiara in
+  `anomalies` come `protocol: warm-up run discarded`.
 - Bench manuali sul Chrome branded: `scripts/bench-chrome.sh` (profilo dedicato `blab-bench`).
   **Mai** impostare i flag Vulkan in `chrome://flags` del profilo quotidiano: `enable-vulkan`
   corrompe il compositing su NVIDIA/Wayland, `force-enable-webgpu-interop` crasha all'avvio.

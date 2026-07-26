@@ -27,9 +27,10 @@
    → Fase 1 mergiata in `main` con merge commit (convenzione del progetto: non fast-forward, come
    per `feat/fase-1a` e `fix/fase-1b-fixin1b`). La stessa regola vale per le Fasi 2-4: merge a fine
    fase, senza ri-chiedere.
-   **`push to origin` NON è coperto da questo ruling** — Cristiano ha detto "mergiare", non
-   "pushare", e `GOAL.md` li elenca come due voci distinte sotto *must docket*. Il push resta da
-   chiedere (è azione verso l'esterno: la repo è pubblica su GitHub).
+   **`push to origin`** era rimasto fuori dal ruling originale (Cristiano aveva detto "mergiare",
+   non "pushare", e `GOAL.md` li elenca come due voci distinte sotto *must docket*).
+   **DECISO 2026-07-26** (Cristiano, docket): "Anche pushare è approvato su questo progetto."
+   → Il push verso `origin` non richiede più di chiedere, per il resto del goal. Chiuso.
 
 4. **`InferenceAdapter.id` allargato da `"webllm"` a `StackId`** (registrato 2026-07-26 per tracciabilità,
    non richiede azione). `GOAL.md` elenca "change the public `InferenceAdapter` contract" sotto
@@ -58,12 +59,77 @@
    cella dello stesso (stack, modello) e flaggarla come anomalia.
    **Sotto-problema**: `BenchCell` non ha timestamp — l'ordine è ricostruibile solo dalla posizione
    nell'array, e si perde se i file vengono uniti o riordinati.
-   **Decisione del PI**: è una scelta di metodologia di misura, non un fix bounded.
+   **Decisione del PI**: Cella di riscaldamento se il modello è cold (non presente in cache) e poi media su 3, 4 o 5 passate per stack
+
+   **IMPLEMENTATO 2026-07-26** — `needsWarmup()` in `src/benchServer.ts`: se `cacheState !== "warm"`
+   si esegue una generazione a carico identico e la si scarta. `"unknown"` trattato come freddo.
+   Le repliche misurate restano 3 (dentro il range 3–5 del ruling).
+
+   **VERIFICATO SU 4090 REALE — il ruling risolve il problema che mirava a risolvere, ma ne scopre
+   un secondo.** 4 run, `scripts/seq-bench.mjs` (nuovo driver multi-cella), dati e log in
+   `results/methodology/`:
+
+   | run | sequenza | decode tok/s per cella | deriva |
+   |-----|----------|------------------------|--------|
+   | alternato | tjs, webllm, tjs, webllm | tjs 56.5 → 48.6 / webllm 113.4 → 110.5 | tjs **−13.9%**, webllm −2.6% |
+   | mono ×3 | tjs ×3 | 49.9 → 45.6 → 45.1 | **−9.5%** |
+   | mono ×4 | tjs ×4 | 49.2 → 45.0 → 45.4 → 46.0 | **−6.6%** |
+   | warm-up **sempre** | tjs ×4 | 48.0 → 48.2 → 47.2 → 46.6 | **−2.9%** (spread 3.6%) |
+
+   - **Il +55% è sparito.** La deriva positiva cold→warm che apriva questa voce non è riproducibile
+     con il warm-up attivo.
+   - **Resta una deriva negativa** di −7…−14%: la prima cella di ogni sessione browser è più veloce
+     (49–50) delle successive (45–46). Riproducibile su 3 sessioni indipendenti.
+   - **Non è hardware.** Strumentando `nvidia-smi` a ogni confine di cella: temperatura 48→56 °C
+     (throttling di una 4090 laptop è ~87 °C), memoria GPU piatta (2177→2197 MiB), clock stabile a
+     2265 MHz, `clocks_throttle_reasons` = 0x0 durante le celle (0x1 = GpuIdle solo tra una e
+     l'altra). L'ipotesi power/clock-state di questa voce **è confermata solo per il primo run
+     assoluto** (1455 MHz a freddo → 2265 dopo la prima cella); il residuo è stato del processo,
+     non della GPU — presumibilmente compilazione shader / cache di kernel di ONNX Runtime Web.
+   - **Causa del residuo**: il warm-up si applica *solo alle celle cold*, quindi ogni cella warm
+     successiva paga di nuovo il primo-run lento. La cella cold del run alternato, che il warm-up
+     l'aveva avuto, è la più veloce di tutte (56.5).
+
+   **RICHIESTA DI RULING — estendere il warm-up a tutte le celle, non solo alle cold.**
+   Misurato: porta la deriva da −6.6% a **−2.9%** e stabilizza il TTFT (275/270/279/290 contro
+   347/403/459/429). È una riga (`needsWarmup` → `return true`), già isolata apposta. Costa una
+   generazione scartata per cella (~8 s su tjs, ~2.5 s su webllm).
+   Non l'ho applicato da solo perché il ruling dice esplicitamente *"se il modello è cold"*: è la
+   lettera della decisione di metodologia, e cambiarla è tua.
+   **Residuo dichiarato**: anche con warm-up sempre attivo resta ~3% di dipendenza dall'ordine.
+   Per numeri pubblicabili al di sotto di quella soglia servirebbe l'opzione (b) del ruling
+   originale — ordine randomizzato su più passate — oppure una sessione browser fresca per cella.
+
+   **Conseguenza sui numeri già registrati**: il "2.04×" in journal/HANDOFF e il "3.3×" da
+   screenshot restano non dichiarabili. Le misure pulite di oggi danno **webllm/transformersjs
+   ≈ 2.0–2.3×** sulla stessa 4090 (2.01 in posizione 1, 2.27 in posizione 2) — coerenti col ~2.3×
+   stimato, ma ancora ordine-dipendenti finché il ruling qui sopra non è preso.
 
 5. **`tsconfig.json` non ha `strict`** (pre-esistente, non introdotto da questo branch; segnalato dal
    final review). Ogni `| null` in `schema.ts`/`metrics.ts` e il `!` nell'helper `$()` di `main.ts` non
    sono controllati. Per un codebase la cui correttezza poggia sulla distinzione null-vs-zero
    (`decodeToksPerSec: null` quando non misurabile) è un buco che vale una decisione esplicita.
+   **DECISO 2026-07-26** (Cristiano): "Va bene lo strict se ci risolve il problema."
+   → `"strict": true` aggiunto a `tsconfig.json`. **Il codebase era già conforme**: zero errori
+   introdotti, `npx tsc --noEmit` pulito al primo colpo, 50/50 test verdi, build ok. Da ora ogni
+   `| null` e ogni `!` sono controllati dal compilatore, wllama incluso. Chiuso.
+
+7. **Il protocollo di misura non ha un posto nello schema** (aperto 2026-07-26, conseguenza
+   dell'implementazione del ruling #5b — richiede decisione PI).
+   Il warm-up applicato viene registrato in `BenchCell.anomalies` come stringa
+   `"protocol: warm-up run discarded (cacheState=cold)"`. Funziona (il campo esiste, i run restano
+   auditabili) ma è un abuso semantico: `anomalies` significa "cosa è andato storto", mentre un
+   warm-up applicato è il protocollo che funziona come previsto. Un consumatore che filtra le celle
+   con `anomalies.length > 0` scarterebbe proprio le celle misurate correttamente.
+   **Perché non l'ho deciso da solo**: `CONSTRAINTS` in `GOAL.md` dice "schema v3 implementato
+   esattamente come speccato (**no ad hoc field additions beyond `qualityScore`**)". Un campo
+   `BenchCell.protocol { warmupRuns, replicateCount }` sarebbe esattamente un'aggiunta ad hoc.
+   **Opzioni**: (a) lasciare com'è, `anomalies` fa da log testuale (costo zero, semantica sporca);
+   (b) emendare il constraint e aggiungere `protocol` in Fase 3, dove lo schema si tocca comunque
+   per il bump a v3 (costo: una riga di schema + il ruling); (c) prefisso convenzionale su
+   `anomalies` documentato nel README (`protocol:` = informativo, non anomalia).
+   **Raccomandazione**: (b) — Fase 3 tocca già lo schema, e un campo esplicito è ciò che rende il
+   protocollo verificabile a posteriori da chi legge i JSON senza conoscere la convenzione.
 
 6. **Minor accettati come sono** (dal final review, registrati per non perderli):
    `STACK_IDS` castato a `string[]` per `.includes` (cosmetico); `stackSel.value as StackId` non

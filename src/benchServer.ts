@@ -1,12 +1,23 @@
 import { isMainToWorker, type WorkerToMain } from "./protocol";
 import type { InferenceAdapter } from "./adapters/types";
-import type { DeviceProbe, BenchCell, StackId } from "./schema";
+import type { DeviceProbe, BenchCell, LoadReport, StackId } from "./schema";
 import { computeGenMetrics, aggregateReplicates } from "./metrics";
 import { PROMPT_512 } from "./promptset";
 import { STACK_FIXED_QUANT } from "./stacks";
 
 const DEFAULT_REPLICATE_COUNT = 3;
 const HIGH_VARIANCE_THRESHOLD = 0.15; // stdev/mean sul tok/s aggregato
+
+/**
+ * Protocollo di misura (ruling PI, docket #5b): una cella che parte a cache fredda
+ * misura sistematicamente più lento delle celle successive nella stessa sessione
+ * (+55% osservato su transformersjs). Si esegue quindi una generazione di
+ * riscaldamento — carico identico a quello misurato — e la si scarta.
+ * `cacheState: "unknown"` è trattato come freddo: non sapendo, si riscalda.
+ */
+function needsWarmup(cacheState: LoadReport["cacheState"]): boolean {
+  return cacheState !== "warm";
+}
 
 export class BenchServer {
   private deps: {
@@ -48,6 +59,13 @@ export class BenchServer {
           const load = await adapter.load(msg.modelId, (text, progress) =>
             this.deps.post({ type: "progress", text, progress }),
           );
+          const anomalies: string[] = [];
+          const warmup = needsWarmup(load.cacheState);
+          if (warmup) {
+            this.deps.post({ type: "progress", text: "warm-up (discarded)…", progress: 0 });
+            await adapter.generate({ prompt: PROMPT_512.text, maxTokens: 256 });
+            anomalies.push(`protocol: warm-up run discarded (cacheState=${load.cacheState})`);
+          }
           const replicates = [];
           for (let i = 0; i < replicateCount; i++) {
             this.deps.post({
@@ -59,7 +77,6 @@ export class BenchServer {
             replicates.push(computeGenMetrics(timeline));
           }
           const gen = aggregateReplicates(replicates);
-          const anomalies: string[] = [];
           if (
             gen.decodeToksPerSec &&
             gen.decodeToksPerSec.mean > 0 &&

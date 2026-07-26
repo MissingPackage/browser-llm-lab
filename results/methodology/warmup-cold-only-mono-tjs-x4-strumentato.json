@@ -1,0 +1,311 @@
+{
+  "schemaVersion": 2,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-26T21:17:38.190Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "nvidia",
+      "architecture": "lovelace",
+      "device": "",
+      "description": ""
+    },
+    "limits": {
+      "maxBufferSize": 4294967292,
+      "maxStorageBufferBindingSize": 2147483644,
+      "maxComputeWorkgroupStorageSize": 49152,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 16
+    },
+    "features": [
+      "depth32float-stencil8",
+      "rg11b10ufloat-renderable",
+      "bgra8unorm-storage",
+      "texture-formats-tier1",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "float32-filterable",
+      "indirect-first-instance",
+      "float32-blendable",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "clip-distances",
+      "timestamp-query",
+      "texture-formats-tier2",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ],
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    "deviceMemoryGB": 32,
+    "browser": {
+      "name": "chrome",
+      "version": "150.0.0.0"
+    },
+    "anomalies": []
+  },
+  "cells": [
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 3570.795000001788,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 346.7199999988079,
+          "stdev": 162.37548436976738,
+          "samples": [
+            533.6599999964237,
+            240.76500000059605,
+            265.73499999940395
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 49.24267402198891,
+          "stdev": 0.6182539911999216,
+          "samples": [
+            49.53755237868244,
+            49.658282855538054,
+            48.53218683174625
+          ]
+        },
+        "totalMs": {
+          "mean": 5525.703333333135,
+          "stdev": 152.78541956858874,
+          "samples": [
+            5681.269999995828,
+            5375.859999999404,
+            5519.980000004172
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 533.6599999964237,
+          "decodeToksPerSec": 49.53755237868244,
+          "totalMs": 5681.269999995828,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 240.76500000059605,
+          "decodeToksPerSec": 49.658282855538054,
+          "totalMs": 5375.859999999404,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 265.73499999940395,
+          "decodeToksPerSec": 48.53218683174625,
+          "totalMs": 5519.980000004172,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 2389.875,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 403.32166666537523,
+          "stdev": 246.23185752243202,
+          "samples": [
+            687.5,
+            269.11500000208616,
+            253.34999999403954
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 44.955278840521295,
+          "stdev": 1.9122019419680423,
+          "samples": [
+            43.00716195740189,
+            45.02925577235801,
+            46.82941879180398
+          ]
+        },
+        "totalMs": {
+          "mean": 6082.496666664879,
+          "stdev": 477.17006455589586,
+          "samples": [
+            6616.744999997318,
+            5932.10000000149,
+            5698.644999995828
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 687.5,
+          "decodeToksPerSec": 43.00716195740189,
+          "totalMs": 6616.744999997318,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 269.11500000208616,
+          "decodeToksPerSec": 45.02925577235801,
+          "totalMs": 5932.10000000149,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 253.34999999403954,
+          "decodeToksPerSec": 46.82941879180398,
+          "totalMs": 5698.644999995828,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 2405.7999999970198,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 458.73166666924953,
+          "stdev": 316.2382398731449,
+          "samples": [
+            823.8650000020862,
+            280.02000000327826,
+            272.3100000023842
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 45.38882843741711,
+          "stdev": 0.620561904172871,
+          "samples": [
+            44.6971635706244,
+            45.89682393980306,
+            45.572497801823864
+          ]
+        },
+        "totalMs": {
+          "mean": 6077.55833333234,
+          "stdev": 391.21884931194165,
+          "samples": [
+            6528.92499999702,
+            5835.960000000894,
+            5867.789999999106
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 823.8650000020862,
+          "decodeToksPerSec": 44.6971635706244,
+          "totalMs": 6528.92499999702,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 280.02000000327826,
+          "decodeToksPerSec": 45.89682393980306,
+          "totalMs": 5835.960000000894,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 272.3100000023842,
+          "decodeToksPerSec": 45.572497801823864,
+          "totalMs": 5867.789999999106,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "anomalies": []
+    },
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 2311.405000001192,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 429.0216666658719,
+          "stdev": 276.8466742781219,
+          "samples": [
+            748.695000000298,
+            270.07999999821186,
+            268.28999999910593
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 45.998196375881946,
+          "stdev": 1.0321715828256688,
+          "samples": [
+            44.93324769584241,
+            46.99412665561377,
+            46.06721477618967
+          ]
+        },
+        "totalMs": {
+          "mean": 5974.583333333333,
+          "stdev": 392.70394323735604,
+          "samples": [
+            6423.780000001192,
+            5696.289999999106,
+            5803.679999999702
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 748.695000000298,
+          "decodeToksPerSec": 44.93324769584241,
+          "totalMs": 6423.780000001192,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 270.07999999821186,
+          "decodeToksPerSec": 46.99412665561377,
+          "totalMs": 5696.289999999106,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 268.28999999910593,
+          "decodeToksPerSec": 46.06721477618967,
+          "totalMs": 5803.679999999702,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "anomalies": []
+    }
+  ]
+}

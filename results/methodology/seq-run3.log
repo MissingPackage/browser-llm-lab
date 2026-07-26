@@ -1,0 +1,8 @@
+[seq] GPU: lovelace
+[seq] cella 1/3 — transformersjs — clock pre: 1455 MHz, 30.99 W
+[seq] cella 1 done — clock post: 1410 MHz, 54.17 W
+[seq] cella 2/3 — transformersjs — clock pre: 1410 MHz, 54.17 W
+[seq] cella 2 done — clock post: 2265 MHz, 55.81 W
+[seq] cella 3/3 — transformersjs — clock pre: 2265 MHz, 55.81 W
+[seq] cella 3 done — clock post: 2265 MHz, 54.90 W
+[seq] EXPORT: /tmp/4090-linux-2026-07-26T21-15-48-167Z.json
