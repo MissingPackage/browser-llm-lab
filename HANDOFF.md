@@ -1,15 +1,21 @@
 # HANDOFF — browser-llm-lab   (updated 2026-07-27, session 5)
 
-## 1. Next decidable — nessun goal attivo, sweep manuale in corso da parte di Cristiano
+## 1. Next decidable — goal attivo `fase-2-deep-dive`, fase 1 (skill bottleneck-brainstorm)
 
-**Goal `fase-1b-matrice` CHIUSO** (2026-07-27, ruling PI: "possiamo chiudere questo goal").
-Storico in `.harness/goals/fase-1b-matrice/` (GOAL.md, PHASES.md, docket.md, journal.md). Tutte e
-4 le fasi complete, mergiate e pushate su `main`.
+**Goal `fase-2-deep-dive` APERTO** (2026-07-27): deep-dive MLC/WebGPU — 6 doc in
+`docs/deep-dive/`, skill `bottleneck-brainstorm` (project-level), micro-bench matmul con
+numeri 4090 reali, max 2 esperimenti di fattibilità in `experiments/`. Contratto in
+`.harness/goals/fase-2-deep-dive/GOAL.md`, spine completo (PHASES.md 7 fasi sequenziali,
+docket, journal, digests). Spec: `docs/superpowers/specs/2026-07-27-fase-2-deep-dive-design.md`.
+Branch di lavoro: `feat/fase-2-deep-dive`. Tag inizio goal: `goal-fase-2-start`.
+**Product-loop autorizzato dal PI** in chat (2026-07-27) subito dopo il setup — plan-check
+(docket #1) trattato come approvazione condizionale.
 
-**Prossimo passo è manuale, non autonomo**: Cristiano testa lui stesso M4 Pro e laptop (domani);
-per l'S22 Ultra va ancora capito l'approccio (vedi risposta su come raggiungere il dev server da
-telefono, registrata sotto in §3 e nella chat). Se lo sweep produce bug/fix da fare in codice,
-quello sarà un **nuovo goal**, non una riapertura di `fase-1b-matrice`.
+**Prossima fase decidibile**: fase 1 — skill `bottleneck-brainstorm` v1 via writing-skills.
+
+**Sweep manuale fase 1b ancora in corso in parallelo** (fuori da questo goal): Cristiano testa
+M4 Pro e laptop; approccio S22 da definire (vedi §3). Bug/fix dallo sweep = nuovo goal, non
+riapertura di `fase-1b-matrice` (chiuso, storico in `.harness/goals/fase-1b-matrice/`).
 
 **Docket ereditati, vivi ma non bloccanti**:
 - **#10**: `src/quality.ts` pronto e testato ma non collegato a `benchServer.ts` — nessun run
