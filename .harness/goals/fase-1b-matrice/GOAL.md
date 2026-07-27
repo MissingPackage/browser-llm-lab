@@ -1,5 +1,21 @@
 GOAL: Extend browser-llm-lab with the "1b — matrice" harness — Transformers.js and wllama inference adapters, a quality-scoring module, and schema v3 — verified end-to-end on the existing 4090 rig, so the codebase is ready for the (separately scheduled) manual multi-device sweep.
 
+**STATUS NOTE (2026-07-27, Fase 4 done)**: every line under DONE WHEN below now checks out
+mechanically (see `.harness/goals/fase-1b-matrice/journal.md`, last entry, for the evidence run).
+**Correction (same day, caught by `loop-verifier` before merge)**: the first version of this note
+claimed this without checking one line literally — "each a valid schema-v3 JSON" for the new-adapter
+real runs. The existing `results/*.json` runs for `transformersjs`/`wllama` predated the v3 bump
+(`schemaVersion: 2`). Fixed by running the existing e2e driver headed on the 4090 (already-granted
+authority, no new ruling needed) for both stacks: `results/4090-linux-2026-07-26T23-56-34-978Z.json`
+(transformersjs, schemaVersion 3) and `results/4090-linux-2026-07-26T23-57-10-621Z.json` (wllama,
+schemaVersion 3) — both carry `BenchCell.protocol` correctly. The line now genuinely checks out.
+
+Not calling this goal DONE unilaterally — that's a PI call, not something a phase gate decides —
+but flagging it here so it isn't missed: the only things left touching this goal are docket-gated
+(docket #10: whether/when to wire `qualityScore` into real bench runs; docket #8: self-monitoring,
+no action needed until the routine fires) or explicitly out of this goal's scope (the manual
+M4/S22 sweep, "must docket" above). Nothing autonomously decidable remains under PHASES.md.
+
 DONE WHEN (all measurable):
 - `src/adapters/transformersjs.ts` and `src/adapters/wllama.ts` exist, implement `InferenceAdapter`, and each passes a conformance test (load a model, generate deterministic output, `capabilities()` matches real behavior) — **[EMENDATO 2026-07-26, ruling PI docket #2]** verifiable via `npm run test:conformance`, a Playwright script that exercises the same contract against every stack **in a real browser**. The original wording said `npm test`; that is not realizable for WebLLM, which requires WebGPU and cannot run in Node. `npm test` remains the fast, offline unit suite.
 - `src/quality.ts` + `src/qualityPrompts.ts` implemented, with unit tests covering both the perplexity path and the 12-prompt exact-match fallback — verifiable via `npm test`.

@@ -31,3 +31,16 @@ deterministici in 4 categorie + perplexity), schema bump a v3 con `BenchCell.qua
 **Prossimo**: Fase 4 (README + verifica finale). Prima di dichiararla completa, decidere se
 collegare `quality.ts` alla pipeline reale (docket #10) — altrimenti il README riporterà solo
 metriche di velocità, come oggi.
+
+## Iterazione (2026-07-27) — Fase 4, stop-by-design
+Fase 4 completata: sezione README sul gap strutturale della fascia Large (Qwen2.5-7B/Llama-3.1-8B:
+solo WebLLM) + sezione sul modulo qualità di Fase 3, con dichiarazione onesta che `qualityScore`
+non è ancora popolato da run reali. Corrette due righe README rese stale dal cambio di Fase 3
+(label schema v2→v3, nota di warm-up spostata da `anomalies` a `BenchCell.protocol`). Gate verdi:
+`npm test` 87/87, `tsc --noEmit` pulito, `npm run build` ok.
+
+**Rilevante**: rileggendo `GOAL.md`, ogni riga di DONE WHEN risulta ora soddisfatta
+meccanicamente — registrato in GOAL.md come STATUS NOTE, non dichiarato come goal chiuso (è una
+decisione del PI). **Fermo il loop qui**: nessun lavoro resta autonomamente decidibile sotto
+PHASES.md — quello che resta è o docket-gated (#10: wiring qualityScore; #8: sorveglianza wllama,
+auto-risolvente) o esplicitamente fuori scope (sweep manuale sui 3 device).

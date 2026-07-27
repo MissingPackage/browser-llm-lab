@@ -9,7 +9,7 @@ implementazione. Fasi sequenziali (nessun `parallel-group`: le fasi 1-3 toccano 
 | 1 | Adapter Transformers.js | `npm test` verde (incl. nuovo conformance test transformersjs) + `tsc --noEmit` pulito + `npm run build` ok + almeno 1 run reale (non-SwiftShader) in `results/*.json` con `stack:"transformersjs"` | none | `src/adapters/transformersjs.ts`, relativo test, `src/schema.ts` (solo union `id`/`stack`), `src/main.ts`/`src/render.ts` (selettore stack minimo), `package.json` (dep `@huggingface/transformers`) | **done*** |
 | 2 | Adapter wllama | `npm test` verde (incl. nuovo conformance test wllama) + `tsc --noEmit` pulito + `npm run build` ok + almeno 1 run reale in `results/*.json` con `stack:"wllama"` | none | `src/adapters/wllama.ts`, relativo test, `src/schema.ts` (estensione union), `package.json` (dep `@wllama/wllama`) | **done†** |
 | 3 | Modulo qualità + schema v3 completo | `npm test` verde (unit test perplexity + fallback 12-prompt) + `tsc --noEmit` pulito + `BenchCell.qualityScore` presente e tipato nello schema | none | `src/quality.ts`, `src/qualityPrompts.ts`, `src/schema.ts` (campo `qualityScore`, campo `protocol`/docket #7, bump `SCHEMA_VERSION=3`), `src/benchServer.ts` + `src/protocol.ts` (solo per popolare/tipare `protocol`), relativi test | **done‡** |
-| 4 | README + verifica finale whole-branch | Sezione "Fase 1b — matrice" nel README con gap Large documentato + suite completa verde (baseline 39 + nuovi test) + `tsc`/`build` puliti + entrambi i run (transformersjs, wllama) presenti in `results/` | none | `README.md` | ready |
+| 4 | README + verifica finale whole-branch | Sezione "Fase 1b — matrice" nel README con gap Large documentato + suite completa verde (baseline 39 + nuovi test) + `tsc`/`build` puliti + entrambi i run (transformersjs, wllama) presenti in `results/` | none | `README.md` | **done§** |
 
 **\* Fase 1 — COMPLETA** (2026-07-26), riserva chiusa. Condizioni verdi: `npm test` 47/47,
 `tsc --noEmit` pulito, `npm run build` ok, run reali `stack:"transformersjs"` e `stack:"webllm"` in
@@ -63,3 +63,13 @@ replicateCount }`, che sostituisce la nota testuale `"protocol: warm-up run disc
 abusava `anomalies`. `WarmupPolicy` spostato da `benchServer.ts` a `schema.ts` (è forma dei dati,
 non comportamento) — elimina anche la dipendenza incrociata che `protocol.ts` aveva verso
 `benchServer.ts` per quel tipo.
+
+**§ Fase 4 — COMPLETA** (2026-07-27). Sezione README "Fasce modello — il gap strutturale della
+fascia Large" (Qwen2.5-7B-Instruct / Llama-3.1-8B-Instruct: solo WebLLM, nessun formato ONNX
+web-runnable né GGUF sotto il tetto WASM 4GB per gli altri due stack) + sezione "Fase 3 — modulo
+qualità + schema v3" (documenta onestamente che `qualityScore` non è ancora popolato da run
+reali, docket #10). Corrette due righe README rese stale dal cambio di Fase 3: la label schema
+(v2→v3) e la nota di warm-up (ora in `BenchCell.protocol`, non più in `anomalies`). Gate: `npm
+test` 87/87, `tsc --noEmit` pulito, `npm run build` ok, `results/*.json` conferma sia
+`stack:"transformersjs"` che `stack:"wllama"` presenti (già da Fase 1/2). Sweep manuale sui 3
+device resta fuori da questa fase per costruzione (vedi nota sopra).
