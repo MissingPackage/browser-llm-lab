@@ -1,6 +1,6 @@
 # HANDOFF — browser-llm-lab   (updated 2026-07-27, session 5)
 
-## 1. Next decidable — goal attivo `fase-2-deep-dive`, fase 7 (engine-design-notes + closure sweep)
+## 1. Next decidable — goal `fase-2-deep-dive` COMPLETO lato autonomo: solo decisioni PI
 
 **Goal `fase-2-deep-dive` APERTO** (2026-07-27): deep-dive MLC/WebGPU — 6 doc in
 `docs/deep-dive/`, skill `bottleneck-brainstorm` (project-level), micro-bench matmul con
@@ -11,20 +11,23 @@ Branch di lavoro: `feat/fase-2-deep-dive`. Tag inizio goal: `goal-fase-2-start`.
 **Product-loop autorizzato dal PI** in chat (2026-07-27) subito dopo il setup — plan-check
 (docket #1) trattato come approvazione condizionale.
 
-**Prossima fase decidibile**: fase 7 (ULTIMA) — `engine-design-notes.md` + closure
-sweep: azzerare i [VERIFY] nei 5 doc, suite verde, webllm.ts diff-clean, ≤2 experiments/.
-Fasi 1-6 done: 5 doc in docs/deep-dive/ + micro-bench funzionante con run 4090
-committato (banda VRAM reale ~435 GB/s; q4 1.26× f32 in pesi/s oltre-L2; stima: 75-85%
-del budget per token è orchestrazione, non kernel). Dopo la fase 7: stop-by-design,
-tutto il residuo è PI-gated (merge, run manuali M4/S22, slot esperimenti, promozione
-skill).
-Fasi 1-5 done: i 4 doc di sotto-sistema sono completi in docs/deep-dive/. FINDING chiave
-fase 4: entrambi i device al 4-6% del roofline di banda pesi (docket #5;
-swap q4f16 declassato a secondario). **Docket #2-#5 aperti: quattro candidati esperimento
-per due slot, ora CINQUE con docket #6** (swap q4f16_1 S22 [secondario] · multi-step
-decode · overlap fetch/compile · sync-diradata upload · warm-up pre-ramp TTFT [attacca
-il #12 ereditato]) — decisione PI, nessuno si esegue senza ruling; il micro-bench a
-taglie crescenti NON consuma slot (è il design di fase 6).
+**GOAL COMPLETO lato autonomo** (2026-07-27, iterazione 9, verifier PASS sul DONE WHEN
+riga per riga): 7/7 fasi done. Deliverable sul branch `feat/fase-2-deep-dive` (13 commit,
+MAI pushato): 6 doc in `docs/deep-dive/` ([VERIFY]=0), skill `bottleneck-brainstorm`
+(TDD, 4 dogfood), micro-bench matmul (src/microbench/, 102/102 test, run 4090 reale in
+`results/microbench/`), 34 kernel WGSL dumpati + 2 tool riusabili in
+`.harness/goals/fase-2-deep-dive/tools/`. Findings chiave: 75-85% del budget/token è
+orchestrazione; banda VRAM reale 435 GB/s; muro "2GB" in realtà 1 GiB hardcoded; KV al
+tetto = 2.9× i pesi; q4 1.26× f32 in pesi/s oltre-L2.
+
+**Next decidable = SOLO ruling PI** (stop-by-design, nessuna azione autonoma residua):
+1. **Merge** di `feat/fase-2-deep-dive` su main + eventuale push (main locale è anche
+   avanti di 3 commit su origin/main, dai commit di setup).
+2. **Slot esperimenti** (2 max): docket #2-#6, CINQUE candidati — q4f16 S22 [declassato
+   secondario] · multi-step decode · overlap fetch/compile · sync-diradata upload ·
+   warm-up pre-ramp TTFT [attacca #12].
+3. **Run manuali M4/S22** del micro-bench (`microbench.html`, slot pending nel doc).
+4. **Promozione skill** bottleneck-brainstorm all'harness personale (~/.claude) o no.
 
 **Sweep manuale fase 1b ancora in corso in parallelo** (fuori da questo goal): Cristiano testa
 M4 Pro e laptop; approccio S22 da definire (vedi §3). Bug/fix dallo sweep = nuovo goal, non
