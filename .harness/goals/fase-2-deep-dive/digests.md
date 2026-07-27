@@ -85,3 +85,10 @@
   in pesi/s 1.26× oltre-L2 (137G vs 109G — corretto dal verifier: il mio primo conto
   diceva 1.6×). Curva L2→VRAM visibile.
 - Prossimo (iterazione 8): doc micro-bench-matmul.md con l'analisi + chiusura fase 6.
+
+## Iterazione 8 (2026-07-27) — fase 6 done
+
+- micro-bench-matmul.md scritto: metodologia + numeri 4090 + 3 letture chiave + stima
+  "75-85% del budget/token è orchestrazione" (chiude la domanda della fase 4).
+- Slot M4/S22 pending con istruzioni per i run manuali (S22: attesi timestamp-query E f16).
+- Prossimo: fase 7 (ULTIMA) — engine-design-notes.md + closure sweep ([VERIFY]=0).

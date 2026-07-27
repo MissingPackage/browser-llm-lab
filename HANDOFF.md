@@ -1,6 +1,6 @@
 # HANDOFF — browser-llm-lab   (updated 2026-07-27, session 5)
 
-## 1. Next decidable — goal attivo `fase-2-deep-dive`, fase 6 (micro-bench matmul)
+## 1. Next decidable — goal attivo `fase-2-deep-dive`, fase 7 (engine-design-notes + closure sweep)
 
 **Goal `fase-2-deep-dive` APERTO** (2026-07-27): deep-dive MLC/WebGPU — 6 doc in
 `docs/deep-dive/`, skill `bottleneck-brainstorm` (project-level), micro-bench matmul con
@@ -11,13 +11,13 @@ Branch di lavoro: `feat/fase-2-deep-dive`. Tag inizio goal: `goal-fase-2-start`.
 **Product-loop autorizzato dal PI** in chat (2026-07-27) subito dopo il setup — plan-check
 (docket #1) trattato come approvazione condizionale.
 
-**Prossima fase decidibile**: fase 6 parte 2 — scrivere `micro-bench-matmul.md`. Il
-motore è FATTO (iterazione 7: src/microbench/, 102/102 test, build ok) e il run 4090 è
-committato (`results/microbench/microbench-4090-linux-...T04-28-42-421Z.json`): banda
-VRAM misurata ~435 GB/s oltre-L2, q4 1.26× f32 in pesi/s oltre-L2 (137G vs 109G; il
-confronto onesto è SOLO la riga 16384², a 8192² il q4 è ancora L2-resident), curva
-L2→VRAM visibile.
-Driver: `tools/microbench-run.mjs` (HEADED=1). f16 non esposto da Chrome Linux/NVIDIA.
+**Prossima fase decidibile**: fase 7 (ULTIMA) — `engine-design-notes.md` + closure
+sweep: azzerare i [VERIFY] nei 5 doc, suite verde, webllm.ts diff-clean, ≤2 experiments/.
+Fasi 1-6 done: 5 doc in docs/deep-dive/ + micro-bench funzionante con run 4090
+committato (banda VRAM reale ~435 GB/s; q4 1.26× f32 in pesi/s oltre-L2; stima: 75-85%
+del budget per token è orchestrazione, non kernel). Dopo la fase 7: stop-by-design,
+tutto il residuo è PI-gated (merge, run manuali M4/S22, slot esperimenti, promozione
+skill).
 Fasi 1-5 done: i 4 doc di sotto-sistema sono completi in docs/deep-dive/. FINDING chiave
 fase 4: entrambi i device al 4-6% del roofline di banda pesi (docket #5;
 swap q4f16 declassato a secondario). **Docket #2-#5 aperti: quattro candidati esperimento

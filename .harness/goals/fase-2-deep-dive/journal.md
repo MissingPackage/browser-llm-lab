@@ -184,3 +184,17 @@ Run valido committato: `results/microbench/microbench-4090-linux-2026-07-27T04-2
 
 Fase 6 done-when PARZIALE: route+test+build+run reale ✓; manca `micro-bench-matmul.md`
 (iterazione 8). PHASES riga 6 resta ready con nota.
+
+## 2026-07-27 — Iterazione 8 (fase 6 parte 2: doc micro-bench-matmul.md)
+
+Doc completo in `docs/deep-dive/micro-bench-matmul.md`: metodologia (incl. le 2 lezioni
+del primo run come parte del design), tabella numeri 4090 con regime L2/VRAM per cella,
+3 letture (banda VRAM reale ~435 GB/s = roofline onesto −25%; curva piegata sul confine
+L2; q4 1.26× f32 in pesi/s oltre-L2 con smontaggio della metrica GB/s ingannevole),
+stima 75-85% del budget/token = orchestrazione (chiude la domanda di dequant-kernels.md
+per ordini di grandezza; conferma kernel-per-kernel instradata a engine-notes), slot
+M4/S22 "pending" espliciti con istruzioni per i run manuali.
+
+Done-when fase 6 COMPLETO: build ✓ (entry microbench nel dist), test 102/102 ✓, JSON
+schema-versionato da run reale non-SwiftShader in results/microbench/ ✓ (iterazione 7),
+doc con metodologia+numeri+slot pending ✓ (grep "pending": 2). Fase 6 done.
