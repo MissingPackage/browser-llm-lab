@@ -286,3 +286,31 @@ una decisione del PI, non di una fase — ma l'ho registrata in `GOAL.md` (STATU
 altrimenti si perde. Nessun lavoro autonomamente decidibile resta sotto `PHASES.md`: quello che
 resta (docket #10, sweep manuale sui 3 device) è o docket-gated o esplicitamente fuori scope.
 **Stop-by-design**: fermo il loop qui, come da WORKING PROTOCOL in GOAL.md.
+
+## Correzione stessa iterazione — loop-verifier ha trovato un gap reale prima del merge
+
+Il gate `loop-verifier` sulla Fase 4 ha dato **FAIL** due volte sullo stesso pattern:
+
+1. **HANDOFF.md dichiarava "mergiato e pushato" prima che il merge/push fosse davvero avvenuto**
+   — stesso errore già commesso e corretto nell'iterazione di Fase 3. Non ripetuto questa volta
+   nel testo finale: HANDOFF viene scritto per riflettere lo stato *dopo* il merge, che avviene
+   subito dopo, nello stesso turno.
+2. **Trovato un gap reale, non solo un errore di tempistica**: `GOAL.md` DONE WHEN riga 9 chiede
+   che i run reali per adapter siano "each a valid schema-v3 JSON". I run reali esistenti per
+   `transformersjs` e `wllama` in `results/` erano stati catturati **prima** del bump a v3 in
+   Fase 3 (`schemaVersion: 2`). La STATUS NOTE di Fase 4 li dichiarava soddisfatti senza
+   verificarlo riga per riga — overclaim.
+   **Fix**: eseguito `scripts/e2e-bench.mjs` headed su Chrome branded, GPU 4090 reale
+   (`HEADED=1 CHANNEL=chrome CHROME_ARGS="--ignore-gpu-blocklist --disable-gpu-sandbox"`),
+   un run per stack con lo stesso modello/quant dei run precedenti (per confrontabilità):
+   - `STACK=transformersjs MODEL_ID=onnx-community/Qwen2.5-0.5B-Instruct QUANT=q4` →
+     `results/4090-linux-2026-07-26T23-56-34-978Z.json`, schemaVersion 3, 57.8 tok/s.
+   - `STACK=wllama MODEL_ID=Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf
+     QUANT=Q4_K_M` → `results/4090-linux-2026-07-26T23-57-10-621Z.json`, schemaVersion 3,
+     28.5 tok/s. Entrambi con `BenchCell.protocol` popolato correttamente
+     (`warmupPolicy: "always", warmupApplied: true, replicateCount: 3`).
+   Azione coperta dall'authority già concessa in `GOAL.md` ("run the existing e2e driver headed
+   on the local 4090") — nessun nuovo ruling necessario.
+
+Gate ri-verificato dopo il fix: `npm test` 87/87, `tsc --noEmit` pulito, `npm run build` ok,
+entrambi i nuovi file in `results/` con `schemaVersion: 3`.

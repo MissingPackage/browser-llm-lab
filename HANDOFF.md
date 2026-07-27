@@ -37,8 +37,14 @@ di queste decisioni, aspettati che si fermi di nuovo qui.
   quando esiste `BenchCell.protocol`.
 - Nessun codice toccato in questa iterazione — solo README + goal spine. Test 87/87 invariati,
   `tsc --noEmit` pulito, `npm run build` ok.
-- **`GOAL.md` DONE WHEN risulta ora soddisfatto riga per riga** (STATUS NOTE aggiunta in
-  `GOAL.md`). Loop fermato **by design** — vedi §1.
+- **`loop-verifier` ha trovato un gap reale prima del merge**: i run reali esistenti per
+  `transformersjs`/`wllama` in `results/` erano schema v2 (catturati prima del bump di Fase 3);
+  `GOAL.md` DONE WHEN chiede esplicitamente "each a valid schema-v3 JSON". Corretto eseguendo
+  l'e2e driver headed sulla 4090 reale (authority già concessa, nessun ruling nuovo):
+  `results/4090-linux-2026-07-26T23-56-34-978Z.json` (transformersjs, schemaVersion 3, 57.8 tok/s)
+  e `results/4090-linux-2026-07-26T23-57-10-621Z.json` (wllama, schemaVersion 3, 28.5 tok/s).
+- **`GOAL.md` DONE WHEN risulta ora soddisfatto riga per riga, verificato non solo dichiarato**
+  (STATUS NOTE aggiornata in `GOAL.md` con la correzione). Loop fermato **by design** — vedi §1.
 
 ## Session 4 (2026-07-27) — Fase 3, per riferimento
 
