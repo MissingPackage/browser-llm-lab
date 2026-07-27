@@ -329,3 +329,11 @@ merge/push non è realmente accaduto in quello stesso turno — è successo due 
 goal (Fase 3 e Fase 4) ed è esattamente il tipo di errore che il gate `loop-verifier` esiste per
 catturare prima che raggiunga `main`. Ordine corretto: verificare i contenuti → mergiare/pushare
 → *poi* la frase è vera senza bisogno di riformularla.
+
+## Goal chiuso (2026-07-27, ruling PI)
+
+Cristiano: "possiamo chiudere questo goal. Domani provo io sul mac e sul laptop. sull's22 ultra
+dobbiamo capire bene come fare." Goal `fase-1b-matrice` chiuso — nessun'altra fase da eseguire in
+autonomo. Lo sweep sui 3 device resta manuale, fuori da questo goal. Se emergono bug/fix per un
+device specifico durante lo sweep, quello sarà lavoro per un nuovo goal quando Cristiano lo aprirà,
+non una riapertura di questo.

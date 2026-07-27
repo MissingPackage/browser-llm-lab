@@ -1,5 +1,14 @@
 GOAL: Extend browser-llm-lab with the "1b — matrice" harness — Transformers.js and wllama inference adapters, a quality-scoring module, and schema v3 — verified end-to-end on the existing 4090 rig, so the codebase is ready for the (separately scheduled) manual multi-device sweep.
 
+**CLOSED (2026-07-27, ruling PI)**: "possiamo chiudere questo goal" — Cristiano testerà lui stesso
+M4 Pro e laptop, e deciderà a parte come procedere sull'S22 Ultra. Goal `fase-1b-matrice` chiuso,
+tutte e 4 le fasi mergiate/pushate su `main`. Lo sweep manuale sui 3 device resta fuori da questo
+goal per costruzione (era già "must docket" in AUTHORITY GRANTED) — se produce lavoro di codice
+(bugfix, adapter fix per un device specifico), sarà un nuovo goal, non una riapertura di questo.
+Docket #10 (wiring `qualityScore` in `benchServer.ts`) e #8 (sorveglianza wllama upstream)
+restano vivi indipendentemente dalla chiusura — non erano bloccanti per questo goal e non lo
+diventano ora.
+
 **STATUS NOTE (2026-07-27, Fase 4 done)**: every line under DONE WHEN below now checks out
 mechanically (see `.harness/goals/fase-1b-matrice/journal.md`, last entry, for the evidence run).
 **Correction (same day, caught by `loop-verifier` before merge)**: the first version of this note

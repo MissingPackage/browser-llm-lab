@@ -1,28 +1,25 @@
 # HANDOFF — browser-llm-lab   (updated 2026-07-27, session 5)
 
-## 1. Next decidable — STOP-BY-DESIGN, tutte le 4 fasi complete
+## 1. Next decidable — nessun goal attivo, sweep manuale in corso da parte di Cristiano
 
-**Goal attivo**: `fase-1b-matrice` (`.harness/goals/fase-1b-matrice/` — GOAL.md, PHASES.md,
-docket.md, journal.md). Design: `docs/superpowers/specs/2026-07-26-fase-1b-matrice-design.md`.
-**Fasi 1, 2, 3 e 4 tutte complete e mergiate in `main`**, pushate su `origin`.
+**Goal `fase-1b-matrice` CHIUSO** (2026-07-27, ruling PI: "possiamo chiudere questo goal").
+Storico in `.harness/goals/fase-1b-matrice/` (GOAL.md, PHASES.md, docket.md, journal.md). Tutte e
+4 le fasi complete, mergiate e pushate su `main`.
 
-**Ogni riga di `GOAL.md` DONE WHEN risulta ora soddisfatta meccanicamente** (vedi STATUS NOTE in
-`GOAL.md`). Il loop si è fermato qui by design — non perché il lavoro sia esaurito per caso, ma
-perché quello che resta è o **docket-gated** o **esplicitamente fuori scope**:
+**Prossimo passo è manuale, non autonomo**: Cristiano testa lui stesso M4 Pro e laptop (domani);
+per l'S22 Ultra va ancora capito l'approccio (vedi risposta su come raggiungere il dev server da
+telefono, registrata sotto in §3 e nella chat). Se lo sweep produce bug/fix da fare in codice,
+quello sarà un **nuovo goal**, non una riapertura di `fase-1b-matrice`.
 
-- **docket #10 (registrato, non bloccante)**: `src/quality.ts` è pronto e testato ma non
-  collegato a `benchServer.ts` — nessun run reale porta un `qualityScore`. Decisione PI: se/quando
-  collegarlo (costo: fino a 12 `generate()` extra per cella, o un passaggio logprobs).
-- **docket #8 (sorveglianza attiva, auto-risolvente)**: conformance wllama 7/8, routine cloud
-  ogni 3 giorni che apre una PR da sola quando il fix upstream arriva. Nessuna azione ora.
-- **Sweep manuale sui 3 device (M4 Pro, Samsung S22 Ultra)**: esplicitamente fuori da queste fasi
-  (GOAL.md "must docket") — un passo manuale separato quando i device sono disponibili, non
-  qualcosa che questo loop può eseguire o simulare.
-- **Decisione PI residua**: se/quando chiudere formalmente il goal `fase-1b-matrice` (o aprirne
-  uno nuovo per lo sweep sui 3 device) — non è una scelta che una fase possa prendere da sola.
+**Docket ereditati, vivi ma non bloccanti**:
+- **#10**: `src/quality.ts` pronto e testato ma non collegato a `benchServer.ts` — nessun run
+  reale porta un `qualityScore`. Decisione PI residua: se/quando collegarlo (costo: fino a 12
+  `generate()` extra per cella, o un passaggio logprobs).
+- **#8**: conformance wllama 7/8, routine cloud ogni 3 giorni che apre una PR da sola quando il
+  fix upstream arriva. Nessuna azione ora.
 
-**Nessun lavoro autonomamente decidibile resta sotto questo goal.** Se riprendi il loop senza una
-di queste decisioni, aspettati che si fermi di nuovo qui.
+**Nessun goal attivo per `/loop`.** Non inventare un nuovo goal per il device sweep senza che
+Cristiano lo chieda esplicitamente.
 
 ## 2. State delta (session 5, 2026-07-27) — Fase 4
 
@@ -80,6 +77,16 @@ di queste decisioni, aspettati che si fermi di nuovo qui.
 
 ## 3. Open threads
 
+- **Sweep manuale sui 3 device (in corso da Cristiano)**: M4 Pro e laptop domani via test diretto.
+  **S22 Ultra — approccio da chiarire**: `npm run dev` gira solo su una macchina con Node (il
+  telefono fa da client Chrome, non da host). Serve `npm run dev -- --host` (bind su tutte le
+  interfacce) sulla macchina con GPU dedicata + navigare da Chrome sull'S22 verso
+  `http://<IP-LAN-macchina>:5173` sulla stessa rete Wi-Fi. Nodo aperto: l'origine non è HTTPS, quindi
+  non è un secure context per default — serve il flag Chrome
+  `chrome://flags/#unsafely-treat-insecure-origin-as-secure` sul telefono con quell'URL aggiunto,
+  altrimenti niente `crossOriginIsolated`/WebGPU. `wllama` (WASM) funziona comunque; `webllm` e
+  `transformersjs` dipendono dal supporto WebGPU reale di Chrome su Adreno, da verificare dal probe
+  box prima di fidarsi di un numero.
 - **Nessuna fase residua** — tutte e 4 fatte. Vedi §1 per cosa resta (docket-gated/fuori scope).
 - **docket #10 — decisione registrata, non un ruling bloccante**: `quality.ts` non è collegato a
   `benchServer.ts`. Nessun run reale porta un `qualityScore`. Va deciso se/quando collegarlo.

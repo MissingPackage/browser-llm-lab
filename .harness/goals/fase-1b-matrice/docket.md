@@ -283,3 +283,9 @@
     finestra cronometrata delle metriche di velocità); (b) farlo come passo manuale separato,
     fuori dal driver di bench, se il costo per cella è ritenuto eccessivo per lo sweep sui 3
     device.
+
+11. **Goal `fase-1b-matrice` chiuso** (2026-07-27, ruling PI: "possiamo chiudere questo goal").
+    Tutte e 4 le fasi complete, mergiate e pushate su `main`. Cristiano testa lui stesso M4 Pro e
+    laptop domani; per l'S22 Ultra resta da capire l'approccio (vedi HANDOFF.md — risposta su come
+    raggiungere il dev server da telefono). Docket #10 e #8 restano aperti/attivi ma non bloccano
+    la chiusura — non erano condizioni di DONE WHEN di questo goal.
