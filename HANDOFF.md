@@ -2,12 +2,14 @@
 
 ## 1. Next decidable
 
-**Tutto è PI-gated**: il goal `fase-2-deep-dive` è COMPLETO (7/7 fasi, verifier PASS sul
-DONE WHEN riga per riga) e i dati cross-device sono arrivati (bench + micro-bench su
-4090, M4 Pro, S22). Le decisioni aperte sono nel docket (§5). Alla prima decisione presa,
-il lavoro riparte da lì; il candidato più probabile è: aggiornare gli slot M4/S22 in
-`docs/deep-dive/micro-bench-matmul.md` coi dati nuovi → merge del branch → nuovo goal
-(fase 3 dello spec madre: ceiling + hero-demo).
+**Sessione di stima per il nuovo motore** (ruling PI 2026-07-28): quantificare
+l'incremento atteso da TUTTI i suggerimenti del deep-dive (backlog engine-notes +
+candidati esperimento), valutare trade-off e alternative, motivare le scelte — in
+funzione dell'obiettivo dichiarato: **costruire un nuovo motore di inferenza browser**.
+Input: `docs/deep-dive/engine-design-notes.md` (backlog + questioni aperte) e i 6 run
+cross-device. Roadmap approvata (ruling stesso giorno): consolidamento (incl. soglia
+TTFT del #12) → ceiling + hero-demo + benchmark pubblico (eventuale paper) → nuovo
+motore. Goal fase-2-deep-dive: MERGIATO su main (77ed165) e pushato.
 
 ## 2. State delta (session 7)
 
@@ -24,13 +26,9 @@ il lavoro riparte da lì; il candidato più probabile è: aggiornare gli slot M4
 
 ## 3. Open threads
 
-- **Branch `feat/fase-2-deep-dive`** (20 commit, MAI pushato): 6 doc deep-dive, skill
-  `bottleneck-brainstorm`, micro-bench (`src/microbench/` + `microbench.html`, 102/102
-  test), 34 WGSL dumpati, 2 tool. In attesa di merge (docket).
-- `docs/deep-dive/micro-bench-matmul.md` ha gli slot M4/S22 "pending" da riempire coi
-  dati appena arrivati (lavoro pronto da fare sul branch, pre-merge).
-- `main` locale avanti di 5 commit su `origin/main` (3 setup + 2 data) — push mai fatto.
 - Sweep manuale fase 1b: wllama/transformersjs su S22 ancora mancanti (fuori goal).
+- Goal di consolidamento da aprire (conterrà: soglia TTFT #12, esiti della sessione di
+  stima, eventuale resto sweep).
 
 ## 4. Landmines
 
@@ -49,18 +47,10 @@ il lavoro riparte da lì; il candidato più probabile è: aggiornare gli slot M4
 
 ## 5. Docket (decisioni PI pendenti)
 
-1. **Merge** `feat/fase-2-deep-dive` → main (previo aggiornamento slot M4/S22 nel doc
-   micro-bench). Push di main+branch a origin: mai fatto in tutto il goal.
-2. **Slot esperimento #2 di 2** (lo swap q4f16 ha consumato il #1, esito ottimo):
-   candidati vivi → multi-step decode (#3a) · overlap fetch/compile al load (#3b) ·
-   sync-diradata upload (#4, ridimensionato: su M4 il load warm è già 0.6 s) ·
-   warm-up pre-ramp (#6, declassato dai dati f16). Oppure: nessuno ora, si rimanda
-   al prossimo goal.
-3. **Docket #12 ereditato** (high-variance non guarda il TTFT): coi dati f16 la varianza
-   S22 collassa, ma lo sweep mobile continuerà — soglia TTFT separata da implementare
-   (piccola, candidabile a prima fase del prossimo goal) o chiudere come "risolto dal
-   passaggio a f16"?
-4. **Promozione skill** `bottleneck-brainstorm` a `~/.claude/skills/` o resta project.
-5. **Prossimo orizzonte**: fase 3 dello spec madre (ceiling run + hero-demo) come nuovo
-   goal (brainstorming → goal-brief), o altro.
-6. Ereditati non bloccanti: #10 (qualityScore non collegato), #8 (sorveglianza wllama).
+1. ~~Merge+push~~ DECISO e FATTO (2026-07-28): merge 77ed165, push origin/main.
+2. ~~Slot esperimento #2~~ DECISO: non assegnato — sostituito dalla sessione di stima
+   (vedi §1); i candidati confluiscono lì come opzioni da quantificare.
+3. ~~Docket #12~~ DECISO: soglia TTFT separata nel goal di consolidamento.
+4. **Promozione skill** `bottleneck-brainstorm` a `~/.claude/skills/`: non decisa,
+   resta project-level.
+5. Ereditati non bloccanti: #10 (qualityScore non collegato), #8 (sorveglianza wllama).
