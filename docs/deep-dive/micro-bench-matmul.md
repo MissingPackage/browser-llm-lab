@@ -69,8 +69,12 @@ Tre letture:
 3. **Il q4 in "GB/s effettivi" sembra 5× peggio dell'f32 (86 vs 436), ma è la metrica a
    ingannare**: a parità di *pesi processati al secondo* — la grandezza che genera tok/s —
    il q4 oltre-L2 fa 137 G pesi/s contro i 109 G dell'f32: **1.26× a favore del q4**.
-   Il confronto onesto è solo la riga 16384² (entrambi oltre L2): a 8192² il q4 (40 MB)
+   Il confronto onesto è solo la riga 16384² (entrambi oltre L2): a 8192² il q4 (42 MB)
    è ancora in cache mentre l'f32 (268 MB) no, e il rapporto apparente (3.6×) è sleale.
+   Caveat sulla cella q4 16384²: i 10 campioni sono **bimodali** (7 a ~2.36 ms, 3 a
+   ~0.7 ms; stdev 44% della media) — probabile transizione di stato cache/clock tra
+   campioni; l'1.26× è la media dei due regimi e la direzione della lettura regge in
+   entrambi, ma il valore puntuale va preso con quella larghezza.
    Resta vero che il kernel q4 è molto più lontano dal tetto di banda del suo omologo
    f32 (86/435 = 20% vs 436/435 = 100%): il costo ALU della dequant (shift+mask+convert
    per nibble) e l'accesso a scale non coalescato mangiano banda — è la conferma
@@ -85,8 +89,8 @@ Stima per ordini di grandezza, tutta da numeri misurati qui e in `results/`: all
 del modello 0.5B (matrici 896-4864), un GEMV isolato costa 5-50 µs. Un token di decode ne
 lancia ~34 (proiezioni + attention + norm + sampling, `compute-shader-dispatch.md`): anche
 contando generosamente ~100-200 µs di puro tempo-kernel per l'intero forward pass più il
-lm_head (~90 µs a 94 GB/s su 896×151936), il **lavoro GPU utile per token è nell'ordine di
-0.5-2 ms contro i 8.6-9.9 ms misurati end-to-end** sulla 4090. Il grosso del budget per
+lm_head (85 MB q4 su 896×151936 → ~0.9 ms a 94 GB/s), il **lavoro GPU utile per token è
+nell'ordine di 1-2 ms contro i 8.6-9.9 ms misurati end-to-end** sulla 4090. Il grosso del budget per
 token — indicativamente il 75-85% — non è nei kernel: è tra i kernel (launch overhead,
 orchestrazione, sync per token). Coerente col prior art TensorRT-LLM citato in
 `dequant-kernels.md` (~14.6% di launch overhead su GPU datacenter con kernel molto più
