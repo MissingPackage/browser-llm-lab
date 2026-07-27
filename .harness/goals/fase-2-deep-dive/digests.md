@@ -92,3 +92,11 @@
   "75-85% del budget/token è orchestrazione" (chiude la domanda della fase 4).
 - Slot M4/S22 pending con istruzioni per i run manuali (S22: attesi timestamp-query E f16).
 - Prossimo: fase 7 (ULTIMA) — engine-design-notes.md + closure sweep ([VERIFY]=0).
+
+## Iterazione 9 (2026-07-27) — fase 7 done → GOAL COMPLETO (lato autonomo)
+
+- engine-design-notes.md scritto (5 fatti vincolanti, backlog 12 idee, 6 questioni
+  aperte, sintesi del motore in 3 frasi).
+- Closure sweep: 25 [VERIFY] → 0 (misure fase 6, datasheet citati, riformulazioni
+  oneste). Suite 102/102, tsc, build, webllm.ts diff-clean, 0 esperimenti eseguiti.
+- Tutte le 7 fasi done. Resta solo lavoro PI-gated: stop-by-design.

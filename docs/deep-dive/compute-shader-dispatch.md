@@ -97,9 +97,10 @@ Xclipse 920), stesso modello `Qwen2.5-0.5B-Instruct-q4f32_1-MLC`.
   accumulati in un encoder (l'intero forward pass), un submit, una sync col JS per il
   readback dell'id campionato. Il costo per token include quindi un round-trip CPU→GPU→CPU
   fisso per il sampling, non solo il calcolo. Quanto pesi quel round-trip dentro i ~9 ms
-  non è misurabile oggi dal runtime stesso (nessun timestamp-query — sopra): è
-  esattamente il buco che il micro-bench matmul di fase 6 può colmare. `[VERIFY: quota
-  sync/dispatch-overhead per token da misurare col micro-bench]`
+  non è misurabile oggi dal runtime stesso (nessun timestamp-query — sopra). Il
+  micro-bench di fase 6 ha dato la risposta di prima battuta: lavoro GPU utile ~1-2
+  ms/token contro 8.6-9.9 misurati, ~75-85% del budget è orchestrazione
+  (`micro-bench-matmul.md`); il breakdown per-kernel nel runtime resta per engine-notes.
 - **Decode 6.99 tok/s su S22 = ~143 ms per token.** A parità di grafo di dispatch, il
   rapporto ~13-17× rispetto alla 4090 non viene dall'orchestrazione (identica: stesso
   bundle, stesso wasm) ma dal costo dei kernel stessi su una GPU con una frazione della
@@ -115,9 +116,10 @@ Xclipse 920), stesso modello `Qwen2.5-0.5B-Instruct-q4f32_1-MLC`.
   `createShaderModule` (compilazione WGSL→IR driver) e `createComputePipelineAsync`
   (specializzazione per il layout). È il candidato naturale a dominare il load warm dopo
   i pesi; i browser hanno cache interne delle pipeline compilate (Dawn/Chrome) che
-  possono assorbire parte del costo tra run consecutivi. `[VERIFY: quota shader-compile
-  del load warm non misurata — separabile strumentando asyncLoadWebGPUPipelines; cache
-  pipeline del browser da verificare su Chrome 150]`
+  possono assorbire parte del costo tra run consecutivi. La quota shader-compile del
+  load warm non è ancora separata: strumentazione di `asyncLoadWebGPUPipelines` e ruolo
+  della cache pipeline del browser sono questioni aperte instradate a
+  `engine-design-notes.md`.
 - **Cold load ~56–62 s (4090, Chrome)**: dominato dal download dei pesi, non dal
   sotto-sistema di questo doc (`results/4090-linux-2026-07-25T19-24-07-948Z.json`,
   `results/4090-linux-2026-07-26T18-34-31-633Z.json`).
@@ -150,9 +152,10 @@ il "profiling" interno resta JS-side (`performance.now()`, `enable_latency_break
 Il tempo per-kernel sulla GPU è invisibile al runtime, mentre l'hardware lo esporrebbe:
 il probe 4090 elenca `timestamp-query` tra le `features` dell'adapter
 (`results/4090-linux-2026-07-26T19-54-55-278Z.json`, `probe.features`, verificato via
-script). Risultato pratico: non possiamo separare, dentro il budget di 9 ms/token del
-bottleneck #1, quanto è calcolo e quanto è overhead di sincronizzazione — il claim resta
-`[VERIFY]` finché non si strumenta.
+script). Risultato pratico: dentro il budget di 9 ms/token del bottleneck #1, la
+separazione calcolo/overhead ha ora la risposta di prima battuta del micro-bench di fase
+6 (~75-85% orchestrazione, `micro-bench-matmul.md`); la conferma strumentando il runtime
+resta per engine-notes.
 
 ### 3. Compile pipeline al load
 
@@ -179,8 +182,7 @@ arrotondando per eccesso se dispari) finché rientra nel limite. Per Qwen2.5-0.5
 (vocab 151936, hidden 896) le dimensioni di dispatch tipiche (es. proiezione finale sul
 vocabolario con workgroup a 256 thread → ~594 blocchi) restano ordini di grandezza sotto
 65535: il ramo di ripacchettamento con ogni probabilità non si attiva mai nei run
-committati. `[VERIFY: nessuna istrumentazione diretta del branch — stima per ordine di
-grandezza, non un conteggio a runtime]`. Non lo tratto come bottleneck di performance
+committati. stima per ordine di grandezza dalla lettura del kernel, non un conteggio a runtime; l'instrumentazione del branch è instradata a engine-notes (tabella sotto). Non lo tratto come bottleneck di performance
 oggi; resta un rischio latente per modelli/context futuri con dispatch grid molto più
 grandi (vocab estesi, batch>1, context lunghissimi).
 
@@ -193,8 +195,8 @@ grandi (vocab estesi, batch>1, context lunghissimi).
 | Fork/patch locale del bundle vendored per aggiungere `timestamp-query` e instrumentare `WebGPUContext` in modo permanente nel runtime chat (non solo nel micro-bench) | Pattern comune di vendoring/patching quando il profiling manca upstream (nessuna singola famiglia esterna, via diretta) | Medio: tocca codice vendored (`node_modules/@mlc-ai/web-llm`), va risincronizzato a ogni bump di `@mlc-ai/web-llm` | Drift dal bundle upstream, costo di manutenzione ricorrente | engine-notes — rework del motore, destinazione `engine-design-notes.md` |
 | Tracciare via Chrome DevTools / `chrome://tracing` (categoria `disabled-by-default-gpu.dawn`) invece di timestamp-query in-app | Dawn (backend WebGPU di Chrome) espone tracing interno usato dal team Dawn per il proprio profiling | Basso per un laboratorio riproducibile: richiede flag Chrome, non gira headless/cross-browser | Non portabile a Firefox/Safari/S22, output non JSON-abile nei `results/` committati | scartata — non integrabile nell'infrastruttura di risultati esistente |
 | Sovrapporre `fetchTensorCache` (pesi) e `asyncLoadWebGPUPipelines` (oggi sequenziali per struttura del codice, righe 12549-12564), invece di attendere i pesi prima di iniziare la compilazione | `WebAssembly.compileStreaming`: i motori JS compilano il modulo wasm mentre i byte sono ancora in arrivo dalla rete, invece di aspettare il download completo — stesso principio di overlap I/O↔compute | Medio: il modulo wasm con `webgpu.get_fmap`/`get_shader` è verificabilmente disponibile prima della fine del fetch pesi; i due path non condividono buffer | Basso: sono percorsi indipendenti (compile shader non tocca i buffer pesi); rischio principale è contesa CPU/rete difficile da isolare senza instrumentazione | esperimento — cronometrabile subito invertendo/parallelizzando le due `yield`, alto rapporto guadagno/costo se confermato |
-| Demand-paging dei kernel: compilare solo i kernel toccati dal primo forward pass (prefill) e lasciare il resto al path lazy già esistente (`wasm.WebGPUCreateShader`, righe 7505-7508) invece di forzare il preload completo del fmap | Paginazione a richiesta (OS demand paging / lazy page-in) | Medio-alto: il primitivo lazy esiste già nel runtime, non serve nuova API | Il primo forward pass probabilmente tocca già la maggioranza dei kernel distinti (stessa architettura per ogni layer): guadagno reale incerto `[VERIFY: quota di kernel del fmap esclusivi di configurazioni rare vs. usati dal primo forward pass — non misurata]`; introduce anche un possibile stallo sincrono imprevedibile a metà generazione se un kernel raro compare tardi | engine-notes — cambia il contratto "modello pronto quando il fmap è compilato", va progettato prima di isolarlo come esperimento |
-| Migrare l'esecuzione a WebNN (grafo compilato una volta su backend nativo — DirectML/CoreML/NNAPI/XNNPACK — niente WGSL) | W3C WebNN spec, `MLGraph` immutabile compilato una volta, nessuna compilazione shader lato pagina ([webnn.io architecture](https://webnn.io/en/faq/architecture)) | Basso nel breve periodo: WebNN ha un op-set fisso, non supporta i kernel custom di dequantizzazione INT4 group-wise generati dal codegen TVM | Alto: mismatch di feature-set (quantizzazione custom, kernel generati), supporto browser ancora parziale `[VERIFY: browser-compat WebNN su Chrome150/S22]` | scartata — incompatibile con l'architettura a kernel-custom-TVM del progetto |
+| Demand-paging dei kernel: compilare solo i kernel toccati dal primo forward pass (prefill) e lasciare il resto al path lazy già esistente (`wasm.WebGPUCreateShader`, righe 7505-7508) invece di forzare il preload completo del fmap | Paginazione a richiesta (OS demand paging / lazy page-in) | Medio-alto: il primitivo lazy esiste già nel runtime, non serve nuova API | Il primo forward pass probabilmente tocca già la maggioranza dei kernel distinti (stessa architettura per ogni layer): guadagno reale incerto quota di kernel del fmap usati dal primo forward pass non misurata — verifica instradata a engine-notes; introduce anche un possibile stallo sincrono imprevedibile a metà generazione se un kernel raro compare tardi | engine-notes — cambia il contratto "modello pronto quando il fmap è compilato", va progettato prima di isolarlo come esperimento |
+| Migrare l'esecuzione a WebNN (grafo compilato una volta su backend nativo — DirectML/CoreML/NNAPI/XNNPACK — niente WGSL) | W3C WebNN spec, `MLGraph` immutabile compilato una volta, nessuna compilazione shader lato pagina ([webnn.io architecture](https://webnn.io/en/faq/architecture)) | Basso nel breve periodo: WebNN ha un op-set fisso, non supporta i kernel custom di dequantizzazione INT4 group-wise generati dal codegen TVM | Alto: mismatch di feature-set (quantizzazione custom, kernel generati), supporto browser ancora parziale browser-compat WebNN non verificata (fronte deferred dallo spec madre) | scartata — incompatibile con l'architettura a kernel-custom-TVM del progetto |
 | Instrumentare `submitShader` per contare quante volte il branch `workDim[0] >= 65536` si attiva realmente nei run del laboratorio | Nessuna famiglia esterna necessaria — stessa logica "misura prima di ottimizzare" del bottleneck #2 | Molto bassa: poche righe, patch locale al bundle vendored, solo dev-build | Nessuno in produzione | engine-notes — patch locale, va in `engine-design-notes.md` insieme a un eventuale fix se il branch risultasse attivo |
 
 **Raccomandazione**: l'esperimento da proporre per primo è **timestamp-query nel micro-bench di fase 6** (quarta riga della tabella). Non è il guadagno di throughput più vistoso sulla carta — quello sarebbe il multi-step decode, con precedente esterno più solido (+28% misurato da vLLM) — ma è l'unico che sblocca la misura degli altri due: senza numeri GPU-side non possiamo dire se il multi-step decode stia davvero comprando calcolo o solo nascondendo un round-trip che pesava meno del previsto, né isolare quanto della finestra 1.46-1.9 s di load warm sia compile pipeline puro contro overhead di orchestrazione JS. È inoltre a basso rischio e basso costo di implementazione (feature standard, già esposta dall'adapter 4090 nel probe), e usa un'infrastruttura (route SPA micro-bench matmul) già pianificata per fase 6 — non richiede di toccare il bundle vendored di produzione.

@@ -79,9 +79,7 @@ Tre letture:
    f32 (86/435 = 20% vs 436/435 = 100%): il costo ALU della dequant (shift+mask+convert
    per nibble) e l'accesso a scale non coalescato mangiano banda — è la conferma
    sperimentale che il kernel dequant di forma-TVM è ALU-bound sul 4-bit, non
-   memory-bound. `[VERIFY: attribuzione ALU vs coalescing distinguibile solo variando il
-   kernel (es. vec4 loads, scale in shared) — fuori scope della fase, materiale per
-   engine-design-notes.md]`
+   memory-bound. l'attribuzione ALU vs coalescing è distinguibile solo variando il kernel (vec4 loads, scale in shared) — questione aperta instradata a `engine-design-notes.md`, fuori scope della fase
 
 ### Cosa dice sul gap del 4-6% (la domanda di `dequant-kernels.md`)
 

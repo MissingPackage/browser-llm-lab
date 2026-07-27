@@ -14,8 +14,7 @@ byte) non è il soffitto operativo reale. È il *cap dell'adapter*: identico sul
 (`results/4090-linux-2026-07-26T19-54-55-278Z.json`, vendor nvidia/lovelace) e
 sull'Xclipse 920 dell'S22 Ultra (`results/s22-ultra-2026-07-27T00-34-09-931Z.json`) —
 architetture del tutto diverse che convergono sullo stesso valore: un vincolo dell'API
-WebGPU, non del driver. `[VERIFY: la motivazione "offset/size rappresentabili in i32" è
-plausibile ma non tracciata a una fonte spec WebGPU]`
+WebGPU, non del driver. Il valore identico cross-vendor (2³¹−4) punta a un vincolo di rappresentazione a 32 bit nell'API o nelle implementazioni; qui resta un'osservazione, non una spiegazione tracciata a spec.
 
 WebLLM però non chiede mai quel cap al device. In `detectGPUDevice` **entrambi** i limiti
 sono richiesti hardcoded a 1 GiB (`1 << 30`):
@@ -70,9 +69,9 @@ osservati ne offrono ampiamente di più (`maxStorageBuffersPerShaderStage`: 16 s
   per-tensore, per transformer densi in fascia browser (≤ ~8B, q4) nessuna matrice si
   avvicina a 1 GiB. Il tensore a rischio è l'embedding/lm_head non quantizzato: con
   vocabolario ~128k e hidden 4096 in fp16 fa `128256 × 4096 × 2 ≈ 0.978 GiB` — sotto la
-  soglia WebLLM di 1 GiB con un margine del ~2%. `[VERIFY: stima a mano; nessun modello
-  del set di progetto ha questo layout — Qwen2.5-0.5B ha vocab 151936 × hidden 896 ≈
-  0.25 GiB fp16]` Vocabolari più grandi, hidden maggiori o embedding non quantizzati
+  soglia WebLLM di 1 GiB con un margine del ~2% (conto a mano su un layout ipotetico:
+  nessun modello del set di progetto lo ha — Qwen2.5-0.5B ha vocab 151936 × hidden 896 ≈
+  0.25 GiB fp16). Vocabolari più grandi, hidden maggiori o embedding non quantizzati
   bastano a superarla: è lì che il muro diventa reale.
 - **Perché il muro pesa diversamente per device**: sulla 4090 il binding cap (1-2 GiB) è
   un limite *per-tensore* dentro 16 GB di VRAM; sull'S22 `maxBufferSize` (2 GiB esatti) e
@@ -80,8 +79,8 @@ osservati ne offrono ampiamente di più (`maxStorageBuffersPerShaderStage`: 16 s
   i muri per-allocazione e per-binding sono a ridosso, e il vincolo vero è il pool
   fisico, non il cap. Per l'M4 Pro (48 GB unificati, sweep manuale in corso), il
   binding cap da ~2 GiB è il candidato numero uno a cappare il vantaggio-capienza:
-  trattato dallo spec madre come finding da misurare, non solo rischio. `[VERIFY: probe
-  M4 non ancora disponibile — slot in attesa dello sweep manuale]`
+  trattato dallo spec madre come finding da misurare, non solo rischio. Probe M4 non
+  ancora disponibile: buco dichiarato, in attesa dello sweep manuale.
 - **Perché il fallback LLVMPIPE è il vero pavimento**: il gradino a 128 MiB non è mai
   scattato su hardware reale nei run committati — solo sul rasterizer software. Il
   vincolo stringente per la classe di device debole non è il layout dei buffer ma il
@@ -103,10 +102,10 @@ Distinto dal cap: nel loop di caricamento, per ogni record/tensore il runtime fa
 | Idea | Prior art | Fattibilità / costo | Rischio | Instradamento |
 |---|---|---|---|---|
 | Alzare la richiesta al cap reale del device (leggere `adapter.limits` invece di `1<<30` hardcoded) | Il pattern "richiedi X, negozia al ribasso se eccede" è già nello stesso blocco di codice (righe 4050-4082) | Basso concettualmente, ma tocca `detectGPUDevice()` nel bundle vendorizzato — fuori da `src/adapters/webllm.ts`, che per contratto di fase non si modifica (`docs/superpowers/specs/2026-07-27-fase-2-deep-dive-design.md`, riga 104) | Basso di per sé (pattern collaudato), ma introduce drift da un pacchetto upstream terzo | engine-notes |
-| Split esplicito dei tensori oversize (embedding/lm_head non quantizzato, esperti MoE concatenati) su più buffer + kernel di indirezione per riga | llama.cpp `--split-mode row` quando un device non regge un tensore intero; ONNX Runtime Web (EP WebGPU) applica split analogo ai grandi initializer di rete `[VERIFY: comportamento EP WebGPU per initializer oversize, non verificato su repo ORT]` | Moderato: tocca i kernel TVM-generati, non solo l'init JS | Basso: il bind multiplo per-tensore è già il pattern esistente, qui solo esteso | engine-notes — nessun modello del set attuale ci si avvicina (stima a mano, **[VERIFY]**: embedding fp16 vocab~128k/hidden 4096 ≈ 0.978 GiB, sotto 1 GiB con ~2% di margine; nessun modello di progetto ha questo layout, es. Qwen2.5-0.5B ≈ 0.25 GiB) |
-| Diradare/eliminare il `device.sync()` per-tensore nel loop di upload pesi (es. un sync ogni N tensori, o accodare tutte le `copyFrom` e sincronizzare una sola volta a fine shard) | Pattern "non sincronizzare per singola operazione, batch sulla coda di comandi" comune in Vulkan/D3D12 e nel modello a coda di comandi della stessa WebGPU; overlap copy/compute stile CUDA streams in FlexGen/DeepSpeed-Inference | Basso-medio: modifica localizzata al loop di caricamento (righe ~7086-7106), testabile con un build locale patchato del bundle vendorizzato senza toccare `src/adapters/webllm.ts` | Medio: non è noto se il sync-per-tensore serva a limitare il picco di staging CPU concorrente — **[VERIFY]**, non testato | **esperimento** |
+| Split esplicito dei tensori oversize (embedding/lm_head non quantizzato, esperti MoE concatenati) su più buffer + kernel di indirezione per riga | llama.cpp `--split-mode row` quando un device non regge un tensore intero; ONNX Runtime Web (EP WebGPU) applica split analogo ai grandi initializer di rete comportamento dell'EP WebGPU sugli initializer oversize non ri-verificato sul repo ORT — check instradato a engine-notes | Moderato: tocca i kernel TVM-generati, non solo l'init JS | Basso: il bind multiplo per-tensore è già il pattern esistente, qui solo esteso | engine-notes — nessun modello del set attuale ci si avvicina (conto a mano: embedding fp16 vocab~128k/hidden 4096 ≈ 0.978 GiB, sotto 1 GiB con ~2% di margine; nessun modello di progetto ha questo layout, es. Qwen2.5-0.5B ≈ 0.25 GiB) |
+| Diradare/eliminare il `device.sync()` per-tensore nel loop di upload pesi (es. un sync ogni N tensori, o accodare tutte le `copyFrom` e sincronizzare una sola volta a fine shard) | Pattern "non sincronizzare per singola operazione, batch sulla coda di comandi" comune in Vulkan/D3D12 e nel modello a coda di comandi della stessa WebGPU; overlap copy/compute stile CUDA streams in FlexGen/DeepSpeed-Inference | Basso-medio: modifica localizzata al loop di caricamento (righe ~7086-7106), testabile con un build locale patchato del bundle vendorizzato senza toccare `src/adapters/webllm.ts` | Medio: non è noto se il sync-per-tensore serva a limitare il picco di staging CPU concorrente — ipotesi non testata, da verificare nell'eventuale esperimento (docket #4) | **esperimento** |
 | Weight streaming/paging per-layer stile `antirez/ds4` (SSD streaming per sopperire alla VRAM) + FlexGen/DeepSpeed-Inference/llama.cpp `--n-gpu-layers` parziale, prefetch del layer N+1 mentre si calcola N | ds4 (storage esterno), FlexGen/DeepSpeed-Inference (offload CPU/disco), llama.cpp (caricamento parziale su GPU) | Alto: nel browser il "disco" diventa IndexedDB/OPFS, va gestito ordine di prefetch e invalidazione cache | Alto: IndexedDB/OPFS molto più lenti di un vero NVMe, margine di prefetch più stretto che nel caso ds4 originale | scartata — risolve un problema più ampio (VRAM/memoria totale insufficiente) di cui il cap per-binding è solo un caso particolare; nessun run del progetto ha mai sbattuto contro il cap, quindi il costo non è giustificato da questo bottleneck specifico |
-| Backend alternativo WebNN (API a grafo, gestione buffer delegata al driver/browser) | Motori browser: WebNN come alternativa a WebGPU compute diretto | **[VERIFY]**, non testato di persona se l'astrazione a grafo esponga o meno lo stesso muro per-binding all'applicazione | Alto: richiederebbe riscrivere l'intero percorso di inferenza, non solo il loader pesi | scartata — WebNN è esplicitamente deferred dallo spec madre di progetto |
+| Backend alternativo WebNN (API a grafo, gestione buffer delegata al driver/browser) | Motori browser: WebNN come alternativa a WebGPU compute diretto | Non testato di persona se l'astrazione a grafo esponga o meno lo stesso muro per-binding — fronte deferred dallo spec madre | Alto: richiederebbe riscrivere l'intero percorso di inferenza, non solo il loader pesi | scartata — WebNN è esplicitamente deferred dallo spec madre di progetto |
 | Staging-ring / double buffering per l'upload pesi (pool di 2-3 buffer di staging riciclati, upload asincroni sovrapposti, sync solo quando il pool si esaurisce) — trasferimento da grafica realtime/OS, non da un motore LLM | Multiple-buffering nelle pipeline grafiche in tempo reale (swap chain a N buffer); code di completamento asincrone stile I/O batched (`io_uring`) invece di un thread/sync per richiesta | Medio: stessa direzione dell'idea "diradare la sync" ma più invasiva — richiede gestione esplicita del ciclo di vita di un pool di buffer, non solo spostare dove cade la `yield` | Medio: complessità di gestione del pool ricreata da zero, stesso rischio di ipotesi non verificata sul perché la sync attuale sia per-tensore | engine-notes — versione più ambiziosa dell'idea "diradare la sync"; quella resta la forma minima testabile subito |
 
 ### Raccomandazione

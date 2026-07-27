@@ -198,3 +198,22 @@ M4/S22 "pending" espliciti con istruzioni per i run manuali.
 Done-when fase 6 COMPLETO: build ✓ (entry microbench nel dist), test 102/102 ✓, JSON
 schema-versionato da run reale non-SwiftShader in results/microbench/ ✓ (iterazione 7),
 doc con metodologia+numeri+slot pending ✓ (grep "pending": 2). Fase 6 done.
+
+## 2026-07-27 — Iterazione 9 (fase 7: engine-design-notes + closure sweep)
+
+**Closure sweep [VERIFY]**: 25 marker nei 5 doc → 0. Risoluzioni: 4 chiusi con misure
+del micro-bench di fase 6 (quota orchestrazione); 2 chiusi con fonti esterne (datasheet
+4090 laptop 576 GB/s — VideoCardz/TechSpot; Exynos 2200 51.2 GB/s — nanoreview/
+Notebookcheck); 1 verificato in-repo (tutti i run sono 0.5B); i restanti riformulati da
+asserzioni-con-marker a questioni aperte esplicite o buchi dichiarati, consolidati nella
+sezione "Questioni aperte" di engine-design-notes.md.
+
+**engine-design-notes.md scritto** (doc personale): 5 fatti che vincolano il design,
+backlog delle 12 idee instradate engine-notes dai 4 doc, 6 questioni aperte, sintesi
+"la forma del motore in tre frasi" (minimizzare sync, misurarsi da solo, negoziare i
+limiti). Contiene i filename di tutti gli altri 5 doc (grep ok).
+
+**Done-when fase 7, tutto verde meccanicamente**: engine-notes con 5 filename ✓;
+grep [VERIFY] docs/deep-dive/*.md = 0 ✓; npm test 102/102 ✓; tsc --noEmit pulito ✓;
+npm run build exit 0 ✓; git diff goal-fase-2-start -- src/adapters/webllm.ts = vuoto ✓;
+experiments/ = 0 entry (≤2) ✓.
