@@ -1,0 +1,476 @@
+{
+  "schemaVersion": 3,
+  "deviceLabel": "m4-pro",
+  "ts": "2026-07-27T16:36:08.710Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "apple",
+      "architecture": "metal-3",
+      "device": "0x0000",
+      "description": "Apple M4 Pro"
+    },
+    "limits": {
+      "maxBufferSize": 4294967292,
+      "maxStorageBufferBindingSize": 4294967292,
+      "maxComputeWorkgroupStorageSize": 32768,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 10
+    },
+    "features": [
+      "depth32float-stencil8",
+      "chromium-experimental-subgroup-matrix",
+      "rg11b10ufloat-renderable",
+      "bgra8unorm-storage",
+      "texture-formats-tier1",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "float32-filterable",
+      "indirect-first-instance",
+      "texture-compression-astc-sliced-3d",
+      "float32-blendable",
+      "texture-compression-astc",
+      "texture-compression-etc2",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "texture-formats-tier2",
+      "shader-f16",
+      "clip-distances",
+      "timestamp-query",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ],
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    "deviceMemoryGB": 32,
+    "browser": {
+      "name": "chrome",
+      "version": "150.0.0.0"
+    },
+    "anomalies": []
+  },
+  "cells": [
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 60719.3049999997,
+        "cacheState": "cold"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 214.73333333432674,
+          "stdev": 0.8259893058535891,
+          "samples": [
+            215.46000000089407,
+            214.9050000011921,
+            213.83500000089407
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 98.32151844333913,
+          "stdev": 0.33872606202477434,
+          "samples": [
+            98.26831117790627,
+            98.68369931794433,
+            98.01254483416677
+          ]
+        },
+        "totalMs": {
+          "mean": 2798.114999997119,
+          "stdev": 8.47586426288585,
+          "samples": [
+            2800.219999998808,
+            2788.7849999964237,
+            2805.3399999961257
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 215.46000000089407,
+          "decodeToksPerSec": 98.26831117790627,
+          "totalMs": 2800.219999998808,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 214.9050000011921,
+          "decodeToksPerSec": 98.68369931794433,
+          "totalMs": 2788.7849999964237,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 213.83500000089407,
+          "decodeToksPerSec": 98.01254483416677,
+          "totalMs": 2805.3399999961257,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    },
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 550.820000000298,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 213.7550000001987,
+          "stdev": 0.6019343778128023,
+          "samples": [
+            213.39999999850988,
+            213.4150000065565,
+            214.44999999552965
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 98.30363458238601,
+          "stdev": 0.3249010720132713,
+          "samples": [
+            98.12291633655738,
+            98.6787153119863,
+            98.10927209861435
+          ]
+        },
+        "totalMs": {
+          "mean": 2797.605000001689,
+          "stdev": 8.844282048589612,
+          "samples": [
+            2801.990000002086,
+            2787.4250000044703,
+            2803.39999999851
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 213.39999999850988,
+          "decodeToksPerSec": 98.12291633655738,
+          "totalMs": 2801.990000002086,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 213.4150000065565,
+          "decodeToksPerSec": 98.6787153119863,
+          "totalMs": 2787.4250000044703,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 214.44999999552965,
+          "decodeToksPerSec": 98.10927209861435,
+          "totalMs": 2803.39999999851,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    },
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 569.8350000008941,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 214.14333333323398,
+          "stdev": 1.3311868151654644,
+          "samples": [
+            213.22500000149012,
+            215.67000000178814,
+            213.53499999642372
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 98.26988809081719,
+          "stdev": 0.5634415767384834,
+          "samples": [
+            97.87111068297853,
+            98.91447208294795,
+            98.0240815065251
+          ]
+        },
+        "totalMs": {
+          "mean": 2798.9183333342276,
+          "stdev": 13.444382965261633,
+          "samples": [
+            2808.47500000149,
+            2783.545000001788,
+            2804.734999999404
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 213.22500000149012,
+          "decodeToksPerSec": 97.87111068297853,
+          "totalMs": 2808.47500000149,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 215.67000000178814,
+          "decodeToksPerSec": 98.91447208294795,
+          "totalMs": 2783.545000001788,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 213.53499999642372,
+          "decodeToksPerSec": 98.0240815065251,
+          "totalMs": 2804.734999999404,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    },
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 159017.87000000477,
+        "cacheState": "cold"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 286.2066666657726,
+          "stdev": 4.448104464522759,
+          "samples": [
+            291.32999999821186,
+            283.96000000089407,
+            283.32999999821186
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 61.04703470317454,
+          "stdev": 1.7314454662497294,
+          "samples": [
+            63.008702613712124,
+            60.400562317426036,
+            59.73183917838546
+          ]
+        },
+        "totalMs": {
+          "mean": 4465.525000000994,
+          "stdev": 112.54415566879013,
+          "samples": [
+            4338.390000000596,
+            4505.77499999851,
+            4552.410000003874
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 291.32999999821186,
+          "decodeToksPerSec": 63.008702613712124,
+          "totalMs": 4338.390000000596,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 283.96000000089407,
+          "decodeToksPerSec": 60.400562317426036,
+          "totalMs": 4505.77499999851,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 283.32999999821186,
+          "decodeToksPerSec": 59.73183917838546,
+          "totalMs": 4552.410000003874,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    },
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 2104.554999999702,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 291.3250000004967,
+          "stdev": 20.043527010280265,
+          "samples": [
+            281.45000000298023,
+            314.39000000059605,
+            278.13499999791384
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 59.72989565931345,
+          "stdev": 0.2844885252865205,
+          "samples": [
+            59.62868864827165,
+            59.509848879952386,
+            60.05114944971631
+          ]
+        },
+        "totalMs": {
+          "mean": 4560.608333331843,
+          "stdev": 37.51258633725882,
+          "samples": [
+            4557.914999999106,
+            4599.395000003278,
+            4524.5149999931455
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 281.45000000298023,
+          "decodeToksPerSec": 59.62868864827165,
+          "totalMs": 4557.914999999106,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 314.39000000059605,
+          "decodeToksPerSec": 59.509848879952386,
+          "totalMs": 4599.395000003278,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 278.13499999791384,
+          "decodeToksPerSec": 60.05114944971631,
+          "totalMs": 4524.5149999931455,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    },
+    {
+      "stack": "transformersjs",
+      "modelId": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "quant": "q4",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 1223.1199999973178,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 280.82833333313465,
+          "stdev": 2.6167935212020765,
+          "samples": [
+            278.9650000035763,
+            283.820000000298,
+            279.69999999552965
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 60.528357644907125,
+          "stdev": 0.2884744041126939,
+          "samples": [
+            60.856501562545546,
+            60.41387055087406,
+            60.31470082130179
+          ]
+        },
+        "totalMs": {
+          "mean": 4493.793333334227,
+          "stdev": 21.388279691140994,
+          "samples": [
+            4469.1500000059605,
+            4504.704999998212,
+            4507.52499999851
+          ]
+        },
+        "promptTokens": null,
+        "completionTokens": 256
+      },
+      "replicates": [
+        {
+          "ttftMs": 278.9650000035763,
+          "decodeToksPerSec": 60.856501562545546,
+          "totalMs": 4469.1500000059605,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 283.820000000298,
+          "decodeToksPerSec": 60.41387055087406,
+          "totalMs": 4504.704999998212,
+          "promptTokens": null,
+          "completionTokens": 256
+        },
+        {
+          "ttftMs": 279.69999999552965,
+          "decodeToksPerSec": 60.31470082130179,
+          "totalMs": 4507.52499999851,
+          "promptTokens": null,
+          "completionTokens": 256
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    }
+  ]
+}

@@ -1,0 +1,265 @@
+{
+  "schemaVersion": 3,
+  "deviceLabel": "s22-ultra",
+  "ts": "2026-07-27T18:09:45.362Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "samsung",
+      "architecture": "rdna-2",
+      "device": "0x73a0",
+      "description": "Samsung Xclipse 920"
+    },
+    "limits": {
+      "maxBufferSize": 2147483648,
+      "maxStorageBufferBindingSize": 2147483644,
+      "maxComputeWorkgroupStorageSize": 32768,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 16
+    },
+    "features": [
+      "depth32float-stencil8",
+      "rg11b10ufloat-renderable",
+      "bgra8unorm-storage",
+      "texture-formats-tier1",
+      "chromium-experimental-multi-draw-indirect",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "chromium-experimental-timestamp-query-inside-passes",
+      "indirect-first-instance",
+      "texture-compression-astc-sliced-3d",
+      "float32-blendable",
+      "subgroup-size-control",
+      "texture-compression-astc",
+      "texture-compression-etc2",
+      "depth-clip-control",
+      "shader-f16",
+      "texture-formats-tier2",
+      "timestamp-query",
+      "clip-distances",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ],
+    "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
+    "deviceMemoryGB": 8,
+    "browser": {
+      "name": "chrome",
+      "version": "150.0.0.0"
+    },
+    "anomalies": []
+  },
+  "cells": [
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "quant": "q4f16_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 45289.705000042915,
+        "cacheState": "cold"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 2605.0266666412354,
+          "stdev": 11.166979558892203,
+          "samples": [
+            2616.8099999427795,
+            2594.600000023842,
+            2603.6699999570847
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 11.751028460785626,
+          "stdev": 0.39612022339380193,
+          "samples": [
+            11.351179114917494,
+            11.758595116371371,
+            12.14331115106801
+          ]
+        },
+        "totalMs": {
+          "mean": 24236.56499997775,
+          "stdev": 737.2474199560202,
+          "samples": [
+            24993.33999991417,
+            24195.820000052452,
+            23520.53499996662
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 2616.8099999427795,
+          "decodeToksPerSec": 11.351179114917494,
+          "totalMs": 24993.33999991417,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 2594.600000023842,
+          "decodeToksPerSec": 11.758595116371371,
+          "totalMs": 24195.820000052452,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 2603.6699999570847,
+          "decodeToksPerSec": 12.14331115106801,
+          "totalMs": 23520.53499996662,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    },
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "quant": "q4f16_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 3691.7099999189377,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 2588.9550000429153,
+          "stdev": 2.8842980455483858,
+          "samples": [
+            2590.570000052452,
+            2585.625,
+            2590.670000076294
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 11.472516771901809,
+          "stdev": 0.2089813366381001,
+          "samples": [
+            11.292723395848121,
+            11.701801248161553,
+            11.423025671695754
+          ]
+        },
+        "totalMs": {
+          "mean": 24733.69166668256,
+          "stdev": 403.6974551696829,
+          "samples": [
+            25082.930000066757,
+            24291.68499994278,
+            24826.460000038147
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 2590.570000052452,
+          "decodeToksPerSec": 11.292723395848121,
+          "totalMs": 25082.930000066757,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 2585.625,
+          "decodeToksPerSec": 11.701801248161553,
+          "totalMs": 24291.68499994278,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 2590.670000076294,
+          "decodeToksPerSec": 11.423025671695754,
+          "totalMs": 24826.460000038147,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    },
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "quant": "q4f16_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 3965.3949999809265,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 2601.618333299955,
+          "stdev": 17.012345787778393,
+          "samples": [
+            2591.329999923706,
+            2592.2699999809265,
+            2621.2549999952316
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 11.660081133914886,
+          "stdev": 0.17287253733931832,
+          "samples": [
+            11.519324006172797,
+            11.853038192671786,
+            11.60788120290007
+          ]
+        },
+        "totalMs": {
+          "mean": 24388.516666650772,
+          "stdev": 325.3861233801612,
+          "samples": [
+            24641.234999895096,
+            24021.375,
+            24502.94000005722
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 2591.329999923706,
+          "decodeToksPerSec": 11.519324006172797,
+          "totalMs": 24641.234999895096,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 2592.2699999809265,
+          "decodeToksPerSec": 11.853038192671786,
+          "totalMs": 24021.375,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 2621.2549999952316,
+          "decodeToksPerSec": 11.60788120290007,
+          "totalMs": 24502.94000005722,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    }
+  ]
+}
