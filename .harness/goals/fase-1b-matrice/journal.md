@@ -314,3 +314,18 @@ Il gate `loop-verifier` sulla Fase 4 ha dato **FAIL** due volte sullo stesso pat
 
 Gate ri-verificato dopo il fix: `npm test` 87/87, `tsc --noEmit` pulito, `npm run build` ok,
 entrambi i nuovi file in `results/` con `schemaVersion: 3`.
+
+## Merge/push Fase 4 (2026-07-27)
+
+`feat/fase-4-readme-final-verification` mergiato in `main` (merge commit `4540246`, no-ff) e
+pushato su `origin` — dopo che `loop-verifier` ha dato PASS di fatto (nessun problema residuo
+sui contenuti; il secondo giro di FAIL era solo sulla frase HANDOFF non ancora vera perché il
+merge non era ancora avvenuto — risolto mergiando/pushando invece di riscrivere la frase).
+Gate ri-verificati su `main` dopo il merge: `npm test` 87/87, `tsc --noEmit` pulito, `npm run
+build` ok. `origin/main` allineato.
+
+**Lezione per le prossime iterazioni**: non scrivere in HANDOFF.md "mergiato e pushato" finché il
+merge/push non è realmente accaduto in quello stesso turno — è successo due volte in questo
+goal (Fase 3 e Fase 4) ed è esattamente il tipo di errore che il gate `loop-verifier` esiste per
+catturare prima che raggiunga `main`. Ordine corretto: verificare i contenuti → mergiare/pushare
+→ *poi* la frase è vera senza bisogno di riformularla.
