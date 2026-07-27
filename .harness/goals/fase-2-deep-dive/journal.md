@@ -37,8 +37,30 @@ delle fasi 2-5): [fase 2: 2026-07-27, iterazione 2, subagent con skill → sezio
 "Bottleneck & vie d'uscita" di compute-shader-dispatch.md, contratto rispettato, nessun
 raffinamento skill necessario] [fase 3: 2026-07-27, iterazione 3, subagent con skill →
 sezione bottleneck di buffer-limit-2gb.md partendo dal materiale baseline run-A
-ri-verificato, contratto rispettato, nessun raffinamento] [fase 4: pre-run GREEN
-2026-07-27, da rifare in-fase] [fase 5: —]
+ri-verificato, contratto rispettato, nessun raffinamento] [fase 4: 2026-07-27,
+iterazione 5, subagent con skill sui fatti del dump WGSL reale → sezione bottleneck di
+dequant-kernels.md; il pre-run GREEN è stato aggiornato e in parte SMENTITO dai fatti
+nuovi (swap q4f16 declassato); contratto rispettato] [fase 5: —]
+
+## 2026-07-27 — Iterazione 5 (fase 4 parte 2: doc dequant-kernels.md)
+
+Doc completo in `docs/deep-dive/dequant-kernels.md`, primo doc con fonte primaria (i 34
+WGSL del dump, non il bundle). Struttura stabilita: schema q4 (8 nibble/u32, offset −7,
+scale f32 per 32, FMA fusa — mai un buffer dequant in VRAM); DUE forme di kernel generate
+da TVM (prefill: GEMM tiled 8×8 con dequant in shared memory; decode: GEMV 64×1 con
+dequant nei registri e riduzione in workgroup).
+
+**Finding principale del goal finora** (sezione "Perché i numeri"): il roofline di banda
+pesi dà tetti ~2000 (4090) e ~180 (S22) tok/s contro 101-116 e 6.99 misurati — **entrambi
+i device al 4-6% del tetto**. Il rapporto relativo (~14×) segue la banda (~11×), ma in
+assoluto il cap NON è la banda: candidati occupancy GEMV vs launch overhead (~34
+dispatch/token). Ridimensiona sia il "memory-bound da manuale" sia il valore atteso dello
+swap q4f16 (docket #2 → secondario, vedi docket #5). Il micro-bench di fase 6 è il
+discriminatore progettato apposta.
+
+Done-when fase 4: 3 heading ✓, citazioni results (4) ✓, bundle con versione ✓, skill in
+journal ✓ (sopra). Dogfood: contratto ok, idea fuori dagli schemi con prior art solido
+(megakernel, TensorRT-LLM 14.6% launch overhead su Qwen2.5-1.5B → engine-notes).
 
 ## 2026-07-27 — Iterazione 3 (fase 3: doc buffer-limit-2gb.md)
 

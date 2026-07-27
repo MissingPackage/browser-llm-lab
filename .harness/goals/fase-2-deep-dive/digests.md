@@ -53,3 +53,13 @@
   → hang eterno nel warm-up) — entrambi diagnosticati e fixati, guardia isReal aggiunta.
 - Schema q4 confermato dal vivo: nibble packing u32, offset-7, scale/32, FMA fusa.
 - Prossimo (iterazione 5): scrivere dequant-kernels.md col materiale primario.
+
+## Iterazione 5 (2026-07-27) — fase 4 done
+
+- `dequant-kernels.md` completo, primo doc su fonte primaria (34 WGSL reali): schema q4
+  confermato (nibble/u32, offset −7, scale/32, FMA fusa), due forme di kernel (GEMM tiled
+  prefill / GEMV registri decode).
+- FINDING CHIAVE: entrambi i device al 4-6% del roofline di banda pesi → sui modelli
+  piccoli i tok/s misurano l'overhead pipeline, non il device. Swap q4f16 declassato a
+  secondario (docket #5); il micro-bench fase 6 discrimina occupancy vs launch overhead.
+- Prossimo: fase 5, kv-cache-layout.md (kernel 008/009/028 già nel dump + run-B baseline).

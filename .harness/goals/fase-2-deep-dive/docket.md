@@ -39,3 +39,14 @@ Decisioni PI-gated e questioni aperte. Append-only; le decisioni le prende Crist
    il picco di memoria staging. **Con #2 e #3 i candidati sono ora QUATTRO per DUE slot**
    (q4f16 S22 · multi-step decode · overlap fetch/compile · sync-diradata upload) →
    decisione PI su quali due approvare.
+
+5. **Re-ranking analitico dei candidati esperimento** (2026-07-27, iterazione 5, dal
+   dogfood fase 4 coi dati del dump WGSL). Finding: entrambi i device stanno al 4-6% del
+   roofline di banda pesi (misurato vs ~576/51 GB/s dichiarati) → sui modelli piccoli i
+   tok/s misurano l'overhead della pipeline, non la banda. Conseguenze per la scelta slot:
+   (a) il "micro-bench a taglie crescenti" raccomandato dal dogfood È il design della
+   fase 6 (nessuno slot consumato); (b) **docket #2 (swap q4f16) declassato a secondario**
+   — spiega al più 2× di un gap di 20×; (c) le due ipotesi da discriminare col micro-bench
+   sono occupancy del GEMV (1 workgroup da 64 thread per riga output) vs kernel-launch
+   overhead (~34 dispatch/token; prior art TensorRT-LLM: 14.6% su Qwen2.5-1.5B).
+   Nessuna decisione presa: è input analitico per il ruling PI sugli slot (#2, #3, #4).
