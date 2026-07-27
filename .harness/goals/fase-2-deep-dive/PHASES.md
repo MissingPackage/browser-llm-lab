@@ -12,7 +12,7 @@ un'idea a basso costo — l'autorità per eseguirli è già nel contratto, il te
 
 | # | phase | done-when (mechanical) | authority delta | owns | status |
 |---|-------|------------------------|-----------------|------|--------|
-| 1 | Skill `bottleneck-brainstorm` v1 (via writing-skills) | `.claude/skills/bottleneck-brainstorm/SKILL.md` esiste con frontmatter valido (name+description, grep); istruzioni contengono input/processo/output come da spec §skill; commit sul branch | none | `.claude/skills/bottleneck-brainstorm/` | ready |
+| 1 | Skill `bottleneck-brainstorm` v1 (via writing-skills) | `.claude/skills/bottleneck-brainstorm/SKILL.md` esiste con frontmatter valido (name+description, grep); istruzioni contengono input/processo/output come da spec §skill; commit sul branch | none | `.claude/skills/bottleneck-brainstorm/` | done (2026-07-27, commit d79bc32; TDD: RED 2 run + GREEN 1 run, artefatti in baseline/) |
 | 2 | Doc `compute-shader-dispatch.md` + dogfood skill | file esiste con heading letterali "Cosa fa", "Perché i numeri sono quelli", "Bottleneck & vie d'uscita" (grep); ≥1 citazione a `results/*.json` e ≥1 al bundle con versione pacchetto (grep); invocazione skill registrata in journal.md; eventuali raffinamenti skill committati | none | `docs/deep-dive/compute-shader-dispatch.md` | ready |
 | 3 | Doc `buffer-limit-2gb.md` | stessi check meccanici della fase 2 (heading, citazioni, journal skill) sul file `buffer-limit-2gb.md` | none | `docs/deep-dive/buffer-limit-2gb.md` | ready |
 | 4 | Doc `dequant-kernels.md` | stessi check meccanici della fase 2 sul file `dequant-kernels.md` | none | `docs/deep-dive/dequant-kernels.md` | ready |

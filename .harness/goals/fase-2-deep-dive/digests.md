@@ -11,3 +11,14 @@
   di fattibilità (max 2) nasceranno docket-born dentro le fasi 2–6.
 - Stop-by-design dopo fase 7: merge, run M4/S22, promozione skill, terzo esperimento —
   tutto PI-gated.
+
+## Iterazione 1 (2026-07-27) — fase 1 done
+
+- Skill `bottleneck-brainstorm` v1 creata via TDD (2 RED + 1 GREEN, artefatti in baseline/),
+  commit d79bc32 su feat/fase-2-deep-dive. Done-when fase 1 verde.
+- Scoperta metodologica: la baseline non fallisce in capacità ma in forma → skill = contratto
+  di output (tabella 5 colonne + instradamento esperimento/engine-notes/scartata).
+- 3 findings load-bearing gratis dai run di test (1 GiB hardcoded, shader-f16 inutilizzato
+  su S22, KV sized sul max) — salvati in baseline/, alimentano fasi 3-5 e docket #2.
+- Verifier: FAIL su bookkeeping alla prima passata, sanato in-iterazione; re-check ok.
+- Prossimo: fase 2, doc compute-shader-dispatch.md (primo dogfood ufficiale della skill).

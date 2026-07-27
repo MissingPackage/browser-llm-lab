@@ -11,7 +11,10 @@ Branch di lavoro: `feat/fase-2-deep-dive`. Tag inizio goal: `goal-fase-2-start`.
 **Product-loop autorizzato dal PI** in chat (2026-07-27) subito dopo il setup — plan-check
 (docket #1) trattato come approvazione condizionale.
 
-**Prossima fase decidibile**: fase 1 — skill `bottleneck-brainstorm` v1 via writing-skills.
+**Prossima fase decidibile**: fase 2 — doc `compute-shader-dispatch.md` (primo dogfood
+ufficiale della skill). Fase 1 done (2026-07-27, commit d79bc32: skill `bottleneck-brainstorm`
+via TDD, artefatti RED/GREEN in `.harness/goals/fase-2-deep-dive/baseline/`). Docket #2 nuovo:
+candidato esperimento swap q4f16_1 su S22 (decisione PI, consuma 1 slot su 2).
 
 **Sweep manuale fase 1b ancora in corso in parallelo** (fuori da questo goal): Cristiano testa
 M4 Pro e laptop; approccio S22 da definire (vedi §3). Bug/fix dallo sweep = nuovo goal, non
