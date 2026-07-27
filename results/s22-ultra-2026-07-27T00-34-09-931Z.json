@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 3,
+  "deviceLabel": "s22-ultra",
+  "ts": "2026-07-27T00:34:09.931Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "samsung",
+      "architecture": "rdna-2",
+      "device": "0x73a0",
+      "description": "Samsung Xclipse 920"
+    },
+    "limits": {
+      "maxBufferSize": 2147483648,
+      "maxStorageBufferBindingSize": 2147483644,
+      "maxComputeWorkgroupStorageSize": 32768,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 16
+    },
+    "features": [
+      "depth32float-stencil8",
+      "rg11b10ufloat-renderable",
+      "texture-formats-tier1",
+      "bgra8unorm-storage",
+      "chromium-experimental-multi-draw-indirect",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "chromium-experimental-timestamp-query-inside-passes",
+      "indirect-first-instance",
+      "texture-compression-astc-sliced-3d",
+      "float32-blendable",
+      "subgroup-size-control",
+      "texture-compression-astc",
+      "texture-compression-etc2",
+      "depth-clip-control",
+      "shader-f16",
+      "clip-distances",
+      "timestamp-query",
+      "texture-formats-tier2",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ],
+    "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
+    "deviceMemoryGB": 8,
+    "browser": {
+      "name": "chrome",
+      "version": "150.0.0.0"
+    },
+    "anomalies": []
+  },
+  "cells": [
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 6113.84500002861,
+        "cacheState": "warm"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 8194.86333334446,
+          "stdev": 2792.2747553482723,
+          "samples": [
+            5354.929999947548,
+            10936.905000090599,
+            8292.754999995232
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 6.993317500691391,
+          "stdev": 0.09055859855192722,
+          "samples": [
+            7.087418423191784,
+            6.906774988847178,
+            6.985759090035212
+          ]
+        },
+        "totalMs": {
+          "mean": 44519.30499998728,
+          "stdev": 3261.6909904459944,
+          "samples": [
+            41193.08499991894,
+            47712.389999985695,
+            44652.44000005722
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 5354.929999947548,
+          "decodeToksPerSec": 7.087418423191784,
+          "totalMs": 41193.08499991894,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 10936.905000090599,
+          "decodeToksPerSec": 6.906774988847178,
+          "totalMs": 47712.389999985695,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 8292.754999995232,
+          "decodeToksPerSec": 6.985759090035212,
+          "totalMs": 44652.44000005722,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    }
+  ]
+}

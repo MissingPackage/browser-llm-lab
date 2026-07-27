@@ -117,9 +117,12 @@ Cristiano lo chieda esplicitamente.
   **Nota**: `shader-f16` è **presente** su Chrome/Android/Xclipse, mentre è assente su
   chromium-playwright sulla 4090 — conferma ulteriore che è per-browser/per-piattaforma, non
   per-GPU.
-  **Il file di quel run non è in `results/`**: è stato esportato quando `deviceLabel` era ancora
-  cablato, quindi si dichiara `4090-linux`. Va corretto a mano (campo `deviceLabel` + nome file)
-  prima di committarlo, o rifatto ora che la label si inserisce da UI.
+  **File committato**: `results/s22-ultra-2026-07-27T00-34-09-931Z.json`. Era stato esportato
+  quando `deviceLabel` era ancora cablato, quindi si dichiarava `4090-linux`: corretto con una
+  sostituzione mirata della sola riga della label (nessun round-trip JSON, così i float delle
+  misure restano byte-identici — verificato che il resto del payload sia invariato).
+  **È il primo datapoint non-4090 del progetto.** Manca ancora la cella `transformersjs` e
+  `wllama` sull'S22: c'è solo `webllm`.
 - **Nessuna fase residua** — tutte e 4 fatte. Vedi §1 per cosa resta (docket-gated/fuori scope).
 - **docket #10 — decisione registrata, non un ruling bloccante**: `quality.ts` non è collegato a
   `benchServer.ts`. Nessun run reale porta un `qualityScore`. Va deciso se/quando collegarlo.
