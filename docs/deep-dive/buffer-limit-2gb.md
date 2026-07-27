@@ -12,9 +12,13 @@ numeri dai run committati in `results/`.
 Il numero che si vede nel probe (`maxStorageBufferBindingSize: 2147483644`, cioè 2³¹-4
 byte) non è il soffitto operativo reale. È il *cap dell'adapter*: identico sulla RTX 4090
 (`results/4090-linux-2026-07-26T19-54-55-278Z.json`, vendor nvidia/lovelace) e
-sull'Xclipse 920 dell'S22 Ultra (`results/s22-ultra-2026-07-27T00-34-09-931Z.json`) —
-architetture del tutto diverse che convergono sullo stesso valore: un vincolo dell'API
-WebGPU, non del driver. Il valore identico cross-vendor (2³¹−4) punta a un vincolo di rappresentazione a 32 bit nell'API o nelle implementazioni; qui resta un'osservazione, non una spiegazione tracciata a spec.
+sull'Xclipse 920 dell'S22 Ultra (`results/s22-ultra-2026-07-27T00-34-09-931Z.json`).
+**Ma non è una costante dell'API**: il probe M4 Pro
+(`results/m4-pro-2026-07-27T16-36-08-710Z.json`, Chrome/Metal) espone
+`maxStorageBufferBindingSize: 4294967292` — 2³²−4, il doppio, pari al suo
+`maxBufferSize`. Il 2³¹−4 di 4090 e S22 è quindi una scelta di implementazione
+(Dawn/driver per quei backend), non un muro dell'API WebGPU: su Metal il piano
+"adapter" del muro sta un piano più su.
 
 WebLLM però non chiede mai quel cap al device. In `detectGPUDevice` **entrambi** i limiti
 sono richiesti hardcoded a 1 GiB (`1 << 30`):
@@ -32,7 +36,7 @@ Quindi i tre piani del muro, dal più largo al più stretto:
 
 | Piano | Valore | Dove vive |
 |---|---|---|
-| Limite API/adapter | ~2 GiB per binding (2³¹-4); `maxBufferSize` 4 GiB su 4090, 2 GiB su S22 | probe, `results/*.json` |
+| Limite API/adapter | binding 2³¹-4 (~2 GiB) su 4090 e S22, **2³²-4 (~4 GiB) su M4 Pro/Metal** — dipende dall'implementazione, non dall'API; `maxBufferSize` 4 GiB su 4090 e M4, 2 GiB su S22 | probe, `results/*.json` |
 | **Richiesta WebLLM** | **1 GiB per entrambi, hardcoded** | bundle, righe 4050-4082 |
 | Fallback WebLLM | 256 MiB (`maxBufferSize`) / 128 MiB (binding) | stesso blocco; osservato su LLVMPIPE |
 

@@ -217,3 +217,12 @@ limiti). Contiene i filename di tutti gli altri 5 doc (grep ok).
 grep [VERIFY] docs/deep-dive/*.md = 0 ✓; npm test 102/102 ✓; tsc --noEmit pulito ✓;
 npm run build exit 0 ✓; git diff goal-fase-2-start -- src/adapters/webllm.ts = vuoto ✓;
 experiments/ = 0 entry (≤2) ✓.
+
+## 2026-07-27 (sera) — Post-chiusura: dati PI (M4 + S22 f16) e correzione doc
+
+Il PI ha eseguito il docket #2 (S22 q4f16_1) e il primo run M4 Pro; dati committati su
+main (340ab91). Esiti nel docket #7-#8. Correzione a buffer-limit-2gb.md sul branch:
+la tesi "binding cap 2³¹−4 = vincolo dell'API" è falsificata dal probe M4 (2³²−4 su
+Metal) → riformulata come scelta di implementazione per-backend. Nessun altro doc
+richiede correzioni da questi dati (la tesi orchestrazione ne esce anzi rafforzata:
+M4 ≈ 4090 in decode con metà banda).

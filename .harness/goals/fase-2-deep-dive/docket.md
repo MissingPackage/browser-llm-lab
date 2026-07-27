@@ -59,3 +59,29 @@ Decisioni PI-gated e questioni aperte. Append-only; le decisioni le prende Crist
    Fatto rilevante emerso: prefill_chunk_size=2048 e prompt bench=469 tok → il chunking
    non è MAI stato esercitato da nessun run committato; tunarlo richiede prima un corpus
    prompt più lungo (dipendenza propedeutica registrata, nessuna azione).
+
+--- AGGIORNAMENTI POST-CHIUSURA (2026-07-27, sera) ---
+
+7. **Docket #2 ESEGUITO dal PI** (run manuale S22, `results/s22-ultra-2026-07-27T18-09-45-362Z.json`,
+   committato su main 340ab91). Esito: decode 6.99 → **11.6 tok/s (+66%)**, TTFT
+   8195±2792 ms → **2600±10 ms (−68%, varianza da 34% a 0.4%)**. Consuma lo slot
+   esperimento #1 (salvo ruling contrario). Due conseguenze analitiche:
+   (a) il +66% sta dentro la busta "≤2×" prevista dal re-ranking (#5) — il gap col
+   roofline resta (S22 ora a ~6.4% del tetto);
+   (b) **la varianza TTFT è COLLASSATA col percorso f16** → l'ipotesi DVFS pura del
+   candidato #6 (warm-up pre-ramp) esce ridimensionata: la varianza era legata al
+   percorso f32 (prefill 3.15× più lento → finestra termica/DVFS più esposta), non a un
+   ramp-up intrinseco. **#6 declassato**; il ruling sul secondo slot va rifatto alla luce
+   di questo.
+
+8. **Primo datapoint M4 Pro** (`results/m4-pro-2026-07-27T16-36-08-710Z.json`, main).
+   Fatti load-bearing:
+   (a) decode webllm **98.3 tok/s ≈ la 4090** (101-116) con metà banda (~273 vs 576 GB/s)
+   → conferma indipendente della tesi "a 0.5B comanda l'orchestrazione";
+   (b) TTFT 214 ms < 4090 (290-344) e warm load **0.6 s** vs 1.5-1.9 s → su memoria
+   unificata upload+sync per-tensore costano molto meno (ridimensiona il candidato #4
+   sul device Apple, lo lascia intatto su 4090);
+   (c) **il binding cap NON è una costante dell'API**: M4 espone maxStorageBufferBindingSize
+   = 4294967292 (2³²−4, come maxBufferSize), non 2³¹−4 → falsifica la frase di
+   `buffer-limit-2gb.md` "architetture che convergono sullo stesso valore = vincolo
+   dell'API". Correzione del doc necessaria sul branch (fatta, vedi journal).
