@@ -45,7 +45,8 @@ riapertura di `fase-1b-matrice` (chiuso, storico in `.harness/goals/fase-1b-matr
 - **#8**: conformance wllama 7/8, routine cloud ogni 3 giorni che apre una PR da sola quando il
   fix upstream arriva. Nessuna azione ora.
 
-**Goal attivo per `/loop`: `fase-2-deep-dive`** (product-loop in corso). Il device sweep
+**Product-loop FERMO by design** (goal `fase-2-deep-dive` completo lato autonomo — vedi
+sopra; si riavvia con /loop dopo i ruling). Il device sweep
 resta fuori: non inventare un goal per quello senza richiesta esplicita di Cristiano.
 
 ## 2. State delta (session 6, 2026-07-27) — fix device label (post-chiusura goal)
@@ -145,7 +146,8 @@ resta fuori: non inventare un goal per quello senza richiesta esplicita di Crist
   misure restano byte-identici — verificato che il resto del payload sia invariato).
   **È il primo datapoint non-4090 del progetto.** Manca ancora la cella `transformersjs` e
   `wllama` sull'S22: c'è solo `webllm`.
-- **Nessuna fase residua** — tutte e 4 fatte. Vedi §1 per cosa resta (docket-gated/fuori scope).
+- **Nessuna fase residua del goal fase-1b** — tutte e 4 fatte (nota storica; il goal
+  corrente fase-2-deep-dive ha 7 fasi, vedi §1).
 - **docket #10 — decisione registrata, non un ruling bloccante**: `quality.ts` non è collegato a
   `benchServer.ts`. Nessun run reale porta un `qualityScore`. Va deciso se/quando collegarlo.
 - **docket #8 — deroga attiva**: conformance wllama **7/8**. Difetto di wllama, non nostro
