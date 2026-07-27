@@ -22,3 +22,14 @@
   su S22, KV sized sul max) — salvati in baseline/, alimentano fasi 3-5 e docket #2.
 - Verifier: FAIL su bookkeeping alla prima passata, sanato in-iterazione; re-check ok.
 - Prossimo: fase 2, doc compute-shader-dispatch.md (primo dogfood ufficiale della skill).
+
+## Iterazione 2 (2026-07-27) — fase 2 done
+
+- `docs/deep-dive/compute-shader-dispatch.md` completo: kernel WGSL nel wasm TVM, encoder
+  condiviso (1 submit per molti kernel, 1 sync per token), zero timestamp-query → tempo
+  GPU per-kernel invisibile, load warm ≈ compile pipeline (fetch/compile sequenziali).
+- Primo dogfood in-fase della skill: contratto rispettato, nessun raffinamento necessario.
+- Docket #3 nuovo: 3 candidati esperimento per 2 slot (q4f16 S22, multi-step decode,
+  overlap fetch/compile) — scelta PI.
+- Done-when fase 2 tutto verde (heading, citazioni, journal); 6 [VERIFY] ammessi → fase 7.
+- Prossimo: fase 3, doc buffer-limit-2gb.md (baseline run-A già pronta come materiale).

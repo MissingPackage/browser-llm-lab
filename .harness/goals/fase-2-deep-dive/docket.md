@@ -18,3 +18,14 @@ Decisioni PI-gated e questioni aperte. Append-only; le decisioni le prende Crist
    percorso f32 non necessario". Consuma 1 dei 2 slot esperimento del goal e il run S22 è
    manuale (mani di Cristiano) → decisione PI: approvare questo come esperimento #1?
    (La sezione completa con l'analisi è in `baseline/run-C-green-dequant.md`.)
+
+3. **Candidati esperimento dal dogfood fase 2** (aperto 2026-07-27, iterazione 2). La
+   sezione bottleneck di `compute-shader-dispatch.md` instrada come `esperimento`:
+   (a) **multi-step decode** (accumulare 4-8 forward pass prima del readback del token —
+   prior art vLLM +28%; rompe lo streaming percepito, guadagno da misurare);
+   (b) **overlap fetch pesi ↔ compile pipeline** al load (oggi sequenziali per struttura,
+   bundle 12549-12564; alto rapporto guadagno/costo se confermato, cronometrabile subito).
+   La raccomandazione principale della sezione (timestamp-query) NON consuma uno slot:
+   è già infrastruttura pianificata del micro-bench di fase 6 per spec. Con docket #2
+   (swap q4f16_1 su S22) i candidati agli slot esperimento sono ora TRE per DUE posti
+   → decisione PI: quali due approvare (o nessuno per ora).
