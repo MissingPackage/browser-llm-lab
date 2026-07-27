@@ -16,11 +16,10 @@ Branch di lavoro: `feat/fase-2-deep-dive`. Tag inizio goal: `goal-fase-2-start`.
 (batch_decode_paged_kv) già nel dump WGSL + baseline run-B (da ri-verificare) + docket
 #12 ereditato (varianza TTFT mobile). Fasi 1-4 done. FINDING chiave fase 4: entrambi i
 device al 4-6% del roofline di banda pesi (docket #5 — re-ranking candidati esperimento;
-swap q4f16 declassato a secondario).
-Fasi 1-3 done (2026-07-27: skill via TDD, `compute-shader-dispatch.md`,
-`buffer-limit-2gb.md`). **Docket #2-#4 aperti: QUATTRO candidati esperimento per DUE
-slot** (swap q4f16_1 su S22 · multi-step decode · overlap fetch/compile al load ·
-sync-diradata upload pesi) — decisione PI, nessuno si esegue senza ruling.
+swap q4f16 declassato a secondario). **Docket #2-#5 aperti: quattro candidati esperimento
+per due slot** (swap q4f16_1 su S22 [secondario] · multi-step decode · overlap
+fetch/compile al load · sync-diradata upload pesi) — decisione PI, nessuno si esegue
+senza ruling; il micro-bench a taglie crescenti NON consuma slot (è il design di fase 6).
 
 **Sweep manuale fase 1b ancora in corso in parallelo** (fuori da questo goal): Cristiano testa
 M4 Pro e laptop; approccio S22 da definire (vedi §3). Bug/fix dallo sweep = nuovo goal, non
@@ -38,8 +37,8 @@ riapertura di `fase-1b-matrice` (chiuso, storico in `.harness/goals/fase-1b-matr
 - **#8**: conformance wllama 7/8, routine cloud ogni 3 giorni che apre una PR da sola quando il
   fix upstream arriva. Nessuna azione ora.
 
-**Nessun goal attivo per `/loop`.** Non inventare un nuovo goal per il device sweep senza che
-Cristiano lo chieda esplicitamente.
+**Goal attivo per `/loop`: `fase-2-deep-dive`** (product-loop in corso). Il device sweep
+resta fuori: non inventare un goal per quello senza richiesta esplicita di Cristiano.
 
 ## 2. State delta (session 6, 2026-07-27) — fix device label (post-chiusura goal)
 
