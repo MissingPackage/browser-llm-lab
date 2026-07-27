@@ -81,3 +81,30 @@ committare. 6 marker [VERIFY] nel doc — ammessi in-fase, sweep a fase 7.
 
 Docket delta: #3 nuovo (candidati esperimento dal dogfood: multi-step decode, overlap
 fetch/compile — scelta slot PI; timestamp-query è già infrastruttura di fase 6 per spec).
+
+## 2026-07-27 — Iterazione 4 (fase 4, parte 1: dump WGSL reale)
+
+Infrastruttura di dump costruita e funzionante: `tools/wgsl-dump.mjs` (Playwright, patch
+di `GPUDevice.prototype.createShaderModule` iniettata NEL worker via `page.workers()` —
+zero modifiche alla SPA). **34 kernel WGSL reali** catturati dal run live 4090
+(Qwen2.5-0.5B q4f32_1, Chrome branded headed) in `wgsl-dump/`: famiglia
+`fused_dequantize*_NT_matmul*` (fase 4), `batch_prefill_ragged_kv` +
+`batch_decode_paged_kv` + `tir_kv_cache_transpose_append` (fase 5), sampling/argsort.
+
+Debug onesto, due tentativi falliti prima del successo:
+1. run #1: timeout 900s senza osservazione (script senza logging) + colpiva un dev server
+   preesistente su :5173 NON nostro (pid 487440, lasciato vivo — probabilmente di
+   Cristiano); il mio vite era su :5177.
+2. run #2 (con logging): fetch ok, poi **hang eterno in warm-up** — causa: Chrome headless
+   cade su SwiftShader (`maxComputeInvocationsPerWorkgroup=256` = spia software rasterizer)
+   e il mio script non aveva la guardia isReal del driver e2e. Fix: HEADED=1 + guardia
+   isReal portata nello script.
+3. run #3 headed su GPU reale: STATUS done, 34 shader, exit 0.
+
+Conferme dal vivo sul kernel 014 (decode matmul embed/lm_head): 8 pesi nibble per u32,
+dequant `(w>>k & 15) − 7` × scale per gruppo di 32 (threadIdx.x>>2), FMA fusa, riduzione
+workgroup via red_buf0, guard blockIdx.z del workaround 65535 presente in testa.
+
+Fase 4 done-when NON ancora soddisfatto (doc mancante): il doc dequant-kernels.md si
+scrive nell'iterazione 5 con questo materiale primario + run-C. PHASES riga 4 resta
+ready con nota "dump fatto".

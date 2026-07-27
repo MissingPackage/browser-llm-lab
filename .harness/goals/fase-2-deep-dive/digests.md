@@ -44,3 +44,12 @@
   dettaglio sync-per-tensore (non era in run-A).
 - Docket #4: quarto candidato esperimento per due slot — la scelta PI si fa più ricca.
 - Prossimo: fase 4, dequant-kernels.md (materiale: run-C GREEN del dogfood).
+
+## Iterazione 4 (2026-07-27) — fase 4 parte 1: dump WGSL
+
+- 34 kernel WGSL REALI catturati dal run live 4090 (tool nuovo `tools/wgsl-dump.mjs`,
+  patch nel worker via Playwright, zero modifiche SPA). Fonte primaria per fasi 4-5.
+- 2 tentativi falliti prima del successo (dev server sbagliato; SwiftShader in headless
+  → hang eterno nel warm-up) — entrambi diagnosticati e fixati, guardia isReal aggiunta.
+- Schema q4 confermato dal vivo: nibble packing u32, offset-7, scale/32, FMA fusa.
+- Prossimo (iterazione 5): scrivere dequant-kernels.md col materiale primario.

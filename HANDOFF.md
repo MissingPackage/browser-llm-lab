@@ -11,9 +11,10 @@ Branch di lavoro: `feat/fase-2-deep-dive`. Tag inizio goal: `goal-fase-2-start`.
 **Product-loop autorizzato dal PI** in chat (2026-07-27) subito dopo il setup — plan-check
 (docket #1) trattato come approvazione condizionale.
 
-**Prossima fase decidibile**: fase 4 — doc `dequant-kernels.md` (materiale grezzo:
-`.harness/goals/fase-2-deep-dive/baseline/run-C-green-dequant.md`, da ri-verificare;
-richiede anche dump/lettura del WGSL generato — vedi rischio nello spec).
+**Prossima fase decidibile**: fase 4, parte 2 — scrivere `dequant-kernels.md`. Il dump
+WGSL è FATTO (iterazione 4): 34 kernel reali dal run live 4090 in
+`.harness/goals/fase-2-deep-dive/wgsl-dump/` (tool riusabile `tools/wgsl-dump.mjs` —
+richiede HEADED=1, headless cade su SwiftShader). Materiale: dump + run-C baseline.
 Fasi 1-3 done (2026-07-27: skill via TDD, `compute-shader-dispatch.md`,
 `buffer-limit-2gb.md`). **Docket #2-#4 aperti: QUATTRO candidati esperimento per DUE
 slot** (swap q4f16_1 su S22 · multi-step decode · overlap fetch/compile al load ·
