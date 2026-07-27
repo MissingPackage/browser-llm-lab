@@ -52,6 +52,14 @@ if (!isReal) {
   }
 }
 
+// Label del device nel file esportato. **Nessun default che nomini una macchina specifica**:
+// sarebbe lo stesso difetto della costante cablata in main.ts, solo spostato qui — con
+// ALLOW_UNVERIFIED=1 su hardware non-NVIDIA produrrebbe un file che si dichiara 4090.
+// Sulla 4090: DEVICE_LABEL=4090-linux node scripts/e2e-bench.mjs
+const DEVICE_LABEL = process.env.DEVICE_LABEL ?? "unknown-device";
+await page.fill("#device-label", DEVICE_LABEL);
+console.log(`[e2e] device label: ${DEVICE_LABEL}`);
+
 // Override stack via env (default: primo stack nel select, cioè "webllm")
 if (process.env.STACK) {
   await page.evaluate((stack) => {

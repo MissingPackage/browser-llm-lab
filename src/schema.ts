@@ -65,6 +65,18 @@ export interface RunFile {
   cells: BenchCell[];
 }
 
+/**
+ * La label del device è l'unica cosa che lega un run all'hardware su cui è girato: il probe
+ * dice cosa ha visto il browser, non su che macchina sei. Era una costante `"4090-linux"`
+ * cablata in `main.ts`, quindi un run fatto dall'S22 si dichiarava 4090 (visto dal vivo,
+ * 2026-07-27). Meglio `unknown-device` di un'etichetta sbagliata: la prima si nota, la
+ * seconda inquina i confronti cross-device in silenzio.
+ */
+export function normalizeDeviceLabel(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed === "" ? "unknown-device" : trimmed;
+}
+
 export function newRunFile(deviceLabel: string, probe: DeviceProbe, ts: string): RunFile {
   return { schemaVersion: SCHEMA_VERSION, deviceLabel, ts, probe, cells: [] };
 }

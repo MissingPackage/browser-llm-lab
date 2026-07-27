@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { SCHEMA_VERSION, newRunFile, addCell, type DeviceProbe, type BenchCell } from "../src/schema";
+import {
+  SCHEMA_VERSION,
+  newRunFile,
+  addCell,
+  normalizeDeviceLabel,
+  type DeviceProbe,
+  type BenchCell,
+} from "../src/schema";
 
 const probe: DeviceProbe = {
   webgpu: true,
@@ -48,5 +55,22 @@ describe("schema", () => {
     expect(run.cells.length).toBe(0);
     expect(run2.cells.length).toBe(1);
     expect(run2.cells[0].gen.decodeToksPerSec?.mean).toBe(42.5);
+  });
+});
+
+describe("normalizeDeviceLabel", () => {
+  it("keeps a real label as typed", () => {
+    expect(normalizeDeviceLabel("s22-ultra")).toBe("s22-ultra");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(normalizeDeviceLabel("  m4-pro \n")).toBe("m4-pro");
+  });
+
+  it("falls back to unknown-device on empty or whitespace-only input", () => {
+    // Meglio un'etichetta palesemente assente che una sbagliata: un file "unknown-device"
+    // si nota, uno che si dichiara "4090-linux" girando su un telefono no.
+    expect(normalizeDeviceLabel("")).toBe("unknown-device");
+    expect(normalizeDeviceLabel("   ")).toBe("unknown-device");
   });
 });

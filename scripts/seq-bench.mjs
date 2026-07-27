@@ -52,6 +52,10 @@ if (!probe.webgpu || vendor !== "nvidia" || /swiftshader|llvmpipe|software/i.tes
 }
 console.log("[seq] GPU:", probe.adapterInfo.description || probe.adapterInfo.architecture);
 
+// Vedi e2e-bench.mjs: nessun default che nomini una macchina specifica.
+const DEVICE_LABEL = process.env.DEVICE_LABEL ?? "unknown-device";
+await page.fill("#device-label", DEVICE_LABEL);
+
 for (const [i, stack] of SEQUENCE.entries()) {
   const m = MODELS[stack];
   await page.evaluate(

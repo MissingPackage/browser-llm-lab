@@ -15,13 +15,38 @@ quello sarà un **nuovo goal**, non una riapertura di `fase-1b-matrice`.
 - **#10**: `src/quality.ts` pronto e testato ma non collegato a `benchServer.ts` — nessun run
   reale porta un `qualityScore`. Decisione PI residua: se/quando collegarlo (costo: fino a 12
   `generate()` extra per cella, o un passaggio logprobs).
+- **#12** (nuovo, dal run S22): `high-variance` controlla solo `decodeToksPerSec`, non `ttftMs`.
+  Sul run S22 il decode era stabilissimo (0.013) e il TTFT oscillava del **104%** (5.3→10.9 s)
+  senza che nulla lo segnalasse. Su mobile la varianza vive nel prefill, cioè proprio dove il
+  codice non guarda. Serve un ruling: soglia separata per il TTFT (raccomandata) vs. estendere
+  quella esistente. **Riguarda tutto lo sweep mobile**, non solo quel run.
 - **#8**: conformance wllama 7/8, routine cloud ogni 3 giorni che apre una PR da sola quando il
   fix upstream arriva. Nessuna azione ora.
 
 **Nessun goal attivo per `/loop`.** Non inventare un nuovo goal per il device sweep senza che
 Cristiano lo chieda esplicitamente.
 
-## 2. State delta (session 5, 2026-07-27) — Fase 4
+## 2. State delta (session 6, 2026-07-27) — fix device label (post-chiusura goal)
+
+- **`deviceLabel` era cablato a `"4090-linux"`** in `main.ts:30` — non un campo manuale, malgrado
+  il README dicesse il contrario. Trovato dal primo run reale dell'S22 di Cristiano, che si
+  dichiarava `4090-linux`. Con lo sweep multi-device imminente, M4/laptop/S22 avrebbero prodotto
+  file indistinguibili.
+- Ora: input `#device-label` in pagina, persistito per-origine in `localStorage` (evento `input`,
+  non `change`: su Android un reload di tab in background prima del blur riporterebbe la label
+  del device precedente). `normalizeDeviceLabel()` in `schema.ts` — funzione pura, unit-testata:
+  trim, e vuoto → `"unknown-device"`. Letta **anche all'export**, così una label corretta dopo il
+  bench finisce comunque nel file.
+- **I driver non hanno più un default che nomina una macchina** (`DEVICE_LABEL`, default
+  `unknown-device`): tenerlo a `4090-linux` sarebbe stato lo stesso difetto spostato nel driver —
+  con `ALLOW_UNVERIFIED=1` su hardware non-NVIDIA avrebbe prodotto un file che si dichiara 4090.
+  Sulla 4090 va passato esplicitamente. **I file già in `results/` non sono toccati.**
+- Test **90/90** (3 nuovi), `tsc --noEmit` pulito, `npm run build` ok. Verificato anche in browser
+  reale (label nel nome file e nel campo JSON) e sul percorso manuale (profilo fresco → vuoto,
+  persistenza dopo reload, storage negato → nessun errore).
+- Registrato **docket #12** (non deciso): `high-variance` guarda solo il decode, non il TTFT.
+
+## Session 5 (2026-07-27) — Fase 4, per riferimento
 
 - **README**: nuova sezione "Fasce modello — il gap strutturale della fascia Large"
   (Qwen2.5-7B-Instruct / Llama-3.1-8B-Instruct: solo WebLLM può servirle — nessun repo ONNX
@@ -77,16 +102,24 @@ Cristiano lo chieda esplicitamente.
 
 ## 3. Open threads
 
-- **Sweep manuale sui 3 device (in corso da Cristiano)**: M4 Pro e laptop domani via test diretto.
-  **S22 Ultra — approccio da chiarire**: `npm run dev` gira solo su una macchina con Node (il
-  telefono fa da client Chrome, non da host). Serve `npm run dev -- --host` (bind su tutte le
-  interfacce) sulla macchina con GPU dedicata + navigare da Chrome sull'S22 verso
-  `http://<IP-LAN-macchina>:5173` sulla stessa rete Wi-Fi. Nodo aperto: l'origine non è HTTPS, quindi
-  non è un secure context per default — serve il flag Chrome
-  `chrome://flags/#unsafely-treat-insecure-origin-as-secure` sul telefono con quell'URL aggiunto,
-  altrimenti niente `crossOriginIsolated`/WebGPU. `wllama` (WASM) funziona comunque; `webllm` e
-  `transformersjs` dipendono dal supporto WebGPU reale di Chrome su Adreno, da verificare dal probe
-  box prima di fidarsi di un numero.
+- **Sweep manuale sui 3 device (in corso da Cristiano)**: M4 Pro e laptop da fare. Procedura per
+  device remoti ora documentata nel README (§"Run da telefono / altro device sulla LAN"):
+  `npm run dev -- --host` sulla macchina con Node + Chrome del device su `http://<IP-LAN>:5173`,
+  con `chrome://flags/#unsafely-treat-insecure-origin-as-secure` per avere un secure context
+  (senza, niente `crossOriginIsolated` → niente WebGPU).
+- **S22 Ultra — primo run reale già fatto (2026-07-27), GPU confermata**. Il probe dà
+  `Samsung Xclipse 920` / `rdna-2` / `vendor: samsung`, `maxBufferSize` 2 GiB: è la GPU RDNA2
+  dell'Exynos 2200, **non** un fallback CPU. Prova decisiva: la cella è `stack: "webllm"`, che è
+  WebGPU-only e non ha alcun percorso CPU — senza WebGPU reale non avrebbe prodotto numeri.
+  Misura: **webllm ~7.0 tok/s** (stdev/mean 0.013), TTFT ~8.2 s, `promptTokens` 469 come sulla
+  4090. Il ~15.7× rispetto alla 4090 (~110 tok/s) è coerente con un decode memory-bandwidth-bound
+  su LPDDR5 mobile; per confronto la Firefox/llvmpipe (CPU vera) fece **1.8 tok/s**.
+  **Nota**: `shader-f16` è **presente** su Chrome/Android/Xclipse, mentre è assente su
+  chromium-playwright sulla 4090 — conferma ulteriore che è per-browser/per-piattaforma, non
+  per-GPU.
+  **Il file di quel run non è in `results/`**: è stato esportato quando `deviceLabel` era ancora
+  cablato, quindi si dichiara `4090-linux`. Va corretto a mano (campo `deviceLabel` + nome file)
+  prima di committarlo, o rifatto ora che la label si inserisce da UI.
 - **Nessuna fase residua** — tutte e 4 fatte. Vedi §1 per cosa resta (docket-gated/fuori scope).
 - **docket #10 — decisione registrata, non un ruling bloccante**: `quality.ts` non è collegato a
   `benchServer.ts`. Nessun run reale porta un `qualityScore`. Va deciso se/quando collegarlo.
@@ -98,8 +131,8 @@ Cristiano lo chieda esplicitamente.
   togliere la deroga da README, PHASES e docket.
 - Rapporto cross-stack ancora **non dichiarabile** in un rapporto: ~3% di dipendenza dall'ordine.
 - I run in `results/*.json` precedenti al 2026-07-26 sono ordine-dipendenti e nulla nel file lo dice.
-- Branch `feat/fase-1a`, `fix/fase-1b-fixin1b`, `feat/fase-2-wllama`, `feat/fase-3-quality-schema-v3`
-  merged, non cancellati.
+- Branch `feat/fase-1a`, `fix/fase-1b-fixin1b`, `feat/fase-2-wllama`, `feat/fase-3-quality-schema-v3`,
+  `feat/fase-4-readme-final-verification`, `fix/device-label-input` merged, non cancellati.
 
 ## 4. Landmines
 

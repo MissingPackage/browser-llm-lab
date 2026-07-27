@@ -18,12 +18,19 @@ scarica il modello (prima volta), esegue prefill 512-tok + 256 tok greedy e
 mostra load/TTFT/tok-s. **Export JSON** scarica il run file (schema v3) da
 salvare in `results/`.
 
+**Device label**: campo di testo in cima, obbligatorio di fatto — è l'unica cosa che lega un run
+all'hardware su cui è girato (il probe dice cosa ha visto il browser, non su che macchina sei).
+Viene ricordata per-origine (`localStorage`), quindi la scrivi una volta per device e sopravvive
+alle ricariche. Se la lasci vuota il file esce come `unknown-device`: **meglio un'etichetta
+palesemente assente che una sbagliata** — un `unknown-device` si nota, un run del telefono che si
+dichiara `4090-linux` inquina i confronti cross-device in silenzio (successo davvero, 2026-07-27).
+
 ## Run automatizzato (Playwright)
 
 ```bash
 node scripts/e2e-bench.mjs                        # headless (finisce su SwiftShader: solo smoke)
-HEADED=1 node scripts/e2e-bench.mjs               # GPU reale (serve un display)
-HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e2e-bench.mjs
+HEADED=1 DEVICE_LABEL=4090-linux node scripts/e2e-bench.mjs               # GPU reale (serve un display)
+HEADED=1 DEVICE_LABEL=4090-linux MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e2e-bench.mjs
 ```
 
 - Il driver **si rifiuta di produrre un risultato** se l'adapter è un software
@@ -37,7 +44,11 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
   Driver parametrizzabile: `CHANNEL=chrome CHROME_ARGS="--ignore-gpu-blocklist"`.
 - Altri env del driver: `BROWSER=firefox` (run Firefox, effimero/solo-cold),
   `ALLOW_UNVERIFIED=1` (procede quando il vendor è nascosto, es. Firefox — la verifica
-  hardware va fatta fuori banda: nvidia-smi o about:support), `E2E_PROFILE=<dir>`.
+  hardware va fatta fuori banda: nvidia-smi o about:support), `E2E_PROFILE=<dir>`,
+  `DEVICE_LABEL=<label>` — **da passare sempre**, default `unknown-device`. Non ha un default che
+  nomini una macchina precisa di proposito: sarebbe lo stesso difetto della costante cablata, solo
+  spostato nel driver (con `ALLOW_UNVERIFIED=1` su hardware non-NVIDIA produrrebbe un file che si
+  dichiara 4090). Sulla 4090: `DEVICE_LABEL=4090-linux node scripts/e2e-bench.mjs`.
 - **Sequenze multi-cella**: `scripts/seq-bench.mjs` esegue più celle nella stessa sessione
   browser e logga i contatori `nvidia-smi` a ogni confine di cella — serve a misurare la
   dipendenza dall'ordine dei run, che una cella sola non può mostrare. Stessi env di
@@ -69,6 +80,28 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
 - Chrome 150 branded (launcher `bench-chrome.sh`): cold 61 s / warm 1.8 s, fino a **116.9 tok/s**
   (run manuale utente) — in linea con chromium-playwright; la varianza run-to-run (~10-25%)
   conferma la necessità di repliche multiple (introdotte in Fase 1b — fondamenta, vedi sotto).
+
+## Run da telefono / altro device sulla LAN
+
+Il dev server gira **sulla macchina con Node**, il telefono fa solo da client Chrome — non si
+lancia `npm run dev` sul telefono.
+
+```bash
+npm run dev -- --host      # bind su tutte le interfacce; vite stampa l'URL "Network:"
+```
+
+Poi da Chrome sul device: `http://<IP-LAN-della-macchina>:5173`, stessa rete Wi-Fi.
+
+**Il nodo è il secure context.** `http://<IP>:5173` non è HTTPS, quindi niente
+`crossOriginIsolated` → niente WebGPU e niente `SharedArrayBuffer`, malgrado i header COOP/COEP
+siano serviti correttamente. Per i test: su Chrome del device apri
+`chrome://flags/#unsafely-treat-insecure-origin-as-secure`, aggiungi **esattamente** l'origine
+(`http://192.168.x.y:5173`) e riavvia il browser. L'IP cambia se il DHCP lo riassegna: allora la
+flag va aggiornata, altrimenti WebGPU sparisce senza dire perché.
+
+Prima di fidarti di un numero, guarda il probe box: `webgpu: true` **con un vendor reale**. Il
+progetto ha già visto un silent-fallback a software rasterizer che dichiarava `webgpu: true`
+(Firefox/llvmpipe, vedi sotto) — su mobile vale la stessa cautela.
 
 ## Cosa abbiamo verificato dal vivo (4090 mobile, Fedora, chromium Playwright)
 
@@ -202,7 +235,9 @@ mai "risolto" in silenzio.
 ## Note
 
 - I risultati in `results/` sono i dati del progetto: committati, schema
-  versionato (`schemaVersion`), niente fingerprinting (label device manuale).
+  versionato (`schemaVersion`), niente fingerprinting (label device inserita a mano, vedi sopra —
+  fino al 2026-07-27 era invece una costante cablata, e i run di ogni device si dichiaravano
+  `4090-linux`).
 - Fase 1b — matrice piena: adapter Transformers.js (Fase 1), wllama (Fase 2) e modulo qualità +
   schema v3 (Fase 3) fatti. Resta lo sweep manuale sui 3 device (M4 Pro, Samsung S22 Ultra) — fuori
   da queste fasi per costruzione, passo separato quando i device sono fisicamente disponibili.
