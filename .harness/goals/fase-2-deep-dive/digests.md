@@ -82,5 +82,6 @@
   16 dispatch/campione) e device senza requiredLimits (celle garbage silenziose → ora
   error scope + skipped[] espliciti).
 - Run valido: banda VRAM 4090 misurata ~435 GB/s oltre-L2 (vs ~576 datasheet); q4 vince
-  in pesi/s (~1.6× vs f32) anche se la metrica GB/s lo penalizza. Curva L2→VRAM visibile.
+  in pesi/s 1.26× oltre-L2 (137G vs 109G — corretto dal verifier: il mio primo conto
+  diceva 1.6×). Curva L2→VRAM visibile.
 - Prossimo (iterazione 8): doc micro-bench-matmul.md con l'analisi + chiusura fase 6.

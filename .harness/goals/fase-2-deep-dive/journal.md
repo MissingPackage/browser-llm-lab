@@ -174,9 +174,11 @@ Run valido committato: `results/microbench/microbench-4090-linux-2026-07-27T04-2
 (10 celle, 0 skip, tutto timestamp-query). Segnale:
 - f32 L2-resident (≤64MB): 480-1000 GB/s (banda cache); f32 oltre L2 (256MB, 1GB):
   **432-436 GB/s** = banda VRAM misurata (~75% del datasheet ~576).
-- q4 a 16384² (160MB > L2): 86 GB/s "effettivi" MA ~172 G pesi/s vs ~109 G del f32 —
-  in pesi/secondo il q4 vince ~1.6×; la metrica GB/s penalizza il packing. Analisi per
-  il doc (prossima iterazione).
+- q4 a 16384² (160MB > L2): 86 GB/s "effettivi" MA — CORREZIONE del verifier, il mio
+  primo conto (172G, 1.6×) divideva i GB/s per 0.5 B/peso dimenticando scale+I/O in
+  bytesRead — pesi/s reali: q4 137.4G vs f32 108.9G = **1.26×** oltre-L2. A 8192² il
+  rapporto apparente è 3.6× ma è sleale (q4 40MB ancora L2-resident, f32 256MB già
+  VRAM-bound). Confronto onesto = solo la riga 16384². Analisi per il doc.
 - f16 assente: Chrome branded non espone shader-f16 su questo stack Linux/NVIDIA
   (skip loggato dal runner, non silenzioso) — dettaglio da riportare nel doc.
 
