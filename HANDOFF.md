@@ -1,207 +1,66 @@
-# HANDOFF — browser-llm-lab   (updated 2026-07-27, session 5)
+# HANDOFF — browser-llm-lab   (updated 2026-07-28, session 7)
 
-## 1. Next decidable — goal `fase-2-deep-dive` COMPLETO lato autonomo: solo decisioni PI
+## 1. Next decidable
 
-**Goal `fase-2-deep-dive` APERTO** (2026-07-27): deep-dive MLC/WebGPU — 6 doc in
-`docs/deep-dive/`, skill `bottleneck-brainstorm` (project-level), micro-bench matmul con
-numeri 4090 reali, max 2 esperimenti di fattibilità in `experiments/`. Contratto in
-`.harness/goals/fase-2-deep-dive/GOAL.md`, spine completo (PHASES.md 7 fasi sequenziali,
-docket, journal, digests). Spec: `docs/superpowers/specs/2026-07-27-fase-2-deep-dive-design.md`.
-Branch di lavoro: `feat/fase-2-deep-dive`. Tag inizio goal: `goal-fase-2-start`.
-**Product-loop autorizzato dal PI** in chat (2026-07-27) subito dopo il setup — plan-check
-(docket #1) trattato come approvazione condizionale.
+**Tutto è PI-gated**: il goal `fase-2-deep-dive` è COMPLETO (7/7 fasi, verifier PASS sul
+DONE WHEN riga per riga) e i dati cross-device sono arrivati (bench + micro-bench su
+4090, M4 Pro, S22). Le decisioni aperte sono nel docket (§5). Alla prima decisione presa,
+il lavoro riparte da lì; il candidato più probabile è: aggiornare gli slot M4/S22 in
+`docs/deep-dive/micro-bench-matmul.md` coi dati nuovi → merge del branch → nuovo goal
+(fase 3 dello spec madre: ceiling + hero-demo).
 
-**GOAL COMPLETO lato autonomo** (2026-07-27, iterazione 9, verifier PASS sul DONE WHEN
-riga per riga): 7/7 fasi done. Deliverable sul branch `feat/fase-2-deep-dive` (13 commit,
-MAI pushato): 6 doc in `docs/deep-dive/` ([VERIFY]=0), skill `bottleneck-brainstorm`
-(TDD, 4 dogfood), micro-bench matmul (src/microbench/, 102/102 test, run 4090 reale in
-`results/microbench/`), 34 kernel WGSL dumpati + 2 tool riusabili in
-`.harness/goals/fase-2-deep-dive/tools/`. Findings chiave: 75-85% del budget/token è
-orchestrazione; banda VRAM reale 435 GB/s; muro "2GB" in realtà 1 GiB hardcoded; KV al
-tetto = 2.9× i pesi; q4 1.26× f32 in pesi/s oltre-L2.
+## 2. State delta (session 7)
 
-**Next decidable = SOLO ruling PI** (stop-by-design, nessuna azione autonoma residua):
-1. **Merge** di `feat/fase-2-deep-dive` su main + eventuale push (main locale è anche
-   avanti di 3 commit su origin/main, dai commit di setup).
-2. **Slot esperimenti** (2 max): docket #2-#6, CINQUE candidati — q4f16 S22 [declassato
-   secondario] · multi-step decode · overlap fetch/compile · sync-diradata upload ·
-   warm-up pre-ramp TTFT [attacca #12].
-3. **Run manuali M4/S22** del micro-bench (`microbench.html`, slot pending nel doc).
-4. **Promozione skill** bottleneck-brainstorm all'harness personale (~/.claude) o no.
-
-**Sweep manuale fase 1b ancora in corso in parallelo** (fuori da questo goal): Cristiano testa
-M4 Pro e laptop; approccio S22 da definire (vedi §3). Bug/fix dallo sweep = nuovo goal, non
-riapertura di `fase-1b-matrice` (chiuso, storico in `.harness/goals/fase-1b-matrice/`).
-
-**Docket ereditati, vivi ma non bloccanti**:
-- **#10**: `src/quality.ts` pronto e testato ma non collegato a `benchServer.ts` — nessun run
-  reale porta un `qualityScore`. Decisione PI residua: se/quando collegarlo (costo: fino a 12
-  `generate()` extra per cella, o un passaggio logprobs).
-- **#12** (nuovo, dal run S22): `high-variance` controlla solo `decodeToksPerSec`, non `ttftMs`.
-  Sul run S22 il decode era stabilissimo (0.013) e il TTFT oscillava del **104%** (5.3→10.9 s)
-  senza che nulla lo segnalasse. Su mobile la varianza vive nel prefill, cioè proprio dove il
-  codice non guarda. Serve un ruling: soglia separata per il TTFT (raccomandata) vs. estendere
-  quella esistente. **Riguarda tutto lo sweep mobile**, non solo quel run.
-- **#8**: conformance wllama 7/8, routine cloud ogni 3 giorni che apre una PR da sola quando il
-  fix upstream arriva. Nessuna azione ora.
-
-**Product-loop FERMO by design** (goal `fase-2-deep-dive` completo lato autonomo — vedi
-sopra; si riavvia con /loop dopo i ruling). Il device sweep
-resta fuori: non inventare un goal per quello senza richiesta esplicita di Cristiano.
-
-## 2. State delta (session 6, 2026-07-27) — fix device label (post-chiusura goal)
-
-- **`deviceLabel` era cablato a `"4090-linux"`** in `main.ts:30` — non un campo manuale, malgrado
-  il README dicesse il contrario. Trovato dal primo run reale dell'S22 di Cristiano, che si
-  dichiarava `4090-linux`. Con lo sweep multi-device imminente, M4/laptop/S22 avrebbero prodotto
-  file indistinguibili.
-- Ora: input `#device-label` in pagina, persistito per-origine in `localStorage` (evento `input`,
-  non `change`: su Android un reload di tab in background prima del blur riporterebbe la label
-  del device precedente). `normalizeDeviceLabel()` in `schema.ts` — funzione pura, unit-testata:
-  trim, e vuoto → `"unknown-device"`. Letta **anche all'export**, così una label corretta dopo il
-  bench finisce comunque nel file.
-- **I driver non hanno più un default che nomina una macchina** (`DEVICE_LABEL`, default
-  `unknown-device`): tenerlo a `4090-linux` sarebbe stato lo stesso difetto spostato nel driver —
-  con `ALLOW_UNVERIFIED=1` su hardware non-NVIDIA avrebbe prodotto un file che si dichiara 4090.
-  Sulla 4090 va passato esplicitamente. **I file già in `results/` non sono toccati.**
-- Test **90/90** (3 nuovi), `tsc --noEmit` pulito, `npm run build` ok. Verificato anche in browser
-  reale (label nel nome file e nel campo JSON) e sul percorso manuale (profilo fresco → vuoto,
-  persistenza dopo reload, storage negato → nessun errore).
-- Registrato **docket #12** (non deciso): `high-variance` guarda solo il decode, non il TTFT.
-
-## Session 5 (2026-07-27) — Fase 4, per riferimento
-
-- **README**: nuova sezione "Fasce modello — il gap strutturale della fascia Large"
-  (Qwen2.5-7B-Instruct / Llama-3.1-8B-Instruct: solo WebLLM può servirle — nessun repo ONNX
-  web-runnable per Transformers.js, GGUF Q4_K_M sopra il tetto WASM 4GB per wllama). Nuova
-  sezione "Fase 3 — modulo qualità + schema v3" che dichiara onestamente che `qualityScore` non
-  è ancora popolato da run reali (docket #10).
-- **Due righe README corrette perché rese stale dalla Fase 3** (trovate rileggendo il file, non
-  nello scope dichiarato ma conseguenza diretta di quel lavoro): la label schema in "Quick
-  start" diceva ancora v2; la nota di warm-up diceva che finiva in `anomalies`, non più vero da
-  quando esiste `BenchCell.protocol`.
-- Nessun codice toccato in questa iterazione — solo README + goal spine. Test 87/87 invariati,
-  `tsc --noEmit` pulito, `npm run build` ok.
-- **`loop-verifier` ha trovato un gap reale prima del merge**: i run reali esistenti per
-  `transformersjs`/`wllama` in `results/` erano schema v2 (catturati prima del bump di Fase 3);
-  `GOAL.md` DONE WHEN chiede esplicitamente "each a valid schema-v3 JSON". Corretto eseguendo
-  l'e2e driver headed sulla 4090 reale (authority già concessa, nessun ruling nuovo):
-  `results/4090-linux-2026-07-26T23-56-34-978Z.json` (transformersjs, schemaVersion 3, 57.8 tok/s)
-  e `results/4090-linux-2026-07-26T23-57-10-621Z.json` (wllama, schemaVersion 3, 28.5 tok/s).
-- **`GOAL.md` DONE WHEN risulta ora soddisfatto riga per riga, verificato non solo dichiarato**
-  (STATUS NOTE aggiornata in `GOAL.md` con la correzione). Loop fermato **by design** — vedi §1.
-
-## Session 4 (2026-07-27) — Fase 3, per riferimento
-
-- **Fase 3 — modulo qualità + schema v3** (`src/quality.ts`, `src/qualityPrompts.ts`):
-  `computePerplexity` (perplexity via `exp(-mean(logprobs))`), `evaluateExactMatch` (12 prompt
-  deterministici, 4 categorie: arithmetic/factual/format/json), `selectQualityMethod` (sceglie il
-  percorso da `capabilities().logprobs`). `SCHEMA_VERSION = 3`. `BenchCell.qualityScore`
-  **opzionale** — modulo pronto e testato ma non collegato a `benchServer.ts` (nessuna cella reale
-  calcola oggi un punteggio; vedi docket #10).
-- **docket #7 implementato**: `BenchCell.protocol { warmupPolicy, warmupApplied,
-  replicateCount }` sostituisce la nota testuale `"protocol: warm-up run discarded…"` che abusava
-  `anomalies`. `WarmupPolicy` spostato da `benchServer.ts` a `schema.ts` (forma dei dati) —
-  elimina anche il cross-import che `protocol.ts` aveva verso `benchServer.ts` per quel tipo.
-  Constraint `GOAL.md` emendato per includerlo esplicitamente accanto a `qualityScore`.
-- Test 87/87 (75 + 12 nuovi su `quality.ts`/`qualityPrompts.ts`). `tsc --noEmit` pulito,
-  `npm run build` ok. `origin/main` allineato dopo il merge di `feat/fase-3-quality-schema-v3`.
-
-### Session 3 (2026-07-26 → 27), per riferimento
-
-- **Ruling #5 (strict)**: `"strict": true` in `tsconfig.json`; il codebase era già conforme.
-- **Ruling #5b (warm-up)**: `WarmupPolicy` — `always` (default, steady-state), `never` (prima
-  esperienza reale), `cold-only`. Selezionabile per run via `MainToWorker.bench.warmup`.
-  **Le prime due misurano cose diverse e non vanno confrontate.**
-- **4 run di metodologia sulla 4090** (`results/methodology/`): il +55% di docket #5b non è più
-  riproducibile; resta ~3% di dipendenza dall'ordine col warm-up esteso. **Non è hardware** —
-  temperatura, memoria GPU, clock e throttle reasons misurati e tutti negativi.
-- **Fase 2 — adapter wllama** (`src/adapters/wllama.ts`, `@wllama/wllama` 3.5.1): terzo stack,
-  CPU via WASM. Tre difetti trovati e corretti (chunk senza contenuto contati come token; prompt
-  cache che falsava il TTFT delle repliche; `document.baseURI` assente nel Web Worker).
-- **Prima misura a tre stack**: webllm ~110 tok/s, transformersjs ~46–48, wllama **25.97**.
-- `scripts/seq-bench.mjs`: driver multi-cella (`SEQ`, `BENCH_URL`) con contatori `nvidia-smi` a
-  ogni confine di cella — `e2e-bench.mjs` fa una cella per invocazione e l'effetto vive *tra* celle.
+- PI ha eseguito: bench M4 Pro, bench S22 con q4f16_1 (esperimento docket #2, slot 1),
+  micro-bench su M4 e S22 → committati su `main` (340ab91, fcb54b0).
+- Esiti chiave: S22 f16 = decode +66% (11.6 tok/s) e varianza TTFT collassata (±34%→±0.4%);
+  M4 = 98.3 tok/s ≈ 4090 con metà banda (conferma tesi orchestrazione); micro-bench M4 =
+  248 GB/s misurati (91% di targa), q4 GEMV 274 Gw/s (2× la 4090); micro-bench S22 =
+  tetto effettivo ~22 GB/s (43% di targa), floor per-dispatch ~0.13 ms (24× la 4090).
+- Probe M4 ha FALSIFICATO la tesi "binding cap 2³¹−4 = costante API" (su Metal è 2³²−4):
+  `buffer-limit-2gb.md` corretto sul branch (c85777d).
+- Docket #7-#8 registrati (esiti esperimento + findings M4); #6 (warm-up) declassato
+  dai dati: la varianza TTFT era legata al percorso f32, non al DVFS puro.
 
 ## 3. Open threads
 
-- **Sweep manuale sui 3 device (in corso da Cristiano)**: M4 Pro e laptop da fare. Procedura per
-  device remoti ora documentata nel README (§"Run da telefono / altro device sulla LAN"):
-  `npm run dev -- --host` sulla macchina con Node + Chrome del device su `http://<IP-LAN>:5173`,
-  con `chrome://flags/#unsafely-treat-insecure-origin-as-secure` per avere un secure context
-  (senza, niente `crossOriginIsolated` → niente WebGPU).
-- **S22 Ultra — primo run reale già fatto (2026-07-27), GPU confermata**. Il probe dà
-  `Samsung Xclipse 920` / `rdna-2` / `vendor: samsung`, `maxBufferSize` 2 GiB: è la GPU RDNA2
-  dell'Exynos 2200, **non** un fallback CPU. Prova decisiva: la cella è `stack: "webllm"`, che è
-  WebGPU-only e non ha alcun percorso CPU — senza WebGPU reale non avrebbe prodotto numeri.
-  Misura: **webllm ~7.0 tok/s** (stdev/mean 0.013), TTFT ~8.2 s, `promptTokens` 469 come sulla
-  4090. Il ~15.7× rispetto alla 4090 (~110 tok/s) è coerente con un decode memory-bandwidth-bound
-  su LPDDR5 mobile; per confronto la Firefox/llvmpipe (CPU vera) fece **1.8 tok/s**.
-  **Nota**: `shader-f16` è **presente** su Chrome/Android/Xclipse, mentre è assente su
-  chromium-playwright sulla 4090 — conferma ulteriore che è per-browser/per-piattaforma, non
-  per-GPU.
-  **File committato**: `results/s22-ultra-2026-07-27T00-34-09-931Z.json`. Era stato esportato
-  quando `deviceLabel` era ancora cablato, quindi si dichiarava `4090-linux`: corretto con una
-  sostituzione mirata della sola riga della label (nessun round-trip JSON, così i float delle
-  misure restano byte-identici — verificato che il resto del payload sia invariato).
-  **È il primo datapoint non-4090 del progetto.** Manca ancora la cella `transformersjs` e
-  `wllama` sull'S22: c'è solo `webllm`.
-- **Nessuna fase residua del goal fase-1b** — tutte e 4 fatte (nota storica; il goal
-  corrente fase-2-deep-dive ha 7 fasi, vedi §1).
-- **docket #10 — decisione registrata, non un ruling bloccante**: `quality.ts` non è collegato a
-  `benchServer.ts`. Nessun run reale porta un `qualityScore`. Va deciso se/quando collegarlo.
-- **docket #8 — deroga attiva**: conformance wllama **7/8**. Difetto di wllama, non nostro
-  (ogni risposta perde la coda, che arriva al giro dopo). Upstream ngxson/wllama#263 + PR #264,
-  entrambe aperte; 3.5.1 è precedente alla PR. **Routine di sorveglianza attiva**
-  `trig_018i6ZnQpZHF1tg6egjTsyST`, ogni 3 giorni: apre una PR quando il fix è rilasciato.
-  Quando arriva → aggiornare la dipendenza, rieseguire il conformance **in locale** (serve GPU) e
-  togliere la deroga da README, PHASES e docket.
-- Rapporto cross-stack ancora **non dichiarabile** in un rapporto: ~3% di dipendenza dall'ordine.
-- I run in `results/*.json` precedenti al 2026-07-26 sono ordine-dipendenti e nulla nel file lo dice.
-- Branch `feat/fase-1a`, `fix/fase-1b-fixin1b`, `feat/fase-2-wllama`, `feat/fase-3-quality-schema-v3`,
-  `feat/fase-4-readme-final-verification`, `fix/device-label-input` merged, non cancellati.
+- **Branch `feat/fase-2-deep-dive`** (20 commit, MAI pushato): 6 doc deep-dive, skill
+  `bottleneck-brainstorm`, micro-bench (`src/microbench/` + `microbench.html`, 102/102
+  test), 34 WGSL dumpati, 2 tool. In attesa di merge (docket).
+- `docs/deep-dive/micro-bench-matmul.md` ha gli slot M4/S22 "pending" da riempire coi
+  dati appena arrivati (lavoro pronto da fare sul branch, pre-merge).
+- `main` locale avanti di 5 commit su `origin/main` (3 setup + 2 data) — push mai fatto.
+- Sweep manuale fase 1b: wllama/transformersjs su S22 ancora mancanti (fuori goal).
 
 ## 4. Landmines
 
-- **`shader-f16` è per-browser, non per-GPU**: assente su chromium-playwright (q4f16_1 crasha →
-  usare q4f32_1), presente su Firefox.
-- **Firefox silent-fallback a CPU**: FF 152 girava su llvmpipe dichiarando `webgpu:true`. Il probe
-  ora rileva il software adapter (128 MiB + vendor vuoto).
-- **Headless = SwiftShader**: mai accettare quei risultati come dati GPU. I driver e2e/conformance
-  rifiutano da soli; `seq-bench.mjs` pure. Per la GPU reale serve
-  `HEADED=1 CHANNEL=chrome CHROME_ARGS="--ignore-gpu-blocklist --disable-gpu-sandbox"`.
-- **Chrome GPU sandbox vs Vulkan ICD (Fedora/NVIDIA)**: col sandbox attivo il GPU process non
-  legge gli ICD ("Found no drivers") → niente adapter WebGPU. Ritestare a ogni update di Chrome.
-- **Chrome flags & NVIDIA/Wayland**: `enable-vulkan` nel profilo corrompe il compositing,
-  `force-enable-webgpu-interop` crasha all'avvio. NON rimetterli nel profilo quotidiano.
-- **`#status` resta `"done"` tra una cella e l'altra**: qualunque driver multi-cella deve azzerarlo
-  prima del click, o la wait ritorna subito e clicca a bench in corso (già pagato).
-- **Il conformance gira nel main thread, il bench nel Web Worker.** Un adapter può passare 8/8 e
-  fallire ogni cella di bench: è successo con wllama (`document.baseURI`, vedi
-  `ensureWorkerDocumentShim`). Un adapter nuovo non è verificato finché non ha girato **anche**
-  in un run reale.
-- **`@wllama/wllama` 3.5.1**: niente `index.js` alla root né campo `exports` malgrado
-  `main: "index.js"` → importare da `@wllama/wllama/esm/index.js`, o TypeScript ripiega sul
-  sorgente `.ts` e `erasableSyntaxOnly` fallisce.
-- **wllama e il quant**: usare sempre `file:` esplicito, mai `quant:` — quest'ultimo fa fallback
-  silenzioso Q4_K_M → Q8_0 → non quantizzato e produce celle mislabellate.
-- Playwright `waitForFunction(fn, arg, options)`: le options sono il TERZO argomento.
-- `chromium.launch()` = profilo effimero → cold/warm richiede `launchPersistentContext`.
-- tsconfig: `erasableSyntaxOnly` (niente parameter properties) e ora `strict`.
-- `.superpowers/` è gitignorato: il ledger SDD non sopravvive a `git clean -fdx`.
-- Il dev server su :5173 può essere già acceso da un'altra sessione — `npm run dev` ripiega su
-  :5174 e i driver puntano a :5173 di default.
+- Chrome headless su Linux/NVIDIA cade su **SwiftShader** (spia:
+  maxComputeInvocationsPerWorkgroup=256): i driver Playwright del deep-dive richiedono
+  HEADED=1 (`tools/wgsl-dump.mjs`, `tools/microbench-run.mjs`).
+- Chrome **quantizza i timestamp GPU** (~100 µs): il micro-bench misura batch da 16
+  dispatch per campione — non togliere il batching.
+- Un device WebGPU senza `requiredLimits` nasce a 128 MiB di binding → celle garbage
+  silenziose. Error scope + checksum già nel runner: mantenerli.
+- `erasableSyntaxOnly` in tsconfig: niente parameter properties nelle classi.
+- Chrome branded su Linux/NVIDIA NON espone `shader-f16` (M4 e S22 sì).
+- Dev server: il :5173 di una vecchia sessione potrebbe essere ancora vivo (pid 487440,
+  non nostro); i tool del goal usano BASE_URL (:5177 nell'ultima sessione).
+- I numeri di riga citati nei doc valgono per `@mlc-ai/web-llm 0.2.84`.
 
-## 5. Docket (user decisions pending)
+## 5. Docket (decisioni PI pendenti)
 
-Vedi `.harness/goals/fase-1b-matrice/docket.md` per il testo integrale.
-
-- **#8 — deciso, deroga attiva**: conformance wllama 7/8, documentato, sorveglianza schedulata.
-  Nessuna azione finché la routine non segnala il fix (vedi §3).
-- **#10 — registrato, non richiede ruling per procedere**: `qualityScore` non collegato alla
-  pipeline di bench. Decisione PI residua (vedi §1).
-- Chiusi in sessione 4: **#7** (`BenchCell.protocol` implementato, constraint emendato).
-- Chiusi in sessione 3: **#3** (push approvato), **#4** (registrazione), **#5** (strict),
-  **#5b** (warm-up selezionabile), **#9** (nome pacchetto `@wllama/wllama`).
-- Nessun item aperto in attesa di ruling PI.
-- Storico dei docket delle fasi precedenti: nel journal del goal.
+1. **Merge** `feat/fase-2-deep-dive` → main (previo aggiornamento slot M4/S22 nel doc
+   micro-bench). Push di main+branch a origin: mai fatto in tutto il goal.
+2. **Slot esperimento #2 di 2** (lo swap q4f16 ha consumato il #1, esito ottimo):
+   candidati vivi → multi-step decode (#3a) · overlap fetch/compile al load (#3b) ·
+   sync-diradata upload (#4, ridimensionato: su M4 il load warm è già 0.6 s) ·
+   warm-up pre-ramp (#6, declassato dai dati f16). Oppure: nessuno ora, si rimanda
+   al prossimo goal.
+3. **Docket #12 ereditato** (high-variance non guarda il TTFT): coi dati f16 la varianza
+   S22 collassa, ma lo sweep mobile continuerà — soglia TTFT separata da implementare
+   (piccola, candidabile a prima fase del prossimo goal) o chiudere come "risolto dal
+   passaggio a f16"?
+4. **Promozione skill** `bottleneck-brainstorm` a `~/.claude/skills/` o resta project.
+5. **Prossimo orizzonte**: fase 3 dello spec madre (ceiling run + hero-demo) come nuovo
+   goal (brainstorming → goal-brief), o altro.
+6. Ereditati non bloccanti: #10 (qualityScore non collegato), #8 (sorveglianza wllama).
