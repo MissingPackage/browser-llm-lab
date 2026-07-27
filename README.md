@@ -29,8 +29,8 @@ dichiara `4090-linux` inquina i confronti cross-device in silenzio (successo dav
 
 ```bash
 node scripts/e2e-bench.mjs                        # headless (finisce su SwiftShader: solo smoke)
-HEADED=1 node scripts/e2e-bench.mjs               # GPU reale (serve un display)
-HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e2e-bench.mjs
+HEADED=1 DEVICE_LABEL=4090-linux node scripts/e2e-bench.mjs               # GPU reale (serve un display)
+HEADED=1 DEVICE_LABEL=4090-linux MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e2e-bench.mjs
 ```
 
 - Il driver **si rifiuta di produrre un risultato** se l'adapter è un software
@@ -45,7 +45,10 @@ HEADED=1 MODEL_ID=Qwen2.5-0.5B-Instruct-q4f32_1-MLC QUANT=q4f32_1 node scripts/e
 - Altri env del driver: `BROWSER=firefox` (run Firefox, effimero/solo-cold),
   `ALLOW_UNVERIFIED=1` (procede quando il vendor è nascosto, es. Firefox — la verifica
   hardware va fatta fuori banda: nvidia-smi o about:support), `E2E_PROFILE=<dir>`,
-  `DEVICE_LABEL=<label>` (default `4090-linux`, la macchina su cui girano questi driver).
+  `DEVICE_LABEL=<label>` — **da passare sempre**, default `unknown-device`. Non ha un default che
+  nomini una macchina precisa di proposito: sarebbe lo stesso difetto della costante cablata, solo
+  spostato nel driver (con `ALLOW_UNVERIFIED=1` su hardware non-NVIDIA produrrebbe un file che si
+  dichiara 4090). Sulla 4090: `DEVICE_LABEL=4090-linux node scripts/e2e-bench.mjs`.
 - **Sequenze multi-cella**: `scripts/seq-bench.mjs` esegue più celle nella stessa sessione
   browser e logga i contatori `nvidia-smi` a ogni confine di cella — serve a misurare la
   dipendenza dall'ordine dei run, che una cella sola non può mostrare. Stessi env di

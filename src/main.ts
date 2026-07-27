@@ -72,7 +72,9 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
 
 const labelInput = $("device-label") as HTMLInputElement;
 labelInput.value = readStoredLabel();
-labelInput.addEventListener("change", () => storeLabel(labelInput.value.trim()));
+// "input", non solo "change": `change` scatta al blur, e su Android una ricarica della tab in
+// background (routine) prima del blur riporterebbe in campo la label del device *precedente*.
+labelInput.addEventListener("input", () => storeLabel(labelInput.value.trim()));
 
 $("stack").addEventListener("change", applyStackFilter);
 applyStackFilter();

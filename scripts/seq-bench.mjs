@@ -52,9 +52,8 @@ if (!probe.webgpu || vendor !== "nvidia" || /swiftshader|llvmpipe|software/i.tes
 }
 console.log("[seq] GPU:", probe.adapterInfo.description || probe.adapterInfo.architecture);
 
-// Vedi e2e-bench.mjs: default alla macchina su cui gira questo driver (che è gated su NVIDIA
-// qui sopra, quindi "4090-linux" resta corretto salvo override esplicito).
-const DEVICE_LABEL = process.env.DEVICE_LABEL ?? "4090-linux";
+// Vedi e2e-bench.mjs: nessun default che nomini una macchina specifica.
+const DEVICE_LABEL = process.env.DEVICE_LABEL ?? "unknown-device";
 await page.fill("#device-label", DEVICE_LABEL);
 
 for (const [i, stack] of SEQUENCE.entries()) {

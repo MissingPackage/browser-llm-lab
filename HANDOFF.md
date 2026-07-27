@@ -26,7 +26,27 @@ quello sarà un **nuovo goal**, non una riapertura di `fase-1b-matrice`.
 **Nessun goal attivo per `/loop`.** Non inventare un nuovo goal per il device sweep senza che
 Cristiano lo chieda esplicitamente.
 
-## 2. State delta (session 5, 2026-07-27) — Fase 4
+## 2. State delta (session 6, 2026-07-27) — fix device label (post-chiusura goal)
+
+- **`deviceLabel` era cablato a `"4090-linux"`** in `main.ts:30` — non un campo manuale, malgrado
+  il README dicesse il contrario. Trovato dal primo run reale dell'S22 di Cristiano, che si
+  dichiarava `4090-linux`. Con lo sweep multi-device imminente, M4/laptop/S22 avrebbero prodotto
+  file indistinguibili.
+- Ora: input `#device-label` in pagina, persistito per-origine in `localStorage` (evento `input`,
+  non `change`: su Android un reload di tab in background prima del blur riporterebbe la label
+  del device precedente). `normalizeDeviceLabel()` in `schema.ts` — funzione pura, unit-testata:
+  trim, e vuoto → `"unknown-device"`. Letta **anche all'export**, così una label corretta dopo il
+  bench finisce comunque nel file.
+- **I driver non hanno più un default che nomina una macchina** (`DEVICE_LABEL`, default
+  `unknown-device`): tenerlo a `4090-linux` sarebbe stato lo stesso difetto spostato nel driver —
+  con `ALLOW_UNVERIFIED=1` su hardware non-NVIDIA avrebbe prodotto un file che si dichiara 4090.
+  Sulla 4090 va passato esplicitamente. **I file già in `results/` non sono toccati.**
+- Test **90/90** (3 nuovi), `tsc --noEmit` pulito, `npm run build` ok. Verificato anche in browser
+  reale (label nel nome file e nel campo JSON) e sul percorso manuale (profilo fresco → vuoto,
+  persistenza dopo reload, storage negato → nessun errore).
+- Registrato **docket #12** (non deciso): `high-variance` guarda solo il decode, non il TTFT.
+
+## Session 5 (2026-07-27) — Fase 4, per riferimento
 
 - **README**: nuova sezione "Fasce modello — il gap strutturale della fascia Large"
   (Qwen2.5-7B-Instruct / Llama-3.1-8B-Instruct: solo WebLLM può servirle — nessun repo ONNX
@@ -111,8 +131,8 @@ Cristiano lo chieda esplicitamente.
   togliere la deroga da README, PHASES e docket.
 - Rapporto cross-stack ancora **non dichiarabile** in un rapporto: ~3% di dipendenza dall'ordine.
 - I run in `results/*.json` precedenti al 2026-07-26 sono ordine-dipendenti e nulla nel file lo dice.
-- Branch `feat/fase-1a`, `fix/fase-1b-fixin1b`, `feat/fase-2-wllama`, `feat/fase-3-quality-schema-v3`
-  merged, non cancellati.
+- Branch `feat/fase-1a`, `fix/fase-1b-fixin1b`, `feat/fase-2-wllama`, `feat/fase-3-quality-schema-v3`,
+  `feat/fase-4-readme-final-verification`, `fix/device-label-input` merged, non cancellati.
 
 ## 4. Landmines
 
