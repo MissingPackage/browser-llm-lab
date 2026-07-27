@@ -1,6 +1,6 @@
 # HANDOFF — browser-llm-lab   (updated 2026-07-27, session 5)
 
-## 1. Next decidable — goal attivo `fase-2-deep-dive`, fase 1 (skill bottleneck-brainstorm)
+## 1. Next decidable — goal attivo `fase-2-deep-dive`, fase 3 (doc buffer-limit-2gb.md)
 
 **Goal `fase-2-deep-dive` APERTO** (2026-07-27): deep-dive MLC/WebGPU — 6 doc in
 `docs/deep-dive/`, skill `bottleneck-brainstorm` (project-level), micro-bench matmul con
