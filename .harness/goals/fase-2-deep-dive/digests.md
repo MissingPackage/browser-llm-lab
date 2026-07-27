@@ -33,3 +33,14 @@
   overlap fetch/compile) — scelta PI.
 - Done-when fase 2 tutto verde (heading, citazioni, journal); 6 [VERIFY] ammessi → fase 7.
 - Prossimo: fase 3, doc buffer-limit-2gb.md (baseline run-A già pronta come materiale).
+
+## Iterazione 3 (2026-07-27) — fase 3 done
+
+- `docs/deep-dive/buffer-limit-2gb.md` completo: il muro è a tre piani (adapter ~2 GiB /
+  richiesta WebLLM hardcoded 1 GiB / fallback 128-256 MiB) e il runtime vive al piano di
+  mezzo; il cap limita il singolo tensore, non la taglia modello; nessun run l'ha mai
+  toccato. Bottleneck reale osservato: upload pesi serializzato con sync per-tensore.
+- Ri-verifica del materiale baseline run-A: confermato quasi tutto, trovato in più il
+  dettaglio sync-per-tensore (non era in run-A).
+- Docket #4: quarto candidato esperimento per due slot — la scelta PI si fa più ricca.
+- Prossimo: fase 4, dequant-kernels.md (materiale: run-C GREEN del dogfood).

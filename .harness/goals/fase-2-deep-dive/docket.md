@@ -29,3 +29,13 @@ Decisioni PI-gated e questioni aperte. Append-only; le decisioni le prende Crist
    è già infrastruttura pianificata del micro-bench di fase 6 per spec. Con docket #2
    (swap q4f16_1 su S22) i candidati agli slot esperimento sono ora TRE per DUE posti
    → decisione PI: quali due approvare (o nessuno per ora).
+
+4. **Candidato esperimento dal dogfood fase 3: diradare il `device.sync()` per-tensore
+   nell'upload pesi** (aperto 2026-07-27, iterazione 3). Il loader fa una sync GPU
+   completa per OGNI tensore (bundle 7086-7106) — centinaia di round-trip dentro la
+   finestra di load warm misurata (1.5-1.9 s 4090, 6.1 s S22). Esperimento: build locale
+   patchata del bundle vendored (nessun tocco a webllm.ts), criterio binario loadMs
+   prima/dopo sullo stesso harness. Rischio noto da verificare: la sync potrebbe limitare
+   il picco di memoria staging. **Con #2 e #3 i candidati sono ora QUATTRO per DUE slot**
+   (q4f16 S22 · multi-step decode · overlap fetch/compile · sync-diradata upload) →
+   decisione PI su quali due approvare.
