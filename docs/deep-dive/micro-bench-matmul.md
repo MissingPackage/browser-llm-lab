@@ -99,11 +99,44 @@ fase.
 
 ## Slot cross-device
 
-| Device | Stato | Note |
+| Device | Stato | Run |
 |---|---|---|
-| 4090 laptop (Linux, Chrome) | ✅ run committato | vedi sopra |
-| MacBook M4 Pro | **pending** (run manuale di Cristiano) | aprire `microbench.html` dal dev server, label `m4pro`, Export → `results/microbench/` |
-| Samsung S22 Ultra | **pending** (run manuale di Cristiano) | il probe espone `timestamp-query` E `shader-f16`: attesi sia il timing GPU-side sia la variante f16 che sulla 4090 manca |
+| 4090 laptop (Linux, Chrome) | ✅ | `results/microbench/microbench-4090-linux-2026-07-27T04-28-42-421Z.json` |
+| MacBook M4 Pro (Chrome/Metal) | ✅ (run manuale, 2026-07-27) | `results/microbench/microbench-m4-pro-2026-07-27T22-49-55-133Z.json` |
+| Samsung S22 Ultra (Chrome/Xclipse) | ✅ (run manuale, 2026-07-27) | `results/microbench/microbench-s22-ultra-2026-07-27T22-53-09-108Z.json` |
 
-I buchi restano dichiarati finché i run non arrivano; il doc si aggiorna appendendo, senza
-riscrivere la metodologia.
+Su M4 e S22 il probe espone sia `timestamp-query` sia `shader-f16`: timing GPU-side e
+variante f16 presenti in entrambi (15 celle ciascuno, 0 skipped) — la f16 che sulla
+4090/Chrome-Linux manca.
+
+## Il quadro a tre regimi (numeri oltre-cache, dai tre run)
+
+| | 4090 laptop | M4 Pro | S22 Ultra |
+|---|---|---|---|
+| Banda f32 misurata vs targa | 435 / 576 GB/s (**75%**) | 248 / 273 GB/s (**91%**) | ~22 / 51.2 GB/s (**43%**) |
+| q4 GEMV, pesi/s (16384²) | 137 G | **274 G** | 26 G |
+| f16 GEMV vs f32, pesi/s | n/d (f16 assente) | **2.0×** (123.6 vs 62.1 G) | ~1.0× (5.5 vs 5.4 G) |
+| Floor per-dispatch (cella più piccola, q4) | ~5 µs | ~28 µs | **~130 µs** |
+
+Quattro letture:
+
+1. **L'M4 Pro è il device più efficiente del banco**: 91% della banda di targa in
+   streaming puro, e il kernel q4 arriva a 274 G pesi/s — **2× la 4090** in valore
+   assoluto, nonostante metà banda. Il costo ALU della dequant che sulla 4090 strozza il
+   kernel al 20% della banda (lettura 3 sopra) su Metal quasi non si vede (171 GB/s
+   effettivi su 248 = 69%). Spiega perché nel bench end-to-end l'M4 (98.3 tok/s) sta
+   alla pari della 4090 (101-116) pur con metà banda.
+2. **L'S22 ha due problemi sovrapposti**: banda effettiva al 43% della targa e un floor
+   per-dispatch di ~130 µs (24× la 4090) — a ~34 dispatch per token, solo il lancio dei
+   kernel costa ~4.5 ms/token. A differenza della 4090 (orchestration-bound) e dell'M4
+   (vicino al metallo), l'S22 è genuinamente kernel+dispatch-bound.
+3. **Nel GEMV puro l'f16 non paga sull'S22** (~5.5 G pesi/s come l'f32): il +66% di
+   decode del run reale q4f16_1 (`results/s22-ultra-2026-07-27T18-09-45-362Z.json`,
+   6.99→11.6 tok/s) viene dal *compute path* f16 dei kernel fusi — e soprattutto dal
+   prefill GEMM (TTFT 8.2 s→2.6 s, 3.15×, varianza da ±34% a ±0.4%) — non dai byte
+   dei pesi, che nel q4 sono identici. Sull'M4, dove i pesi f16 dimezzano i byte letti,
+   l'f16 rende invece il 2× pieno da modello memory-bound.
+4. **La varianza del micro-bench è essa stessa un dato**: 4090 stabilissima (tranne la
+   bimodalità nota a 16384²), M4 rumorosa alle taglie medie (stdev/mean fino a 0.7 —
+   scheduling/DVFS macOS), S22 stabile ma lenta. Coerente col comportamento dei bench
+   end-to-end per device.

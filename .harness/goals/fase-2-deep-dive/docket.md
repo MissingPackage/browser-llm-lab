@@ -85,3 +85,18 @@ Decisioni PI-gated e questioni aperte. Append-only; le decisioni le prende Crist
    = 4294967292 (2³²−4, come maxBufferSize), non 2³¹−4 → falsifica la frase di
    `buffer-limit-2gb.md` "architetture che convergono sullo stesso valore = vincolo
    dell'API". Correzione del doc necessaria sul branch (fatta, vedi journal).
+
+9. **Rulings PI sessione 7** (2026-07-28, "facciamo il punto"):
+   - **Merge + push approvati** (previo aggiornamento slot M4/S22 nel doc micro-bench —
+     fatto in questo commit, col "quadro a tre regimi" dai 3 run).
+   - **Slot esperimento #2: NON assegnato ora.** Sostituito da una decisione più ampia:
+     la prossima sessione fa una STIMA QUANTITATIVA dell'incremento atteso da TUTTI i
+     suggerimenti (backlog engine-notes + candidati esperimento), con trade-off,
+     alternative e motivazioni — orientata all'obiettivo nuovo dichiarato dal PI:
+     **costruire un nuovo motore di inferenza browser** (oltre a hero-demo/benchmark
+     pubblico).
+   - **Docket #12 ereditato**: soglia TTFT separata da implementare nel prossimo goal
+     (consolidamento), non chiuso come risolto-da-f16.
+   - **Roadmap approvata**: consolidamento → ceiling + hero-demo + benchmark pubblico
+     (con eventuale paper di accompagnamento) → nuovo motore di inferenza browser.
+   - Promozione skill: non decisa, resta project-level.
