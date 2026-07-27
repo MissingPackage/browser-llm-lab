@@ -63,3 +63,13 @@
   piccoli i tok/s misurano l'overhead pipeline, non il device. Swap q4f16 declassato a
   secondario (docket #5); il micro-bench fase 6 discrimina occupancy vs launch overhead.
 - Prossimo: fase 5, kv-cache-layout.md (kernel 008/009/028 già nel dump + run-B baseline).
+
+## Iterazione 6 (2026-07-27) — fase 5 done
+
+- `kv-cache-layout.md` completo: layout pagina decodificato dall'indicizzazione del
+  kernel reale (16 KiB/pagina, [K|V][head][pos][dim]); attention decode FlashAttention-
+  style; KV f32 al tetto contesto (32k) = 768 MiB = 2.9× i pesi; run reali ~11 MB.
+- Fatti inchiodati da fonte primaria HF (dogfood): chunk 2048 → prompt 469 = un unico
+  mega-dispatch, chunking mai esercitato; sliding window spenta.
+- Docket #6: QUINTO candidato esperimento (warm-up pre-ramp, attacca il #12 ereditato).
+- Prossimo: fase 6, micro-bench matmul (unica fase con codice SPA) — 2-4 iterazioni.

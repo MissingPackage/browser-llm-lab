@@ -50,3 +50,12 @@ Decisioni PI-gated e questioni aperte. Append-only; le decisioni le prende Crist
    sono occupancy del GEMV (1 workgroup da 64 thread per riga output) vs kernel-launch
    overhead (~34 dispatch/token; prior art TensorRT-LLM: 14.6% su Qwen2.5-1.5B).
    Nessuna decisione presa: è input analitico per il ruling PI sugli slot (#2, #3, #4).
+
+6. **Candidato esperimento dal dogfood fase 5: warm-up pre-ramp clock per il TTFT mobile**
+   (aperto 2026-07-27, iterazione 6). Burst di compute scartato prima del timer TTFT,
+   harness-level (zero tocco a webllm.ts), per falsificare/confermare l'ipotesi DVFS
+   dietro la varianza 104% del TTFT S22 (docket #12 ereditato: high-variance non guarda
+   il TTFT). QUINTO candidato per DUE slot; nota: attacca direttamente il tuo #12.
+   Fatto rilevante emerso: prefill_chunk_size=2048 e prompt bench=469 tok → il chunking
+   non è MAI stato esercitato da nessun run committato; tunarlo richiede prima un corpus
+   prompt più lungo (dipendenza propedeutica registrata, nessuna azione).

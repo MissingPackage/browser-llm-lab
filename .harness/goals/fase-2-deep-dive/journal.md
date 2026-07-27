@@ -40,7 +40,29 @@ sezione bottleneck di buffer-limit-2gb.md partendo dal materiale baseline run-A
 ri-verificato, contratto rispettato, nessun raffinamento] [fase 4: 2026-07-27,
 iterazione 5, subagent con skill sui fatti del dump WGSL reale → sezione bottleneck di
 dequant-kernels.md; il pre-run GREEN è stato aggiornato e in parte SMENTITO dai fatti
-nuovi (swap q4f16 declassato); contratto rispettato] [fase 5: —]
+nuovi (swap q4f16 declassato); contratto rispettato] [fase 5: 2026-07-27, iterazione 6,
+subagent con skill su run-B ri-verificato + kernel 008/009/028 del dump; l'agente ha
+verificato da fonte primaria HF i config (context 32768, chunk 2048, 24 layer, GQA 14:2)
+superando i miei [VERIFY]; contratto rispettato]
+
+## 2026-07-27 — Iterazione 6 (fase 5: doc kv-cache-layout.md)
+
+Doc completo in `docs/deep-dive/kv-cache-layout.md`. Pezzo forte: il layout di pagina
+letto direttamente dall'aritmetica di indicizzazione del kernel 009 —
+`[pagina][K|V][kv-head][pos∈16][dim∈64]`, 4096 f32 = 16 KiB/pagina, V a offset +2048.
+Attention decode (028) = FlashAttention-style online softmax, workgroup (16,7,2) = 14
+Q-head GQA. Allocazione: create_tir_paged_kv_cache dimensionata su context_window_size
+32768 → 768 MiB di KV f32 al tetto = ~2.9× i pesi q4; working set reale dei run: ~11 MB.
+
+Fatti nuovi verificati dal dogfood (fonte primaria HF): prefill_chunk_size=2048 → il
+prompt bench (469 tok) gira come UN mega-dispatch, il chunking non è mai stato
+esercitato da nessun run; sliding_window=-1 (attention piena). Il dogfood ha anche
+scartato con argomenti solidi l'adattamento ds4-swap alla KV (incoerente con attention
+piena) e l'offload stile FlexGen (su memoria unificata non libera nulla).
+
+Done-when fase 5: 3 heading ✓, citazioni results (4) ✓, bundle versione ✓, skill in
+journal ✓. Docket delta: #6 (warm-up pre-ramp = QUINTO candidato per 2 slot, attacca il
+#12 ereditato).
 
 ## 2026-07-27 — Iterazione 5 (fase 4 parte 2: doc dequant-kernels.md)
 

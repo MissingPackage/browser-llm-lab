@@ -1,6 +1,6 @@
 # HANDOFF — browser-llm-lab   (updated 2026-07-27, session 5)
 
-## 1. Next decidable — goal attivo `fase-2-deep-dive`, fase 5 (doc kv-cache-layout.md)
+## 1. Next decidable — goal attivo `fase-2-deep-dive`, fase 6 (micro-bench matmul)
 
 **Goal `fase-2-deep-dive` APERTO** (2026-07-27): deep-dive MLC/WebGPU — 6 doc in
 `docs/deep-dive/`, skill `bottleneck-brainstorm` (project-level), micro-bench matmul con
@@ -11,15 +11,16 @@ Branch di lavoro: `feat/fase-2-deep-dive`. Tag inizio goal: `goal-fase-2-start`.
 **Product-loop autorizzato dal PI** in chat (2026-07-27) subito dopo il setup — plan-check
 (docket #1) trattato come approvazione condizionale.
 
-**Prossima fase decidibile**: fase 5 — doc `kv-cache-layout.md`. Materiale: kernel
-008 (batch_prefill_ragged_kv), 009 (tir_kv_cache_transpose_append), 028
-(batch_decode_paged_kv) già nel dump WGSL + baseline run-B (da ri-verificare) + docket
-#12 ereditato (varianza TTFT mobile). Fasi 1-4 done. FINDING chiave fase 4: entrambi i
-device al 4-6% del roofline di banda pesi (docket #5 — re-ranking candidati esperimento;
+**Prossima fase decidibile**: fase 6 — micro-bench matmul (route SPA, unica fase con
+codice; timestamp-query disponibile su ENTRAMBI i device dal probe, S22 incluso; design
+confermato dai doc: taglie crescenti per discriminare occupancy vs launch overhead).
+Fasi 1-5 done: i 4 doc di sotto-sistema sono completi in docs/deep-dive/. FINDING chiave
+fase 4: entrambi i device al 4-6% del roofline di banda pesi (docket #5;
 swap q4f16 declassato a secondario). **Docket #2-#5 aperti: quattro candidati esperimento
-per due slot** (swap q4f16_1 su S22 [secondario] · multi-step decode · overlap
-fetch/compile al load · sync-diradata upload pesi) — decisione PI, nessuno si esegue
-senza ruling; il micro-bench a taglie crescenti NON consuma slot (è il design di fase 6).
+per due slot, ora CINQUE con docket #6** (swap q4f16_1 S22 [secondario] · multi-step
+decode · overlap fetch/compile · sync-diradata upload · warm-up pre-ramp TTFT [attacca
+il #12 ereditato]) — decisione PI, nessuno si esegue senza ruling; il micro-bench a
+taglie crescenti NON consuma slot (è il design di fase 6).
 
 **Sweep manuale fase 1b ancora in corso in parallelo** (fuori da questo goal): Cristiano testa
 M4 Pro e laptop; approccio S22 da definire (vedi §3). Bug/fix dallo sweep = nuovo goal, non
