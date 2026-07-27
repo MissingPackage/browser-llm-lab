@@ -289,3 +289,22 @@
     laptop domani; per l'S22 Ultra resta da capire l'approccio (vedi HANDOFF.md — risposta su come
     raggiungere il dev server da telefono). Docket #10 e #8 restano aperti/attivi ma non bloccano
     la chiusura — non erano condizioni di DONE WHEN di questo goal.
+
+12. **`high-variance` guarda solo il decode: la varianza del TTFT non è segnalata da nulla**
+    (aperto 2026-07-27, dal primo run reale sull'S22 Ultra di Cristiano — goal già chiuso, quindi
+    questo è materiale per il prossimo, non lavoro in corso).
+    Dati del run S22 (webllm, Qwen2.5-0.5B q4f32_1, 3 repliche):
+    - `decodeToksPerSec`: 7.087 / 6.907 / 6.986 → stdev/mean = **0.013**, stabilissimo.
+    - `ttftMs`: 5354 / 10936 / 8292 → stdev/mean = **0.34**, oltre il doppio fra prima e seconda.
+    Il flag `high-variance` in `benchServer.ts` valuta **solo** `gen.decodeToksPerSec` contro
+    `HIGH_VARIANCE_THRESHOLD = 0.15`, quindi non è scattato: `anomalies: []`. Il file dichiara
+    implicitamente una misura pulita, mentre il prefill oscillava del 104%.
+    **Perché conta su mobile in particolare**: sul desktop la varianza vive nel decode (ed è lì che
+    il flag guarda); su un telefono termicamente limitato vive nel **prefill**, che è esattamente
+    la finestra che nessuno controlla. Tutto lo sweep su S22/M4 ha questo punto cieco.
+    **Opzioni**: (a) estendere il controllo a `ttftMs` con la stessa soglia; (b) soglia separata
+    per il TTFT (più alta: il prefill è intrinsecamente più rumoroso del decode steady-state);
+    (c) lasciare com'è e documentare che il TTFT mobile va letto guardando `replicates`, non
+    l'aggregato. **Raccomandazione**: (b) — (a) rischia di flaggare come anomalo un
+    comportamento normale del prefill, e (c) sposta su chi legge un controllo che il codice può
+    fare. Serve un ruling perché cambia cosa il progetto chiama "anomalia".

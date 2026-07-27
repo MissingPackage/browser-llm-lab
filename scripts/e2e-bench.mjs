@@ -52,6 +52,12 @@ if (!isReal) {
   }
 }
 
+// Label del device nel file esportato. Default "4090-linux": è la macchina su cui gira questo
+// driver, e mantiene invariati i nomi dei run già in results/. Su altro hardware va passata.
+const DEVICE_LABEL = process.env.DEVICE_LABEL ?? "4090-linux";
+await page.fill("#device-label", DEVICE_LABEL);
+console.log(`[e2e] device label: ${DEVICE_LABEL}`);
+
 // Override stack via env (default: primo stack nel select, cioè "webllm")
 if (process.env.STACK) {
   await page.evaluate((stack) => {
