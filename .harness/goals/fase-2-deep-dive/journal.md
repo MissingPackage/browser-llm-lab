@@ -152,3 +152,33 @@ workgroup via red_buf0, guard blockIdx.z del workaround 65535 presente in testa.
 Fase 4 done-when NON ancora soddisfatto (doc mancante): il doc dequant-kernels.md si
 scrive nell'iterazione 5 con questo materiale primario + run-C. PHASES riga 4 resta
 ready con nota "dump fatto".
+
+## 2026-07-27 — Iterazione 7 (fase 6 parte 1: motore micro-bench + run reale 4090)
+
+Costruito il micro-bench matmul: `src/microbench/` (mbSchema v1 con `skipped[]`, stats
+pure unit-testate, kernels.ts con GEMV parametrici modellati sulla forma dei kernel TVM
+dumpati — q4f32 con nibble/offset−7/scale∈32, f32, f16 —, runner con timestamp-query +
+fallback CPU, worker + page) + entry `microbench.html` nel build vite. Driver headed in
+`tools/microbench-run.mjs`. Test 102/102 (12 nuovi), `tsc --noEmit` pulito, build ok.
+
+Due bug REALI trovati dal primo run e fixati (entrambi lezioni da doc):
+1. **Quantizzazione timestamp Chrome (~100µs)**: singolo dispatch piccolo → delta 0 →
+   "tempo non positivo". Fix metodologico: batch di 16 dispatch per campione (serializzati
+   dal WAW hazard su y), delta/16.
+2. **Device senza requiredLimits** → binding default 128 MiB → cella f32 8192² garbage
+   silenziosa. Lo STESSO errore concettuale del cap hardcoded di WebLLM documentato in
+   buffer-limit-2gb.md, riprodotto in casa. Fix: requiredLimits al max dell'adapter +
+   error scope validation/oom + checksum → celle fallite = `skipped[]` esplicito.
+
+Run valido committato: `results/microbench/microbench-4090-linux-2026-07-27T04-28-42-421Z.json`
+(10 celle, 0 skip, tutto timestamp-query). Segnale:
+- f32 L2-resident (≤64MB): 480-1000 GB/s (banda cache); f32 oltre L2 (256MB, 1GB):
+  **432-436 GB/s** = banda VRAM misurata (~75% del datasheet ~576).
+- q4 a 16384² (160MB > L2): 86 GB/s "effettivi" MA ~172 G pesi/s vs ~109 G del f32 —
+  in pesi/secondo il q4 vince ~1.6×; la metrica GB/s penalizza il packing. Analisi per
+  il doc (prossima iterazione).
+- f16 assente: Chrome branded non espone shader-f16 su questo stack Linux/NVIDIA
+  (skip loggato dal runner, non silenzioso) — dettaglio da riportare nel doc.
+
+Fase 6 done-when PARZIALE: route+test+build+run reale ✓; manca `micro-bench-matmul.md`
+(iterazione 8). PHASES riga 6 resta ready con nota.

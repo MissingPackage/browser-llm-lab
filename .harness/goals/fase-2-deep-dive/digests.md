@@ -73,3 +73,14 @@
   mega-dispatch, chunking mai esercitato; sliding window spenta.
 - Docket #6: QUINTO candidato esperimento (warm-up pre-ramp, attacca il #12 ereditato).
 - Prossimo: fase 6, micro-bench matmul (unica fase con codice SPA) — 2-4 iterazioni.
+
+## Iterazione 7 (2026-07-27) — fase 6 parte 1: micro-bench costruito + run 4090
+
+- src/microbench/ completo (kernel GEMV q4/f32/f16 modellati sul dump, timestamp-query
+  + fallback, schema v1 con skipped[], 12 test nuovi → 102/102, build ok).
+- 2 bug veri trovati dal primo run e fixati: quantizzazione timestamp Chrome (fix: batch
+  16 dispatch/campione) e device senza requiredLimits (celle garbage silenziose → ora
+  error scope + skipped[] espliciti).
+- Run valido: banda VRAM 4090 misurata ~435 GB/s oltre-L2 (vs ~576 datasheet); q4 vince
+  in pesi/s (~1.6× vs f32) anche se la metrica GB/s lo penalizza. Curva L2→VRAM visibile.
+- Prossimo (iterazione 8): doc micro-bench-matmul.md con l'analisi + chiusura fase 6.

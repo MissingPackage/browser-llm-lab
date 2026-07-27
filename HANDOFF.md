@@ -11,9 +11,11 @@ Branch di lavoro: `feat/fase-2-deep-dive`. Tag inizio goal: `goal-fase-2-start`.
 **Product-loop autorizzato dal PI** in chat (2026-07-27) subito dopo il setup — plan-check
 (docket #1) trattato come approvazione condizionale.
 
-**Prossima fase decidibile**: fase 6 — micro-bench matmul (route SPA, unica fase con
-codice; timestamp-query disponibile su ENTRAMBI i device dal probe, S22 incluso; design
-confermato dai doc: taglie crescenti per discriminare occupancy vs launch overhead).
+**Prossima fase decidibile**: fase 6 parte 2 — scrivere `micro-bench-matmul.md`. Il
+motore è FATTO (iterazione 7: src/microbench/, 102/102 test, build ok) e il run 4090 è
+committato (`results/microbench/microbench-4090-linux-...T04-28-42-421Z.json`): banda
+VRAM misurata ~435 GB/s oltre-L2, q4 ~1.6× f32 in pesi/s, curva L2→VRAM visibile.
+Driver: `tools/microbench-run.mjs` (HEADED=1). f16 non esposto da Chrome Linux/NVIDIA.
 Fasi 1-5 done: i 4 doc di sotto-sistema sono completi in docs/deep-dive/. FINDING chiave
 fase 4: entrambi i device al 4-6% del roofline di banda pesi (docket #5;
 swap q4f16 declassato a secondario). **Docket #2-#5 aperti: quattro candidati esperimento
