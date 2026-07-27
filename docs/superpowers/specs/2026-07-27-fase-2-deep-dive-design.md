@@ -43,7 +43,9 @@ resta per gli spec di processo):
    il bundle non basta.
 3. *Bottleneck & vie d'uscita* — output del passaggio creativo (skill dedicata, sotto):
    limiti identificati + idee di aggiramento valutate su fattibilità/costo, con prior art.
-4. *PoC* — presente solo se un aggiramento è stato effettivamente provato.
+4. *Esperimenti* — presente solo se un aggiramento è stato effettivamente provato con uno
+   studio di fattibilità (terminologia scelta dal PI: "esperimento di fattibilità", non
+   "PoC" — non è un prodotto; vivono in `experiments/`).
 
 ## Metodologia — ciclo per sotto-sistema (ripetuto 4 volte, in sequenza)
 
@@ -54,9 +56,10 @@ precedente (approccio A, sequenziale per fondamenta, scelto dal PI).
 2. **Spiegazione**: scrittura ancorata ai run già in `results/`.
 3. **Passaggio creativo**: invocazione della skill `bottleneck-brainstorm` (nuova, sotto)
    sul sotto-sistema appena capito.
-4. **PoC leggero dove fattibile**: se dal passaggio creativo emerge un'idea promettente e a
-   basso costo, piccolo esperimento/script per verificare che regga. Non produzione, non
-   integrato. Criterio: 1–2 PoC in tutta la fase, sulle idee migliori — non uno per doc.
+4. **Esperimento di fattibilità dove sensato**: se dal passaggio creativo emerge un'idea
+   promettente e a basso costo, piccolo esperimento/script sotto `experiments/` per
+   verificare che regga. Non produzione, non integrato. Criterio: 1–2 esperimenti in tutta
+   la fase, sulle idee migliori — non uno per doc.
 5. **Scrittura del doc** e commit.
 
 ## Nuova skill: `bottleneck-brainstorm`
@@ -93,12 +96,13 @@ scout/peripheral-vision.
   un run in `results/`, o una fonte upstream. Dove non verificabile: marcato `[VERIFY]`.
 - **Micro-bench**: sanity check su range plausibili + unit test sulla matematica delle
   metriche, coerente con l'approccio di fase 1b. I run reali restano manuali.
-- **PoC**: ognuno dichiara esplicitamente cosa dimostra e cosa no.
+- **Esperimenti**: ognuno dichiara esplicitamente cosa dimostra e cosa no (README per
+  esperimento in `experiments/<nome>/`).
 
 ## Fuori scope (esplicito)
 
 - Nessun rework del motore WebLLM reale; `src/adapters/webllm.ts` non si tocca.
-- I PoC restano esperimenti isolati, mai integrati nella SPA di bench (eccetto il
+- Gli esperimenti di fattibilità restano isolati, mai integrati nella SPA di bench (eccetto il
   micro-bench matmul, che è deliverable a sé).
 - Nessun nuovo backend implementato (WebNN resta nei Deferred dello spec madre).
 - Il motore di inferenza custom di Cristiano: `engine-design-notes.md` ne prepara il
@@ -106,7 +110,7 @@ scout/peripheral-vision.
 
 ## Transizione
 
-Lavoro project-sized (6 documenti, skill nuova, micro-bench cross-device, PoC,
+Lavoro project-sized (6 documenti, skill nuova, micro-bench cross-device, esperimenti,
 multi-sessione): dopo l'approvazione di questo spec → `goal-brief` → `/goal` con
 `PHASES.md` come roadmap. Non `writing-plans`.
 
@@ -117,5 +121,5 @@ multi-sessione): dopo l'approvazione di questo spec → `goal-brief` → `/goal`
   sorgenti mlc-llm upstream. Trattato come parte del lavoro, non blocco.
 - `timestamp-query` non disponibile ovunque (S22 da verificare): il fallback CPU-side è
   meno preciso — dichiarato nei risultati, come per la memoria stimata in fase 1b.
-- Scope creep sui PoC: il tetto (1–2 in tutta la fase) è nel contratto; oltre quel tetto
+- Scope creep sugli esperimenti: il tetto (1–2 in tutta la fase) è nel contratto; oltre quel tetto
   serve un ruling PI.
