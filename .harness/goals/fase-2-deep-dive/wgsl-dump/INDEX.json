@@ -1,0 +1,176 @@
+{
+  "status": "done",
+  "count": 34,
+  "shaders": [
+    {
+      "file": "000-get_index_from_sorted_kernel.wgsl",
+      "bytes": 2475,
+      "ts": 1730
+    },
+    {
+      "file": "001-get_renorm_prob_kernel.wgsl",
+      "bytes": 2384,
+      "ts": 1730
+    },
+    {
+      "file": "002-index_kernel.wgsl",
+      "bytes": 895,
+      "ts": 1730
+    },
+    {
+      "file": "003-take_sorted_probs_kernel.wgsl",
+      "bytes": 1232,
+      "ts": 1730
+    },
+    {
+      "file": "004-fused_dequantize_take1_kernel.wgsl",
+      "bytes": 1394,
+      "ts": 1749
+    },
+    {
+      "file": "005-rms_norm1_kernel.wgsl",
+      "bytes": 8522,
+      "ts": 1751
+    },
+    {
+      "file": "006-fused_dequantize1_fused_NT_matmul5_add2_kernel_2.wgsl",
+      "bytes": 41016,
+      "ts": 1752
+    },
+    {
+      "file": "007-fused_rope_kernel.wgsl",
+      "bytes": 3152,
+      "ts": 1754
+    },
+    {
+      "file": "008-batch_prefill_ragged_kv_kernel.wgsl",
+      "bytes": 23252,
+      "ts": 1755
+    },
+    {
+      "file": "009-tir_kv_cache_transpose_append_kernel.wgsl",
+      "bytes": 1890,
+      "ts": 1755
+    },
+    {
+      "file": "010-fused_dequantize2_fused_NT_matmul6_add3_kernel_2.wgsl",
+      "bytes": 41456,
+      "ts": 1756
+    },
+    {
+      "file": "011-fused_dequantize3_NT_matmul7_kernel_2.wgsl",
+      "bytes": 39405,
+      "ts": 1757
+    },
+    {
+      "file": "012-fused_split1_silu1_multiply1_kernel.wgsl",
+      "bytes": 1106,
+      "ts": 1757
+    },
+    {
+      "file": "013-fused_dequantize4_fused_NT_matmul8_add3_kernel_2.wgsl",
+      "bytes": 40466,
+      "ts": 1757
+    },
+    {
+      "file": "014-fused_dequantize_NT_matmul14_kernel.wgsl",
+      "bytes": 7022,
+      "ts": 1760
+    },
+    {
+      "file": "015-chunk_lse_kernel.wgsl",
+      "bytes": 134580,
+      "ts": 2115
+    },
+    {
+      "file": "016-softmax_with_chunked_sum_kernel.wgsl",
+      "bytes": 23427,
+      "ts": 2116
+    },
+    {
+      "file": "017-argsort1_kernel.wgsl",
+      "bytes": 1223,
+      "ts": 2117
+    },
+    {
+      "file": "018-argsort1_kernel_1.wgsl",
+      "bytes": 4990,
+      "ts": 2117
+    },
+    {
+      "file": "019-argsort1_kernel_2.wgsl",
+      "bytes": 95416,
+      "ts": 2120
+    },
+    {
+      "file": "020-argsort1_kernel_3.wgsl",
+      "bytes": 1326,
+      "ts": 2121
+    },
+    {
+      "file": "021-full_kernel.wgsl",
+      "bytes": 787,
+      "ts": 2122
+    },
+    {
+      "file": "022-gpu_2d_continuous_cumsum_kernel.wgsl",
+      "bytes": 15844,
+      "ts": 2123
+    },
+    {
+      "file": "023-gpu_2d_continuous_cumsum_kernel_1.wgsl",
+      "bytes": 16486,
+      "ts": 2123
+    },
+    {
+      "file": "024-gpu_2d_continuous_cumsum_kernel_2.wgsl",
+      "bytes": 2334,
+      "ts": 2124
+    },
+    {
+      "file": "025-gpu_2d_continuous_cumsum_kernel_3.wgsl",
+      "bytes": 1413,
+      "ts": 2124
+    },
+    {
+      "file": "026-rms_norm2_kernel.wgsl",
+      "bytes": 7455,
+      "ts": 2419
+    },
+    {
+      "file": "027-fused_dequantize1_fused_NT_matmul10_add4_kernel.wgsl",
+      "bytes": 7686,
+      "ts": 2420
+    },
+    {
+      "file": "028-batch_decode_paged_kv_kernel.wgsl",
+      "bytes": 13518,
+      "ts": 2420
+    },
+    {
+      "file": "029-fused_dequantize2_fused_NT_matmul11_add5_kernel.wgsl",
+      "bytes": 7549,
+      "ts": 2420
+    },
+    {
+      "file": "030-fused_dequantize3_NT_matmul12_kernel.wgsl",
+      "bytes": 7531,
+      "ts": 2421
+    },
+    {
+      "file": "031-fused_split2_silu2_multiply2_kernel.wgsl",
+      "bytes": 989,
+      "ts": 2421
+    },
+    {
+      "file": "032-fused_dequantize4_fused_NT_matmul13_add5_kernel.wgsl",
+      "bytes": 6298,
+      "ts": 2421
+    },
+    {
+      "file": "033-apply_penalty_inplace_kernel.wgsl",
+      "bytes": 2376,
+      "ts": 2423
+    }
+  ]
+}

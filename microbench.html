@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>browser-llm-lab — micro-bench matmul</title>
+  </head>
+  <body>
+    <h1>micro-bench matmul (deep-dive fase 2)</h1>
+    <p>
+      GEMV decode-shape a taglie crescenti, dequant-q4 vs f32 vs f16 (se
+      <code>shader-f16</code>), timing GPU via <code>timestamp-query</code> con fallback
+      CPU. Export JSON per <code>results/microbench/</code>.
+    </p>
+    <p>
+      <label>Device label: <input id="device-label" placeholder="es. 4090-linux" /></label>
+      <button id="run">Run</button>
+      <button id="export" disabled>Export JSON</button>
+    </p>
+    <p>Status: <span id="status">idle</span></p>
+    <div id="results"></div>
+    <script type="module" src="/src/microbench/page.ts"></script>
+  </body>
+</html>
