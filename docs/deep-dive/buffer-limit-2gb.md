@@ -61,7 +61,8 @@ cache (righe 7086-7106). Due conseguenze:
 
 Più tensori vengono poi bindati insieme nello stesso dispatch: la libreria chiede
 headroom di storage buffer per shader stage oltre il default WebGPU di 8, e i device
-osservati ne offrono 16 (`maxStorageBuffersPerShaderStage` nei probe di tutti i run).
+osservati ne offrono ampiamente di più (`maxStorageBuffersPerShaderStage`: 16 sui probe
+4090 e S22, 48 su LLVMPIPE).
 
 ## Perché i numeri sono quelli
 
