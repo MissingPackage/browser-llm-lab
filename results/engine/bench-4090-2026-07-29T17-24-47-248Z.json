@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-bench",
+  "promptId": "bench-512-v1",
+  "promptTokens": 469,
+  "genTokens": 256,
+  "replicates": 3,
+  "warmup": {
+    "decodeToksPerSec": 112.03620307052324,
+    "prefillMs": 2980.7799999713898,
+    "msPerTokenDecode": 8.925686274556552
+  },
+  "reps": [
+    {
+      "decodeToksPerSec": 112.4653507480831,
+      "prefillMs": 2737.7800000309944,
+      "msPerTokenDecode": 8.891627451017792
+    },
+    {
+      "decodeToksPerSec": 111.70688114434515,
+      "prefillMs": 2727.4050000309944,
+      "msPerTokenDecode": 8.9519999999626
+    },
+    {
+      "decodeToksPerSec": 112.20899916090872,
+      "prefillMs": 2714.0400000214577,
+      "msPerTokenDecode": 8.911941176536036
+    }
+  ],
+  "decodeToksPerSec": {
+    "mean": 112.12707701777897,
+    "stdev": 0.3858140265721645
+  },
+  "dispatchesPerToken": 123,
+  "quant": "Q4_0 (gguf)",
+  "note": "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T17-24-47-248Z"
+}

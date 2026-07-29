@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-conformance",
+  "top1Pct": 98.046875,
+  "agree": 502,
+  "total": 512,
+  "maxDlogitSampled": 0.8338179077148435,
+  "tapCheck": {
+    "layer": 11,
+    "len": 896,
+    "nonZero": true
+  },
+  "perPrompt": [
+    {
+      "id": "p0",
+      "agree": 124,
+      "total": 128,
+      "mismatches": [
+        {
+          "pos": 29,
+          "got": 504,
+          "gold": 311
+        },
+        {
+          "pos": 52,
+          "got": 16209,
+          "gold": 4963
+        },
+        {
+          "pos": 60,
+          "got": 2567,
+          "gold": 5871
+        },
+        {
+          "pos": 91,
+          "got": 2924,
+          "gold": 525
+        }
+      ]
+    },
+    {
+      "id": "p1",
+      "agree": 126,
+      "total": 128,
+      "mismatches": [
+        {
+          "pos": 61,
+          "got": 641,
+          "gold": 9707
+        },
+        {
+          "pos": 100,
+          "got": 84915,
+          "gold": 1187
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "agree": 127,
+      "total": 128,
+      "mismatches": [
+        {
+          "pos": 71,
+          "got": 872,
+          "gold": 198
+        }
+      ]
+    },
+    {
+      "id": "p3",
+      "agree": 125,
+      "total": 128,
+      "mismatches": [
+        {
+          "pos": 19,
+          "got": 151643,
+          "gold": 151644
+        },
+        {
+          "pos": 62,
+          "got": 13570,
+          "gold": 15502
+        },
+        {
+          "pos": 64,
+          "got": 576,
+          "gold": 2573
+        }
+      ]
+    }
+  ],
+  "dispatchesPerToken": 123,
+  "wallMs": 2770.7449999451637,
+  "msPerForward": 4.223696646257872,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T17-27-59-085Z"
+}

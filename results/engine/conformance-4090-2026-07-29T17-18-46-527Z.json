@@ -1,0 +1,448 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-conformance",
+  "top1Pct": 0.1953125,
+  "agree": 1,
+  "total": 512,
+  "maxDlogitSampled": 30.3053,
+  "tapCheck": {
+    "layer": 11,
+    "len": 896,
+    "nonZero": false
+  },
+  "perPrompt": [
+    {
+      "id": "p0",
+      "agree": 0,
+      "total": 128,
+      "mismatches": [
+        {
+          "pos": 0,
+          "got": 0,
+          "gold": 785
+        },
+        {
+          "pos": 1,
+          "got": 0,
+          "gold": 12884
+        },
+        {
+          "pos": 2,
+          "got": 0,
+          "gold": 374
+        },
+        {
+          "pos": 3,
+          "got": 0,
+          "gold": 6303
+        },
+        {
+          "pos": 4,
+          "got": 0,
+          "gold": 1576
+        },
+        {
+          "pos": 5,
+          "got": 0,
+          "gold": 432
+        },
+        {
+          "pos": 6,
+          "got": 0,
+          "gold": 374
+        },
+        {
+          "pos": 7,
+          "got": 0,
+          "gold": 279
+        },
+        {
+          "pos": 8,
+          "got": 0,
+          "gold": 1102
+        },
+        {
+          "pos": 9,
+          "got": 0,
+          "gold": 315
+        },
+        {
+          "pos": 10,
+          "got": 0,
+          "gold": 279
+        },
+        {
+          "pos": 11,
+          "got": 0,
+          "gold": 71816
+        },
+        {
+          "pos": 12,
+          "got": 0,
+          "gold": 315
+        },
+        {
+          "pos": 13,
+          "got": 0,
+          "gold": 39020
+        },
+        {
+          "pos": 14,
+          "got": 0,
+          "gold": 553
+        },
+        {
+          "pos": 15,
+          "got": 0,
+          "gold": 13673
+        },
+        {
+          "pos": 16,
+          "got": 0,
+          "gold": 18730
+        },
+        {
+          "pos": 17,
+          "got": 0,
+          "gold": 304
+        },
+        {
+          "pos": 18,
+          "got": 0,
+          "gold": 279
+        },
+        {
+          "pos": 19,
+          "got": 0,
+          "gold": 9237
+        }
+      ]
+    },
+    {
+      "id": "p1",
+      "agree": 0,
+      "total": 128,
+      "mismatches": [
+        {
+          "pos": 0,
+          "got": 0,
+          "gold": 36
+        },
+        {
+          "pos": 1,
+          "got": 0,
+          "gold": 57661
+        },
+        {
+          "pos": 2,
+          "got": 0,
+          "gold": 650
+        },
+        {
+          "pos": 3,
+          "got": 0,
+          "gold": 1531
+        },
+        {
+          "pos": 4,
+          "got": 0,
+          "gold": 3262
+        },
+        {
+          "pos": 5,
+          "got": 0,
+          "gold": 815
+        },
+        {
+          "pos": 6,
+          "got": 0,
+          "gold": 1853
+        },
+        {
+          "pos": 7,
+          "got": 0,
+          "gold": 5093
+        },
+        {
+          "pos": 8,
+          "got": 0,
+          "gold": 2464
+        },
+        {
+          "pos": 9,
+          "got": 0,
+          "gold": 29667
+        },
+        {
+          "pos": 10,
+          "got": 0,
+          "gold": 13027
+        },
+        {
+          "pos": 11,
+          "got": 0,
+          "gold": 3016
+        },
+        {
+          "pos": 12,
+          "got": 0,
+          "gold": 304
+        },
+        {
+          "pos": 13,
+          "got": 0,
+          "gold": 64832
+        },
+        {
+          "pos": 14,
+          "got": 0,
+          "gold": 5093
+        },
+        {
+          "pos": 15,
+          "got": 0,
+          "gold": 914
+        },
+        {
+          "pos": 16,
+          "got": 0,
+          "gold": 64
+        },
+        {
+          "pos": 17,
+          "got": 0,
+          "gold": 1447
+        },
+        {
+          "pos": 18,
+          "got": 0,
+          "gold": 73594
+        },
+        {
+          "pos": 19,
+          "got": 0,
+          "gold": 12669
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "agree": 0,
+      "total": 128,
+      "mismatches": [
+        {
+          "pos": 0,
+          "got": 0,
+          "gold": 785
+        },
+        {
+          "pos": 1,
+          "got": 0,
+          "gold": 10250
+        },
+        {
+          "pos": 2,
+          "got": 0,
+          "gold": 5109
+        },
+        {
+          "pos": 3,
+          "got": 0,
+          "gold": 7046
+        },
+        {
+          "pos": 4,
+          "got": 0,
+          "gold": 1091
+        },
+        {
+          "pos": 5,
+          "got": 0,
+          "gold": 220
+        },
+        {
+          "pos": 6,
+          "got": 0,
+          "gold": 16
+        },
+        {
+          "pos": 7,
+          "got": 0,
+          "gold": 15
+        },
+        {
+          "pos": 8,
+          "got": 0,
+          "gold": 15
+        },
+        {
+          "pos": 9,
+          "got": 0,
+          "gold": 525
+        },
+        {
+          "pos": 10,
+          "got": 0,
+          "gold": 220
+        },
+        {
+          "pos": 11,
+          "got": 0,
+          "gold": 16
+        },
+        {
+          "pos": 12,
+          "got": 0,
+          "gold": 15
+        },
+        {
+          "pos": 13,
+          "got": 0,
+          "gold": 16
+        },
+        {
+          "pos": 14,
+          "got": 0,
+          "gold": 11
+        },
+        {
+          "pos": 15,
+          "got": 0,
+          "gold": 220
+        },
+        {
+          "pos": 16,
+          "got": 0,
+          "gold": 16
+        },
+        {
+          "pos": 17,
+          "got": 0,
+          "gold": 15
+        },
+        {
+          "pos": 18,
+          "got": 0,
+          "gold": 18
+        },
+        {
+          "pos": 19,
+          "got": 0,
+          "gold": 11
+        }
+      ]
+    },
+    {
+      "id": "p3",
+      "agree": 1,
+      "total": 128,
+      "mismatches": [
+        {
+          "pos": 0,
+          "got": 0,
+          "gold": 59604
+        },
+        {
+          "pos": 1,
+          "got": 0,
+          "gold": 151645
+        },
+        {
+          "pos": 2,
+          "got": 0,
+          "gold": 198
+        },
+        {
+          "pos": 3,
+          "got": 0,
+          "gold": 151643
+        },
+        {
+          "pos": 4,
+          "got": 0,
+          "gold": 33975
+        },
+        {
+          "pos": 5,
+          "got": 0,
+          "gold": 551
+        },
+        {
+          "pos": 6,
+          "got": 0,
+          "gold": 11
+        },
+        {
+          "pos": 7,
+          "got": 0,
+          "gold": 4486
+        },
+        {
+          "pos": 8,
+          "got": 0,
+          "gold": 13
+        },
+        {
+          "pos": 9,
+          "got": 0,
+          "gold": 151645
+        },
+        {
+          "pos": 10,
+          "got": 0,
+          "gold": 198
+        },
+        {
+          "pos": 11,
+          "got": 0,
+          "gold": 151643
+        },
+        {
+          "pos": 12,
+          "got": 0,
+          "gold": 33975
+        },
+        {
+          "pos": 13,
+          "got": 0,
+          "gold": 551
+        },
+        {
+          "pos": 14,
+          "got": 0,
+          "gold": 11
+        },
+        {
+          "pos": 15,
+          "got": 0,
+          "gold": 4486
+        },
+        {
+          "pos": 16,
+          "got": 0,
+          "gold": 13
+        },
+        {
+          "pos": 17,
+          "got": 0,
+          "gold": 151645
+        },
+        {
+          "pos": 18,
+          "got": 0,
+          "gold": 198
+        },
+        {
+          "pos": 19,
+          "got": 0,
+          "gold": 151644
+        }
+      ]
+    }
+  ],
+  "dispatchesPerToken": 123,
+  "wallMs": 538.8000000119209,
+  "msPerForward": 0.8213414634328063,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T17-18-46-527Z"
+}

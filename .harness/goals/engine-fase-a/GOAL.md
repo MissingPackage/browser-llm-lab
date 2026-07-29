@@ -5,23 +5,28 @@ numerica verificata contro l'oracolo llama.cpp.
 <!-- Contract approved by PI 2026-07-29 (chat, goal-brief; tutti gli [ASSUMED] approvati
      così com'erano: OPFS+M2 dentro il goal; soglie numeriche marcate "da spec A" vanno
      fissate nella spec prima del codice; merge su main resta ruling PI).
-     Direction: docs/engine/direction.md. Goal start tag: goal-engine-fase-a-start. -->
+     Direction: docs/engine/direction.md. Goal start tag: goal-engine-fase-a-start.
+     EMENDAMENTI da ruling PI 2026-07-29 (docket 2-5): spec approvata; gate conformance
+     → doppio (vs cpuref-f64 ≥99% E vs golden llama.cpp ≥97%, evidenza di calibrazione
+     nel docket 3); dispatch/token ≤130 in fase A (≤100 = target fase B in direction);
+     merge a goal chiuso = policy permanente. -->
 
 DONE WHEN (all measurable):
 - Spec di fase A scritta (docs/superpowers/specs/<data>-engine-fase-a-design.md) e
   ruling PI di approvazione registrato nel docket di HANDOFF.md.
 - `npm test` verde con i test del motore inclusi (unit su IR/piano/quant-decode CPU-side,
   in CI senza GPU — convenzione metrics.ts/quality.ts).
-- Parità numerica: script di conformance contro llama.cpp (STESSO file GGUF, greedy,
-  corpus fisso committato) esce 0 con top-1 agreement ≥ 99% (soglia esatta e metrica KL
-  fissate nella spec A) su ≥ 512 token generati.
+- Parità numerica: script di conformance esce 0 col GATE DOPPIO (ruling docket 3,
+  2026-07-29): top-1 vs cpuref-f64 ≥ 99% E top-1 vs golden llama.cpp ≥ 97% (stesso file
+  GGUF, greedy, corpus fisso committato) su ≥ 512 token generati.
 - First-light: run sulla 4090 (protocollo bench del repo: warmup + 3 repliche,
   PROMPT_512, driver HEADED) con decodeToksPerSec.mean del motore > della cella WebLLM
   baseline ri-misurata lo stesso giorno stesso device (q4f32_1; confronto cross-quant
   GGUF-vs-MLC dichiarato nel JSON) — entrambi i JSON committati in results/engine/.
 - Struttura L1-L3 provata dai contatori, non a giudizio: run del profiler
   (src/prof/profiler.ts riusato sulla pagina bench del motore) con, in finestra decode:
-  createBindGroup = 0, submit/token = 1, dispatch/token ≤ 100 (target L3, estimates §3).
+  createBindGroup = 0, submit/token = 1, dispatch/token ≤ 130 (ruling docket 4,
+  2026-07-29; ≤100 resta target di fase B in direction.md).
 - Telemetria nativa: il JSON di bench del motore contiene sezione telemetry per-fase
   (encode CPU, GPU ms via timestamp-query dove disponibile) prodotta SENZA cambiare il
   batching, e un test dimostra overhead ~zero da spenta (soglia <1%, da confermare in

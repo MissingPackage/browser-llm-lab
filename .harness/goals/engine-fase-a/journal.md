@@ -1,5 +1,64 @@
 # Journal — engine-fase-a
 
+2026-07-29 — CHIUSURA GOAL (iterazione 7). Ruling PI ricevuti: docket 1 OK, 2 sì
+(spec approvata), 3 opzione A (gate doppio), 4 confermato (≤130 fase A, ≤100 target
+fase B in direction), 5 policy merge-a-goal-chiuso (in memoria harness). Gate doppio
+meccanizzato (secondo golden: cpuref-argmax da dump f64). REGRESSIONE trovata e
+risolta in chiusura: telemetria livello 2 (timestamp) CORROMPE il compute quando
+attiva (conformance 98.05%→93.4%, maxΔ 5.8; isolata con A/B a una variabile) →
+livello 2 dietro opt-in telemetryGpu, spento di default, diagnosi fase B; livello 1
+innocuo (overhead 0.24%). CONFORMANCE FINALE: GATE DOPPIO PASS — 100.00% vs
+cpuref-f64 (512/512), 98.05% vs golden llama.cpp, exit 0. Bench finale 122.0 tok/s.
+Suite verde. DONE WHEN: 8/8. Merge su main eseguito (policy docket 5).
+
+2026-07-29 — Iterazioni 5-6 (fase 4-6, su branch): bench mode + baseline WebLLM
+same-day (naive 81.9 vs 117.8 ⇒ il plan-check 1b è moot: baseline misurata E si
+procede). L3: piano fuso 123 dispatch/token (5/layer), kernel vec4 + unpack4x8snorm
+(q8 esatto), 4 righe/wg con x condivisa. Parità INVARIATA a ogni passo (98.05%,
+mismatch set = cpuref-f64). FIRST LIGHT: 122.5/123.2/123.6 vs WebLLM 117.8/116.5.
+Contatori verificati dal profiler esterno: bindGroup=0, submit=1, dispatch=123
+(WebLLM: 270/7/270). Telemetria: encode CPU 0.042 ms/token (54× meno di WebLLM),
+overhead A/B −0.55% (<1% gate); KNOWN-ISSUE: timestamp GPU azzerati dal browser in
+questa integrazione (microbench standalone ok) → gpuMs=null dichiarato. Esperimento
+fallito documentato: attention GQA-aware a 2 wg (43 tok/s — su GPU grandi il
+parallelismo batte la deduplicazione: la L2 assorbiva già la ridondanza).
+Delta leve MISURATO sul nostro motore: naive(L1+L2) 81.9 → L3+kernel 123.0 = 1.50×
+(estimates prediceva 1.44× per L1-L3 su WebLLM). Restano SOLO i ruling PI:
+docket 1 (moot), 2 (spec), 3 (gate conformance), 4 (budget L3), 5 (merge).
+
+2026-07-29 — Iterazione 4 (nucleo comune fase 4/5, su branch): (a) cpuref.ts — forward
+CPU f64 con parità PIENA vs oracolo (16/16 smoke); (b) kernel WGSL completi + ktest
+page: 11/11 PASS su 4090 al primo colpo; (c) gpuforward.ts — motore GPU end-to-end,
+conformance 512 posizioni: **top-1 98.05%**, 8.5 ms/forward, 412 dispatch/token non
+fusi. Bring-up bug memorabile: dispatchWorkgroups(151936) > limite 65535/dim ⇒ command
+buffer rigettati IN SILENZIO (top-1 0.2%, zero errori) → griglia 2D + uncapturederror
+fatale nel motore. I 10 mismatch sono tutti near-tie (margini 0.004-0.39, 9/10 rank-1
+golden): l'oracolo CPU quantizza le attivazioni a Q8_0 (algoritmo ≠ f32 puro).
+Calibrazione ESEGUITA: cpuref f64 vs golden = 502/512 con gli STESSI 10 mismatch del
+motore GPU ⇒ **motore GPU = matematica esatta al 100% (512/512)**; il 98.05% è il noise
+floor dell'oracolo (vec_dot q4_0×q8_0 quantizza le attivazioni). Proposta gate doppio
+nel docket (item 3). Tap hidden-states implementati e verificati (taps=[11], 896 f32
+non-zero, conformance invariata). NOTA per il plan-check: nel motore nostro L1+L2
+sono risultati GRATIS by construction (buffer statici ⇒ bind group al load, 1
+submit/token naturale) — la domanda naive-vs-diretto si riduce di fatto alla sola
+fusione L3.
+
+Stato DONE WHEN a fine 2026-07-29: spec scritta (ruling ✗); npm test verde ✓;
+conformance harness fatto — 98.05% vs gate 99% (pende docket 3: con la proposta il
+gate oggi PASSEREBBE: vs cpuref 100%, vs golden ≥97%); first-light ✗ (gated);
+L1/L2 by construction, L3 ✗ (gated); telemetria ✗ (fase 5); tap ✓; OPFS ✓; M2 ✓.
+Tutto il residuo pende dai docket 1-3.
+
+2026-07-29 — Iterazione 3 (fase 3, su branch engine/fase-a, avviata pre-ruling — vedi
+docket 2): gguf.ts (parser v3, subset F32/F16/Q4_0/Q8_0), quant.ts (dequant reference
+esatta Q4_0/Q8_0 + f16), shape.ts (inventario 291 tensori VERIFICATO sul file reale —
+due correzioni alla spec: output.weight separato Q8_0, bias q/k/v F32), 119/119 test
+(fixture sintetica CI + validazione file reale skipIf), gen-golden.py (llama-cpp-python
+0.3.16 pinnato) → corpus 4 prompt token-id + golden 512 posizioni (argmax+top-32,
+sha256 del GGUF registrato). Sanity: output oracolo sensati (p3 → "Paris").
+Fasi 4-6 FERME in attesa dei due ruling (il plan-check 1b decide proprio la forma
+della fase 4).
+
 2026-07-29 — Goal aperto. Contratto approvato dal PI in chat (goal-brief, [ASSUMED]
 approvati in blocco). Direction: docs/engine/direction.md.
 

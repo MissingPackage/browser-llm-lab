@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>browser-llm-lab — engine kernel test</title>
+  </head>
+  <body>
+    <h1>engine kernel test (dev-only)</h1>
+    <p>
+      Ogni kernel WGSL del motore contro un riferimento JS su dati seeded. Parte da solo
+      al load; <code>done</code> = tutti PASS. Non richiede il modello.
+    </p>
+    <section id="probe-box"><em>probing…</em></section>
+    <p>Status: <span id="status">running…</span></p>
+    <section id="results"></section>
+    <script type="module" src="/src/engine/ktest/page.ts"></script>
+  </body>
+</html>

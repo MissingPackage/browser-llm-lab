@@ -1,6 +1,6 @@
 # Engine fase A — execution core: Design
 
-**Data**: 2026-07-29 · **Stato**: in attesa di ruling PI (docket goal `engine-fase-a`, item 2)
+**Data**: 2026-07-29 · **Stato**: **approvato** (ruling PI 2026-07-29, docket goal item 2; gate emendati da item 3-4)
 **Direction**: `docs/engine/direction.md` · **Contratto**: `.harness/goals/engine-fase-a/GOAL.md`
 
 ## Obiettivo
@@ -16,8 +16,8 @@ src/engine/
   gguf.ts          parser GGUF (header, metadata KV, tensor table) — puro, testabile CI
   quant.ts         layout Q4_0 + dequant CPU di riferimento (bit-exact) — puro
   shape.ts         shape Qwen2.5-0.5B hardcoded (24 layer, d=896, 14Q/2KV head_dim 64,
-                   ffn 4864, vocab 151936, embeddings tied) + validazione hard del GGUF:
-                   nome/tipo/shape per tensore, mismatch ⇒ throw (postura ds4)
+                   ffn 4864, vocab 151936) + validazione hard del GGUF: nome/tipo/shape
+                   per tensore, mismatch ⇒ throw (postura ds4)
   plan.ts          piano statico: compila la lista di step al load — puro, testabile
   kernels/         WGSL come template string + specializzazione (pattern shader-lib
                    LlamaWeb: la funzione restituisce pipeline + metadata delle decisioni)
@@ -37,15 +37,18 @@ Il motore NON tocca `src/` esistente (adapters/schema/bench intatti); condivide 
 
 ## Formato pesi
 
-- **Fase A: solo Q4_0** (blocchi da 32, scala f16, layout documentato e semplice;
-  l'ufficiale `Qwen/Qwen2.5-0.5B-Instruct-GGUF` lo pubblica). K-quants/IQ arrivano in
-  fase C col modello-tesi. Un formato = un percorso di test bit-exact.
+- **Fase A: Q4_0 + Q8_0 + F32** — corretto dopo il parse del file reale (2026-07-29):
+  il GGUF ufficiale "q4_0" di Qwen tiene `output.weight` **separato e in Q8_0** (niente
+  tied embeddings nel file, contrariamente alla config HF) e ha **bias F32 su q/k/v**
+  (architettura qwen2); norme F32. K-quants/IQ arrivano in fase C col modello-tesi.
+  Pochi formati = percorsi di test bit-exact per ciascuno.
 - **Repack al load** (CPU, una volta): da blocchi Q4_0 a layout GPU-friendly — nibbles
   in u32 row-major + buffer scale separato (f16 lette come u16→unpack in WGSL: niente
   dipendenza da shader-f16), offset allineati a 256 B. La **dequant è fusa nel matmul**
   (mai materializzata), lezione unanime LlamaWeb/ds4/colibri.
 - Attivazioni f32 (dev-loop 4090 senza shader-f16); percorso f16 = feature-detect,
-  fuori fase A. Embeddings tied: `lm_head` legge lo stesso buffer di `token_embd`.
+  fuori fase A. `lm_head` = `output.weight` Q8_0 (kernel GEMV dedicato, stesso schema
+  fuso del Q4_0 con loader di blocco diverso — pattern `mul_mat_decls` di LlamaWeb).
 - Upload: streaming a chunk dal fetch/OPFS direttamente in `writeBuffer` (mai l'intero
   modello nel heap WASM/JS).
 
@@ -108,10 +111,14 @@ test A/B sul bench: 3 run on vs off, delta medio):
 - **Golden**: `scripts/gen-golden.py` (llama-cpp-python pinnato, stesso file GGUF
   Q4_0, logits f32) salva per posizione: argmax id + top-32 (id, logit). File in
   `results/engine/golden/` (~qualche MB).
-- **Gate (contratto)**: top-1 agreement ≥ **99%** sui 512 token. Riportati non gated:
-  agreement@8 e max|Δlogit| sui top-32 (numeri attesi ~100% e ~1e-3: stessa dequant
-  Q4_0 esatta, diverso ordine di riduzione f32 — se top-1 scende sotto 99% è un bug,
-  non rumore).
+- **Gate (DECISO, ruling PI 2026-07-29 docket item 3, opzione A)**: **gate doppio** —
+  **top-1 vs cpuref-f64 ≥ 99%** (parità vera, oracolo-indipendente; misurato 100%)
+  **E top-1 vs golden llama.cpp ≥ 97%** (sanity; misurato 98.05%). Razionale: la
+  calibrazione ha mostrato che anche la matematica esatta concorda col golden solo al
+  98.05% (l'oracolo CPU quantizza le attivazioni a Q8 nel vec_dot: 10 near-tie
+  identici, maxΔlogit 1.12) ⇒ il 99% secco era sopra il noise floor dell'oracolo.
+  Riportati non gated: agreement@8 e max|Δlogit| sui top-32. Secondo golden:
+  `results/engine/golden/cpuref-argmax-*.json`.
 - **Unit bit-exact**: `quant.ts` dequant CPU vs blocchi di riferimento generati dal
   golden script (la dequant Q4_0 in f32 è esatta: qualunque diff = bug di layout).
 - First-light (fase 6): protocollo bench del repo (warmup + 3 repliche, PROMPT_512,
@@ -137,7 +144,9 @@ tap (fase D) · f16 compute · prefill veloce · UI oltre la pagina bench · mul
 
 - Fusione attention in 1 kernel (②) è il pezzo WGSL più difficile: fallback dichiarato
   = attention a 2-3 dispatch (budget sale a ~120-130, resta sotto 270/2) — il gate ≤100
-  andrebbe rinegoziato via docket, non silenziosamente.
+  andrebbe rinegoziato via docket, non silenziosamente. [ESITO: floor architetturale
+  misurato 5 dispatch/layer = 123; ruling docket 4 (2026-07-29): gate fase A ≤130,
+  ≤100 = target fase B (megakernel/fusioni cross-layer).]
 - llama-cpp-python su Fedora: build locale con BLAS off (CPU pura basta per 512 token
   su 0.5B) — pinnata nel golden script con `uv run --with`.
 - Il confronto cross-quant del first-light è il punto debole dichiarato del gate: la

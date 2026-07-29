@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 2,
+  "kind": "engine-bench",
+  "promptId": "bench-512-v1",
+  "promptTokens": 469,
+  "genTokens": 256,
+  "replicates": 3,
+  "warmup": {
+    "decodeToksPerSec": 124.07189357735177,
+    "prefillMs": 2550.274999976158,
+    "msPerTokenDecode": 8.059843137451246
+  },
+  "reps": [
+    {
+      "decodeToksPerSec": 121.8553553050442,
+      "prefillMs": 2414.925000011921,
+      "msPerTokenDecode": 8.206450980317358
+    },
+    {
+      "decodeToksPerSec": 123.82217193614768,
+      "prefillMs": 2308.364999949932,
+      "msPerTokenDecode": 8.076098039337232
+    },
+    {
+      "decodeToksPerSec": 123.19167900284226,
+      "prefillMs": 2395.2900000214577,
+      "msPerTokenDecode": 8.117431372754714
+    }
+  ],
+  "decodeToksPerSec": {
+    "mean": 122.95640208134472,
+    "stdev": 1.004294945440998
+  },
+  "telemetryOn": {
+    "reps": [
+      {
+        "decodeToksPerSec": 125.10486731393253,
+        "prefillMs": 2369.6199999451637,
+        "msPerTokenDecode": 7.993294117731207
+      },
+      {
+        "decodeToksPerSec": 120.91841089416569,
+        "prefillMs": 2386.520000040531,
+        "msPerTokenDecode": 8.270039215742374
+      },
+      {
+        "decodeToksPerSec": 124.90111994612542,
+        "prefillMs": 2335.979999959469,
+        "msPerTokenDecode": 8.006333333370732
+      }
+    ],
+    "decodeToksPerSec": {
+      "mean": 123.64146605140787,
+      "stdev": 2.3604343434015593
+    }
+  },
+  "telemetry": {
+    "forwards": 2896,
+    "encodeCpuMsPerToken": 0.03980490359482844,
+    "gpuMsPerToken": null,
+    "timestampNote": "timestamp azzerati dal browser in questa integrazione (known-issue, journal 2026-07-29)"
+  },
+  "telemetryOverheadPct": -0.5540729918054547,
+  "dispatchesPerToken": 123,
+  "quant": "Q4_0 (gguf)",
+  "note": "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T17-39-02-399Z"
+}
