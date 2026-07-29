@@ -11,8 +11,9 @@ export default defineConfig({
   build: {
     rollupOptions: {
       // microbench.html è una seconda entry di produzione (deep-dive fase 2);
+      // prof.html è l'entry del dispatch profiler (docket #11, run manuali M4/S22);
       // conformance.html resta dev/test-only, fuori dal build come prima.
-      input: ["index.html", "microbench.html"],
+      input: ["index.html", "microbench.html", "prof.html"],
     },
   },
 });

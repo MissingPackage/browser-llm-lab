@@ -8,7 +8,16 @@ export interface GenTimeline {
 }
 
 export function computeGenMetrics(t: GenTimeline): GenMetrics {
-  if (t.chunkTimestamps.length === 0) throw new Error("empty timeline: no chunks received");
+  // I token di usage nel messaggio discriminano tre cause diverse di timeline vuota
+  // (visto sul campo, S22 2026-07-29): completionTokens=0 -> il modello ha emesso EOS
+  // subito; >0 -> token generati ma delta senza contenuto; n/d -> stream chiuso senza
+  // nemmeno il chunk di usage (abort lato engine senza eccezione).
+  if (t.chunkTimestamps.length === 0) {
+    throw new Error(
+      `empty timeline: no chunks received (promptTokens=${t.promptTokens ?? "n/d"}, ` +
+        `completionTokens=${t.completionTokens ?? "n/d"})`,
+    );
+  }
   const first = t.chunkTimestamps[0];
   const last = t.chunkTimestamps[t.chunkTimestamps.length - 1];
   const completionTokens = t.completionTokens ?? t.chunkTimestamps.length;

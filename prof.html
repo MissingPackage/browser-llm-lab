@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>browser-llm-lab — dispatch profiler</title>
+  </head>
+  <body>
+    <h1>dispatch profiler (docket #11)</h1>
+    <p>
+      Conta dispatch/submit/encode-CPU WebGPU durante un bench WebLLM reale (stesso
+      <code>BenchServer</code> della pagina principale). Procedura manuale: label device →
+      Run → attendere <code>done</code> → Export JSON per <code>results/dispatch-profile/</code>.
+    </p>
+    <section id="probe-box"><em>probing…</em></section>
+    <section>
+      <label>Device label:
+        <input id="device-label" type="text" placeholder="es. s22-ultra, m4-pro, 4090-linux" size="26" />
+      </label>
+      <label>Model:
+        <select id="model">
+          <option value="Qwen2.5-0.5B-Instruct-q4f32_1-MLC" data-quant="q4f32_1">Qwen2.5-0.5B q4f32_1 (baseline cross-device)</option>
+          <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC" data-quant="q4f16_1">Qwen2.5-0.5B q4f16_1 (richiede shader-f16)</option>
+        </select>
+      </label>
+      <button id="run">Run</button>
+      <button id="export" disabled>Export JSON</button>
+    </section>
+    <p>Status: <span id="status">idle</span></p>
+    <section id="results"></section>
+    <script type="module" src="/src/prof/page.ts"></script>
+  </body>
+</html>
