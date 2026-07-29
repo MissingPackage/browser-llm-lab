@@ -7,8 +7,11 @@
 misurati. Servono: (1) **plan-check** su PHASES.md — punto vivo: spine
 correttezza-poi-velocità 4→5; (2) **ruling spec** — decisioni chiave: Q4_0-only,
 corpus token-id senza tokenizer, top-1≥99%, golden via llama-cpp-python, ≤100 dispatch
-con fallback attention dichiarato. Entrambi nel docket del goal. Approvati → fase 3
-(GGUF parser + golden) su branch `engine/fase-a` (merge su main = ruling PI).
+con fallback attention dichiarato. Entrambi nel docket del goal. La fase 3 (GGUF parser + dequant reference + shape
+validata sul file reale + golden oracolo, 512 posizioni) è FATTA su branch
+`engine/fase-a` (avviata pre-ruling, razionale nel docket 2; il file reale ha corretto
+la spec: output.weight Q8_0 separato, bias F32). Approvati i due ruling → fase 4, la
+cui forma dipende dal plan-check 1b (naive-first o L1-L3 diretto). Merge = ruling PI.
 
 ## 2. State delta (sessione 10)
 
