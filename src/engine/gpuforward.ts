@@ -23,10 +23,23 @@ const N_PARTIALS = Math.ceil(S.vocab / ARGMAX_CHUNK);
 
 interface QuantBufs { qs: GPUBuffer; scales: GPUBuffer }
 
+export interface EngineTelemetry {
+  forwards: number;
+  encodeCpuMsPerToken: number;
+  gpuMsPerToken: number | null; // null se timestamp-query assente o spenta
+  timestampNote: string;
+}
+
 export interface EngineHandle {
   device: GPUDevice;
   forwardToken(token: number, pos: number): Promise<number>; // ritorna argmax id
   readLogits(): Promise<Float32Array>;
+  // Telemetria nativa (spec §Telemetria): livello 1 = encode CPU (2 letture clock/
+  // token); livello 2 = GPU ms via timestamp-query (ring, resolve lazy ogni 64 token,
+  // MAI bloccante nel loop). Zero-overhead da spenta: nessun timer, nessun
+  // timestampWrites nel pass descriptor.
+  setTelemetry(on: boolean): void;
+  getTelemetry(): Promise<EngineTelemetry>;
   // Tap hidden-states (contratto DeepSpec, spec §Tap): hidden post-layer dei layer
   // richiesti in opts.taps, copiati a ogni forward. Zero step emessi se taps=[].
   readTap(layer: number): Promise<Float32Array>;
@@ -38,7 +51,7 @@ export interface EngineHandle {
 export async function createEngine(
   gguf: ArrayBuffer,
   onProgress: (text: string, frac: number) => void,
-  opts: { taps?: number[]; fused?: boolean } = {},
+  opts: { taps?: number[]; fused?: boolean; telemetry?: boolean } = {},
 ): Promise<EngineHandle> {
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("WebGPU non disponibile");
@@ -47,7 +60,9 @@ export async function createEngine(
   const lim = adapter.limits;
   const need = 256 * 1024 * 1024;
   if (lim.maxStorageBufferBindingSize < need) throw new Error("adapter: maxStorageBufferBindingSize insufficiente");
+  const hasTsq = adapter.features.has("timestamp-query");
   const device = await adapter.requestDevice({
+    requiredFeatures: hasTsq ? (["timestamp-query"] as GPUFeatureName[]) : [],
     requiredLimits: {
       maxStorageBufferBindingSize: need,
       maxBufferSize: need,
@@ -158,6 +173,34 @@ export async function createEngine(
   const P = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const stagingId = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
+  // --- telemetria ---
+  let telemetryOn = opts.telemetry ?? true;
+  let tForwards = 0;
+  let tEncodeCpuMs = 0;
+  const TSQ_RING = 64; // token per batch di resolve (lazy, mai bloccante)
+  const querySet = hasTsq ? device.createQuerySet({ type: "timestamp", count: TSQ_RING * 2 }) : null;
+  const tsqResolve = hasTsq
+    ? device.createBuffer({ size: TSQ_RING * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
+    : null;
+  const pendingTsq: Promise<number[]>[] = [];
+  let tsqIdx = 0;
+  const flushTsq = (enc: GPUCommandEncoder, count: number): void => {
+    if (!querySet || !tsqResolve) return;
+    enc.resolveQuerySet(querySet, 0, count * 2, tsqResolve, 0);
+    const staging = device.createBuffer({ size: count * 2 * 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    enc.copyBufferToBuffer(tsqResolve, 0, staging, 0, count * 2 * 8);
+    pendingTsq.push(
+      (async () => {
+        await staging.mapAsync(GPUMapMode.READ);
+        const ts = new BigUint64Array(staging.getMappedRange().slice(0));
+        staging.destroy();
+        const out: number[] = [];
+        for (let i = 0; i < count; i++) out.push(Number(ts[i * 2 + 1] - ts[i * 2]) / 1e6);
+        return out;
+      })(),
+    );
+  };
+
   // --- pipeline (15 varianti) + bind group precostruiti ---
   const mkPipe = (code: string) =>
     device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code }), entryPoint: "main" } });
@@ -259,13 +302,17 @@ export async function createEngine(
       dequantQ4_0Row(bytes, embdOff, S.dModel, token, embdRow);
       device.queue.writeBuffer(x, 0, embdRow as unknown as BufferSource);
       device.queue.writeBuffer(P, 0, new Uint32Array([pos, pos, 0, 0]));
+      const tEnc0 = telemetryOn ? performance.now() : 0;
       const enc = device.createCommandEncoder();
-      let pass = enc.beginComputePass();
+      const passDesc: GPUComputePassDescriptor = telemetryOn && querySet
+        ? { timestampWrites: { querySet, beginningOfPassWriteIndex: tsqIdx * 2, endOfPassWriteIndex: tsqIdx * 2 + 1 } }
+        : {};
+      let pass = enc.beginComputePass(passDesc);
       for (const s of steps) {
         if (s.kind === "copy") {
           pass.end();
           enc.copyBufferToBuffer(s.src, 0, s.dst, 0, s.bytes);
-          pass = enc.beginComputePass();
+          pass = enc.beginComputePass(); // i pass successivi del token non ri-scrivono timestamp
           continue;
         }
         pass.setPipeline(s.pipe);
@@ -274,11 +321,38 @@ export async function createEngine(
       }
       pass.end();
       enc.copyBufferToBuffer(amaxOut, 0, stagingId, 0, 4);
+      if (telemetryOn && querySet) {
+        tsqIdx++;
+        if (tsqIdx === TSQ_RING) { flushTsq(enc, TSQ_RING); tsqIdx = 0; }
+      }
       device.queue.submit([enc.finish()]);
+      if (telemetryOn) { tEncodeCpuMs += performance.now() - tEnc0; tForwards++; }
       await stagingId.mapAsync(GPUMapMode.READ);
       const id = new Uint32Array(stagingId.getMappedRange())[0];
       stagingId.unmap();
       return id;
+    },
+    setTelemetry(on: boolean): void {
+      telemetryOn = on;
+      tsqIdx = 0; // il ring riparte: i timestamp parziali del batch corrente si scartano
+    },
+    async getTelemetry() {
+      const batches = await Promise.all(pendingTsq);
+      pendingTsq.length = 0;
+      const gpuMs = batches.flat().filter((v) => v > 0);
+      // Known-issue (2026-07-29): su Chrome branded Linux/NVIDIA i timestamp del pass
+      // tornano azzerati in questa integrazione (anche col pattern del microbench,
+      // che invece funziona standalone). Livello 2 resta feature-detected e lazy;
+      // diagnosi rimandata — si dichiara null invece di riportare zeri.
+      const mean = gpuMs.length ? gpuMs.reduce((a, b) => a + b, 0) / gpuMs.length : null;
+      return {
+        forwards: tForwards,
+        encodeCpuMsPerToken: tForwards ? tEncodeCpuMs / tForwards : 0,
+        gpuMsPerToken: mean,
+        timestampNote: querySet
+          ? (gpuMs.length ? "quantizzazione Chrome ~100us, media su batch da 64" : "timestamp azzerati dal browser in questa integrazione (known-issue, journal 2026-07-29)")
+          : "timestamp-query non disponibile",
+      };
     },
     async readTap(layer: number): Promise<Float32Array> {
       const src = tapBufs.get(layer);

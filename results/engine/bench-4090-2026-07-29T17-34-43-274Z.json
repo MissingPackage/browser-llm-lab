@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 2,
+  "kind": "engine-bench",
+  "promptId": "bench-512-v1",
+  "promptTokens": 469,
+  "genTokens": 256,
+  "replicates": 3,
+  "warmup": {
+    "decodeToksPerSec": 121.76807241252278,
+    "prefillMs": 2570.360000014305,
+    "msPerTokenDecode": 8.212333333258535
+  },
+  "reps": [
+    {
+      "decodeToksPerSec": 121.58460500457986,
+      "prefillMs": 2447.685000002384,
+      "msPerTokenDecode": 8.224725490224127
+    },
+    {
+      "decodeToksPerSec": 120.3937584091805,
+      "prefillMs": 2350.5949999690056,
+      "msPerTokenDecode": 8.306078431419298
+    },
+    {
+      "decodeToksPerSec": 125.05179841825547,
+      "prefillMs": 2400.550000011921,
+      "msPerTokenDecode": 7.996686274397607
+    }
+  ],
+  "decodeToksPerSec": {
+    "mean": 122.3433872773386,
+    "stdev": 2.4199477441931436
+  },
+  "telemetryOn": {
+    "reps": [
+      {
+        "decodeToksPerSec": 124.82377819578008,
+        "prefillMs": 2380.2300000190735,
+        "msPerTokenDecode": 8.01129411762836
+      },
+      {
+        "decodeToksPerSec": 122.38785912311444,
+        "prefillMs": 2413.5699999928474,
+        "msPerTokenDecode": 8.170745098123364
+      },
+      {
+        "decodeToksPerSec": 120.40683344234222,
+        "prefillMs": 2363.7049999833107,
+        "msPerTokenDecode": 8.305176470560186
+      }
+    ],
+    "decodeToksPerSec": {
+      "mean": 122.53949025374557,
+      "stdev": 2.2123729881199776
+    }
+  },
+  "telemetry": {
+    "forwards": 2896,
+    "encodeCpuMsPerToken": 0.0416626386262106,
+    "gpuMsPerToken": 0,
+    "timestampNote": "Chrome quantizza i timestamp GPU (~100us): media su batch di 64 token"
+  },
+  "telemetryOverheadPct": -0.16003247279785898,
+  "dispatchesPerToken": 123,
+  "quant": "Q4_0 (gguf)",
+  "note": "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T17-34-43-274Z"
+}

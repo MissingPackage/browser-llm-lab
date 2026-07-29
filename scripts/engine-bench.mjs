@@ -10,6 +10,7 @@ const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService"
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
 page.on("pageerror", (e) => console.log("[bench][pageerror]", e.message.slice(0, 300)));
+page.on("console", (m) => { if (m.text().includes("[engine]")) console.log("[bench]", m.text().slice(0, 300)); });
 await page.goto(`${BASE_URL}/engine.html?bench=1`, { waitUntil: "load" });
 
 let last = "";

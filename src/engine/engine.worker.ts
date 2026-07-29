@@ -98,18 +98,32 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
       msPerTokenDecode: (tEnd - tFirst) / (genTokens - 1),
     };
   };
+  const stats = (rs: { decodeToksPerSec: number }[]) => {
+    const rates = rs.map((r) => r.decodeToksPerSec);
+    const mean = rates.reduce((a, b) => a + b, 0) / rates.length;
+    const stdev = Math.sqrt(rates.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, rates.length - 1));
+    return { mean, stdev };
+  };
   const warmup = await runOnce("warmup (scartato)");
-  const reps = [];
-  for (let r = 0; r < replicates; r++) reps.push(await runOnce(`replica ${r + 1}/${replicates}`));
-  const rates = reps.map((r) => r.decodeToksPerSec);
-  const mean = rates.reduce((a, b) => a + b, 0) / rates.length;
-  const stdev = Math.sqrt(rates.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, rates.length - 1));
+  // A/B overhead telemetria (spec §Telemetria: ~zero da spenta): N repliche ON, N OFF.
+  engine.setTelemetry(true);
+  const repsOn = [];
+  for (let r = 0; r < replicates; r++) repsOn.push(await runOnce(`replica ON ${r + 1}/${replicates}`));
+  const telemetry = await engine.getTelemetry();
+  engine.setTelemetry(false);
+  const repsOff = [];
+  for (let r = 0; r < replicates; r++) repsOff.push(await runOnce(`replica OFF ${r + 1}/${replicates}`));
+  const on = stats(repsOn);
+  const off = stats(repsOff);
+  const overheadPct = ((1 / on.mean - 1 / off.mean) / (1 / off.mean)) * 100;
   post({
     type: "done",
     report: {
-      schemaVersion: 1, kind: "engine-bench", promptId: promptFix.promptId,
+      schemaVersion: 2, kind: "engine-bench", promptId: promptFix.promptId,
       promptTokens: promptFix.tokens.length, genTokens, replicates,
-      warmup, reps, decodeToksPerSec: { mean, stdev },
+      warmup, reps: repsOff, decodeToksPerSec: off, // headline = telemetria spenta
+      telemetryOn: { reps: repsOn, decodeToksPerSec: on },
+      telemetry, telemetryOverheadPct: overheadPct,
       dispatchesPerToken: engine.dispatchesPerToken,
       quant: "Q4_0 (gguf)", note: "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
     },
