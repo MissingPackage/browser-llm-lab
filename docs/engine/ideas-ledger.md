@@ -113,6 +113,26 @@ paginati con prefetch predittivo, KV tiering/checkpoint, adapter hot-swap, spec-
 2605.20706, backend WebGPU upstream di llama.cpp — apre la decisione fork-vs-scratch) e
 LFM2-MoE (Liquid AI). Lo studio in profondità dei codebase resta un WP a sé.
 
+## H. Modello target — ruling PI 2026-07-29 (docket #13)
+
+**Modello-tesi: GLM-4.7-Flash** (30B-A3B, MLA, MIT, GGUF unsloth disponibili) · dev
+rungs: Qwen3.5-0.8B/2B (Apache) · first-light: Qwen2.5-0.5B (grafo già noto al
+dispatch-level) · v2 dichiarato: ibridi (Qwen3.5-35B-A3B / Nemotron-3-Nano).
+
+Panorama architetturale che ha deciso (recon 2026-07-29, fonte Kaitchup + verifiche):
+
+| Candidato | Attention | KV B/token | Licenza | Verdetto |
+|---|---|---|---|---|
+| Qwen3-30B-A3B (2025) | GQA classica | 98 304 | Apache | fallback: ultimo della specie, già battuto in intell./byte |
+| **GLM-4.7-Flash** | **MLA** | 54 144 | **MIT** | **tesi**: KV compressa (allineata alla sintesi WP), ds4+colibri = reference GLM in casa, MTP nativa di famiglia [VERIFY su 4.7], kernel scope senza SSM |
+| Qwen3.5-35B-A3B (2026) | ibrida (30 DeltaNet + 10 attn) | 20 480 | Apache | v2: mette i kernel linear-attention nel critical path di v0 |
+| Nemotron-3-Nano | ibrida Mamba-2 | 6 144 | NVIDIA | v2 |
+| LFM2.5-8B-A1B | ibrida conv | piccola | LFM custom | classe 4-6B dense: eventuale gradino mobile, non tesi |
+
+Nota (domanda PI sui piccoli MoE): il rischio "stupidità" è di taglia, non di quant —
+la quant estrema (Q2/Q3) non serve all'hero su M4 (q4 ~17 GB in 48 GB); serve solo per
+la 4090/16 GB, dove le risposte sono paging o ricetta asimmetrica ds4 + evals.
+
 ## F. Decisioni di cornice già prese (brain dump 2026-07-28/29)
 
 - Obiettivo = intelligenza sotto vincolo di rate sufficiente, non max tok/s.

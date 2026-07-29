@@ -68,8 +68,12 @@ q4, 4090) con le sole L1-L3. Decisione ancora aperta che il piano deve forzare: 
     estrapolazioni cross-device di estimates.md.
 12. ~~Commit sessioni 8-9~~ DECISO e FATTO (2026-07-29): 4 commit diretti su `main`
     (convenzione docs/data delle sessioni 7-8). Push NON fatto (non richiesto).
-13. **Modello target del motore** — ora informato da: cuneo M4, DeepSpec (draft per
-    Qwen3-4/8/14B), ecosistema DeepSeek V4 Flash (ds4+DSpark+MLA), narrow-focus.
+13. ~~Modello target~~ **DECISO (2026-07-29): GLM-4.7-Flash (30B-A3B, MLA, MIT) come
+    modello-tesi**; dev rungs Qwen3.5-0.8B/2B (Apache); first-light invariato
+    Qwen2.5-0.5B; v2 target dichiarato: architetture ibride (Qwen3.5-35B-A3B /
+    Nemotron). Razionale e panorama architetturale in `ideas-ledger.md` §H.
+    Due [VERIFY] da chiudere in sessione di piano: (a) presenza testa MTP su
+    4.7-Flash (per spec-dec senza DeepSpec), (b) benchmark indipendenti non-vendor.
 14. ~~From-scratch vs fork~~ **DECISO (2026-07-29): SCRATCH** — narrow,
     GGUF-compatibile, llama.cpp come oracolo non come substrato; tokenizer e draft
     DeepSpec in prestito. First-light dichiarato: Qwen2.5-0.5B q4 su 4090, target
