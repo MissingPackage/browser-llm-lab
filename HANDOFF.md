@@ -2,13 +2,13 @@
 
 ## 1. Next decidable
 
-**Fase B del motore (memoria I: KV/prefix-cache OPFS) — goal nuovo, in sessione
-nuova.** Il goal `engine-fase-a` è CHIUSO (2026-07-29): DONE WHEN 8/8, ruling PI
-docket 1-5 applicati, merge su main fatto. Riancorarsi da: `docs/engine/direction.md`
-§7 (fase B: prefix-cache OPFS design ds4, forward multi-token M≤8, rollback KV;
-eredita il target ≤100 dispatch/token) + journal del goal chiuso
-(`.harness/goals/engine-fase-a/journal.md`) per i known-issue (telemetria liv.2,
-tokenizer assente). Percorso: goal-brief → contratto → goal-setup, come per la fase A.
+**Goal `engine-fase-b1` APERTO (2026-07-29): memoria I — prefill multi-token M≤8,
+rollback KV, prefix-cache OPFS.** Contratto approvato dal PI in chat (goal-brief,
+approvazione in blocco). SPLIT deciso dal PI: la fase B di direction §7 si divide in
+**B1** (questo goal, memoria/latenza di entrata) e **B2** (floor dispatch ≤100/token,
+goal separato futuro — in B1 vale solo la NON-regressione: ≥120 tok/s, ≤130 dispatch).
+Contratto: `.harness/goals/engine-fase-b1/GOAL.md`. Next: goal-setup (PHASES.md) →
+spec B1 → ruling → codice.
 
 ## 2. State delta (sessione 10)
 
@@ -32,8 +32,9 @@ tokenizer assente). Percorso: goal-brief → contratto → goal-setup, come per 
 
 ## 3. Open threads
 
-- Fasi B-D del motore (KV/OPFS → MoE/paging → spec-dec/LoRA/evals): sequenziate in
-  direction §7, ciascuna avrà spec e goal propri dopo il gate first-light.
+- Fasi B-D del motore: B1 in corso (goal aperto); **B2 = floor dispatch ≤100** (goal
+  futuro, split PI 2026-07-29); poi C (MoE/paging) e D (spec-dec/LoRA/evals) da
+  direction §7, ciascuna con spec e goal propri.
 - S22 q4f32_1 non completa i run ("empty timeline", EOS immediato) — baseline S22 = f16;
   nota aperta non bloccante (estimates §8.4).
 - Sweep fase 1b (wllama/transformersjs su S22) ancora fuori goal.
