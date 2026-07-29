@@ -111,10 +111,13 @@ test A/B sul bench: 3 run on vs off, delta medio):
 - **Golden**: `scripts/gen-golden.py` (llama-cpp-python pinnato, stesso file GGUF
   Q4_0, logits f32) salva per posizione: argmax id + top-32 (id, logit). File in
   `results/engine/golden/` (~qualche MB).
-- **Gate (contratto)**: top-1 agreement ≥ **99%** sui 512 token. Riportati non gated:
-  agreement@8 e max|Δlogit| sui top-32 (numeri attesi ~100% e ~1e-3: stessa dequant
-  Q4_0 esatta, diverso ordine di riduzione f32 — se top-1 scende sotto 99% è un bug,
-  non rumore).
+- **Gate (contratto: 99% — correzione proposta con evidenza, docket goal item 3)**:
+  la calibrazione 2026-07-29 ha misurato che ANCHE la matematica esatta (cpuref f64)
+  concorda col golden solo al 98.05% (identici 10 near-tie: l'oracolo CPU quantizza le
+  attivazioni a Q8 nel vec_dot, maxΔlogit 1.12) ⇒ il 99% secco è sopra il noise floor
+  dell'oracolo. Proposta: **top-1 vs cpuref-f64 ≥ 99%** (parità vera; misurato 100%)
+  **e top-1 vs golden ≥ 97%** (sanity; misurato 98.05%). Riportati non gated:
+  agreement@8 e max|Δlogit| sui top-32.
 - **Unit bit-exact**: `quant.ts` dequant CPU vs blocchi di riferimento generati dal
   golden script (la dequant Q4_0 in f32 è esatta: qualunque diff = bug di layout).
 - First-light (fase 6): protocollo bench del repo (warmup + 3 repliche, PROMPT_512,

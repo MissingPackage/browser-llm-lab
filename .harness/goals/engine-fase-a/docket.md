@@ -19,3 +19,12 @@ Decisioni PI pendenti del goal. Append-only; le decisioni prese migrano in GOAL/
    niente tied embeddings nel file). Fase 3 avviata pre-ruling: authority `src/engine/**`
    su branch è esplicita nel contratto e gli artefatti (parser, dequant reference,
    golden) sono invarianti rispetto a entrambi i ruling pendenti; nessun merge.]
+3. **Correzione del gate di conformance con evidenza di calibrazione** (2026-07-29,
+   iterazione 4). Misurato: (a) motore GPU vs golden llama.cpp = 502/512 (98.05%);
+   (b) cpuref f64 (matematica esatta) vs stesso golden = 502/512 con gli STESSI
+   identici 10 mismatch (posizioni e token); (c) ⇒ motore GPU vs cpuref = 512/512.
+   Il 99% del contratto è sopra il noise floor dell'oracolo (il suo vec_dot q4_0×q8_0
+   quantizza le attivazioni: algoritmo diverso, ±0.4 logit sui near-tie, maxΔ 1.12).
+   PROPOSTA: gate doppio — top-1 vs cpuref-f64 ≥ 99% (parità vera, oracolo-indipendente;
+   oggi 100%) E top-1 vs golden llama.cpp ≥ 97% (sanity; oggi 98.05%). In alternativa:
+   golden rigenerato da un oracolo f32-full-precision. Decidere prima del gate di fase.

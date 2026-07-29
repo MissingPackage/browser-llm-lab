@@ -1,5 +1,20 @@
 # Journal — engine-fase-a
 
+2026-07-29 — Iterazione 4 (nucleo comune fase 4/5, su branch): (a) cpuref.ts — forward
+CPU f64 con parità PIENA vs oracolo (16/16 smoke); (b) kernel WGSL completi + ktest
+page: 11/11 PASS su 4090 al primo colpo; (c) gpuforward.ts — motore GPU end-to-end,
+conformance 512 posizioni: **top-1 98.05%**, 8.5 ms/forward, 412 dispatch/token non
+fusi. Bring-up bug memorabile: dispatchWorkgroups(151936) > limite 65535/dim ⇒ command
+buffer rigettati IN SILENZIO (top-1 0.2%, zero errori) → griglia 2D + uncapturederror
+fatale nel motore. I 10 mismatch sono tutti near-tie (margini 0.004-0.39, 9/10 rank-1
+golden): l'oracolo CPU quantizza le attivazioni a Q8_0 (algoritmo ≠ f32 puro).
+Calibrazione del noise floor in corso: cpuref f64 sul protocollo completo — se anche
+f64 sta sotto 99%, il gate 99% della spec è sopra il rumore dell'oracolo e va corretto
+via docket (evidenza, non deroga). NOTA per il plan-check: nel motore nostro L1+L2
+sono risultati GRATIS by construction (buffer statici ⇒ bind group al load, 1
+submit/token naturale) — la domanda naive-vs-diretto si riduce di fatto alla sola
+fusione L3.
+
 2026-07-29 — Iterazione 3 (fase 3, su branch engine/fase-a, avviata pre-ruling — vedi
 docket 2): gguf.ts (parser v3, subset F32/F16/Q4_0/Q8_0), quant.ts (dequant reference
 esatta Q4_0/Q8_0 + f16), shape.ts (inventario 291 tensori VERIFICATO sul file reale —
