@@ -41,7 +41,7 @@ controllare) · `da-misurare` (esperimento definibile subito) · `moonshot` (fro
 | requiredLimits negoziati dall'adapter (M4: binding 2³²−4) | probe di progetto | stimata (regola v0) |
 | Split tensori oversize + indirezione | llama.cpp split-mode row | stimata (solo se target >8B dense) |
 | **Quantizzazione asimmetrica per classe di tensore**: routed expert aggressivi (q2-q3), attention/shared conservativi; compone col residuo low-rank | antirez/ds4 (validata in produzione) | da-verificare (recon 2026-07-29) |
-| Picco di load = stato finale (upload a chunk con backpressure; OPFS SyncAccessHandle come SSD) | — | da-misurare (banda OPFS) |
+| Picco di load = stato finale (upload a chunk con backpressure; OPFS SyncAccessHandle come SSD) | — | **misurata (2026-07-29, 4090/NVMe)**: write 2.2 GB/s; read via API 7.5-11.7 GB/s a page-cache calda ⇒ l'overhead API non è il bottleneck, il freddo è disco-bound (`results/opfs-bench/`) |
 
 ## B. Budget touch — velocità a parità di modello e spazio
 

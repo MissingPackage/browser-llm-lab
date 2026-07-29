@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "kind": "opfs-bench",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T16:22:46.596Z",
+  "fileMB": 512,
+  "cacheState": "warm-page-cache",
+  "profileDir": "/home/neuromancer/.cache/blab-opfs-profile",
+  "writeMs": 240.95500004291534,
+  "writeGBps": 2.228096166937314,
+  "size": 536870912,
+  "results": [
+    {
+      "mode": "seq",
+      "blockBytes": 65536,
+      "bytes": 536870912,
+      "ms": 49.969999969005585,
+      "gBps": 10.743864565399235
+    },
+    {
+      "mode": "seq",
+      "blockBytes": 1048576,
+      "bytes": 536870912,
+      "ms": 45.894999980926514,
+      "gBps": 11.697808306419391
+    },
+    {
+      "mode": "seq",
+      "blockBytes": 5557453,
+      "bytes": 533515488,
+      "ms": 46.685000002384186,
+      "gBps": 11.427985176668171
+    },
+    {
+      "mode": "seq",
+      "blockBytes": 19922944,
+      "bytes": 517996544,
+      "ms": 68.68500000238419,
+      "gBps": 7.541625449254122
+    },
+    {
+      "mode": "rand",
+      "blockBytes": 5557453,
+      "n": 48,
+      "bytes": 266757744,
+      "ms": 23.884999990463257,
+      "gBps": 11.168421356772468
+    }
+  ]
+}

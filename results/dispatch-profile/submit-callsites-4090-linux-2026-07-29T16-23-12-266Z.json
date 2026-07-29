@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "kind": "submit-callsites",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T16:23:12.266Z",
+  "status": "done",
+  "totalSubmits": 7164,
+  "histogram": {
+    "3273:25 <- 3598:11 <- 3567:19 <- 8413:13": 2044,
+    "3273:25 <- 3602:11 <- 3570:12 <- 8413:13": 1024,
+    "3273:25 <- 3299:12 <- at Generator.next (<anonymous>) <- 2309:68": 4,
+    "3273:25 <- 3335:11 <- 7318:69 <- 7307:19": 2044,
+    "3273:25 <- 3641:11 <- 3573:12 <- 8413:13": 1024,
+    "3646:24 <- 3573:12 <- 8413:13 <- 2816:14": 1024
+  },
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "nvidia",
+      "architecture": "lovelace",
+      "device": "",
+      "description": ""
+    },
+    "limits": {
+      "maxBufferSize": 4294967292,
+      "maxStorageBufferBindingSize": 2147483644,
+      "maxComputeWorkgroupStorageSize": 49152,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 16
+    },
+    "features": [
+      "depth32float-stencil8",
+      "chromium-experimental-subgroup-matrix",
+      "rg11b10ufloat-renderable",
+      "texture-formats-tier1",
+      "bgra8unorm-storage",
+      "chromium-experimental-multi-draw-indirect",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "chromium-experimental-timestamp-query-inside-passes",
+      "float32-filterable",
+      "indirect-first-instance",
+      "float32-blendable",
+      "subgroup-size-control",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "clip-distances",
+      "texture-formats-tier2",
+      "timestamp-query",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ],
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+    "deviceMemoryGB": 32,
+    "browser": {
+      "name": "chrome",
+      "version": "150.0.0.0"
+    },
+    "anomalies": []
+  }
+}

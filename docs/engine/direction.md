@@ -156,10 +156,12 @@ del codice (convenzione repo). Il benchmark pubblico e la roadmap generale del p
 2. **Residuo 33% del budget 4090 non attribuito** (estimates §2): se fosse
    proporzionale a N_disp, L3 vale il doppio; se fosse fisso, L4 pesa di più. Si
    scioglie solo con timestamp-query nel runtime nostro (telemetria nativa, fase A).
-3. **Banda OPFS in lettura mai misurata in casa** (un datapoint esterno ~1 GB/s
-   scrittura). Da misurare in fase B *prima* di dimensionare il paging: a ~1 GB/s un
-   miss pieno da 1.7 GB è ~1.7 s ⇒ il paging vive di hit-rate (pinning+prefetch),
-   target realistico "modello ~2× la memoria".
+3. **Banda OPFS** — misurata (fase 2 del goal, 2026-07-29, 4090/NVMe): write 2.2 GB/s,
+   read via SyncAccessHandle 7.5-11.7 GB/s **a page-cache calda** ⇒ l'API non è il
+   bottleneck; il regime freddo è disco-bound e va ancora caratterizzato (drop_caches
+   impossibile dal browser). Il dimensionamento del paging (fase C) usa: warm re-read
+   ~gratis, cold-load ≈ banda NVMe del device. Il paging vive comunque di hit-rate
+   (pinning+prefetch), target realistico "modello ~2× la memoria".
 4. **Equità benchmark**: Chrome/Linux/NVIDIA non espone shader-f16 (M4/S22 sì) — da
    dichiarare in ogni confronto pubblico.
 5. **S22**: T_fisso misurato ~18 ms/token di solo encode CPU (estimates §8) > budget a

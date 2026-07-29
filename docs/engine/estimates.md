@@ -245,9 +245,16 @@ propedeutiche a scrivere codice del motore.
 - **M1 — `dispatch-profile` su M4 Pro e S22.** ~~Il tool è scritto e girato; servono le
   mani del PI~~ **ESEGUITA (2026-07-29)** via `prof.html` (pagina manuale, stessa
   procedura fase-1b) — esiti in §8.
-- **M2 — contatore per call-site su `flushCommands`** (~10 righe sul bundle vendored).
-  Dice quali dei 7 submit/token sono eliminabili con scratch preallocato, cioè quanto vale
-  davvero L2 — oggi contabilizzata a −0.06 ms, quasi certamente una sottostima.
+- **M2 — contatore per call-site su `flushCommands`** — **ESEGUITA (2026-07-29)**, tool
+  `.harness/tools/submit-callsites.mjs` (patch di `queue.submit` con cattura stack), run
+  `results/dispatch-profile/submit-callsites-4090-*.json`: 7 164 submit in 6 call-site.
+  Per token: **2× free di buffer** (`deviceFreeDataSpace` → flush), **2× upload CPU→GPU**
+  (`copyRawBytesToBuffer`), **1× `deviceCopyToGPU`**, **1× flush pre-readback + 1× submit
+  della staging copy** (`deviceCopyFromGPU`). Verdetto: 5 su 7 eliminabili con scratch
+  preallocato + uniform ring; i 2 del readback si fondono in un unico submit (lavoro+copy
+  nello stesso encoder) ⇒ **1 submit/token raggiungibile per costruzione**. Il valore CPU
+  diretto resta ~0.06 ms, ma L2 elimina 6 rotture di batching/token la cui quota vera vive
+  nel residuo 33% — si quantifica sul motore (fase A, telemetria nativa).
 - **M3 — `timestamp-query` dentro il runtime** (fork strumentato del bundle, già in
   backlog engine-notes). È l'unica cosa che scioglie il residuo del 33%. Se il residuo
   fosse proporzionale a `N_disp`, L3 varrebbe il doppio di quanto stimato qui.
