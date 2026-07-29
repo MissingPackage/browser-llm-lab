@@ -24,6 +24,14 @@ worker.onmessage = (e: MessageEvent) => {
   } else if (m.type === "done" && m.report) {
     window.__report = m.report;
     const r = m.report;
+    if ((r as { kind?: string }).kind === "engine-tsq-diag") {
+      const s = r as unknown as { variants: { label: string; idsMatch: boolean | null; maxDlogit: number | null; gpuMsPerToken: number | null }[] };
+      $("results").innerHTML = s.variants
+        .map((v) => `<p>${v.label}: idsMatch=${v.idsMatch} · maxΔlogit=${v.maxDlogit?.toFixed(4) ?? "—"} · gpuMs=${v.gpuMsPerToken?.toFixed(3) ?? "null"}</p>`)
+        .join("");
+      $("status").textContent = "done";
+      return;
+    }
     if ((r as { kind?: string }).kind === "engine-prefill-sim") {
       const s = r as unknown as {
         prefillTokens: number;
@@ -71,6 +79,7 @@ if (params.get("conformance") === "1") {
     type: "conformance",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     goldenUrl: "/results/engine/golden/golden-qwen25-05b-q4_0.json",
+    telemetryGpu: params.get("tsq") === "1", // fase B1: gate "liv.2 attivo non perturba"
   });
 } else if (params.get("bench") === "1") {
   worker.postMessage({
@@ -81,6 +90,12 @@ if (params.get("conformance") === "1") {
 } else if (params.get("prefillsim") === "1") {
   worker.postMessage({
     type: "prefillsim",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+  });
+} else if (params.get("tsqdiag") === "1") {
+  worker.postMessage({
+    type: "tsqdiag",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
   });

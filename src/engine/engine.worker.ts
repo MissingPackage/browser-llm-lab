@@ -17,13 +17,15 @@ async function fetchBuf(url: string): Promise<ArrayBuffer> {
   return r.arrayBuffer();
 }
 
-async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: number): Promise<void> {
+async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: number, telemetryGpu = false): Promise<void> {
   progress("fetch modello…", 0);
   const gguf = await fetchBuf(modelUrl);
   const golden = JSON.parse(new TextDecoder().decode(await fetchBuf(goldenUrl))) as Golden;
   // taps=[11]: esercita il contratto tap (spec §Tap) dentro il run di conformance —
   // non cambia la matematica, aggiunge una copy per token. Check strutturale sotto.
-  const engine: EngineHandle = await createEngine(gguf, progress, { taps: [11] });
+  // telemetryGpu: opzionale (fase B1) — dopo il fix mapAsync-post-submit il liv.2
+  // deve lasciare la conformance invariata anche ATTIVO.
+  const engine: EngineHandle = await createEngine(gguf, progress, { taps: [11], telemetryGpu });
   post({ type: "meta", dispatchesPerToken: engine.dispatchesPerToken });
   let tapCheck: { layer: number; len: number; nonZero: boolean } | null = null;
 
@@ -200,6 +202,61 @@ async function runPrefillSim(modelUrl: string, promptUrl: string, replicates: nu
   });
 }
 
+// Diagnosi known-issue telemetria liv.2 (fase B1, timeboxed): matrice A/B a una
+// variabile. Sintomi fase A: timestamp AZZERATI + corruzione del compute quando il
+// liv.2 è attivo (conformance 98.05%→93.4%). Ipotesi: H1 = timestampWrites nel pass
+// descriptor; H2 = resolve/copy nello stesso encoder del forward; H3 = ring lungo.
+// Detector: 64 token greedy deterministici + logits finali vs baseline off.
+async function runTsqDiag(modelUrl: string, promptUrl: string): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  const PREFILL = 32, DECODE = 64;
+  const prompt = promptFix.tokens.slice(0, PREFILL);
+
+  type DiagOpts = { telemetryGpu?: boolean; tsqDiag?: { ring?: number; resolveEnc?: "same" | "own" | "none" } };
+  const variants: { label: string; opts: DiagOpts; hyp: string }[] = [
+    { label: "off", opts: {}, hyp: "baseline" },
+    { label: "on-ring64-same", opts: { telemetryGpu: true }, hyp: "comportamento fase A (sintomo atteso)" },
+    { label: "on-ring1-same", opts: { telemetryGpu: true, tsqDiag: { ring: 1 } }, hyp: "H3: ring lungo" },
+    { label: "on-ring1-own", opts: { telemetryGpu: true, tsqDiag: { ring: 1, resolveEnc: "own" } }, hyp: "H2: resolve nello stesso encoder" },
+    { label: "on-writes-only", opts: { telemetryGpu: true, tsqDiag: { resolveEnc: "none" } }, hyp: "H1: timestampWrites da solo" },
+  ];
+
+  let refIds: number[] | null = null;
+  let refLogits: Float32Array | null = null;
+  const results: { label: string; hyp: string; idsMatch: boolean | null; divergeAt: number | null; maxDlogit: number | null; gpuMsPerToken: number | null; timestampNote: string }[] = [];
+  for (const v of variants) {
+    progress(`variante ${v.label}…`, results.length / variants.length);
+    const engine = await createEngine(gguf, progress, v.opts);
+    let pos = 0;
+    for (let i = 0; i < prompt.length - 1; i++) await engine.forwardToken(prompt[i], pos++);
+    let prev = prompt[prompt.length - 1];
+    const ids: number[] = [];
+    for (let i = 0; i < DECODE; i++) { prev = await engine.forwardToken(prev, pos++); ids.push(prev); }
+    const logits = await engine.readLogits();
+    const tel = await engine.getTelemetry();
+    engine.destroy();
+    if (v.label === "off") { refIds = ids; refLogits = logits; }
+    const divergeAt = refIds ? ids.findIndex((id, i) => id !== refIds![i]) : null;
+    let maxD: number | null = null;
+    if (refLogits) { maxD = 0; for (let i = 0; i < logits.length; i++) maxD = Math.max(maxD, Math.abs(logits[i] - refLogits[i])); }
+    results.push({
+      label: v.label, hyp: v.hyp,
+      idsMatch: refIds ? divergeAt === -1 : null,
+      divergeAt: divergeAt === -1 ? null : divergeAt,
+      maxDlogit: maxD, gpuMsPerToken: tel.gpuMsPerToken, timestampNote: tel.timestampNote,
+    });
+  }
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-tsq-diag", promptId: promptFix.promptId,
+      prefillTokens: PREFILL, decodeTokens: DECODE, variants: results,
+    },
+  });
+}
+
 self.onmessage = (e: MessageEvent) => {
   const m = e.data as {
     type: string; modelUrl: string; goldenUrl?: string; promptUrl?: string;
@@ -208,10 +265,12 @@ self.onmessage = (e: MessageEvent) => {
   const fail = (err: unknown) =>
     post({ type: "error", message: err instanceof Error ? `${err.message}\n${err.stack}` : String(err) });
   if (m.type === "conformance") {
-    runConformance(m.modelUrl, m.goldenUrl!, m.sampleEvery ?? 16).catch(fail);
+    runConformance(m.modelUrl, m.goldenUrl!, m.sampleEvery ?? 16, (m as { telemetryGpu?: boolean }).telemetryGpu ?? false).catch(fail);
   } else if (m.type === "bench") {
     runBench(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, m.replicates ?? 3).catch(fail);
   } else if (m.type === "prefillsim") {
     runPrefillSim(m.modelUrl, m.promptUrl!, m.replicates ?? 3).catch(fail);
+  } else if (m.type === "tsqdiag") {
+    runTsqDiag(m.modelUrl, m.promptUrl!).catch(fail);
   }
 };

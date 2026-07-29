@@ -56,8 +56,10 @@ Contratto: `.harness/goals/engine-fase-b1/GOAL.md`. PHASES.md scritto (iterazion
 - `erasableSyntaxOnly` in tsconfig; righe doc valide per `@mlc-ai/web-llm 0.2.84`.
 - Dev server vite di sessioni vecchie vivi su :5173-:5177 (ascoltano solo su [::1]).
 - llama.cpp = SOLO oracolo (ruling #14): mai vendored/linkato nel motore.
-- timestamp-query nel motore: valori AZZERATI su Chrome branded Linux/NVIDIA in questa
-  integrazione (il microbench standalone funziona) — known-issue, journal goal 2026-07-29.
+- ~~timestamp-query nel motore azzerati~~ RISOLTO in fase B1 (2026-07-29): era mapAsync
+  prima del submit (bug nostro, non del browser) — docs/engine/tsq-diag-2026-07-29.md.
+  Resta vero: mai chiamare mapAsync su un buffer referenziato da un submit non ancora
+  emesso (Dawn droppa l'INTERO command buffer, in silenzio salvo uncapturederror).
 - L'oracolo llama.cpp CPU quantizza le attivazioni (q8 dot): parità esatta impossibile
   by design, noise floor 98.05% su questo corpus (docket 3 del goal).
 

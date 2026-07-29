@@ -1,5 +1,20 @@
 # Journal — engine-fase-b1
 
+2026-07-29 — Iterazione 2, fase 2 DONE (diagnosi telemetria liv.2, dentro il timebox).
+Matrice A/B (5 varianti, detector = 64 token greedy + logits finali): H1 timestampWrites
+refutata, H3 ring refutata, H2 resolve-in-encoder confermata ma incompleta; il buffer
+etichettato ha dato il colpevole: "tsq-staging used in submit while mapped". ROOT CAUSE
+= bug NOSTRO fase A (mapAsync chiamata prima del submit che riempie lo staging ⇒ Dawn
+droppa l'intero command buffer: token saltato = corruzione, copy mai eseguita = zeri;
+"own" curava solo la matematica; il microbench attendeva il submit ⇒ funzionava).
+FIX: flushTsq encoda soltanto, armTsq mappa dopo il submit. VERIFICA: matrice post-fix
+tutta pulita (idsMatch=✔, maxΔ=0, gpuMs 2.17-2.26 ms/token REALI), conformance completa
+con telemetryGpu:true GATE DOPPIO PASS (98.05% golden / 100.00% cpuref, = fase A),
+npm test 122/122. Landmine HANDOFF aggiornata (decade "timestamp azzerati", resta la
+lezione mapAsync-post-submit). Nota: docs/engine/tsq-diag-2026-07-29.md. Osservazione
+fuori scope → docket 2: GPU busy 2.2 ms/token vs 8.1 wall ⇒ ~73% del decode è sync/
+encode, dato che ri-inquadra il goal-brief di B2.
+
 2026-07-29 — Iterazione 1 (parziale, pre-spec): plan-check APPROVATO dal PI ("sul
 resto tutto ok"). Soglia prefill decisa per simulazione col criterio di Pareto
 (mandato PI in chat). Sim su 4090 (prefill-sim-4090-*.json, 2 run concordanti):

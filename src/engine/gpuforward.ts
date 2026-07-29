@@ -56,7 +56,14 @@ export interface EngineHandle {
 export async function createEngine(
   gguf: ArrayBuffer,
   onProgress: (text: string, frac: number) => void,
-  opts: { taps?: number[]; fused?: boolean; telemetry?: boolean; telemetryGpu?: boolean } = {},
+  opts: {
+    taps?: number[]; fused?: boolean; telemetry?: boolean; telemetryGpu?: boolean;
+    // Diagnosi known-issue liv.2 (fase B1, timeboxed): knob per l'A/B a una variabile.
+    // ring = dimensione del ring di query; resolveEnc = dove vive resolve+copy
+    // ("same" = encoder del forward, comportamento fase A; "own" = encoder+submit
+    // dedicato; "none" = solo timestampWrites, mai resolve).
+    tsqDiag?: { ring?: number; resolveEnc?: "same" | "own" | "none" };
+  } = {},
 ): Promise<EngineHandle> {
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("WebGPU non disponibile");
@@ -176,29 +183,39 @@ export async function createEngine(
   const pidx = storage(N_PARTIALS * 4);
   const amaxOut = storage(16);
   const P = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const stagingId = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const stagingId = device.createBuffer({ label: "staging-argmax-id", size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
   // --- telemetria ---
   let telemetryOn = opts.telemetry ?? true;
   let tForwards = 0;
   let tEncodeCpuMs = 0;
-  const TSQ_RING = 64; // token per batch di resolve (lazy, mai bloccante)
-  // Livello 2 SOLO dietro opt-in esplicito: su Chrome/Linux/NVIDIA i timestamp
-  // risultano azzerati E la loro attivazione corrompe il compute (visto 2026-07-29:
-  // conformance 98.05% -> 93.4% con maxDlogit 5.8 a parita' di tutto). Known-issue,
-  // diagnosi in fase B; il livello 1 (encode CPU) e' innocuo per costruzione.
+  const TSQ_RING = opts.tsqDiag?.ring ?? 64; // token per batch di resolve (lazy, mai bloccante)
+  const tsqResolveEnc = opts.tsqDiag?.resolveEnc ?? "same";
+  // Livello 2 dietro opt-in (feature di misura: zero-overhead da spenta by design).
+  // Il known-issue fase A (timestamp azzerati + corruzione compute) e' stato
+  // root-causato e RISOLTO in fase B1 (2026-07-29): era mapAsync chiamata prima del
+  // submit — vedi armTsq e docs/engine/tsq-diag-2026-07-29.md. Col liv.2 attivo la
+  // conformance resta PASS (gate doppio) e i timestamp sono reali (~2.2 ms/token GPU).
   const wantGpuTs = hasTsq && opts.telemetryGpu === true;
   const querySet = wantGpuTs ? device.createQuerySet({ type: "timestamp", count: TSQ_RING * 2 }) : null;
   const tsqResolve = wantGpuTs
-    ? device.createBuffer({ size: TSQ_RING * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
+    ? device.createBuffer({ label: "tsq-resolve", size: TSQ_RING * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
     : null;
   const pendingTsq: Promise<number[]>[] = [];
   let tsqIdx = 0;
-  const flushTsq = (enc: GPUCommandEncoder, count: number): void => {
-    if (!querySet || !tsqResolve) return;
+  // Root-cause del known-issue fase A (diagnosi 2026-07-29, tsq-diag): mapAsync era
+  // chiamata DENTRO flushTsq, cioè prima del submit che contiene la copy verso lo
+  // staging — Dawn valida "buffer used in submit while mapped" e DROPPA l'intero
+  // command buffer (⇒ token saltato = corruzione; copy mai eseguita = timestamp a
+  // zero). Fix: flushTsq encoda soltanto; armTsq (la mapAsync) parte DOPO il submit.
+  const flushTsq = (enc: GPUCommandEncoder, count: number): GPUBuffer | null => {
+    if (!querySet || !tsqResolve) return null;
     enc.resolveQuerySet(querySet, 0, count * 2, tsqResolve, 0);
-    const staging = device.createBuffer({ size: count * 2 * 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const staging = device.createBuffer({ label: "tsq-staging", size: count * 2 * 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     enc.copyBufferToBuffer(tsqResolve, 0, staging, 0, count * 2 * 8);
+    return staging;
+  };
+  const armTsq = (staging: GPUBuffer, count: number): void => {
     pendingTsq.push(
       (async () => {
         await staging.mapAsync(GPUMapMode.READ);
@@ -331,11 +348,23 @@ export async function createEngine(
       }
       pass.end();
       enc.copyBufferToBuffer(amaxOut, 0, stagingId, 0, 4);
+      let flushOwn = false;
+      let tsqStaging: GPUBuffer | null = null;
       if (telemetryOn && querySet) {
         tsqIdx++;
-        if (tsqIdx === TSQ_RING) { flushTsq(enc, TSQ_RING); tsqIdx = 0; }
+        if (tsqIdx === TSQ_RING) {
+          if (tsqResolveEnc === "same") tsqStaging = flushTsq(enc, TSQ_RING);
+          flushOwn = tsqResolveEnc === "own";
+          tsqIdx = 0;
+        }
       }
       device.queue.submit([enc.finish()]);
+      if (flushOwn) {
+        const enc2 = device.createCommandEncoder();
+        tsqStaging = flushTsq(enc2, TSQ_RING);
+        device.queue.submit([enc2.finish()]);
+      }
+      if (tsqStaging) armTsq(tsqStaging, TSQ_RING); // mapAsync SOLO dopo il submit
       if (telemetryOn) { tEncodeCpuMs += performance.now() - tEnc0; tForwards++; }
       await stagingId.mapAsync(GPUMapMode.READ);
       const id = new Uint32Array(stagingId.getMappedRange())[0];
@@ -397,19 +426,18 @@ export async function createEngine(
     async getTelemetry() {
       const batches = await Promise.all(pendingTsq);
       pendingTsq.length = 0;
+      // v>0 scarta i pass sotto il quanto di Chrome (~100us) e gli eventuali reset
+      // del counter GPU (delta negativi, documentati) — non più gli "zeri" del
+      // known-issue fase A, risolto (vedi armTsq).
       const gpuMs = batches.flat().filter((v) => v > 0);
-      // Known-issue (2026-07-29): su Chrome branded Linux/NVIDIA i timestamp del pass
-      // tornano azzerati in questa integrazione (anche col pattern del microbench,
-      // che invece funziona standalone). Livello 2 resta feature-detected e lazy;
-      // diagnosi rimandata — si dichiara null invece di riportare zeri.
       const mean = gpuMs.length ? gpuMs.reduce((a, b) => a + b, 0) / gpuMs.length : null;
       return {
         forwards: tForwards,
         encodeCpuMsPerToken: tForwards ? tEncodeCpuMs / tForwards : 0,
         gpuMsPerToken: mean,
         timestampNote: querySet
-          ? (gpuMs.length ? "quantizzazione Chrome ~100us, media su batch da 64" : "timestamp azzerati (known-issue)")
-          : "livello 2 spento di default (known-issue 2026-07-29: valori azzerati + corruzione compute quando attivo su Chrome/Linux/NVIDIA — opt-in telemetryGpu, diagnosi fase B)",
+          ? "quantizzazione Chrome ~100us, media su batch (ring)"
+          : "livello 2 opt-in (telemetryGpu) — spento: zero-overhead by design",
       };
     },
     async readTap(layer: number): Promise<Float32Array> {
