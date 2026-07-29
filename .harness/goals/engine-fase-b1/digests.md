@@ -2,6 +2,16 @@
 
 (un digest per ciclo, dal working protocol)
 
+## Iterazione 2 (2026-07-29, fasi 1+2)
+Fase 2 DONE dentro il timebox: il known-issue telemetria liv.2 era un bug NOSTRO
+(mapAsync prima del submit ⇒ Dawn droppava l'intero command buffer: corruzione + zeri).
+Fix (armTsq post-submit) verificato: matrice A/B pulita, gpuMs reali ~2.2 ms/token,
+conformance GATE DOPPIO PASS con liv.2 attivo, 122/122 test. Landmine HANDOFF chiusa.
+Fase 1 DONE: spec B1 scritta (multi-token M≤8, crop con kvLen, prefix-cache OPFS stile
+ds4 ristretta a token-id, LRU 512 MB, soglie con prefill 3× Pareto) → ruling richiesto
+(docket 3). Scoperta fuori scope per B2 nel docket 2: ~73% del decode è fuori GPU.
+Next: fasi 3-6 blocked sul ruling spec — stop-by-design.
+
 ## Iterazione 0 (2026-07-29, goal-setup)
 Contratto approvato in blocco (split B1/B2 deciso dal PI). PHASES.md scritto: 6 fasi —
 parallel-group 1+2 (spec B1 ∥ diagnosi telemetria liv.2 timeboxed), poi spine

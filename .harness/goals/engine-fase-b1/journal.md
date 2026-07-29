@@ -1,5 +1,13 @@
 # Journal — engine-fase-b1
 
+2026-07-29 — Iterazione 2 (cont.), fase 1 DONE: spec B1 scritta
+(specs/2026-07-29-engine-fase-b1-design.md, 5 sezioni contratto verificate via grep).
+Decisioni proposte al ruling (docket 3): chiave su token-id, lookup v1 esatto, niente
+logits nel checkpoint (1 forward al restore), LRU semplice, contratto hard pos===kvLen,
+budget 512 MB. Soglia prefill 3× già PI-ruled (Pareto, it.1); resto soglie =
+non-regressione fase A. Con fase 2 già chiusa, TUTTO il residuo (fasi 3-6) è
+PI-gated dal ruling spec ⇒ stop-by-design da working protocol.
+
 2026-07-29 — Iterazione 2, fase 2 DONE (diagnosi telemetria liv.2, dentro il timebox).
 Matrice A/B (5 varianti, detector = 64 token greedy + logits finali): H1 timestampWrites
 refutata, H3 ring refutata, H2 resolve-in-encoder confermata ma incompleta; il buffer

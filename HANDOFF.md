@@ -7,9 +7,11 @@ rollback KV, prefix-cache OPFS.** Contratto approvato dal PI in chat (goal-brief
 approvazione in blocco). SPLIT deciso dal PI: la fase B di direction §7 si divide in
 **B1** (questo goal, memoria/latenza di entrata) e **B2** (floor dispatch ≤100/token,
 goal separato futuro — in B1 vale solo la NON-regressione: ≥120 tok/s, ≤130 dispatch).
-Contratto: `.harness/goals/engine-fase-b1/GOAL.md`. PHASES.md scritto (iterazione 0):
-**pende il plan-check** (docket 1 del goal) — al ruling PI partono le fasi 1 (spec B1)
-+ 2 (diagnosi telemetria, timeboxed) in parallelo.
+Contratto: `.harness/goals/engine-fase-b1/GOAL.md`. Fasi 1+2 DONE (2026-07-29, branch
+`engine/fase-b1`): known-issue telemetria RISOLTO (bug nostro, mapAsync pre-submit —
+`docs/engine/tsq-diag-2026-07-29.md`), spec B1 scritta. **Pende il ruling spec (docket
+3 del goal)** — le fasi 3-6 (kernel M≤8 → crop → OPFS → bench) sono blocked fino al
+ruling. Nel docket 2 un dato che ri-inquadra B2: ~73% del decode è fuori GPU.
 
 ## 2. State delta (sessione 10)
 
