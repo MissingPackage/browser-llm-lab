@@ -143,8 +143,9 @@ Le stesse leve, sugli altri due regimi:
 | f16 compute path | 0 (feature assente su Chrome/Linux) | ~2× sulle GEMV | **+66% misurato** | — |
 
 ᵉ = estrapolato: l'encode CPU non è misurato su quel device — per M4 assumo lo stesso
-costo per dispatch della 4090, per S22 un fattore 3× (CPU mobile). Sono le assunzioni che
-M1 (§6) sostituisce con numeri · ᵐ = limitato dalla banda: il q4
+costo per dispatch della 4090, per S22 un fattore 3× (CPU mobile). **Assunzioni superate
+da M1, eseguita: misure in §8** (M4 ~2.5 µs/dispatch, S22 ~67: la colonna S22 sottostima
+L1/L3, la colonna M4 sovrastima L1) · ᵐ = limitato dalla banda: il q4
 S22 è già a 16.4 di 21.7 GB/s misurati (**76% della banda**), l'M4 a 171 di 248 (69%). Il
 "kernel dequant lontano dal suo tetto" del deep-dive **è un fatto solo della 4090** (86 di
 436 GB/s, 20%) — e sulla 4090 i kernel sono il 23% del budget. Il margine reale di kernel
@@ -241,11 +242,9 @@ integrabile nei `results/`). Nessuno di questi cambia col venir meno del vincolo
 In ordine di rapporto informazione/costo. M1 e M2 sono le uniche che considero
 propedeutiche a scrivere codice del motore.
 
-- **M1 — `dispatch-profile` su M4 Pro e S22.** Il tool è scritto e girato; servono le mani
-  del PI (run manuale, ~5 min a device, dev server + `HEADED=1 CHANNEL=chrome`). Chiude
-  l'incertezza più grande del quadro (encode CPU e floor su M4, §2) e conferma che
-  `N_disp = 270` sia davvero invariante di device. **Senza M1, le colonne M4/S22 di §3
-  restano estrapolazioni.**
+- **M1 — `dispatch-profile` su M4 Pro e S22.** ~~Il tool è scritto e girato; servono le
+  mani del PI~~ **ESEGUITA (2026-07-29)** via `prof.html` (pagina manuale, stessa
+  procedura fase-1b) — esiti in §8.
 - **M2 — contatore per call-site su `flushCommands`** (~10 righe sul bundle vendored).
   Dice quali dei 7 submit/token sono eliminabili con scratch preallocato, cioè quanto vale
   davvero L2 — oggi contabilizzata a −0.06 ms, quasi certamente una sottostima.
@@ -268,5 +267,41 @@ deep-dive, già mergiati su main e destinati alla pagina pubblica:
 
 La *conclusione* di quei passaggi regge (lavoro GPU utile ~2 ms su ~9 misurati, quindi
 75-85% orchestrazione): con 270 dispatch a 5 µs di floor il conto torna a 2.15 ms invece
-di 1-2 ms. È il numero intermedio a essere sbagliato, non la tesi. **Non ho modificato i
-doc**: sono artefatti pubblicati e la correzione è un ruling PI (docket).
+di 1-2 ms. È il numero intermedio a essere sbagliato, non la tesi. ~~Non ho modificato i
+doc~~ **Corretti il 2026-07-29** (ruling PI: doc stale si corregge appena notato) — in
+quattro doc, non tre: anche `engine-design-notes.md` citava "~34 + 1 sync".
+
+## 8. M1 eseguita — misure cross-device (2026-07-29)
+
+Run manuali via `prof.html` (S22: q4f16_1; M4: q4f32_1 e q4f16_1) + run 4090 di
+cross-validazione della pagina contro il tool. File in `results/dispatch-profile/`.
+
+| | 4090 (f32) | M4 Pro (f32 / f16) | S22 (f16) |
+|---|---|---|---|
+| dispatch totali | 275 456 | 275 456 / 275 456 | 275 456 |
+| submit totali | 7 164 | 7 164 | 7 164 |
+| dispatch/submit (finestra decode) | 38.4 | 38.4 | 38.4 |
+| encode CPU µs/dispatch | 3.9 (tool 28/7: 8.6) | 2.7 / 2.5 | **67.4** |
+| tok/s sotto patch | 112.8 | 92.5 / 98.1 | 6.9 |
+
+Quattro fatti:
+
+1. **`N_disp = 269/token` e 7 submit/token sono invarianti di device E di quant** —
+   totali identici al byte in tutti e cinque i run. Il grafo di esecuzione è
+   deterministico; la premessa strutturale di §2-3 è confermata.
+2. **L'encode CPU per dispatch era la stima più sbagliata, in direzioni opposte.**
+   M4 misurato ~2.5 µs (assunto = 4090: in realtà l'M4 encoda *più veloce*); S22
+   misurato ~67 µs (assunto 3× la 4090 ≈ 25 µs: è ~10-25×). Solo encode CPU su S22:
+   270 × 67 µs ≈ **18 ms/token** — è la voce dominante del suo budget, e le leve
+   L1/L3 su S22 valgono *più* di quanto stimato in §3. **Le colonne ᵉ di §3 vanno
+   ricalcolate**; i numeri grezzi bastano a `direction.md`, il ricalcolo fine può
+   attendere il primo timestamp-query nel runtime (M3).
+3. **Observer effect dichiarato**: i tok/s sotto patch non sostituiscono i bench.
+   Su 4090/M4 il patch è neutro (112.8 vs ~107; 98.1 vs 98.3 baseline); su S22
+   6.9 vs 11.7 baseline — sul device CPU-encode-bound le ~2200 chiamate
+   `performance.now()`/token del patch pesano, e il run è partito a telefono già
+   caldo (il 67 µs/dispatch può includere throttling: leggerlo come limite superiore).
+4. **q4f32_1 su S22 non ha completato il run prof** ("empty timeline: no chunks
+   received" — stream chiuso senza contenuto, nessuna eccezione engine). Non
+   investigato oltre una volta riusciti su f16; coerente col pivot a f16 già fatto in
+   fase-1b. Nota aperta, non bloccante: la baseline S22 del progetto è f16.

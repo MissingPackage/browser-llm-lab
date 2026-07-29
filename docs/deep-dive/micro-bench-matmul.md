@@ -84,8 +84,10 @@ Tre letture:
 ### Cosa dice sul gap del 4-6% (la domanda di `dequant-kernels.md`)
 
 Stima per ordini di grandezza, tutta da numeri misurati qui e in `results/`: alle taglie
-del modello 0.5B (matrici 896-4864), un GEMV isolato costa 5-50 µs. Un token di decode ne
-lancia ~34 (proiezioni + attention + norm + sampling, `compute-shader-dispatch.md`): anche
+del modello 0.5B (matrici 896-4864), un GEMV isolato costa 5-50 µs. Un token di decode
+lancia ~270 dispatch misurati (`results/dispatch-profile/`; i "~34" citati in prima
+stesura erano i kernel *distinti* nel dump WGSL, non le invocazioni — i GEMV restano la
+quota dominante del tempo-kernel): anche
 contando generosamente ~100-200 µs di puro tempo-kernel per l'intero forward pass più il
 lm_head (85 MB q4 su 896×151936 → ~0.9 ms a 94 GB/s), il **lavoro GPU utile per token è
 nell'ordine di 1-2 ms contro i 8.6-9.9 ms misurati end-to-end** sulla 4090. Il grosso del budget per
@@ -127,8 +129,11 @@ Quattro letture:
    effettivi su 248 = 69%). Spiega perché nel bench end-to-end l'M4 (98.3 tok/s) sta
    alla pari della 4090 (101-116) pur con metà banda.
 2. **L'S22 ha due problemi sovrapposti**: banda effettiva al 43% della targa e un floor
-   per-dispatch di ~130 µs (24× la 4090) — a ~34 dispatch per token, solo il lancio dei
-   kernel costa ~4.5 ms/token. A differenza della 4090 (orchestration-bound) e dell'M4
+   per-dispatch di ~130 µs (24× la 4090). Ai ~270 dispatch/token misurati
+   (`results/dispatch-profile/`) il conto naive col floor isolato darebbe ~35 ms/token —
+   sovrastima, perché i dispatch batchati in un encoder condiviso ammortizzano il
+   round-trip; la misura diretta lato CPU sull'S22 dà ~67 µs/dispatch di solo encode
+   ≈ 18 ms/token. In entrambe le letture, ordini di grandezza sopra la 4090. A differenza della 4090 (orchestration-bound) e dell'M4
    (vicino al metallo), l'S22 è genuinamente kernel+dispatch-bound.
 3. **Nel GEMV puro l'f16 non paga sull'S22** (~5.5 G pesi/s come l'f32): il +66% di
    decode del run reale q4f16_1 (`results/s22-ultra-2026-07-27T18-09-45-362Z.json`,

@@ -62,10 +62,12 @@ q4, 4090) con le sole L1-L3. Decisione ancora aperta che il piano deve forzare: 
 4-5. Ereditati: promozione skill `bottleneck-brainstorm`; #10 qualityScore (ora si
      aggancia alla sez. D del ledger), #8 sorveglianza wllama (ora rilevante: v3.1 ha
      WebGPU via LlamaWeb).
-10. **Correzione doc pubblicati** ("~34 dispatch/token" → 270; "1 submit" → 7) in tre
-    doc deep-dive. Correggere ora o nel consolidamento?
-11. **Run `dispatch-profile` su M4 e S22** (mani PI, ~5 min/device) — chiude le
-    estrapolazioni cross-device di estimates.md.
+10. ~~Correzione doc pubblicati~~ FATTO (2026-07-29, ruling "doc stale si corregge
+    subito"): quattro doc corretti (anche engine-design-notes), vedi estimates §7.
+11. ~~Run `dispatch-profile` su M4 e S22~~ FATTO (2026-07-29) via `prof.html` (pagina
+    manuale nuova). Esiti in estimates §8: N_disp/submit invarianti di device e quant,
+    encode CPU S22 ~67 µs/dispatch (~18 ms/token), M4 ~2.5 µs. S22 q4f32_1 non completa
+    (empty timeline) — baseline S22 resta f16.
 12. ~~Commit sessioni 8-9~~ DECISO e FATTO (2026-07-29): 4 commit diretti su `main`
     (convenzione docs/data delle sessioni 7-8). Push NON fatto (non richiesto).
 13. ~~Modello target~~ **DECISO (2026-07-29): GLM-4.7-Flash (30B-A3B, MLA, MIT) come

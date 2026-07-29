@@ -18,7 +18,8 @@ motore di inferenza browser da zero. Fonti: `compute-shader-dispatch.md`,
 
 1. **A taglia piccola comanda l'orchestrazione, non i kernel.** Sulla 4090 il lavoro GPU
    utile per token è ~1-2 ms contro 8.6-9.9 misurati: 75-85% del budget vive *tra* i
-   kernel (~34 dispatch + 1 sync per token). Un motore custom compra più throughput
+   kernel (270 dispatch + 7 submit + 1 sync per token, misurati —
+   `results/dispatch-profile/`). Un motore custom compra più throughput
    riducendo dispatch e sync che ottimizzando WGSL.
 2. **La banda di targa non è la banda.** 4090 laptop: 576 GB/s dichiarati, ~435 misurati
    in streaming puro (−25%); e qualsiasi working set sotto la L2 (64 MB su AD103) misura

@@ -66,7 +66,10 @@ writeup in giro, che spesso descrivono ancora "un submit per kernel"):
 
 Nel decode loop, i kernel dell'intero forward pass (attention, matmul, norm, softmax,
 sampling top-p) si accumulano nell'encoder senza alcuna sync intermedia. La sync arriva
-**una volta per token generato**, quando il layer JS deve leggere l'id del token
+**una volta per token generato** (misurato: `mapAsync` = 1.0/token esatto,
+`results/dispatch-profile/`; i `submit` invece sono **7 per token**, non 1 — copie e
+free di buffer forzano flush intermedi, come previsto dalle condizioni di
+`flushCommands()` sopra). La sync scatta quando il layer JS deve leggere l'id del token
 campionato: `copyFrom(sampledTokensDevice)` + `yield this.device.sync()` (righe
 11126-11135). `sync()` (righe 4445-4458) flusha l'encoder e attende o la promise della
 copia GPU→CPU pendente (fast path) o `queue.onSubmittedWorkDone()`. Il readback usa
@@ -94,7 +97,8 @@ adapter nvidia/lovelace) e `results/s22-ultra-2026-07-27T00-34-09-931Z.json` (S2
 Xclipse 920), stesso modello `Qwen2.5-0.5B-Instruct-q4f32_1-MLC`.
 
 - **Decode 101–116 tok/s sulla 4090 = 8.6–9.9 ms per token.** Ogni token è: N dispatch
-  accumulati in un encoder (l'intero forward pass), un submit, una sync col JS per il
+  accumulati in un encoder (l'intero forward pass), 7 submit (misurati — non 1: vedi
+  sopra), una sync col JS per il
   readback dell'id campionato. Il costo per token include quindi un round-trip CPU→GPU→CPU
   fisso per il sampling, non solo il calcolo. Quanto pesi quel round-trip dentro i ~9 ms
   non è misurabile oggi dal runtime stesso (nessun timestamp-query — sopra). Il
