@@ -2,14 +2,13 @@
 
 ## 1. Next decidable
 
-**Goal `engine-fase-a`: FIRST LIGHT RAGGIUNTO — servono 4 ruling PI e il goal chiude.**
-Il motore (branch `engine/fase-a`) decodifica Qwen2.5-0.5B Q4_0 a **123.0 tok/s vs
-WebLLM 116.5-117.8 same-day** (3 run stabili), parità = matematica esatta (mismatch
-set identico a cpuref-f64), 123 dispatch/1 submit/0 createBindGroup per token
-(WebLLM: 270/7/270), telemetria nativa overhead −0.55%. Docket del goal: (1) plan-check
-[moot nei fatti], (2) ruling spec, (3) gate conformance 99%→proposta doppio gate,
-(4) budget L3 123 vs ≤100, (5) merge su main. Tutto il resto è fatto ed evidenziato
-in results/engine/ e nel journal del goal.
+**Fase B del motore (memoria I: KV/prefix-cache OPFS) — goal nuovo, in sessione
+nuova.** Il goal `engine-fase-a` è CHIUSO (2026-07-29): DONE WHEN 8/8, ruling PI
+docket 1-5 applicati, merge su main fatto. Riancorarsi da: `docs/engine/direction.md`
+§7 (fase B: prefix-cache OPFS design ds4, forward multi-token M≤8, rollback KV;
+eredita il target ≤100 dispatch/token) + journal del goal chiuso
+(`.harness/goals/engine-fase-a/journal.md`) per i known-issue (telemetria liv.2,
+tokenizer assente). Percorso: goal-brief → contratto → goal-setup, come per la fase A.
 
 ## 2. State delta (sessione 10)
 
