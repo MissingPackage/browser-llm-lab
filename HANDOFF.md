@@ -7,8 +7,9 @@ rollback KV, prefix-cache OPFS.** Contratto approvato dal PI in chat (goal-brief
 approvazione in blocco). SPLIT deciso dal PI: la fase B di direction §7 si divide in
 **B1** (questo goal, memoria/latenza di entrata) e **B2** (floor dispatch ≤100/token,
 goal separato futuro — in B1 vale solo la NON-regressione: ≥120 tok/s, ≤130 dispatch).
-Contratto: `.harness/goals/engine-fase-b1/GOAL.md`. Next: goal-setup (PHASES.md) →
-spec B1 → ruling → codice.
+Contratto: `.harness/goals/engine-fase-b1/GOAL.md`. PHASES.md scritto (iterazione 0):
+**pende il plan-check** (docket 1 del goal) — al ruling PI partono le fasi 1 (spec B1)
++ 2 (diagnosi telemetria, timeboxed) in parallelo.
 
 ## 2. State delta (sessione 10)
 
