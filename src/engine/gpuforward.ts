@@ -12,8 +12,10 @@ import { QWEN25_05B as S, validateQwen25_05B } from "./shape";
 import {
   gemvQuantWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl, attnDecodeWgsl,
   siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, ARGMAX_CHUNK,
-  gemvGrid,
+  gemvGrid, attnFusedWgsl,
+  rmsGemvQ8FastWgsl, rmsPairGemvSiluFastWgsl, gemvResidualFastWgsl, rmsGemvQ4FastBiasWgsl,
 } from "./kernels/wgsl";
+import type { RepackedQuant } from "./quant";
 
 export const CTX_MAX = 1024; // bench: prompt ~469 + warmup/gen 256 (scores in shared: 4 KB, ok)
 const KV_DIM = S.nKvHead * S.headDim;
@@ -36,7 +38,7 @@ export interface EngineHandle {
 export async function createEngine(
   gguf: ArrayBuffer,
   onProgress: (text: string, frac: number) => void,
-  opts: { taps?: number[] } = {},
+  opts: { taps?: number[]; fused?: boolean } = {},
 ): Promise<EngineHandle> {
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("WebGPU non disponibile");
@@ -49,6 +51,9 @@ export async function createEngine(
     requiredLimits: {
       maxStorageBufferBindingSize: need,
       maxBufferSize: need,
+      // il kernel down-proj tiene xin (4864 f32) in shared: 19.7 KB > default 16 KB.
+      // 32 KB è nel range di tutti i device target (S22: 32768, probe fase-1b).
+      maxComputeWorkgroupStorageSize: Math.min(lim.maxComputeWorkgroupStorageSize, 32768),
     },
   });
   // Gli errori di validazione WebGPU sono silenziosi by default e trasformano ogni
@@ -83,13 +88,36 @@ export async function createEngine(
     return upload(new Float32Array(gguf, f.dataOffset + t.offset, elems));
   };
 
+  // Concat QKV al repack (piano fuso): righe q|k|v in un solo qs/scales — i
+  // conteggi blocchi per tensore sono pari, quindi le scale impacchettate a coppie
+  // si concatenano senza ricodifica.
+  const repackConcat = (ts: GgufTensorInfo[]): { qs: Uint32Array; scales: Uint32Array } => {
+    const parts: RepackedQuant[] = ts.map((t) => {
+      const nBlocks = t.dims.reduce((a, b) => a * b, 1) / 32;
+      if (nBlocks % 2 !== 0) throw new Error(`repackConcat: blocchi dispari in ${t.name}`);
+      return repackQ4_0(bytes, f.dataOffset + t.offset, nBlocks);
+    });
+    const qs = new Uint32Array(parts.reduce((a, r) => a + r.qs.length, 0));
+    const scales = new Uint32Array(parts.reduce((a, r) => a + r.scales.length, 0));
+    let qo = 0, so = 0;
+    for (const r of parts) { qs.set(r.qs, qo); scales.set(r.scales, so); qo += r.qs.length; so += r.scales.length; }
+    return { qs, scales };
+  };
+
   // --- pesi su GPU ---
   const T = (name: string) => byName.get(name)!;
   onProgress("upload pesi…", 0);
   const layers = [];
   for (let l = 0; l < S.nLayer; l++) {
     const p = (n: string) => T(`blk.${l}.${n}`);
+    const qkvConcat = repackConcat([p("attn_q.weight"), p("attn_k.weight"), p("attn_v.weight")]);
+    const biasCat = new Float32Array(S.dModel + 2 * KV_DIM);
+    biasCat.set(new Float32Array(gguf, f.dataOffset + p("attn_q.bias").offset, S.dModel), 0);
+    biasCat.set(new Float32Array(gguf, f.dataOffset + p("attn_k.bias").offset, KV_DIM), S.dModel);
+    biasCat.set(new Float32Array(gguf, f.dataOffset + p("attn_v.bias").offset, KV_DIM), S.dModel + KV_DIM);
     layers.push({
+      qkv: { qs: upload(qkvConcat.qs), scales: upload(qkvConcat.scales) },
+      qkvBias: upload(biasCat),
       attnNorm: f32Buf(p("attn_norm.weight")),
       wq: quantBufs(p("attn_q.weight")), bq: f32Buf(p("attn_q.bias")),
       wk: quantBufs(p("attn_k.weight")), bk: f32Buf(p("attn_k.bias")),
@@ -116,6 +144,7 @@ export async function createEngine(
   const x = storage(S.dModel * 4);
   const hn = storage(S.dModel * 4);
   const qB = storage(S.dModel * 4);
+  const qkvB = storage((S.dModel + 2 * KV_DIM) * 4);
   const kB = storage(KV_DIM * 4);
   const vB = storage(KV_DIM * 4);
   const attnOut = storage(S.dModel * 4);
@@ -148,6 +177,13 @@ export async function createEngine(
     add: mkPipe(addInPlaceWgsl(S.dModel)),
     am1: mkPipe(argmaxStage1Wgsl(S.vocab)),
     am2: mkPipe(argmaxStage2Wgsl(N_PARTIALS)),
+    // fusi (L3)
+    rmsQkv: mkPipe(rmsGemvQ4FastBiasWgsl({ K: S.dModel, N: S.dModel + 2 * KV_DIM, eps: S.rmsEps })),
+    attnF: mkPipe(attnFusedWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_MAX, freqBase: S.ropeFreqBase })),
+    oResid: mkPipe(gemvResidualFastWgsl({ K: S.dModel, N: S.dModel })),
+    pairSilu: mkPipe(rmsPairGemvSiluFastWgsl({ K: S.dModel, N: S.dFfn, eps: S.rmsEps })),
+    downResid: mkPipe(gemvResidualFastWgsl({ K: S.dFfn, N: S.dModel })),
+    rmsLmHead: mkPipe(rmsGemvQ8FastWgsl({ K: S.dModel, N: S.vocab, eps: S.rmsEps })),
   };
   const bg = (pipe: GPUComputePipeline, bufs: GPUBuffer[], uni?: GPUBuffer) =>
     device.createBindGroup({
@@ -172,7 +208,18 @@ export async function createEngine(
     tapBufs.set(l, storage(S.dModel * 4));
   }
 
+  const fused = opts.fused ?? true;
   for (const L of layers) {
+    if (fused) {
+      push(pipes.rmsQkv, [L.qkv.qs, L.qkv.scales, x, L.attnNorm, qkvB, L.qkvBias], gemvGrid((S.dModel + 2 * KV_DIM) / 4));
+      push(pipes.attnF, [qkvB, L.kCache, L.vCache, attnOut], S.nHead, P);
+      push(pipes.oResid, [L.wo.qs, L.wo.scales, attnOut, x], gemvGrid(S.dModel / 4));
+      push(pipes.pairSilu, [L.wGate.qs, L.wGate.scales, L.wUp.qs, L.wUp.scales, x, L.ffnNorm, gateB], gemvGrid(S.dFfn / 4));
+      push(pipes.downResid, [L.wDown.qs, L.wDown.scales, gateB, x], gemvGrid(S.dModel / 4));
+      const tapDstF = tapBufs.get(layers.indexOf(L));
+      if (tapDstF) steps.push({ kind: "copy", src: x, dst: tapDstF, bytes: S.dModel * 4 });
+      continue;
+    }
     push(pipes.rms, [x, L.attnNorm, hn], 1);
     push(pipes.gemvQDD_b, [L.wq.qs, L.wq.scales, hn, qB, L.bq], gemvGrid(S.dModel));
     push(pipes.gemvQDKV_b, [L.wk.qs, L.wk.scales, hn, kB, L.bk], gemvGrid(KV_DIM));
@@ -193,8 +240,12 @@ export async function createEngine(
     const tapDst = tapBufs.get(layers.indexOf(L));
     if (tapDst) steps.push({ kind: "copy", src: x, dst: tapDst, bytes: S.dModel * 4 });
   }
-  push(pipes.rms, [x, outNorm, hn], 1);
-  push(pipes.gemvOut, [wOut.qs, wOut.scales, hn, logits], gemvGrid(S.vocab));
+  if (fused) {
+    push(pipes.rmsLmHead, [wOut.qs, wOut.scales, x, outNorm, logits], gemvGrid(S.vocab / 4));
+  } else {
+    push(pipes.rms, [x, outNorm, hn], 1);
+    push(pipes.gemvOut, [wOut.qs, wOut.scales, hn, logits], gemvGrid(S.vocab));
+  }
   push(pipes.am1, [logits, pmax, pidx], N_PARTIALS);
   push(pipes.am2, [pmax, pidx, amaxOut], 1);
   onProgress("pronto", 1);

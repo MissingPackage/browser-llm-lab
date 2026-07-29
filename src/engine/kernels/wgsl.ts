@@ -334,3 +334,395 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
   if (t == 0u) { out[0] = vidx[0]; }
 }`;
 }
+
+// ============================== KERNEL FUSI (L3) ==============================
+// Fusioni della spec §Piano statico. Il trucco comune: la rmsnorm si ricalcola
+// per workgroup (riduzione su D elementi, ~gratis rispetto al dot) così la catena
+// norm→matmul diventa un dispatch solo, senza buffer intermedi né barriere globali.
+
+// Attention fusa: assorbe RoPE(q), RoPE(k_cur), append in cache (head "owner" per
+// kv-head) e l'attention decode. Legge il buffer QKV concatenato [q|k|v].
+export function attnFusedWgsl(opts: {
+  nHead: number; nKvHead: number; headDim: number; ctxMax: number; freqBase: number;
+}): string {
+  const { nHead, nKvHead, headDim, ctxMax, freqBase } = opts;
+  const groups = nHead / nKvHead;
+  const kvDim = nKvHead * headDim;
+  const half = headDim / 2;
+  return `${TOK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> qkv: array<f32>; // [${nHead * headDim} q | ${kvDim} k | ${kvDim} v]
+@group(0) @binding(1) var<storage, read_write> kCache: array<f32>;
+@group(0) @binding(2) var<storage, read_write> vCache: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@group(0) @binding(4) var<uniform> P: TokParams;
+const HEAD_DIM = ${headDim}u;
+const HALF = ${half}u;
+const KV_DIM = ${kvDim}u;
+const GROUPS = ${groups}u;
+const K_OFF = ${nHead * headDim}u;
+const V_OFF = ${nHead * headDim + kvDim}u;
+const SCALE = ${1 / Math.sqrt(headDim)};
+var<workgroup> qh: array<f32, ${headDim}>;
+var<workgroup> kh: array<f32, ${headDim}>;
+var<workgroup> vh: array<f32, ${headDim}>;
+var<workgroup> scores: array<f32, ${ctxMax}>;
+var<workgroup> red: array<f32, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let h = wid.x;
+  let t = lid.x;
+  let kvHead = h / GROUPS;
+  let pos = P.pos;
+  // A) rope locale di q (slice del head) e k_cur (slice del kv-head); copia v_cur
+  if (t < HALF) {
+    let theta = f32(pos) * pow(${freqBase}.0, -f32(t) / f32(HALF));
+    let c = cos(theta); let s = sin(theta);
+    let qb = h * HEAD_DIM;
+    let a = qkv[qb + t]; let b = qkv[qb + t + HALF];
+    qh[t] = a * c - b * s;
+    qh[t + HALF] = a * s + b * c;
+    let kb = K_OFF + kvHead * HEAD_DIM;
+    let ka = qkv[kb + t]; let kb2 = qkv[kb + t + HALF];
+    kh[t] = ka * c - kb2 * s;
+    kh[t + HALF] = ka * s + kb2 * c;
+  }
+  if (t < HEAD_DIM) { vh[t] = qkv[V_OFF + kvHead * HEAD_DIM + t]; }
+  workgroupBarrier();
+  // B) append in cache: solo il head "owner" del kv-head (nessuna dipendenza
+  // cross-workgroup: la posizione corrente si legge dalle copie locali)
+  if (h % GROUPS == 0u && t < HEAD_DIM) {
+    kCache[pos * KV_DIM + kvHead * HEAD_DIM + t] = kh[t];
+    vCache[pos * KV_DIM + kvHead * HEAD_DIM + t] = vh[t];
+  }
+  // C) score: passato dalla cache, corrente dalle copie locali
+  let n = pos + 1u;
+  for (var p = t; p < pos; p = p + 64u) {
+    let kOff = p * KV_DIM + kvHead * HEAD_DIM;
+    var acc = 0.0;
+    for (var i = 0u; i < HEAD_DIM; i = i + 1u) { acc = acc + qh[i] * kCache[kOff + i]; }
+    scores[p] = acc * SCALE;
+  }
+  if (t == 0u) {
+    var acc = 0.0;
+    for (var i = 0u; i < HEAD_DIM; i = i + 1u) { acc = acc + qh[i] * kh[i]; }
+    scores[pos] = acc * SCALE;
+  }
+  workgroupBarrier();
+  // D) softmax (max + somma, riduzioni)
+  var m = -3.0e38;
+  for (var p = t; p < n; p = p + 64u) { m = max(m, scores[p]); }
+  red[t] = m;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { red[t] = max(red[t], red[t + stride]); }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  let mAll = red[0];
+  workgroupBarrier();
+  var s = 0.0;
+  for (var p = t; p < n; p = p + 64u) {
+    let e = exp(scores[p] - mAll);
+    scores[p] = e;
+    s = s + e;
+  }
+  red[t] = s;
+  workgroupBarrier();
+  stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { red[t] = red[t] + red[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  let sAll = red[0];
+  workgroupBarrier();
+  // E) out = Σ softmax·V (passato dalla cache, corrente da vh)
+  for (var i = t; i < HEAD_DIM; i = i + 64u) {
+    var acc = scores[pos] * vh[i];
+    for (var p = 0u; p < pos; p = p + 1u) {
+      acc = acc + scores[p] * vCache[p * KV_DIM + kvHead * HEAD_DIM + i];
+    }
+    out[h * HEAD_DIM + i] = acc / sAll;
+  }
+}`;
+}
+
+// lm_head veloce: rmsnorm fusa + GEMV Q8_0 con 4 righe per workgroup (16 lane/riga),
+// x normalizzata in shared (letta una volta per 4 righe), load dei pesi in vec4<u32>.
+// È il kernel dominante del decode (145 MB/token, ~42% del touch): la variante
+// generica a 1 riga/wg lo serviva con metà thread inattivi e load scalari.
+export function rmsGemvQ8FastWgsl(opts: { K: number; N: number; eps: number }): string {
+  const { K, N, eps } = opts;
+  const blocksPerRow = K / 32;
+  if (N % 4 !== 0) throw new Error("rmsGemvQ8Fast: N non multiplo di 4");
+  return `
+@group(0) @binding(0) var<storage, read> qs: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> x: array<f32>;
+@group(0) @binding(3) var<storage, read> normW: array<f32>;
+@group(0) @binding(4) var<storage, read_write> y: array<f32>;
+const K = ${K}u;
+const BLOCKS_PER_ROW = ${blocksPerRow}u;
+var<workgroup> red: array<f32, 64>;
+var<workgroup> xn4: array<vec4<f32>, ${K / 4}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  // 1) rms + x normalizzata condivisa in vec4 (una volta per 4 righe)
+  var ss = 0.0;
+  for (var i = t; i < K; i = i + 64u) { ss = ss + x[i] * x[i]; }
+  red[t] = ss;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { red[t] = red[t] + red[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  let rms = 1.0 / sqrt(red[0] / f32(K) + ${eps});
+  for (var i = t; i < K / 4u; i = i + 64u) {
+    xn4[i] = vec4(x[i * 4u], x[i * 4u + 1u], x[i * 4u + 2u], x[i * 4u + 3u]) * rms *
+             vec4(normW[i * 4u], normW[i * 4u + 1u], normW[i * 4u + 2u], normW[i * 4u + 3u]);
+  }
+  workgroupBarrier();
+  // 2) 4 righe/wg, 16 lane/riga; int8 via unpack4x8snorm*127 (ESATTO: q8_0 mai -128)
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  var acc = 0.0;
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+      let x8 = b * 8u;
+      var bd = 0.0;
+      for (var half = 0u; half < 2u; half = half + 1u) {
+        let w4 = qs[gb * 2u + half];
+        bd = bd + dot(unpack4x8snorm(w4.x) * 127.0, xn4[x8 + half * 4u])
+               + dot(unpack4x8snorm(w4.y) * 127.0, xn4[x8 + half * 4u + 1u])
+               + dot(unpack4x8snorm(w4.z) * 127.0, xn4[x8 + half * 4u + 2u])
+               + dot(unpack4x8snorm(w4.w) * 127.0, xn4[x8 + half * 4u + 3u]);
+      }
+      acc = acc + sc * bd;
+    }
+  }
+  red[t] = acc;
+  workgroupBarrier();
+  // riduzione dentro le 16 lane di ciascuna riga
+  stride = 8u;
+  while (stride > 0u) {
+    if (lane < stride) { red[t] = red[t] + red[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (lane == 0u && r < ${N}u) { y[r] = red[sub * 16u]; }
+}`;
+}
+
+// Pair gate/up veloce: rms fusa + 4 righe/wg + load vec4. Sostituisce
+// rmsPairGemvSiluWgsl nel piano (stessa interfaccia di binding).
+export function rmsPairGemvSiluFastWgsl(opts: { K: number; N: number; eps: number }): string {
+  const { K, N, eps } = opts;
+  const blocksPerRow = K / 32;
+  return `
+@group(0) @binding(0) var<storage, read> gQs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> gScales: array<u32>;
+@group(0) @binding(2) var<storage, read> uQs4: array<vec4<u32>>;
+@group(0) @binding(3) var<storage, read> uScales: array<u32>;
+@group(0) @binding(4) var<storage, read> x: array<f32>;
+@group(0) @binding(5) var<storage, read> normW: array<f32>;
+@group(0) @binding(6) var<storage, read_write> out: array<f32>;
+const K = ${K}u;
+const BLOCKS_PER_ROW = ${blocksPerRow}u;
+var<workgroup> redG: array<f32, 64>;
+var<workgroup> redU: array<f32, 64>;
+var<workgroup> xn4: array<vec4<f32>, ${K / 4}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  var ss = 0.0;
+  for (var i = t; i < K; i = i + 64u) { ss = ss + x[i] * x[i]; }
+  redG[t] = ss;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { redG[t] = redG[t] + redG[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  let rms = 1.0 / sqrt(redG[0] / f32(K) + ${eps});
+  for (var i = t; i < K / 4u; i = i + 64u) {
+    xn4[i] = vec4(x[i * 4u], x[i * 4u + 1u], x[i * 4u + 2u], x[i * 4u + 3u]) * rms *
+             vec4(normW[i * 4u], normW[i * 4u + 1u], normW[i * 4u + 2u], normW[i * 4u + 3u]);
+  }
+  workgroupBarrier();
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  var accG = 0.0;
+  var accU = 0.0;
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let x4 = b * 8u;
+      {
+        let w4 = gQs4[gb];
+        var lo = 0.0; var hi = 0.0;
+        for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+          let word = w4[wi];
+        let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu)) - 8.0;
+        let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu)) - 8.0;
+          lo = lo + dot(nibLo, xn4[x4 + wi]);
+          hi = hi + dot(nibHi, xn4[x4 + 4u + wi]);
+        }
+        accG = accG + unpack2x16float(gScales[gb >> 1u])[gb & 1u] * (lo + hi);
+      }
+      {
+        let w4 = uQs4[gb];
+        var lo = 0.0; var hi = 0.0;
+        for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+          let word = w4[wi];
+        let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu)) - 8.0;
+        let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu)) - 8.0;
+          lo = lo + dot(nibLo, xn4[x4 + wi]);
+          hi = hi + dot(nibHi, xn4[x4 + 4u + wi]);
+        }
+        accU = accU + unpack2x16float(uScales[gb >> 1u])[gb & 1u] * (lo + hi);
+      }
+    }
+  }
+  redG[t] = accG;
+  redU[t] = accU;
+  workgroupBarrier();
+  stride = 8u;
+  while (stride > 0u) {
+    if (lane < stride) { redG[t] = redG[t] + redG[t + stride]; redU[t] = redU[t] + redU[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (lane == 0u && r < ${N}u) {
+    let g = redG[sub * 16u];
+    out[r] = (g / (1.0 + exp(-g))) * redU[sub * 16u];
+  }
+}`;
+}
+
+// GEMV+residual veloce: 4 righe/wg, load vec4, xin in shared.
+export function gemvResidualFastWgsl(opts: { K: number; N: number }): string {
+  const { K, N } = opts;
+  const blocksPerRow = K / 32;
+  return `
+@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> xin: array<f32>;
+@group(0) @binding(3) var<storage, read_write> xres: array<f32>;
+const K = ${K}u;
+const BLOCKS_PER_ROW = ${blocksPerRow}u;
+var<workgroup> red: array<f32, 64>;
+var<workgroup> xs4: array<vec4<f32>, ${K / 4}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  for (var i = t; i < K / 4u; i = i + 64u) {
+    xs4[i] = vec4(xin[i * 4u], xin[i * 4u + 1u], xin[i * 4u + 2u], xin[i * 4u + 3u]);
+  }
+  workgroupBarrier();
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  var acc = 0.0;
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let x4 = b * 8u;
+      let w4 = qs4[gb];
+      var lo = 0.0; var hi = 0.0;
+      for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+        let word = w4[wi];
+        let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu)) - 8.0;
+        let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu)) - 8.0;
+        lo = lo + dot(nibLo, xs4[x4 + wi]);
+        hi = hi + dot(nibHi, xs4[x4 + 4u + wi]);
+      }
+      acc = acc + unpack2x16float(scales[gb >> 1u])[gb & 1u] * (lo + hi);
+    }
+  }
+  red[t] = acc;
+  workgroupBarrier();
+  var stride = 8u;
+  while (stride > 0u) {
+    if (lane < stride) { red[t] = red[t] + red[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (lane == 0u && r < ${N}u) { xres[r] = xres[r] + red[sub * 16u]; }
+}`;
+}
+
+// QKV veloce: rms fusa + GEMV Q4_0 con bias, 4 righe/wg, load vec4 (stessa
+// architettura del pair, un solo accumulatore + bias).
+export function rmsGemvQ4FastBiasWgsl(opts: { K: number; N: number; eps: number }): string {
+  const { K, N, eps } = opts;
+  const blocksPerRow = K / 32;
+  return `
+@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> x: array<f32>;
+@group(0) @binding(3) var<storage, read> normW: array<f32>;
+@group(0) @binding(4) var<storage, read_write> y: array<f32>;
+@group(0) @binding(5) var<storage, read> bias: array<f32>;
+const K = ${K}u;
+const BLOCKS_PER_ROW = ${blocksPerRow}u;
+var<workgroup> red: array<f32, 64>;
+var<workgroup> xn4: array<vec4<f32>, ${K / 4}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  var ss = 0.0;
+  for (var i = t; i < K; i = i + 64u) { ss = ss + x[i] * x[i]; }
+  red[t] = ss;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { red[t] = red[t] + red[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  let rms = 1.0 / sqrt(red[0] / f32(K) + ${eps});
+  for (var i = t; i < K / 4u; i = i + 64u) {
+    xn4[i] = vec4(x[i * 4u], x[i * 4u + 1u], x[i * 4u + 2u], x[i * 4u + 3u]) * rms *
+             vec4(normW[i * 4u], normW[i * 4u + 1u], normW[i * 4u + 2u], normW[i * 4u + 3u]);
+  }
+  workgroupBarrier();
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  var acc = 0.0;
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let x4 = b * 8u;
+      let w4 = qs4[gb];
+      var lo = 0.0; var hi = 0.0;
+      for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+        let word = w4[wi];
+        let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu)) - 8.0;
+        let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu)) - 8.0;
+        lo = lo + dot(nibLo, xn4[x4 + wi]);
+        hi = hi + dot(nibHi, xn4[x4 + 4u + wi]);
+      }
+      acc = acc + unpack2x16float(scales[gb >> 1u])[gb & 1u] * (lo + hi);
+    }
+  }
+  red[t] = acc;
+  workgroupBarrier();
+  stride = 8u;
+  while (stride > 0u) {
+    if (lane < stride) { red[t] = red[t] + red[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (lane == 0u && r < ${N}u) { y[r] = red[sub * 16u] + bias[r]; }
+}`;
+}
