@@ -15,7 +15,7 @@ import {
   gemvGrid,
 } from "./kernels/wgsl";
 
-export const CTX_MAX = 512;
+export const CTX_MAX = 1024; // bench: prompt ~469 + warmup/gen 256 (scores in shared: 4 KB, ok)
 const KV_DIM = S.nKvHead * S.headDim;
 const N_PARTIALS = Math.ceil(S.vocab / ARGMAX_CHUNK);
 

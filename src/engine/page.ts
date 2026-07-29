@@ -24,6 +24,20 @@ worker.onmessage = (e: MessageEvent) => {
   } else if (m.type === "done" && m.report) {
     window.__report = m.report;
     const r = m.report;
+    if (!("perPrompt" in (r as object))) {
+      // report bench
+      const b = r as unknown as {
+        decodeToksPerSec: { mean: number; stdev: number }; dispatchesPerToken: number;
+        promptTokens: number; genTokens: number; reps: { decodeToksPerSec: number; prefillMs: number }[];
+      };
+      $("results").innerHTML =
+        `<p>decode: <b>${b.decodeToksPerSec.mean.toFixed(1)} tok/s</b> (±${b.decodeToksPerSec.stdev.toFixed(1)}) · ` +
+        `${b.dispatchesPerToken} dispatch/token · prompt ${b.promptTokens} tok · ` +
+        `repliche: ${b.reps.map((x) => x.decodeToksPerSec.toFixed(1)).join(", ")} · ` +
+        `prefill ~${(b.reps[0].prefillMs / 1000).toFixed(1)}s</p>`;
+      $("status").textContent = "done";
+      return;
+    }
     const rows = r.perPrompt
       .map((p) =>
         `<tr><td>${p.id}</td><td>${p.agree}/${p.total}</td>` +
@@ -47,6 +61,12 @@ if (params.get("conformance") === "1") {
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     goldenUrl: "/results/engine/golden/golden-qwen25-05b-q4_0.json",
   });
+} else if (params.get("bench") === "1") {
+  worker.postMessage({
+    type: "bench",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+  });
 } else {
-  $("status").textContent = "aggiungi ?conformance=1 per il run";
+  $("status").textContent = "aggiungi ?conformance=1 o ?bench=1 per il run";
 }

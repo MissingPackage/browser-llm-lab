@@ -72,11 +72,60 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
   });
 }
 
+// Bench decode: protocollo del repo (warmup scartato + N repliche, stesso prompt,
+// greedy self-feeding). Il decode rate è misurato dal primo all'ultimo token generato.
+async function runBench(modelUrl: string, promptUrl: string, genTokens: number, replicates: number): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  const engine = await createEngine(gguf, progress);
+  const runOnce = async (label: string): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number }> => {
+    let pos = 0;
+    const t0 = performance.now();
+    for (let i = 0; i < promptFix.tokens.length - 1; i++) await engine.forwardToken(promptFix.tokens[i], pos++);
+    const tPrefill = performance.now();
+    let prev = promptFix.tokens[promptFix.tokens.length - 1];
+    let tFirst = 0;
+    for (let i = 0; i < genTokens; i++) {
+      prev = await engine.forwardToken(prev, pos++);
+      if (i === 0) tFirst = performance.now();
+      if (i % 32 === 0) progress(`${label}: ${i}/${genTokens}`, i / genTokens);
+    }
+    const tEnd = performance.now();
+    return {
+      decodeToksPerSec: ((genTokens - 1) / (tEnd - tFirst)) * 1000,
+      prefillMs: tPrefill - t0,
+      msPerTokenDecode: (tEnd - tFirst) / (genTokens - 1),
+    };
+  };
+  const warmup = await runOnce("warmup (scartato)");
+  const reps = [];
+  for (let r = 0; r < replicates; r++) reps.push(await runOnce(`replica ${r + 1}/${replicates}`));
+  const rates = reps.map((r) => r.decodeToksPerSec);
+  const mean = rates.reduce((a, b) => a + b, 0) / rates.length;
+  const stdev = Math.sqrt(rates.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, rates.length - 1));
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-bench", promptId: promptFix.promptId,
+      promptTokens: promptFix.tokens.length, genTokens, replicates,
+      warmup, reps, decodeToksPerSec: { mean, stdev },
+      dispatchesPerToken: engine.dispatchesPerToken,
+      quant: "Q4_0 (gguf)", note: "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
+    },
+  });
+}
+
 self.onmessage = (e: MessageEvent) => {
-  const m = e.data as { type: string; modelUrl: string; goldenUrl: string; sampleEvery?: number };
+  const m = e.data as {
+    type: string; modelUrl: string; goldenUrl?: string; promptUrl?: string;
+    sampleEvery?: number; genTokens?: number; replicates?: number;
+  };
+  const fail = (err: unknown) =>
+    post({ type: "error", message: err instanceof Error ? `${err.message}\n${err.stack}` : String(err) });
   if (m.type === "conformance") {
-    runConformance(m.modelUrl, m.goldenUrl, m.sampleEvery ?? 16).catch((err) =>
-      post({ type: "error", message: err instanceof Error ? `${err.message}\n${err.stack}` : String(err) }),
-    );
+    runConformance(m.modelUrl, m.goldenUrl!, m.sampleEvery ?? 16).catch(fail);
+  } else if (m.type === "bench") {
+    runBench(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, m.replicates ?? 3).catch(fail);
   }
 };
