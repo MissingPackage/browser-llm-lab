@@ -25,9 +25,12 @@ DONE WHEN (all measurable):
   esce 0 col gate doppio della fase A (top-1 vs cpuref-f64 ≥99% E vs golden llama.cpp
   ≥97%, ≥512 token, stesso corpus committato) usando il percorso prefill M>1.
 - Prefill più veloce: bench sulla 4090 (protocollo repo: warmup + 3 repliche, HEADED)
-  con prefillMs mean ≤ 1/2 della baseline fase A committata (~2.44 s su 469 token)
-  [ASSUMED approvato: soglia 2×; da confermare in spec B1 prima del codice] — JSON
-  committato in results/engine/.
+  con prefillMs mean ≤ 1/3 della baseline seq same-day (fase A: ~2.44 s su 469 token,
+  ⇒ ~810 ms) — soglia fissata col criterio di Pareto su simulazione (ruling PI
+  2026-07-29 in chat: "simulazioni + Pareto"; results/engine/prefill-sim-4090-*.json:
+  floor dei trucchi de-sync+nohead = 1.53×, predizione analitica M=8 = 5-10×; 3× =
+  discrimina la tesi GEMM senza gate-risk da tuning) — JSON committato in
+  results/engine/.
 - Rollback KV provato meccanicamente: script/pagina con run "genera N, crop a pos P,
   rigenera" vs run fresco dallo stesso prefisso — sequenze token IDENTICHE (exit 0,
   report JSON committato).

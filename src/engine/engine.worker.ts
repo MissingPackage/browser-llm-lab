@@ -131,6 +131,75 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   });
 }
 
+// Simulazione fase B1 (per fissare la soglia prefill della spec, criterio Pareto):
+// misura il floor "de-sync only" — prefill batched sul piano M=1 attuale, senza
+// readback per token, a granularità di submit variabile. Il percorso vero M≤8 (GEMM,
+// lm_head solo sull'ultima posizione) dovrà battere questo floor, altrimenti non
+// aggiunge nulla al semplice batching dei submit.
+async function runPrefillSim(modelUrl: string, promptUrl: string, replicates: number): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  const engine = await createEngine(gguf, progress, { telemetry: false });
+  const prefillTokens = promptFix.tokens.slice(0, -1); // stesso perimetro del bench
+  const CHECK_DECODE = 8;
+
+  // baseline: prefill sequenziale con await per token (identico al bench fase A)
+  const seqOnce = async (): Promise<{ ms: number; decoded: number[] }> => {
+    let pos = 0;
+    const t0 = performance.now();
+    for (const t of prefillTokens) await engine.forwardToken(t, pos++);
+    const ms = performance.now() - t0;
+    let prev = promptFix.tokens[promptFix.tokens.length - 1];
+    const decoded: number[] = [];
+    for (let i = 0; i < CHECK_DECODE; i++) { prev = await engine.forwardToken(prev, pos++); decoded.push(prev); }
+    return { ms, decoded };
+  };
+  const batchedOnce = async (tokensPerSubmit: number, skipHead = false): Promise<{ ms: number; decoded: number[] }> => {
+    const t0 = performance.now();
+    await engine.prefillBatched(prefillTokens, 0, tokensPerSubmit, skipHead);
+    const ms = performance.now() - t0;
+    let pos = prefillTokens.length;
+    let prev = promptFix.tokens[promptFix.tokens.length - 1];
+    const decoded: number[] = [];
+    for (let i = 0; i < CHECK_DECODE; i++) { prev = await engine.forwardToken(prev, pos++); decoded.push(prev); }
+    return { ms, decoded };
+  };
+
+  const variants: { label: string; run: () => Promise<{ ms: number; decoded: number[] }> }[] = [
+    { label: "seq-await", run: seqOnce },
+    { label: "batched-1", run: () => batchedOnce(1) },
+    { label: "batched-8", run: () => batchedOnce(8) },
+    { label: "batched-64", run: () => batchedOnce(64) },
+    { label: `batched-all`, run: () => batchedOnce(prefillTokens.length) },
+    { label: "batched-64-nohead", run: () => batchedOnce(64, true) },
+  ];
+  const ref = await seqOnce(); // warmup + sequenza di riferimento per il check
+  const results: { label: string; prefillMs: number[]; msPerToken: number; decodeMatch: boolean }[] = [];
+  for (const v of variants) {
+    const times: number[] = [];
+    let match = true;
+    for (let r = 0; r < replicates; r++) {
+      progress(`${v.label}: replica ${r + 1}/${replicates}`, 0.5);
+      const out = await v.run();
+      times.push(out.ms);
+      match &&= out.decoded.every((id, i) => id === ref.decoded[i]);
+    }
+    const mean = times.reduce((a, b) => a + b, 0) / times.length;
+    results.push({ label: v.label, prefillMs: times, msPerToken: mean / prefillTokens.length, decodeMatch: match });
+  }
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-prefill-sim", promptId: promptFix.promptId,
+      prefillTokens: prefillTokens.length, replicates, checkDecodeTokens: CHECK_DECODE,
+      dispatchesPerToken: engine.dispatchesPerToken,
+      note: "floor de-sync-only sul piano M=1 fuso (lm_head+argmax ancora per ogni posizione, come la baseline); il percorso M<=8 GEMM deve battere questo",
+      variants: results,
+    },
+  });
+}
+
 self.onmessage = (e: MessageEvent) => {
   const m = e.data as {
     type: string; modelUrl: string; goldenUrl?: string; promptUrl?: string;
@@ -142,5 +211,7 @@ self.onmessage = (e: MessageEvent) => {
     runConformance(m.modelUrl, m.goldenUrl!, m.sampleEvery ?? 16).catch(fail);
   } else if (m.type === "bench") {
     runBench(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, m.replicates ?? 3).catch(fail);
+  } else if (m.type === "prefillsim") {
+    runPrefillSim(m.modelUrl, m.promptUrl!, m.replicates ?? 3).catch(fail);
   }
 };

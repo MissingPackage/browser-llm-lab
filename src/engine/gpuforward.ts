@@ -33,6 +33,11 @@ export interface EngineTelemetry {
 export interface EngineHandle {
   device: GPUDevice;
   forwardToken(token: number, pos: number): Promise<number>; // ritorna argmax id
+  // SIM fase B1 (misura per la soglia di spec, non il percorso definitivo): prefill
+  // batched sul piano M=1 attuale — niente readback per token (l'input del token i+1
+  // è il prompt, noto), embedding e pos pre-caricati, submit ogni tokensPerSubmit.
+  // Misura il floor "solo de-sync" che il vero percorso M≤8 (GEMM) dovrà battere.
+  prefillBatched(tokens: number[], posStart: number, tokensPerSubmit: number, skipHeadExceptLast?: boolean): Promise<void>;
   readLogits(): Promise<Float32Array>;
   // Telemetria nativa (spec §Telemetria): livello 1 = encode CPU (2 letture clock/
   // token); livello 2 = GPU ms via timestamp-query (ring, resolve lazy ogni 64 token,
@@ -336,6 +341,54 @@ export async function createEngine(
       const id = new Uint32Array(stagingId.getMappedRange())[0];
       stagingId.unmap();
       return id;
+    },
+    async prefillBatched(tokens: number[], posStart: number, tokensPerSubmit: number, skipHeadExceptLast = false): Promise<void> {
+      const n = tokens.length;
+      if (posStart + n > CTX_MAX) throw new Error("contesto pieno");
+      // Embedding di tutti i token in un buffer solo (dequant CPU una volta) + array
+      // di uniform pos a stride 256; dentro il command buffer si copia riga/pos in
+      // x/P prima del pass di ciascun token: stessi bind group del decode, zero sync.
+      const emb = new Float32Array(n * S.dModel);
+      for (let i = 0; i < n; i++)
+        dequantQ4_0Row(bytes, embdOff, S.dModel, tokens[i], emb.subarray(i * S.dModel, (i + 1) * S.dModel));
+      const embBuf = storage(emb.byteLength);
+      device.queue.writeBuffer(embBuf, 0, emb as unknown as BufferSource);
+      const posArr = new Uint32Array(n * 64); // stride 256 B (allineamento copy safe)
+      for (let i = 0; i < n; i++) { posArr[i * 64] = posStart + i; posArr[i * 64 + 1] = posStart + i; }
+      const posBuf = storage(posArr.byteLength);
+      device.queue.writeBuffer(posBuf, 0, posArr as unknown as BufferSource);
+
+      // lm_head+argmax servono solo all'ultima posizione del prefill: gli step di
+      // coda (fuso: rmsLmHead+am1+am2; naive: rms+gemvOut+am1+am2) si saltano per
+      // i<n-1 quando richiesto — è ciò che il percorso M≤8 farà by design.
+      const headSteps = fused ? 3 : 4;
+      let enc = device.createCommandEncoder();
+      for (let i = 0; i < n; i++) {
+        const stepsTok = skipHeadExceptLast && i < n - 1 ? steps.slice(0, steps.length - headSteps) : steps;
+        enc.copyBufferToBuffer(embBuf, i * S.dModel * 4, x, 0, S.dModel * 4);
+        enc.copyBufferToBuffer(posBuf, i * 256, P, 0, 16);
+        let pass = enc.beginComputePass();
+        for (const s of stepsTok) {
+          if (s.kind === "copy") { // tap attivo: stessa semantica del decode
+            pass.end();
+            enc.copyBufferToBuffer(s.src, 0, s.dst, 0, s.bytes);
+            pass = enc.beginComputePass();
+            continue;
+          }
+          pass.setPipeline(s.pipe);
+          pass.setBindGroup(0, s.bind);
+          pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
+        }
+        pass.end();
+        if ((i + 1) % tokensPerSubmit === 0) {
+          device.queue.submit([enc.finish()]);
+          enc = device.createCommandEncoder();
+        }
+      }
+      if (n % tokensPerSubmit !== 0) device.queue.submit([enc.finish()]);
+      await device.queue.onSubmittedWorkDone();
+      embBuf.destroy();
+      posBuf.destroy();
     },
     setTelemetry(on: boolean): void {
       telemetryOn = on;

@@ -24,6 +24,17 @@ worker.onmessage = (e: MessageEvent) => {
   } else if (m.type === "done" && m.report) {
     window.__report = m.report;
     const r = m.report;
+    if ((r as { kind?: string }).kind === "engine-prefill-sim") {
+      const s = r as unknown as {
+        prefillTokens: number;
+        variants: { label: string; msPerToken: number; decodeMatch: boolean }[];
+      };
+      $("results").innerHTML = s.variants
+        .map((v) => `<p>${v.label}: <b>${v.msPerToken.toFixed(2)} ms/token</b> · decodeMatch=${v.decodeMatch}</p>`)
+        .join("");
+      $("status").textContent = "done";
+      return;
+    }
     if (!("perPrompt" in (r as object))) {
       // report bench
       const b = r as unknown as {
@@ -67,6 +78,12 @@ if (params.get("conformance") === "1") {
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
   });
+} else if (params.get("prefillsim") === "1") {
+  worker.postMessage({
+    type: "prefillsim",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+  });
 } else {
-  $("status").textContent = "aggiungi ?conformance=1 o ?bench=1 per il run";
+  $("status").textContent = "aggiungi ?conformance=1, ?bench=1 o ?prefillsim=1 per il run";
 }

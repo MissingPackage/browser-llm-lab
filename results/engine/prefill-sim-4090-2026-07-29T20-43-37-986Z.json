@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-prefill-sim",
+  "promptId": "bench-512-v1",
+  "prefillTokens": 468,
+  "replicates": 3,
+  "checkDecodeTokens": 8,
+  "dispatchesPerToken": 123,
+  "note": "floor de-sync-only sul piano M=1 fuso (lm_head+argmax ancora per ogni posizione, come la baseline); il percorso M<=8 GEMM deve battere questo",
+  "variants": [
+    {
+      "label": "seq-await",
+      "prefillMs": [
+        2467.0300000309944,
+        2450.139999985695,
+        2428.4599999785423
+      ],
+      "msPerToken": 5.231930199426803,
+      "decodeMatch": true
+    },
+    {
+      "label": "batched-1",
+      "prefillMs": [
+        1966.4350000023842,
+        1981.4650000333786,
+        1983.2349999547005
+      ],
+      "msPerToken": 4.224455128198336,
+      "decodeMatch": true
+    },
+    {
+      "label": "batched-8",
+      "prefillMs": [
+        1875.2199999690056,
+        1724.2749999761581,
+        1766.7749999761581
+      ],
+      "msPerToken": 3.8221296295735914,
+      "decodeMatch": true
+    },
+    {
+      "label": "batched-64",
+      "prefillMs": [
+        1804.6850000023842,
+        1785.3950000405312,
+        1721.9749999642372
+      ],
+      "msPerToken": 3.7835149572700515,
+      "decodeMatch": true
+    },
+    {
+      "label": "batched-all",
+      "prefillMs": [
+        1900.7750000357628,
+        1941.6599999666214,
+        1939.035000026226
+      ],
+      "msPerToken": 4.117856125376504,
+      "decodeMatch": true
+    }
+  ],
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T20-43-37-986Z"
+}
