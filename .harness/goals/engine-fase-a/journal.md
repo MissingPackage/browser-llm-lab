@@ -8,12 +8,20 @@ fusi. Bring-up bug memorabile: dispatchWorkgroups(151936) > limite 65535/dim ⇒
 buffer rigettati IN SILENZIO (top-1 0.2%, zero errori) → griglia 2D + uncapturederror
 fatale nel motore. I 10 mismatch sono tutti near-tie (margini 0.004-0.39, 9/10 rank-1
 golden): l'oracolo CPU quantizza le attivazioni a Q8_0 (algoritmo ≠ f32 puro).
-Calibrazione del noise floor in corso: cpuref f64 sul protocollo completo — se anche
-f64 sta sotto 99%, il gate 99% della spec è sopra il rumore dell'oracolo e va corretto
-via docket (evidenza, non deroga). NOTA per il plan-check: nel motore nostro L1+L2
+Calibrazione ESEGUITA: cpuref f64 vs golden = 502/512 con gli STESSI 10 mismatch del
+motore GPU ⇒ **motore GPU = matematica esatta al 100% (512/512)**; il 98.05% è il noise
+floor dell'oracolo (vec_dot q4_0×q8_0 quantizza le attivazioni). Proposta gate doppio
+nel docket (item 3). Tap hidden-states implementati e verificati (taps=[11], 896 f32
+non-zero, conformance invariata). NOTA per il plan-check: nel motore nostro L1+L2
 sono risultati GRATIS by construction (buffer statici ⇒ bind group al load, 1
 submit/token naturale) — la domanda naive-vs-diretto si riduce di fatto alla sola
 fusione L3.
+
+Stato DONE WHEN a fine 2026-07-29: spec scritta (ruling ✗); npm test verde ✓;
+conformance harness fatto — 98.05% vs gate 99% (pende docket 3: con la proposta il
+gate oggi PASSEREBBE: vs cpuref 100%, vs golden ≥97%); first-light ✗ (gated);
+L1/L2 by construction, L3 ✗ (gated); telemetria ✗ (fase 5); tap ✓; OPFS ✓; M2 ✓.
+Tutto il residuo pende dai docket 1-3.
 
 2026-07-29 — Iterazione 3 (fase 3, su branch engine/fase-a, avviata pre-ruling — vedi
 docket 2): gguf.ts (parser v3, subset F32/F16/Q4_0/Q8_0), quant.ts (dequant reference
