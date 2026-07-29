@@ -2,12 +2,13 @@
 
 ## 1. Next decidable
 
-**Goal `engine-fase-a`, plan-check pendente** (iterazione 0 fatta 2026-07-29):
-PHASES.md scritto (6 fasi, gruppo parallelo 1+2, correttezza-poi-velocità 3→4→5) —
-serve l'approvazione PI della decomposizione (docket del goal, item 1) prima
-dell'iterazione 1. Approvata → partono fase 1 (spec fase A) + fase 2 (OPFS bench, M2)
-in parallelo. Direzione in `docs/engine/direction.md` (§7/§9). Branch di lavoro:
-`engine/fase-a` (merge su main = ruling PI).
+**Goal `engine-fase-a`: due ruling PI pendenti, poi si scrive codice.** Fasi 1-2 fatte
+(2026-07-29): spec scritta (`specs/2026-07-29-engine-fase-a-design.md`), OPFS+M2
+misurati. Servono: (1) **plan-check** su PHASES.md — punto vivo: spine
+correttezza-poi-velocità 4→5; (2) **ruling spec** — decisioni chiave: Q4_0-only,
+corpus token-id senza tokenizer, top-1≥99%, golden via llama-cpp-python, ≤100 dispatch
+con fallback attention dichiarato. Entrambi nel docket del goal. Approvati → fase 3
+(GGUF parser + golden) su branch `engine/fase-a` (merge su main = ruling PI).
 
 ## 2. State delta (sessione 10)
 

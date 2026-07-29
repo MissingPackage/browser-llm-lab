@@ -7,6 +7,13 @@ approvati in blocco). Direction: docs/engine/direction.md.
 1+2, spine correttezza-poi-velocità 3→4→5, first-light in fase 6). plan-check appeso al
 docket: STOP by design in attesa dell'approvazione PI della decomposizione.
 
+2026-07-29 — Iterazione 2 (fase 1): spec scritta
+(specs/2026-07-29-engine-fase-a-design.md, 6 sezioni contratto verificate via grep).
+Decisioni proposte: Q4_0-only, corpus token-id, top-1≥99%, golden llama-cpp-python,
+budget ≤100 dispatch con fallback dichiarato, telemetria 4 livelli. Ruling richiesto
+(docket 2). Con fase 2 già chiusa, TUTTO il lavoro residuo è PI-gated: plan-check
+(docket 1) + ruling spec (docket 2) ⇒ stop-by-design da working protocol.
+
 2026-07-29 — Iterazione 1 (fase 2 SOLTANTO — contrattuale, indipendente dalle domande
 del plan-check): opfs-bench.mjs (write 2.2 GB/s, read API 7.5-11.7 GB/s warm — API non
 bottleneck) + submit-callsites.mjs (M2: 7 submit/token = 2 free + 2 upload + 1 copyTo +
