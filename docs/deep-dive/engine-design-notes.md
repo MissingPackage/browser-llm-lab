@@ -8,6 +8,12 @@ motore di inferenza browser da zero. Fonti: `compute-shader-dispatch.md`,
 `.harness/goals/fase-2-deep-dive/wgsl-dump/` e i run in `results/` e
 `results/microbench/`.
 
+> **Continua in `docs/engine/estimates.md`** (sessione di stima 2026-07-28): il backlog
+> qui sotto è qualitativo e le sue righe erano instradate sotto il vincolo di fase
+> "niente rework del motore". Lì le stesse idee sono quantificate contro un modello di
+> budget misurato — e il ranking cambia. Nota: il "~34 dispatch per token" usato dai doc
+> di sotto-sistema è misurato **270** (vedi `results/dispatch-profile/`).
+
 ## I cinque fatti che vincolano il design
 
 1. **A taglia piccola comanda l'orchestrazione, non i kernel.** Sulla 4090 il lavoro GPU
