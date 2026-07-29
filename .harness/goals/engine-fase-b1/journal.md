@@ -40,3 +40,8 @@ goal": approvazione in blocco, [ASSUMED] compresi). SPLIT della fase B di direct
 B1 = memoria/latenza di entrata (questo goal), B2 = floor dispatch ≤100 (goal futuro,
 annotato in HANDOFF). Soglie numeriche marcate "da confermare in spec" vanno fissate
 nella spec B1 prima del codice.
+
+2026-07-29 — Verifier gate iterazione 2: PASS (8/8 punti, zero violazioni). Nota a
+costo zero dal verifier per la fase 3+: aggiungere il campo `telemetryGpu` allo schema
+del report di conformance, così il gate "liv.2 non perturba" diventa auto-evidente
+dal JSON.
