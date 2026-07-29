@@ -1,56 +1,77 @@
-# HANDOFF — browser-llm-lab   (updated 2026-07-28, session 7)
+# HANDOFF — browser-llm-lab   (updated 2026-07-29, session 9)
 
 ## 1. Next decidable
 
-**Sessione di stima per il nuovo motore** (ruling PI 2026-07-28): quantificare
-l'incremento atteso da TUTTI i suggerimenti del deep-dive (backlog engine-notes +
-candidati esperimento), valutare trade-off e alternative, motivare le scelte — in
-funzione dell'obiettivo dichiarato: **costruire un nuovo motore di inferenza browser**.
-Input: `docs/deep-dive/engine-design-notes.md` (backlog + questioni aperte) e i 6 run
-cross-device. Roadmap approvata (ruling stesso giorno): consolidamento (incl. soglia
-TTFT del #12) → ceiling + hero-demo + benchmark pubblico (eventuale paper) → nuovo
-motore. Goal fase-2-deep-dive: MERGIATO su main (77ed165) e pushato.
+**Ruling PI su #14 (from-scratch vs fork)**: raccomandazione consegnata in chat
+(2026-07-29) — scratch narrow GGUF-compatibile, llama.cpp come oracolo non come
+substrato. Al ruling parte subito il **WP di studio #15 (già approvato)**, coi brief
+tarati sull'esito. Poi `docs/engine/direction.md` e il goal.
+Roadmap approvata invariata: consolidamento → ceiling + hero-demo + benchmark → motore.
 
-## 2. State delta (session 7)
+## 2. State delta (sessioni 8-9)
 
-- PI ha eseguito: bench M4 Pro, bench S22 con q4f16_1 (esperimento docket #2, slot 1),
-  micro-bench su M4 e S22 → committati su `main` (340ab91, fcb54b0).
-- Esiti chiave: S22 f16 = decode +66% (11.6 tok/s) e varianza TTFT collassata (±34%→±0.4%);
-  M4 = 98.3 tok/s ≈ 4090 con metà banda (conferma tesi orchestrazione); micro-bench M4 =
-  248 GB/s misurati (91% di targa), q4 GEMV 274 Gw/s (2× la 4090); micro-bench S22 =
-  tetto effettivo ~22 GB/s (43% di targa), floor per-dispatch ~0.13 ms (24× la 4090).
-- Probe M4 ha FALSIFICATO la tesi "binding cap 2³¹−4 = costante API" (su Metal è 2³²−4):
-  `buffer-limit-2gb.md` corretto sul branch (c85777d).
-- Docket #7-#8 registrati (esiti esperimento + findings M4); #6 (warm-up) declassato
-  dai dati: la varianza TTFT era legata al percorso f32, non al DVFS puro.
+- Sessione 8 (stima): tool `.harness/tools/dispatch-profile.mjs` + run 4090 →
+  **270 dispatch/token (non ~34), 7 submit/token, 8.3 µs encode CPU/dispatch**;
+  round-trip per device estratto dai micro-bench (1.8/0.45/5.0 ms). Doc
+  `docs/engine/estimates.md`: modello di budget, leve stimate (1.44× architettura,
+  2.06× totale), kernel engineering ultima leva ovunque.
+- Sessione 9 (brainstorm + verifica): nuova funzione obiettivo dal PI — **max
+  intelligenza sotto rate "sufficiente" (~30 tok/s morbidi) e memoria host**; due
+  budget (touch = BW×(1/rate−T_fisso), residenza). Frontiere: 4090 ~20B, M4 cuneo
+  MoE 5×, S22 oggi irraggiungibile (T_fisso 40 ms > budget).
+- `docs/engine/ideas-ledger.md`: ~50 idee su 3 assi + evals, con statuses.
+- **Sweep di verifica eseguito** → `docs/engine/verification-sweep-2026-07-29.md`.
+  Fatti chiave: llama.cpp ha backend WebGPU upstream (LlamaWeb, arXiv 2605.20706) con
+  le nostre L1/L2 già dentro (valida la diagnosi; prefill loro debole −21-51%); MoE
+  full-residency già in browser (LFM2); QuantSpec = prior art cascata di precisione;
+  SharedWorker+WebGPU mai shippato (fallback leader-tab); colibri: routing predicibile
+  71.6%, draft quant-sensibile (int4 → accettazione 0-4%); ds4: ricetta quant
+  asimmetrica + KV checkpoint SHA1 su disco.
+- Memoria persistente: `engine-objective-intelligence-at-threshold.md` (funzione
+  obiettivo + precedente ardesia-gguf).
 
 ## 3. Open threads
 
-- Sweep manuale fase 1b: wllama/transformersjs su S22 ancora mancanti (fuori goal).
-- Goal di consolidamento da aprire (conterrà: soglia TTFT #12, esiti della sessione di
-  stima, eventuale resto sweep).
+- Gap statement raffinato: il vuoto browser è il **sistema di memoria** (paging
+  esperti+prefetch, KV tiering/checkpoint, adapter hot-swap, spec-dec) + telemetria/
+  eval integrata — non l'esecuzione MoE né GGUF+WebGPU (già esistenti).
+- Idee promosse dal PI: LoRA hot-swap ("geniale"), oracolo desktop golden-logits,
+  narrow-focus stile ds4 (dense = MoE degenere, un modello di riferimento).
+- Aperti dallo sweep: stato MLA in llama.cpp, architettura draft DeepSpec, banda OPFS
+  in lettura (tool 20 righe), MambaKit "WSLA", TEAL/PowerInfer (search non fatta).
+- Sweep fase 1b (wllama/transformersjs su S22) ancora fuori goal.
 
 ## 4. Landmines
 
-- Chrome headless su Linux/NVIDIA cade su **SwiftShader** (spia:
-  maxComputeInvocationsPerWorkgroup=256): i driver Playwright del deep-dive richiedono
-  HEADED=1 (`tools/wgsl-dump.mjs`, `tools/microbench-run.mjs`).
-- Chrome **quantizza i timestamp GPU** (~100 µs): il micro-bench misura batch da 16
-  dispatch per campione — non togliere il batching.
-- Un device WebGPU senza `requiredLimits` nasce a 128 MiB di binding → celle garbage
-  silenziose. Error scope + checksum già nel runner: mantenerli.
-- `erasableSyntaxOnly` in tsconfig: niente parameter properties nelle classi.
-- Chrome branded su Linux/NVIDIA NON espone `shader-f16` (M4 e S22 sì).
-- Dev server: il :5173 di una vecchia sessione potrebbe essere ancora vivo (pid 487440,
-  non nostro); i tool del goal usano BASE_URL (:5177 nell'ultima sessione).
-- I numeri di riga citati nei doc valgono per `@mlc-ai/web-llm 0.2.84`.
+- Residuo non attribuito del budget 4090 = 33%: non assegnarlo a nessuna leva senza
+  timestamp-query nel runtime. Floor M4 (28 µs) è un limite superiore.
+- Paging esperti: a ~1 GB/s OPFS un miss pieno su 30B-A3B costa ~1.7 s → vive solo con
+  pinning+prefetch; target realistico "modello ~2× la memoria".
+- Chrome headless Linux/NVIDIA → SwiftShader: driver Playwright con HEADED=1.
+- Chrome quantizza i timestamp GPU (~100 µs); `performance.now()` worker quanto 5 µs.
+- Device senza `requiredLimits` nasce a 128 MiB binding → garbage silenzioso.
+- Chrome branded Linux/NVIDIA NON espone shader-f16 (M4/S22 sì) — per il benchmark
+  pubblico è un problema di equità da dichiarare.
+- `erasableSyntaxOnly` in tsconfig; righe doc valide per `@mlc-ai/web-llm 0.2.84`.
+- Dev server vite di sessioni vecchie vivi su :5173-:5177.
 
 ## 5. Docket (decisioni PI pendenti)
 
-1. ~~Merge+push~~ DECISO e FATTO (2026-07-28): merge 77ed165, push origin/main.
-2. ~~Slot esperimento #2~~ DECISO: non assegnato — sostituito dalla sessione di stima
-   (vedi §1); i candidati confluiscono lì come opzioni da quantificare.
-3. ~~Docket #12~~ DECISO: soglia TTFT separata nel goal di consolidamento.
-4. **Promozione skill** `bottleneck-brainstorm` a `~/.claude/skills/`: non decisa,
-   resta project-level.
-5. Ereditati non bloccanti: #10 (qualityScore non collegato), #8 (sorveglianza wllama).
+4-5. Ereditati: promozione skill `bottleneck-brainstorm`; #10 qualityScore (ora si
+     aggancia alla sez. D del ledger), #8 sorveglianza wllama (ora rilevante: v3.1 ha
+     WebGPU via LlamaWeb).
+10. **Correzione doc pubblicati** ("~34 dispatch/token" → 270; "1 submit" → 7) in tre
+    doc deep-dive. Correggere ora o nel consolidamento?
+11. **Run `dispatch-profile` su M4 e S22** (mani PI, ~5 min/device) — chiude le
+    estrapolazioni cross-device di estimates.md.
+12. ~~Commit sessioni 8-9~~ DECISO e FATTO (2026-07-29): 4 commit diretti su `main`
+    (convenzione docs/data delle sessioni 7-8). Push NON fatto (non richiesto).
+13. **Modello target del motore** — ora informato da: cuneo M4, DeepSpec (draft per
+    Qwen3-4/8/14B), ecosistema DeepSeek V4 Flash (ds4+DSpark+MLA), narrow-focus.
+14. **Motore from-scratch vs sopra llama.cpp-WebGPU** — raccomandazione consegnata
+    (scratch narrow: tesi inesprimibile in ggml, economia dell'attenzione, deep-dive
+    = spec del v0; paletti: GGUF come formato, llama.cpp come oracolo, tokenizer/draft
+    presi in prestito). ATTESA RULING PI.
+15. ~~WP "studio in profondità"~~ APPROVATO (2026-07-29): ds4, colibri, DeepSpec
+    (architettura draft), LlamaWeb/ggml-webgpu (incl. stato MLA). Parte al ruling #14
+    (i brief cambiano con l'esito).
