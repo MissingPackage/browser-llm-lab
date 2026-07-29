@@ -25,6 +25,9 @@ export interface EngineHandle {
   device: GPUDevice;
   forwardToken(token: number, pos: number): Promise<number>; // ritorna argmax id
   readLogits(): Promise<Float32Array>;
+  // Tap hidden-states (contratto DeepSpec, spec §Tap): hidden post-layer dei layer
+  // richiesti in opts.taps, copiati a ogni forward. Zero step emessi se taps=[].
+  readTap(layer: number): Promise<Float32Array>;
   reset(): void;
   dispatchesPerToken: number;
   destroy(): void;
@@ -33,6 +36,7 @@ export interface EngineHandle {
 export async function createEngine(
   gguf: ArrayBuffer,
   onProgress: (text: string, frac: number) => void,
+  opts: { taps?: number[] } = {},
 ): Promise<EngineHandle> {
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("WebGPU non disponibile");
@@ -154,10 +158,19 @@ export async function createEngine(
       ],
     });
 
-  type Step = { pipe: GPUComputePipeline; bind: GPUBindGroup; wgs: [number, number] };
+  type Step =
+    | { kind: "compute"; pipe: GPUComputePipeline; bind: GPUBindGroup; wgs: [number, number] }
+    | { kind: "copy"; src: GPUBuffer; dst: GPUBuffer; bytes: number };
   const steps: Step[] = [];
   const push = (pipe: GPUComputePipeline, bufs: GPUBuffer[], wgs: number | [number, number], uni?: GPUBuffer) =>
-    steps.push({ pipe, bind: bg(pipe, bufs, uni), wgs: typeof wgs === "number" ? [wgs, 1] : wgs });
+    steps.push({ kind: "compute", pipe, bind: bg(pipe, bufs, uni), wgs: typeof wgs === "number" ? [wgs, 1] : wgs });
+  // Tap hidden-states: buffer dedicato per layer richiesto; la copy vive fra i
+  // dispatch (chiude e riapre il pass), emessa SOLO se il tap e' attivo.
+  const tapBufs = new Map<number, GPUBuffer>();
+  for (const l of opts.taps ?? []) {
+    if (l < 0 || l >= S.nLayer) throw new Error(`tap fuori range: ${l}`);
+    tapBufs.set(l, storage(S.dModel * 4));
+  }
 
   for (const L of layers) {
     push(pipes.rms, [x, L.attnNorm, hn], 1);
@@ -177,6 +190,8 @@ export async function createEngine(
     push(pipes.silu, [gateB, upB], Math.ceil(S.dFfn / 64));
     push(pipes.gemvQFD, [L.wDown.qs, L.wDown.scales, gateB, tmpD], gemvGrid(S.dModel));
     push(pipes.add, [x, tmpD], Math.ceil(S.dModel / 64));
+    const tapDst = tapBufs.get(layers.indexOf(L));
+    if (tapDst) steps.push({ kind: "copy", src: x, dst: tapDst, bytes: S.dModel * 4 });
   }
   push(pipes.rms, [x, outNorm, hn], 1);
   push(pipes.gemvOut, [wOut.qs, wOut.scales, hn, logits], gemvGrid(S.vocab));
@@ -186,7 +201,7 @@ export async function createEngine(
 
   return {
     device,
-    dispatchesPerToken: steps.length,
+    dispatchesPerToken: steps.filter((st) => st.kind === "compute").length,
     reset() { /* le cache si sovrascrivono per posizione: basta ripartire da pos 0 */ },
     async forwardToken(token: number, pos: number): Promise<number> {
       if (pos >= CTX_MAX) throw new Error("contesto pieno");
@@ -194,8 +209,14 @@ export async function createEngine(
       device.queue.writeBuffer(x, 0, embdRow as unknown as BufferSource);
       device.queue.writeBuffer(P, 0, new Uint32Array([pos, pos, 0, 0]));
       const enc = device.createCommandEncoder();
-      const pass = enc.beginComputePass();
+      let pass = enc.beginComputePass();
       for (const s of steps) {
+        if (s.kind === "copy") {
+          pass.end();
+          enc.copyBufferToBuffer(s.src, 0, s.dst, 0, s.bytes);
+          pass = enc.beginComputePass();
+          continue;
+        }
         pass.setPipeline(s.pipe);
         pass.setBindGroup(0, s.bind);
         pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
@@ -207,6 +228,18 @@ export async function createEngine(
       const id = new Uint32Array(stagingId.getMappedRange())[0];
       stagingId.unmap();
       return id;
+    },
+    async readTap(layer: number): Promise<Float32Array> {
+      const src = tapBufs.get(layer);
+      if (!src) throw new Error(`tap non attivo per layer ${layer}`);
+      const staging = device.createBuffer({ size: S.dModel * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(src, 0, staging, 0, S.dModel * 4);
+      device.queue.submit([enc.finish()]);
+      await staging.mapAsync(GPUMapMode.READ);
+      const out = new Float32Array(staging.getMappedRange().slice(0));
+      staging.destroy();
+      return out;
     },
     async readLogits(): Promise<Float32Array> {
       const staging = device.createBuffer({ size: S.vocab * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });

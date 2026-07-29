@@ -21,8 +21,11 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
   progress("fetch modello…", 0);
   const gguf = await fetchBuf(modelUrl);
   const golden = JSON.parse(new TextDecoder().decode(await fetchBuf(goldenUrl))) as Golden;
-  const engine: EngineHandle = await createEngine(gguf, progress);
+  // taps=[11]: esercita il contratto tap (spec §Tap) dentro il run di conformance —
+  // non cambia la matematica, aggiunge una copy per token. Check strutturale sotto.
+  const engine: EngineHandle = await createEngine(gguf, progress, { taps: [11] });
   post({ type: "meta", dispatchesPerToken: engine.dispatchesPerToken });
+  let tapCheck: { layer: number; len: number; nonZero: boolean } | null = null;
 
   let agree = 0, total = 0, maxDlogit = 0;
   const perPrompt: { id: string; agree: number; total: number; mismatches: { pos: number; got: number; gold: number }[] }[] = [];
@@ -49,6 +52,10 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
         }
       }
       prev = gold.argmax; // teacher forcing sul golden
+      if (!tapCheck) {
+        const tap = await engine.readTap(11);
+        tapCheck = { layer: 11, len: tap.length, nonZero: tap.some((v) => v !== 0) };
+      }
       if (i % 16 === 0) progress(`${p.id}: ${i}/${p.positions.length} (agree ${agree}/${total})`, total / 512);
     }
     perPrompt.push(row);
@@ -58,7 +65,7 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
     type: "done",
     report: {
       schemaVersion: 1, kind: "engine-conformance",
-      top1Pct: (agree / total) * 100, agree, total, maxDlogitSampled: maxDlogit,
+      top1Pct: (agree / total) * 100, agree, total, maxDlogitSampled: maxDlogit, tapCheck,
       perPrompt, dispatchesPerToken: engine.dispatchesPerToken,
       wallMs, msPerForward: wallMs / Math.max(1, forwards * golden.prompts.length),
     },
