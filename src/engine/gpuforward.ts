@@ -51,7 +51,7 @@ export interface EngineHandle {
 export async function createEngine(
   gguf: ArrayBuffer,
   onProgress: (text: string, frac: number) => void,
-  opts: { taps?: number[]; fused?: boolean; telemetry?: boolean } = {},
+  opts: { taps?: number[]; fused?: boolean; telemetry?: boolean; telemetryGpu?: boolean } = {},
 ): Promise<EngineHandle> {
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("WebGPU non disponibile");
@@ -178,8 +178,13 @@ export async function createEngine(
   let tForwards = 0;
   let tEncodeCpuMs = 0;
   const TSQ_RING = 64; // token per batch di resolve (lazy, mai bloccante)
-  const querySet = hasTsq ? device.createQuerySet({ type: "timestamp", count: TSQ_RING * 2 }) : null;
-  const tsqResolve = hasTsq
+  // Livello 2 SOLO dietro opt-in esplicito: su Chrome/Linux/NVIDIA i timestamp
+  // risultano azzerati E la loro attivazione corrompe il compute (visto 2026-07-29:
+  // conformance 98.05% -> 93.4% con maxDlogit 5.8 a parita' di tutto). Known-issue,
+  // diagnosi in fase B; il livello 1 (encode CPU) e' innocuo per costruzione.
+  const wantGpuTs = hasTsq && opts.telemetryGpu === true;
+  const querySet = wantGpuTs ? device.createQuerySet({ type: "timestamp", count: TSQ_RING * 2 }) : null;
+  const tsqResolve = wantGpuTs
     ? device.createBuffer({ size: TSQ_RING * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
     : null;
   const pendingTsq: Promise<number[]>[] = [];
@@ -350,8 +355,8 @@ export async function createEngine(
         encodeCpuMsPerToken: tForwards ? tEncodeCpuMs / tForwards : 0,
         gpuMsPerToken: mean,
         timestampNote: querySet
-          ? (gpuMs.length ? "quantizzazione Chrome ~100us, media su batch da 64" : "timestamp azzerati dal browser in questa integrazione (known-issue, journal 2026-07-29)")
-          : "timestamp-query non disponibile",
+          ? (gpuMs.length ? "quantizzazione Chrome ~100us, media su batch da 64" : "timestamp azzerati (known-issue)")
+          : "livello 2 spento di default (known-issue 2026-07-29: valori azzerati + corruzione compute quando attivo su Chrome/Linux/NVIDIA — opt-in telemetryGpu, diagnosi fase B)",
       };
     },
     async readTap(layer: number): Promise<Float32Array> {

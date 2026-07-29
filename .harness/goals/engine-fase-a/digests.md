@@ -16,3 +16,9 @@ overhead. VERIFIER GATE: PASS su 8/8 claim (agent loop-verifier, evidenza per cl
 transcript; nota: due formati di conformance JSON nello stesso prefisso — l'ultimo per
 nome è quello valido). Goal gated sui ruling PI docket 2-5: "serve input umano, non
 altra esecuzione".
+
+## Iterazione 7 (2026-07-29, chiusura)
+
+Ruling 1-5 ricevuti e applicati. Gate doppio PASS (100% cpuref / 98.05% golden, exit 0).
+Regressione telemetria-liv.2 trovata in chiusura e isolata (corruzione compute) →
+opt-in, known-issue fase B. DONE WHEN 8/8. Merge su main.

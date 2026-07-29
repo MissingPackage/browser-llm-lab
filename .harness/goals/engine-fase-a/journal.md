@@ -1,5 +1,16 @@
 # Journal — engine-fase-a
 
+2026-07-29 — CHIUSURA GOAL (iterazione 7). Ruling PI ricevuti: docket 1 OK, 2 sì
+(spec approvata), 3 opzione A (gate doppio), 4 confermato (≤130 fase A, ≤100 target
+fase B in direction), 5 policy merge-a-goal-chiuso (in memoria harness). Gate doppio
+meccanizzato (secondo golden: cpuref-argmax da dump f64). REGRESSIONE trovata e
+risolta in chiusura: telemetria livello 2 (timestamp) CORROMPE il compute quando
+attiva (conformance 98.05%→93.4%, maxΔ 5.8; isolata con A/B a una variabile) →
+livello 2 dietro opt-in telemetryGpu, spento di default, diagnosi fase B; livello 1
+innocuo (overhead 0.24%). CONFORMANCE FINALE: GATE DOPPIO PASS — 100.00% vs
+cpuref-f64 (512/512), 98.05% vs golden llama.cpp, exit 0. Bench finale 122.0 tok/s.
+Suite verde. DONE WHEN: 8/8. Merge su main eseguito (policy docket 5).
+
 2026-07-29 — Iterazioni 5-6 (fase 4-6, su branch): bench mode + baseline WebLLM
 same-day (naive 81.9 vs 117.8 ⇒ il plan-check 1b è moot: baseline misurata E si
 procede). L3: piano fuso 123 dispatch/token (5/layer), kernel vec4 + unpack4x8snorm

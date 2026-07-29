@@ -37,11 +37,12 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
     // prefill sequenziale (riparte da pos 0: la cache si sovrascrive per posizione)
     for (let i = 0; i < p.promptTokens.length - 1; i++) await engine.forwardToken(p.promptTokens[i], pos++);
     let prev = p.promptTokens[p.promptTokens.length - 1];
-    const row = { id: p.id, agree: 0, total: 0, mismatches: [] as { pos: number; got: number; gold: number }[] };
+    const row = { id: p.id, agree: 0, total: 0, got: [] as number[], mismatches: [] as { pos: number; got: number; gold: number }[] };
     for (let i = 0; i < p.positions.length; i++) {
       const got = await engine.forwardToken(prev, pos++);
       forwards = pos;
       const gold = p.positions[i];
+      row.got.push(got);
       row.total++; total++;
       if (got === gold.argmax) { row.agree++; agree++; }
       else if (row.mismatches.length < 20) row.mismatches.push({ pos: i, got, gold: gold.argmax });

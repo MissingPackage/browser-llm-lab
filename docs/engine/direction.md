@@ -127,7 +127,10 @@ logit dal giorno zero — il motore espone i logits by design, WebLLM non lo fa)
 f32-first sul dev-loop (Chrome/Linux non espone shader-f16; percorso f16 dietro
 feature-detect per M4/S22), tap hidden-states nel design del forward (§4.4).
 
-**Fase B — memoria I: KV e persistenza.** Prefix-cache OPFS (design ds4), forward
+**Fase B — memoria I: KV e persistenza.** Eredita dalla fase A il target
+**≤100 dispatch/token** (ruling docket 4: la fase A ha chiuso a 123, floor
+architetturale a 5 dispatch/layer; sotto 100 servono fusioni cross-layer o
+megakernel parziali). Prefix-cache OPFS (design ds4), forward
 multi-token (prefill chunk + futura verifica spec-dec), rollback KV (`crop` con length
 pointer). Prima misura: banda OPFS in lettura (tool ~20 righe, ancora mancante).
 

@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 2,
+  "kind": "engine-bench",
+  "promptId": "bench-512-v1",
+  "promptTokens": 469,
+  "genTokens": 256,
+  "replicates": 3,
+  "warmup": {
+    "decodeToksPerSec": 123.69153755957291,
+    "prefillMs": 2498.4950000047684,
+    "msPerTokenDecode": 8.084627450914944
+  },
+  "reps": [
+    {
+      "decodeToksPerSec": 121.70327310269879,
+      "prefillMs": 2438.0199999809265,
+      "msPerTokenDecode": 8.216705882315543
+    },
+    {
+      "decodeToksPerSec": 121.0714107672205,
+      "prefillMs": 2410.8449999690056,
+      "msPerTokenDecode": 8.259588235266069
+    },
+    {
+      "decodeToksPerSec": 123.27565160694257,
+      "prefillMs": 2436.349999964237,
+      "msPerTokenDecode": 8.111901960887161
+    }
+  ],
+  "decodeToksPerSec": {
+    "mean": 122.01677849228729,
+    "stdev": 1.1350698841262803
+  },
+  "telemetryOn": {
+    "reps": [
+      {
+        "decodeToksPerSec": 120.55170131339364,
+        "prefillMs": 2338.8550000190735,
+        "msPerTokenDecode": 8.29519607857162
+      },
+      {
+        "decodeToksPerSec": 122.19929987017292,
+        "prefillMs": 2380.6700000166893,
+        "msPerTokenDecode": 8.183352941157771
+      },
+      {
+        "decodeToksPerSec": 122.43810273743178,
+        "prefillMs": 2355.8900000452995,
+        "msPerTokenDecode": 8.167392156872095
+      }
+    ],
+    "decodeToksPerSec": {
+      "mean": 121.72970130699944,
+      "stdev": 1.0271415146192013
+    }
+  },
+  "telemetry": {
+    "forwards": 2896,
+    "encodeCpuMsPerToken": 0.03321132596932064,
+    "gpuMsPerToken": null,
+    "timestampNote": "livello 2 spento di default (known-issue 2026-07-29: valori azzerati + corruzione compute quando attivo su Chrome/Linux/NVIDIA — opt-in telemetryGpu, diagnosi fase B)"
+  },
+  "telemetryOverheadPct": 0.2358316682005439,
+  "dispatchesPerToken": 123,
+  "quant": "Q4_0 (gguf)",
+  "note": "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T18-50-21-031Z"
+}

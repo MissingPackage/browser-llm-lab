@@ -1,6 +1,6 @@
 # Engine fase A — execution core: Design
 
-**Data**: 2026-07-29 · **Stato**: in attesa di ruling PI (docket goal `engine-fase-a`, item 2)
+**Data**: 2026-07-29 · **Stato**: **approvato** (ruling PI 2026-07-29, docket goal item 2; gate emendati da item 3-4)
 **Direction**: `docs/engine/direction.md` · **Contratto**: `.harness/goals/engine-fase-a/GOAL.md`
 
 ## Obiettivo
@@ -111,13 +111,14 @@ test A/B sul bench: 3 run on vs off, delta medio):
 - **Golden**: `scripts/gen-golden.py` (llama-cpp-python pinnato, stesso file GGUF
   Q4_0, logits f32) salva per posizione: argmax id + top-32 (id, logit). File in
   `results/engine/golden/` (~qualche MB).
-- **Gate (contratto: 99% — correzione proposta con evidenza, docket goal item 3)**:
-  la calibrazione 2026-07-29 ha misurato che ANCHE la matematica esatta (cpuref f64)
-  concorda col golden solo al 98.05% (identici 10 near-tie: l'oracolo CPU quantizza le
-  attivazioni a Q8 nel vec_dot, maxΔlogit 1.12) ⇒ il 99% secco è sopra il noise floor
-  dell'oracolo. Proposta: **top-1 vs cpuref-f64 ≥ 99%** (parità vera; misurato 100%)
-  **e top-1 vs golden ≥ 97%** (sanity; misurato 98.05%). Riportati non gated:
-  agreement@8 e max|Δlogit| sui top-32.
+- **Gate (DECISO, ruling PI 2026-07-29 docket item 3, opzione A)**: **gate doppio** —
+  **top-1 vs cpuref-f64 ≥ 99%** (parità vera, oracolo-indipendente; misurato 100%)
+  **E top-1 vs golden llama.cpp ≥ 97%** (sanity; misurato 98.05%). Razionale: la
+  calibrazione ha mostrato che anche la matematica esatta concorda col golden solo al
+  98.05% (l'oracolo CPU quantizza le attivazioni a Q8 nel vec_dot: 10 near-tie
+  identici, maxΔlogit 1.12) ⇒ il 99% secco era sopra il noise floor dell'oracolo.
+  Riportati non gated: agreement@8 e max|Δlogit| sui top-32. Secondo golden:
+  `results/engine/golden/cpuref-argmax-*.json`.
 - **Unit bit-exact**: `quant.ts` dequant CPU vs blocchi di riferimento generati dal
   golden script (la dequant Q4_0 in f32 è esatta: qualunque diff = bug di layout).
 - First-light (fase 6): protocollo bench del repo (warmup + 3 repliche, PROMPT_512,
@@ -143,7 +144,9 @@ tap (fase D) · f16 compute · prefill veloce · UI oltre la pagina bench · mul
 
 - Fusione attention in 1 kernel (②) è il pezzo WGSL più difficile: fallback dichiarato
   = attention a 2-3 dispatch (budget sale a ~120-130, resta sotto 270/2) — il gate ≤100
-  andrebbe rinegoziato via docket, non silenziosamente.
+  andrebbe rinegoziato via docket, non silenziosamente. [ESITO: floor architetturale
+  misurato 5 dispatch/layer = 123; ruling docket 4 (2026-07-29): gate fase A ≤130,
+  ≤100 = target fase B (megakernel/fusioni cross-layer).]
 - llama-cpp-python su Fedora: build locale con BLAS off (CPU pura basta per 512 token
   su 0.5B) — pinnata nel golden script con `uv run --with`.
 - Il confronto cross-quant del first-light è il punto debole dichiarato del gate: la
