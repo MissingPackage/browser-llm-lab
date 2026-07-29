@@ -2,11 +2,13 @@
 
 ## 1. Next decidable
 
-**Ruling PI su #14 (from-scratch vs fork)**: raccomandazione consegnata in chat
-(2026-07-29) — scratch narrow GGUF-compatibile, llama.cpp come oracolo non come
-substrato. Al ruling parte subito il **WP di studio #15 (già approvato)**, coi brief
-tarati sull'esito. Poi `docs/engine/direction.md` e il goal.
-Roadmap approvata invariata: consolidamento → ceiling + hero-demo + benchmark → motore.
+**Piano di lavoro del motore, in una SESSIONE NUOVA** (deciso col PI, 2026-07-29):
+riancorarsi da HANDOFF + `docs/engine/{estimates,ideas-ledger}.md` + i 4 study report
+(`docs/engine/study/` — leggere prima `study/README.md`, la sintesi incrociata), poi
+scrivere `docs/engine/direction.md` e aprire il goal. Ruling già presi: **scratch**
+narrow GGUF-compatibile (#14), first-light = battere WebLLM (107 tok/s, Qwen2.5-0.5B
+q4, 4090) con le sole L1-L3. Decisione ancora aperta che il piano deve forzare: #13
+(modello target). Roadmap invariata: consolidamento → ceiling+hero-demo+benchmark → motore.
 
 ## 2. State delta (sessioni 8-9)
 
@@ -68,10 +70,14 @@ Roadmap approvata invariata: consolidamento → ceiling + hero-demo + benchmark 
     (convenzione docs/data delle sessioni 7-8). Push NON fatto (non richiesto).
 13. **Modello target del motore** — ora informato da: cuneo M4, DeepSpec (draft per
     Qwen3-4/8/14B), ecosistema DeepSeek V4 Flash (ds4+DSpark+MLA), narrow-focus.
-14. **Motore from-scratch vs sopra llama.cpp-WebGPU** — raccomandazione consegnata
-    (scratch narrow: tesi inesprimibile in ggml, economia dell'attenzione, deep-dive
-    = spec del v0; paletti: GGUF come formato, llama.cpp come oracolo, tokenizer/draft
-    presi in prestito). ATTESA RULING PI.
-15. ~~WP "studio in profondità"~~ APPROVATO (2026-07-29): ds4, colibri, DeepSpec
-    (architettura draft), LlamaWeb/ggml-webgpu (incl. stato MLA). Parte al ruling #14
-    (i brief cambiano con l'esito).
+14. ~~From-scratch vs fork~~ **DECISO (2026-07-29): SCRATCH** — narrow,
+    GGUF-compatibile, llama.cpp come oracolo non come substrato; tokenizer e draft
+    DeepSpec in prestito. First-light dichiarato: Qwen2.5-0.5B q4 su 4090, target
+    battere i 107 tok/s di WebLLM con le sole L1-L3.
+15. ~~WP "studio in profondità"~~ ESEGUITO (2026-07-29, sessione 9): 4 studi paralleli
+    → `docs/engine/study/` + sintesi incrociata in `study/README.md`. Esiti chiave:
+    tesi scratch confermata dal codice ggml-webgpu; sistema di memoria già progettato
+    2× in nativo (PILOT 71.6% recall, tier.h ~60 righe); KV persistente risolta 2×;
+    spec-dec portabile ma ri-prioritizzato (tap hidden-states da progettare in v0,
+    build dopo; draft mai sotto int8; checkpoint DeepSpec senza licenza dichiarata).
+    Caveat: nessun codebase eseguito, solo lettura.
