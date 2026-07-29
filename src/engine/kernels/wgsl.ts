@@ -11,6 +11,12 @@
 
 export const TOK_PARAMS_WGSL = `struct TokParams { pos: u32, nPast: u32 };`;
 
+// Larghezza X della griglia 2D dei gemv (limite WebGPU: 65535 wg/dimensione).
+export const GEMV_GRID_X = 32768;
+export function gemvGrid(N: number): [number, number] {
+  return N <= GEMV_GRID_X ? [N, 1] : [GEMV_GRID_X, Math.ceil(N / GEMV_GRID_X)];
+}
+
 // GEMV dequant-fusa: y[r] = Σ_b scale(b)·Σ_j q_j·x[...] (+ bias). Un workgroup da
 // 64 thread per riga di output; riduzione in shared memory.
 export function gemvQuantWgsl(opts: {
@@ -58,7 +64,10 @@ const WORDS_PER_BLOCK = ${wordsPerBlock}u;
 var<workgroup> partial: array<f32, 64>;
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let r = wid.x;                    // riga di output (0..${N - 1})
+  // Griglia 2D: una riga per workgroup, ma il limite WebGPU è 65535 wg per
+  // dimensione (l'lm_head ha 151936 righe): r = x + y*GRID_X.
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  if (r >= ${N}u) { return; }
   let t = lid.x;
   var acc = 0.0;
   for (var b = t; b < BLOCKS_PER_ROW; b = b + 64u) {

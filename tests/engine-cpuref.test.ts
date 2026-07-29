@@ -11,7 +11,9 @@ import { loadCpuRef, CpuRefSession, argmax } from "../src/engine/cpuref";
 // CPU): gira solo in locale col modello scaricato; CI lo salta.
 const MODEL = `${homedir()}/.cache/blab-models/qwen2.5-0.5b-instruct-q4_0.gguf`;
 const GOLDEN = "results/engine/golden/golden-qwen25-05b-q4_0.json";
-const N = 4; // token verificati per prompt (teacher-forced sul golden)
+// Token verificati per prompt (teacher-forced sul golden). CPUREF_N=128 = protocollo
+// completo (~13 min): usato per calibrare il noise floor del confronto con l'oracolo.
+const N = Number(process.env.CPUREF_N ?? 4);
 
 describe.skipIf(!existsSync(MODEL) || !existsSync(GOLDEN))("cpuref vs oracolo", () => {
   it("top-1 identico al golden sui primi token di ogni prompt", { timeout: 600_000 }, () => {
@@ -22,19 +24,31 @@ describe.skipIf(!existsSync(MODEL) || !existsSync(GOLDEN))("cpuref vs oracolo", 
     const tensors = loadCpuRef(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
 
     let maxDlogit = 0;
+    let agree = 0, total = 0;
+    const mismatches: string[] = [];
     for (const p of golden.prompts) {
       const sess = new CpuRefSession(tensors, p.promptTokens.length + N + 1);
       let logits!: Float32Array;
       for (const tok of p.promptTokens) logits = sess.forward(tok);
       for (let i = 0; i < N; i++) {
         const gold = p.positions[i];
-        expect(argmax(logits), `${p.id} pos ${i}`).toBe(gold.argmax);
+        const got = argmax(logits);
+        total++;
+        if (got === gold.argmax) agree++;
+        else mismatches.push(`${p.id} pos${i}: ${got}≠${gold.argmax}`);
         for (const [tid, glogit] of gold.top) {
           maxDlogit = Math.max(maxDlogit, Math.abs(logits[tid] - glogit));
         }
         logits = sess.forward(gold.argmax); // teacher-forcing: confronto per-posizione pulito
       }
     }
+    console.log(`[cpuref] top-1: ${agree}/${total} (${((agree / total) * 100).toFixed(2)}%)`);
+    if (mismatches.length) console.log(`[cpuref] mismatch: ${mismatches.join("; ")}`);
+    // Smoke (N piccolo): parità piena attesa. Calibrazione (N=128): il numero stampato
+    // È il noise floor del confronto con l'oracolo (llama.cpp CPU quantizza le
+    // attivazioni a Q8: algoritmo diverso ⇒ near-tie che flippano anche in f64).
+    if (N <= 8) expect(agree).toBe(total);
+    else expect(agree / total).toBeGreaterThan(0.95);
     // Riportato, non gated (spec §Soglie): stessa dequant esatta, diverso ordine di
     // riduzione f32 — atteso O(1e-2) sui logit. Il gate è il top-1.
     console.log(`[cpuref] max|Δlogit| sui top-32 golden: ${maxDlogit.toFixed(4)}`);
