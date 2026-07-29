@@ -16,8 +16,8 @@ src/engine/
   gguf.ts          parser GGUF (header, metadata KV, tensor table) — puro, testabile CI
   quant.ts         layout Q4_0 + dequant CPU di riferimento (bit-exact) — puro
   shape.ts         shape Qwen2.5-0.5B hardcoded (24 layer, d=896, 14Q/2KV head_dim 64,
-                   ffn 4864, vocab 151936, embeddings tied) + validazione hard del GGUF:
-                   nome/tipo/shape per tensore, mismatch ⇒ throw (postura ds4)
+                   ffn 4864, vocab 151936) + validazione hard del GGUF: nome/tipo/shape
+                   per tensore, mismatch ⇒ throw (postura ds4)
   plan.ts          piano statico: compila la lista di step al load — puro, testabile
   kernels/         WGSL come template string + specializzazione (pattern shader-lib
                    LlamaWeb: la funzione restituisce pipeline + metadata delle decisioni)
@@ -37,15 +37,18 @@ Il motore NON tocca `src/` esistente (adapters/schema/bench intatti); condivide 
 
 ## Formato pesi
 
-- **Fase A: solo Q4_0** (blocchi da 32, scala f16, layout documentato e semplice;
-  l'ufficiale `Qwen/Qwen2.5-0.5B-Instruct-GGUF` lo pubblica). K-quants/IQ arrivano in
-  fase C col modello-tesi. Un formato = un percorso di test bit-exact.
+- **Fase A: Q4_0 + Q8_0 + F32** — corretto dopo il parse del file reale (2026-07-29):
+  il GGUF ufficiale "q4_0" di Qwen tiene `output.weight` **separato e in Q8_0** (niente
+  tied embeddings nel file, contrariamente alla config HF) e ha **bias F32 su q/k/v**
+  (architettura qwen2); norme F32. K-quants/IQ arrivano in fase C col modello-tesi.
+  Pochi formati = percorsi di test bit-exact per ciascuno.
 - **Repack al load** (CPU, una volta): da blocchi Q4_0 a layout GPU-friendly — nibbles
   in u32 row-major + buffer scale separato (f16 lette come u16→unpack in WGSL: niente
   dipendenza da shader-f16), offset allineati a 256 B. La **dequant è fusa nel matmul**
   (mai materializzata), lezione unanime LlamaWeb/ds4/colibri.
 - Attivazioni f32 (dev-loop 4090 senza shader-f16); percorso f16 = feature-detect,
-  fuori fase A. Embeddings tied: `lm_head` legge lo stesso buffer di `token_embd`.
+  fuori fase A. `lm_head` = `output.weight` Q8_0 (kernel GEMV dedicato, stesso schema
+  fuso del Q4_0 con loader di blocco diverso — pattern `mul_mat_decls` di LlamaWeb).
 - Upload: streaming a chunk dal fetch/OPFS direttamente in `writeBuffer` (mai l'intero
   modello nel heap WASM/JS).
 

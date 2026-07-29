@@ -14,4 +14,8 @@ Decisioni PI pendenti del goal. Append-only; le decisioni prese migrano in GOAL/
    rimandato); top-1 ≥99% come gate + agreement@8 e Δlogit riportati non gated; golden
    via llama-cpp-python; budget ≤100 dispatch con fallback attention dichiarato
    (rinegoziazione via docket); telemetria a 4 livelli con diagnostica mai-default.
-   Sblocca le fasi 3-5.
+   Sblocca le fasi 4-5. [Agg. iterazione 3: spec corretta dopo il parse del GGUF reale —
+   "Q4_0-only" diventa Q4_0+Q8_0+F32 (output.weight separato in Q8_0, bias q/k/v F32,
+   niente tied embeddings nel file). Fase 3 avviata pre-ruling: authority `src/engine/**`
+   su branch è esplicita nel contratto e gli artefatti (parser, dequant reference,
+   golden) sono invarianti rispetto a entrambi i ruling pendenti; nessun merge.]

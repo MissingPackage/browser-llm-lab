@@ -1,5 +1,15 @@
 # Journal — engine-fase-a
 
+2026-07-29 — Iterazione 3 (fase 3, su branch engine/fase-a, avviata pre-ruling — vedi
+docket 2): gguf.ts (parser v3, subset F32/F16/Q4_0/Q8_0), quant.ts (dequant reference
+esatta Q4_0/Q8_0 + f16), shape.ts (inventario 291 tensori VERIFICATO sul file reale —
+due correzioni alla spec: output.weight separato Q8_0, bias q/k/v F32), 119/119 test
+(fixture sintetica CI + validazione file reale skipIf), gen-golden.py (llama-cpp-python
+0.3.16 pinnato) → corpus 4 prompt token-id + golden 512 posizioni (argmax+top-32,
+sha256 del GGUF registrato). Sanity: output oracolo sensati (p3 → "Paris").
+Fasi 4-6 FERME in attesa dei due ruling (il plan-check 1b decide proprio la forma
+della fase 4).
+
 2026-07-29 — Goal aperto. Contratto approvato dal PI in chat (goal-brief, [ASSUMED]
 approvati in blocco). Direction: docs/engine/direction.md.
 
