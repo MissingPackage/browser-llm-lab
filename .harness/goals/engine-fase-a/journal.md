@@ -1,5 +1,20 @@
 # Journal — engine-fase-a
 
+2026-07-29 — Iterazioni 5-6 (fase 4-6, su branch): bench mode + baseline WebLLM
+same-day (naive 81.9 vs 117.8 ⇒ il plan-check 1b è moot: baseline misurata E si
+procede). L3: piano fuso 123 dispatch/token (5/layer), kernel vec4 + unpack4x8snorm
+(q8 esatto), 4 righe/wg con x condivisa. Parità INVARIATA a ogni passo (98.05%,
+mismatch set = cpuref-f64). FIRST LIGHT: 122.5/123.2/123.6 vs WebLLM 117.8/116.5.
+Contatori verificati dal profiler esterno: bindGroup=0, submit=1, dispatch=123
+(WebLLM: 270/7/270). Telemetria: encode CPU 0.042 ms/token (54× meno di WebLLM),
+overhead A/B −0.55% (<1% gate); KNOWN-ISSUE: timestamp GPU azzerati dal browser in
+questa integrazione (microbench standalone ok) → gpuMs=null dichiarato. Esperimento
+fallito documentato: attention GQA-aware a 2 wg (43 tok/s — su GPU grandi il
+parallelismo batte la deduplicazione: la L2 assorbiva già la ridondanza).
+Delta leve MISURATO sul nostro motore: naive(L1+L2) 81.9 → L3+kernel 123.0 = 1.50×
+(estimates prediceva 1.44× per L1-L3 su WebLLM). Restano SOLO i ruling PI:
+docket 1 (moot), 2 (spec), 3 (gate conformance), 4 (budget L3), 5 (merge).
+
 2026-07-29 — Iterazione 4 (nucleo comune fase 4/5, su branch): (a) cpuref.ts — forward
 CPU f64 con parità PIENA vs oracolo (16/16 smoke); (b) kernel WGSL completi + ktest
 page: 11/11 PASS su 4090 al primo colpo; (c) gpuforward.ts — motore GPU end-to-end,

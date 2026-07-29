@@ -28,3 +28,12 @@ Decisioni PI pendenti del goal. Append-only; le decisioni prese migrano in GOAL/
    PROPOSTA: gate doppio — top-1 vs cpuref-f64 ≥ 99% (parità vera, oracolo-indipendente;
    oggi 100%) E top-1 vs golden llama.cpp ≥ 97% (sanity; oggi 98.05%). In alternativa:
    golden rigenerato da un oracolo f32-full-precision. Decidere prima del gate di fase.
+4. **Budget L3: 123 dispatch/token vs gate ≤100** (2026-07-29, iterazione 6). Il piano
+   fuso è a 5 dispatch/layer + 3 finali = 123 — dentro il fallback dichiarato dalla spec
+   (§Rischi: attention-in-1 già fusa; scendere sotto 100 richiede fusioni cross-layer o
+   assorbire o-proj nell'attention). Il first-light è passato a 123. PROPOSTA: gate → ≤130
+   con nota, oppure si tiene ≤100 come target di fase B. Rinegoziazione esplicita, non
+   silenziosa (come da spec).
+5. **Candidatura merge engine/fase-a → main** (2026-07-29). First-light PASSATO
+   (122.5-123.6 vs 116.5-117.8 same-day, 3 run stabili, results/engine/). Il merge resta
+   ruling PI (contratto, must-docket). Con i ruling 2-4 approvati, il goal chiude.

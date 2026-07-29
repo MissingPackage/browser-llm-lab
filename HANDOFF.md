@@ -2,16 +2,14 @@
 
 ## 1. Next decidable
 
-**Goal `engine-fase-a`: due ruling PI pendenti, poi si scrive codice.** Fasi 1-2 fatte
-(2026-07-29): spec scritta (`specs/2026-07-29-engine-fase-a-design.md`), OPFS+M2
-misurati. Servono: (1) **plan-check** su PHASES.md — punto vivo: spine
-correttezza-poi-velocità 4→5; (2) **ruling spec** — decisioni chiave: Q4_0-only,
-corpus token-id senza tokenizer, top-1≥99%, golden via llama-cpp-python, ≤100 dispatch
-con fallback attention dichiarato. Entrambi nel docket del goal. La fase 3 (GGUF parser + dequant reference + shape
-validata sul file reale + golden oracolo, 512 posizioni) è FATTA su branch
-`engine/fase-a` (avviata pre-ruling, razionale nel docket 2; il file reale ha corretto
-la spec: output.weight Q8_0 separato, bias F32). Approvati i due ruling → fase 4, la
-cui forma dipende dal plan-check 1b (naive-first o L1-L3 diretto). Merge = ruling PI.
+**Goal `engine-fase-a`: FIRST LIGHT RAGGIUNTO — servono 4 ruling PI e il goal chiude.**
+Il motore (branch `engine/fase-a`) decodifica Qwen2.5-0.5B Q4_0 a **123.0 tok/s vs
+WebLLM 116.5-117.8 same-day** (3 run stabili), parità = matematica esatta (mismatch
+set identico a cpuref-f64), 123 dispatch/1 submit/0 createBindGroup per token
+(WebLLM: 270/7/270), telemetria nativa overhead −0.55%. Docket del goal: (1) plan-check
+[moot nei fatti], (2) ruling spec, (3) gate conformance 99%→proposta doppio gate,
+(4) budget L3 123 vs ≤100, (5) merge su main. Tutto il resto è fatto ed evidenziato
+in results/engine/ e nel journal del goal.
 
 ## 2. State delta (sessione 10)
 
@@ -57,6 +55,10 @@ cui forma dipende dal plan-check 1b (naive-first o L1-L3 diretto). Merge = rulin
 - `erasableSyntaxOnly` in tsconfig; righe doc valide per `@mlc-ai/web-llm 0.2.84`.
 - Dev server vite di sessioni vecchie vivi su :5173-:5177 (ascoltano solo su [::1]).
 - llama.cpp = SOLO oracolo (ruling #14): mai vendored/linkato nel motore.
+- timestamp-query nel motore: valori AZZERATI su Chrome branded Linux/NVIDIA in questa
+  integrazione (il microbench standalone funziona) — known-issue, journal goal 2026-07-29.
+- L'oracolo llama.cpp CPU quantizza le attivazioni (q8 dot): parità esatta impossibile
+  by design, noise floor 98.05% su questo corpus (docket 3 del goal).
 
 ## 5. Docket (decisioni PI pendenti)
 
