@@ -205,3 +205,50 @@ describe.skipIf(!existsSync(REAL))("GGUF reale (skip in CI)", () => {
     }
   });
 });
+
+describe("repack GPU-friendly", () => {
+  // Decodifica CPU che simula ESATTAMENTE ciò che farà il WGSL (unpack nibble da u32,
+  // unpack2x16float della scala): deve coincidere col dequant reference.
+  it("repackQ4_0: la decodifica stile-WGSL coincide col reference", async () => {
+    const { repackQ4_0, dequantQ4_0, f16ToF32, Q4_0_BLOCK_BYTES } = await import("../src/engine/quant");
+    const nBlocks = 5;
+    const src = new Uint8Array(nBlocks * Q4_0_BLOCK_BYTES);
+    let seed = 7;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) % 256;
+    for (let i = 0; i < src.length; i++) src[i] = rnd();
+    // scale f16 plausibili (esponente moderato) per evitare inf
+    for (let b = 0; b < nBlocks; b++) { src[b * 18] = rnd(); src[b * 18 + 1] = 0x2c | (b & 3); }
+    const ref = new Float32Array(nBlocks * 32);
+    dequantQ4_0(src, 0, nBlocks, ref);
+    const { qs, scales } = repackQ4_0(src, 0, nBlocks);
+    for (let b = 0; b < nBlocks; b++) {
+      const sBits = (scales[b >> 1] >>> ((b & 1) * 16)) & 0xffff;
+      const scale = f16ToF32(sBits);
+      for (let j = 0; j < 32; j++) {
+        const byte = (qs[b * 4 + ((j % 16) >> 2)] >>> ((j % 16 & 3) * 8)) & 0xff;
+        const nib = j < 16 ? (byte & 0x0f) : (byte >> 4);
+        expect((nib - 8) * scale, `blocco ${b} peso ${j}`).toBe(ref[b * 32 + j]);
+      }
+    }
+  });
+
+  it("repackQ8_0: idem", async () => {
+    const { repackQ8_0, dequantQ8_0, f16ToF32, Q8_0_BLOCK_BYTES } = await import("../src/engine/quant");
+    const nBlocks = 3;
+    const src = new Uint8Array(nBlocks * Q8_0_BLOCK_BYTES);
+    let seed = 42;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) % 256;
+    for (let i = 0; i < src.length; i++) src[i] = rnd();
+    for (let b = 0; b < nBlocks; b++) { src[b * 34 + 1] = 0x30; }
+    const ref = new Float32Array(nBlocks * 32);
+    dequantQ8_0(src, 0, nBlocks, ref);
+    const { qs, scales } = repackQ8_0(src, 0, nBlocks);
+    for (let b = 0; b < nBlocks; b++) {
+      const scale = f16ToF32((scales[b >> 1] >>> ((b & 1) * 16)) & 0xffff);
+      for (let j = 0; j < 32; j++) {
+        const byte = (qs[b * 8 + (j >> 2)] >>> ((j & 3) * 8)) & 0xff;
+        expect(((byte << 24) >> 24) * scale, `blocco ${b} peso ${j}`).toBe(ref[b * 32 + j]);
+      }
+    }
+  });
+});

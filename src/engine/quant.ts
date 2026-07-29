@@ -53,6 +53,52 @@ export function dequantQ4_0Row(
   dequantQ4_0(data, tensorByteOffset + row * rowBytes, blocksPerRow, dst, 0);
 }
 
+// --- Repack GPU-friendly (spec §Formato pesi) ---
+//
+// I blocchi GGUF (18/34 B) non sono allineati a u32: si repacka una volta al load in
+// due buffer per tensore: `qs` (nibbles/int8 come u32 LE, 4-allineati) e `scales`
+// (bit f16 grezzi, due per u32 — in WGSL si legge con unpack2x16float, che NON
+// richiede shader-f16). Il kernel deve produrre ESATTAMENTE i valori del reference.
+export interface RepackedQuant {
+  qs: Uint32Array; // Q4_0: 4 u32/blocco (16 B nibbles) · Q8_0: 8 u32/blocco (32 int8)
+  scales: Uint32Array; // ⌈nBlocks/2⌉ u32: bit f16 del blocco b in half (b&1) di word (b>>1)
+}
+
+function packScale(scales: Uint32Array, b: number, f16bits: number): void {
+  const w = b >> 1;
+  scales[w] = (b & 1) ? (scales[w] | (f16bits << 16)) : (scales[w] | f16bits);
+}
+
+export function repackQ4_0(src: Uint8Array, srcOffset: number, nBlocks: number): RepackedQuant {
+  const qs = new Uint32Array(nBlocks * 4);
+  const scales = new Uint32Array(Math.ceil(nBlocks / 2));
+  let o = srcOffset;
+  for (let b = 0; b < nBlocks; b++) {
+    packScale(scales, b, src[o] | (src[o + 1] << 8));
+    o += 2;
+    for (let w = 0; w < 4; w++) {
+      qs[b * 4 + w] = src[o] | (src[o + 1] << 8) | (src[o + 2] << 16) | (src[o + 3] << 24);
+      o += 4;
+    }
+  }
+  return { qs, scales };
+}
+
+export function repackQ8_0(src: Uint8Array, srcOffset: number, nBlocks: number): RepackedQuant {
+  const qs = new Uint32Array(nBlocks * 8);
+  const scales = new Uint32Array(Math.ceil(nBlocks / 2));
+  let o = srcOffset;
+  for (let b = 0; b < nBlocks; b++) {
+    packScale(scales, b, src[o] | (src[o + 1] << 8));
+    o += 2;
+    for (let w = 0; w < 8; w++) {
+      qs[b * 8 + w] = src[o] | (src[o + 1] << 8) | (src[o + 2] << 16) | (src[o + 3] << 24);
+      o += 4;
+    }
+  }
+  return { qs, scales };
+}
+
 // Q8_0 (34 byte, 32 pesi): [scala f16 LE (2 B)] [32 int8]. w = int8 * scala.
 // Serve per output.weight del GGUF ufficiale (vedi gguf.ts). Anche questa è esatta
 // in f32.

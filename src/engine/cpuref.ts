@@ -5,7 +5,7 @@
 //
 // f32 puro, dequant dal riferimento quant.ts, zero dipendenze. Lento per design
 // (~1-2 s/token): va usato su pochi token, non sul corpus intero.
-import { GGML_TYPE, parseGguf, tensorByteSize, type GgufTensorInfo } from "./gguf";
+import { GGML_TYPE, parseGguf, tensorByteSize } from "./gguf";
 import { dequantQ4_0, dequantQ8_0 } from "./quant";
 import { QWEN25_05B as S, validateQwen25_05B } from "./shape";
 
