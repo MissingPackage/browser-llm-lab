@@ -2,13 +2,12 @@
 
 ## 1. Next decidable
 
-**Iterazione 0 del goal `engine-fase-a`** (contratto approvato dal PI 2026-07-29,
-`.harness/goals/engine-fase-a/GOAL.md`): eseguire goal-setup (costruire PHASES.md),
-poi prima azione da contratto = **spec di fase A** (spec-first: IR/piano statico,
-formato interno pesi da GGUF, contratto dei tap, telemetria, soglie di conformance).
-La direzione completa è in `docs/engine/direction.md` (ancorarsi a §7 ordine di
-costruzione e §9 prime azioni). Branch di lavoro: `engine/fase-a` (merge su main =
-ruling PI).
+**Goal `engine-fase-a`, plan-check pendente** (iterazione 0 fatta 2026-07-29):
+PHASES.md scritto (6 fasi, gruppo parallelo 1+2, correttezza-poi-velocità 3→4→5) —
+serve l'approvazione PI della decomposizione (docket del goal, item 1) prima
+dell'iterazione 1. Approvata → partono fase 1 (spec fase A) + fase 2 (OPFS bench, M2)
+in parallelo. Direzione in `docs/engine/direction.md` (§7/§9). Branch di lavoro:
+`engine/fase-a` (merge su main = ruling PI).
 
 ## 2. State delta (sessione 10)
 
