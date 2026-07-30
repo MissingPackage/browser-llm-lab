@@ -2,15 +2,18 @@
 
 ## 1. Next decidable
 
-**GOAL `engine-fase-b1` CHIUSO** (2026-07-30, checklist DONE WHEN 8/8 nel journal,
-verifier gate finale + merge su main da ruling permanente). Il residuo è
-**PI-gated**: (a) goal-brief di **B2** (docket goal B1 item 2: col dato GPU busy
-2.2/8.1 ms/token la leva è il sync/encode, non il dispatch count — il contratto
-"floor dispatch ≤100" va ri-inquadrato); (b) headline benchmark pubblico (docket
-16); (c) igiene goal stale (fase-1b-matrice, fase-2-deep-dive) da
-/weekly-maintenance. Riancorarsi da: `.harness/goals/engine-fase-b1/{GOAL,PHASES,
-docket,journal}.md` (chiusura), `docs/engine/direction.md` §7-8, ideas-ledger §I
-(rimandi con trigger: longest-prefix→fase C, spec-dec parametro M→fase D, ecc.).
+**GOAL ATTIVO: `engine-fase-b2`** (aperto 2026-07-30, iterazione 0 fatta —
+contratto approvato in chat al goal-brief, ri-inquadramento su sync/encode: gate
+sulla QUOTA fuori-GPU del decode wall [~73% → ≤ soglia da spec, provv. ≤50%] con
+guard-rail gpuBusy ≤ +5%; dispatch ≤100 retrocesso a soglia-da-spec). **PI-gated
+ADESSO: plan-check** — approvare `.harness/goals/engine-fase-b2/PHASES.md`
+(docket B2 item 1) prima dell'iterazione 1. Poi: fase 1 = attribuzione del decode
+wall (gpuBusy/readback/encode + predizione K∈{2,4,8}). Riancorarsi da:
+`.harness/goals/engine-fase-b2/{GOAL,PHASES,docket}.md`,
+`docs/engine/tsq-diag-2026-07-29.md` §Conseguenze (dato 2.2/8.1), ideas-ledger §I.
+Altri PI-gated (non bloccanti): igiene goal stale (fase-1b-matrice,
+fase-2-deep-dive) da /weekly-maintenance. Benchmark pubblico: FUORI dai goal
+engine (ruling 2026-07-30: contributo separato, repo/paper/sito propri).
 
 ## 2. State delta (sessione 12, 2026-07-30 — goal B1 completo, iterazioni 3-6)
 
@@ -41,7 +44,8 @@ docket,journal}.md` (chiusura), `docs/engine/direction.md` §7-8, ideas-ledger �
 - **Merge su main**: fatto a goal chiuso dopo verifier PASS (ruling permanente) —
   se questa riga è presente e il merge non risulta in `git log main`, il merge è
   stato interrotto: rifarlo (fast-forward di engine/fase-b1).
-- **B2 goal-brief** (PI-gated): ri-inquadrare su sync/encode (~73% del decode wall).
+- **B2 plan-check** (PI-gated): PHASES.md da approvare (docket B2 item 1);
+  contratto già approvato in chat 2026-07-30.
 - Goal harness stale mai chiusi: `fase-1b-matrice` (11 docket item),
   `fase-2-deep-dive` (5) — igiene da /weekly-maintenance.
 - Sweep fase 1b (wllama/transformersjs su S22) fuori goal; GLM-5 uscito → ledger §H a v2.
@@ -83,6 +87,9 @@ docket,journal}.md` (chiusura), `docs/engine/direction.md` §7-8, ideas-ledger �
      (goal evals futuro); #8 sorveglianza wllama (v3.1 ha WebGPU — rilevante per il
      benchmark pubblico).
 16. Headline del benchmark pubblico (ledger §E): serve prima del goal benchmark.
-18. **B2 goal-brief da approvare** (quando il PI vuole): ri-inquadramento su
-    sync/encode (docket goal B1, item 2) — il contratto "floor dispatch ≤100"
-    scritto in direction §7 non è più la leva giusta secondo i dati liv.2.
+    Nota 2026-07-30: il benchmark è un CONTRIBUTO SEPARATO dall'engine (ruling PI:
+    repo/paper/sito propri, confronto imparziale che include il nostro engine;
+    split repo rimandato alla pubblicazione) — ci si torna su iniziativa PI.
+18. ~~B2 goal-brief da approvare~~ RISOLTO (2026-07-30, ruling PI in chat:
+    contratto B2 approvato col gate a quota fuori-GPU + guard-rail gpuBusy;
+    goal `engine-fase-b2` aperto). Resta il plan-check (docket B2 item 1).
