@@ -22,7 +22,11 @@
    routing non dipende dalla MTP. Riferimento: gguf-dump del file in journal
    it.1; ledger §H/§I da aggiornare in fase 6 (sintesi).
 
-3. **RULING RICHIESTO — spec C1** (2026-07-30, fase 2): approvazione di
+3. ~~**RULING RICHIESTO — spec C1**~~ RISOLTO (2026-07-31, ruling PI in chat:
+   "ok (a)-(f)" dopo walkthrough delle decisioni). Spec approvata senza
+   modifiche; fasi 3-6 SBLOCCATE (3 ready, 4-6 a cascata). Testo originale:
+
+   **RULING RICHIESTO — spec C1** (2026-07-30, fase 2): approvazione di
    `docs/superpowers/specs/2026-07-30-engine-fase-c1-design.md`. Decisioni
    proposte da ratificare:
    (a) predittore LOOKA = router di L+1 applicato a `ffn_norm(L)` (analogo
@@ -39,4 +43,3 @@
    (e) timebox fase 4 = 3 iterazioni (fallback ROUTE_TRACE-only da contratto);
    (f) NESSUN gate numerico sul recall (misura, non target): il numero decide
        il go/no-go PILOT in fase 6, decisione PI.
-   Le fasi 3-6 restano gated fino al ruling.

@@ -100,3 +100,40 @@ spec↔journal e spec↔GOAL verificate; claim tecnico sigmoid→+bias→top-k
 verificato NEL CODICE a commit 5f55650a e nei metadati GGUF, incl. esistenza di
 blk.N.ffn_gate_inp.weight/exp_probs_b.bias e ASSENZA di ffn_gate_inp.bias;
 src/engine intatto; drift none). FASE 2 DONE, ruling pendente (docket 3).
+
+## it.3 — fase 3: ROUTE_TRACE (2026-07-31)
+
+Tool `tools/oracle-moe/trace.cpp` (C++ puro su llama.h, zero patch upstream,
+linka la build via build.sh) + corpus 8 prompt generati da gen-corpus.py
+(estratti CONGELATI da src/engine e docs/engine/study + 3 task hand-written;
+corpus hash 2882e4ab…) + run-trace.sh (envelope: sha GGUF, commit oracolo,
+threads, corpus hash).
+
+**FINDING metodologico (primo run FAILed by design, sanity in azione)**:
+llama.cpp POTA l'ultimo layer alle sole righe di output (`inp_out_ids`) — con
+`llama_batch_get_one` solo l'ultima posizione ha logits ⇒ il routing del layer
+46 spariva per 511/512 colonne del chunk ("colonne 1 != 512 su il=46", exit 2).
+Fix: batch custom con `logits=true` su OGNI posizione di prefill (il routing
+non cambia; si paga l'lm_head su tutte le righe). Lezione per chiunque
+strumenti llama.cpp via cb_eval: l'ultimo layer non è come gli altri.
+
+**Run canonica (exit 0, ~21 min, 16 thread)**: 31.274 posizioni routed
+(26.154 prefill + 5.120 decode = 640×8, ZERO eos anticipati) — gate ≥16k/≥4k
+PASS con margine ~2×. Sanity nel tool: colonne per layer per batch PASS su
+tutti i batch, 46 layer MoE osservati esatti, slot tutti scritti, expert id
+∈[0,64), top-4. Verifica indipendente post-run: 31.275 righe jsonl (=tot+
+header), ultima riga parsata e valida (184 id). Artefatti:
+`results/engine/moe-oracle/trace-2026-07-30.jsonl.gz` (5.6 MB, input della
+fase 5) + `trace-2026-07-30-summary.json` (envelope+sanity). Nota naming: la
+data nel filename è UTC (run partita 23:xx UTC del 30) — coerente con
+l'envelope, non un errore.
+
+**Done-when fase 3**: tool committato ✓ (niente patch: il "patch-file" del
+contratto si è rivelato non necessario, deviazione già registrata in spec
+approvata), run exit 0 documentata ✓, traccia con envelope completo ✓,
+sanity righe = posizioni × 46 ✓ (verificata anche fuori dal tool).
+Verifier: **PASS** (loop-verifier, 2026-07-31 — checkout oracolo PULITO (zero
+patch confermato), summary e traccia riverificati indipendentemente (31.275
+righe, campioni validi, corpusHash ricalcolato identico), sanity nel codice
+alle righe giuste, src/engine intatto; blocker segnalato: commit it.3 da fare
+= questo commit; binario trace ignorato via .gitignore). FASE 3 DONE.

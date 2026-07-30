@@ -5,8 +5,8 @@ Goal contract: `.harness/goals/engine-fase-c1/GOAL.md`. Ancorata ai fatti di fas
 **deepseek2** (46 layer MoE routed: 47 blocchi, dense lead 1, niente NextN),
 64 expert routed top-4 + 1 shared, gating **sigmoid** + `exp_probs_b`
 (bias di selezione stile DeepSeek-V3), `expert_weights_norm=true`, scale 1.8;
-throughput pp512 56.6 / tg64 13.4 t/s a 16 thread. Stato: **PROPOSTA — ruling
-PI richiesto (docket item 3)**.
+throughput pp512 56.6 / tg64 13.4 t/s a 16 thread. Stato: **APPROVATA**
+(ruling PI 2026-07-31, "ok (a)-(f)", docket item 3).
 
 ## Strumentazione
 

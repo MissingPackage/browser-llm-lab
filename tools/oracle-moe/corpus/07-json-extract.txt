@@ -1,0 +1,18 @@
+Extract every benchmark result from the log below into a JSON array. Each
+element must have: engine (string), device (string), metric (string), value
+(number), unit (string), date (ISO). Output ONLY the JSON array, no commentary.
+
+--- log ---
+[2026-07-29 18:02] webllm baseline on rtx4090: decode 122.4 tok/s (ctx 570)
+[2026-07-29 18:41] our engine, first-light gate: decode 141.0 tok/s on rtx4090
+[2026-07-29 19:15] prefill measured at 697.8 ms for 2048 tokens (rtx4090, our engine)
+[2026-07-30 08:13] profiler: 148 dispatches per forward, 0 bind group creations (rtx4090)
+[2026-07-30 19:25] multi-step K=8 decode: 287.5 tok/s mean over 3 replicas (rtx4090)
+[2026-07-30 19:25] baseline same-day K=1: 238.3 tok/s (rtx4090)
+[2026-07-30 21:10] opfs read bandwidth warm: 11.7 GB/s via SyncAccessHandle (nvme box)
+[2026-07-30 21:11] opfs write bandwidth: 2.2 GB/s sustained (nvme box)
+[2026-07-31 00:02] oracle cpu pp512: 56.58 tok/s on 32-core box (16 threads)
+[2026-07-31 00:03] oracle cpu tg64: 13.43 tok/s on 32-core box (16 threads)
+[2026-07-31 00:40] m4 hero demo target: 30 tok/s minimum sustained (macbook m4)
+[2026-07-31 00:41] s22 encode floor measured: 18 ms/token cpu-side (galaxy s22)
+--- end log ---

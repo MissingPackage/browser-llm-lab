@@ -32,3 +32,13 @@ decode-only + baseline, simulatore TS+vitest con 4 policy × 6 budget, autotest
 predittore ≥0.999 come gate hard dello strumento, NESSUN gate numerico sul
 recall (misura, non target). RULING PI RICHIESTO: docket item 3, decisioni
 (a)-(f). Fasi 3-6 gated — il goal riprende al ruling.
+
+2026-07-31 — it.3 (fase 3 DONE, verifier PASS). ROUTE_TRACE operativo:
+trace.cpp (C++ su llama.h, zero patch — checkout oracolo verificato pulito),
+corpus 8 prompt congelati (hash in envelope), run canonica exit 0 in ~21 min:
+31.274 posizioni routed (26.154 prefill + 5.120 decode, zero EOS anticipati),
+gate ≥16k/≥4k passato con margine 2×. Finding metodologico: llama.cpp pota
+l'ultimo layer alle righe di output (inp_out_ids) — il primo run è FALLITO
+correttamente sul sanity ("colonne 1 != 512 su il=46"), fix = logits=true su
+ogni posizione. Traccia 5.6 MB gz = input della fase 5. Next: fase 4 (LOOKA
+online, timebox 3 it.).
