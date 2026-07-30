@@ -44,3 +44,29 @@ fase 1 dichiarata: toccati engine.worker.ts e page.ts (plumbing della modalità
 diag, autorizzato dal GOAL §may-do; owns di PHASES citava solo scripts/pagina).
 Unit 156/156 invariati, tsc pulito (i cambi sono modalità diag additive).
 Next: STOP by design — fase 2 (spec) è gated dal ruling re-scope.
+
+2026-07-30 — Iterazione 2, FASE 2 DONE (ruling spec pendente, docket 3). Dopo il
+re-scope v2 (ruling PI: opzione (a), "il miglior motore in assoluto"): scritti i
+kernel attnSplitPartWgsl/attnSplitReduceWgsl (split del contesto in blocchi da 64,
+1 pos/thread, griglia FISSA (14,16) — piano statico invariato, partizioni vuote
+escono su begin>=n; pass 2 log-sum-exp esatto; owner-rule rope/append invariato)
+e il microbench in isolamento (worker mode attnbench, pattern kernel-diag: input
+sintetici deterministici, riferimento CPU f64, 480 op/submit serializzate dagli
+hazard RW, error-scope da landmine B1).
+
+RISULTATI (attn-bench-4090-2026-07-30T14-59-18-433Z.json):
+- split ~28-38 µs/layer PIATTO da ctx 64 a 1024; fuso 29→219 µs lineare.
+  ctx 576: 144.3 vs 31.8 µs = 4.53×; ctx 1024: 7.18×; ctx 64: 0.77× (accettato).
+- Parità: maxΔ vs CPU f64 IDENTICO fuso/split a ogni ctx (5.7e-8 @ 64, ~3e-3 @
+  lunghi = accumulo f32 uguale per entrambi) ⇒ split numericamente equivalente.
+- Proiezione ctx 576: gpuBusy 6.46−2.70=3.76 ms/tok ⇒ K=1 185, K=4 238, K=8 249
+  tok/s. Plateau a leva singola: sync-only 149, kernel-only 185.
+
+Spec v2 scritta (2026-07-30-engine-fase-b2-design.md, sezioni: Attention split,
+Decode loop multi-step, Streaming, Tap e telemetria, Metodologia gpuBusy, Soglie,
+Rischi). Soglia proposta col Pareto: decode ≥230 (sopra entrambi i plateau,
+margine 8% sotto predizione; alternativa 240 al PI). Dispatch ≤100: proposta di
+archiviazione motivata (floor GEMV = lavoro reale; +24 dispatch dello split e il
+wall scende comunque), bound sanity 160. Decisione grossa in spec: token_embd su
+GPU (~68 MB) per il feedback on-GPU (embedGatherQ4), deviazione dichiarata dalla
+fase A. Next: STOP by design — fasi 3-6 gated dal ruling spec (docket 3).

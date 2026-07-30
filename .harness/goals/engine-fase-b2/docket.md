@@ -1,5 +1,27 @@
 # Docket — engine-fase-b2 (decisioni PI pendenti)
 
+3. **RULING RICHIESTO — spec B2 v2** (2026-07-30, fase 2): approvazione di
+   `docs/superpowers/specs/2026-07-30-engine-fase-b2-design.md`. Decisioni proposte
+   da ratificare:
+   (a) attention split CHUNK=64, griglia fissa (14,16), due pass con log-sum-exp —
+       validato in isolamento: ~32 µs/layer piatto vs 144 del fuso a ctx 576
+       (4.53×), parità identica al fuso vs CPU f64 (attn-bench JSON);
+   (b) NIENTE switch runtime fuso/split: +0.2 ms/token accettati sotto ctx~128;
+   (c) multi-step K=8 default con token feedback on-GPU ⇒ token_embd sale su GPU
+       (~68 MB, kernel embedGatherQ4) — deviazione dalla scelta fase A
+       "embedding CPU-side" (motivata: il readback per-token sparisce);
+   (d) EOS mid-batch risolto con crop() (esatto by design B1); streaming a
+       raffiche di K, K=1 ripristina il flusso B1;
+   (e) SOGLIA decode: proposta ≥230 tok/s (sopra entrambi i plateau a leva
+       singola: sync-only 149, kernel-only 185; margine ~8% sotto predizione 249)
+       — alternativa ambiziosa ≥240 (margine 3.6%): SCELTA AL PI;
+   (f) dispatch ≤100/token ARCHIVIATO con motivazione numerica (il floor GEMV è
+       lavoro reale, non overhead dispatch; su 4090 lo split ne aggiunge 24 e
+       vince comunque) — resta rimando §I con trigger mobile; nuovo bound sanity
+       profiler ≤160;
+   (g) conformance a K=1 (teacher-forcing), K>1 coperto dal gate token-identity.
+   Le fasi 3-6 restano blocked fino al ruling.
+
 2. ~~**RULING RICHIESTO — re-scope del contratto**~~ RISOLTO (2026-07-30, ruling PI
    in chat: "Opzione A, assolutamente. Non abbiamo fretta. L'obiettivo è quello di
    scrivere il miglior motore in assoluto (o almeno, uno dei migliori)"). Re-scope

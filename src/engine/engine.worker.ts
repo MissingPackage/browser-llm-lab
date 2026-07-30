@@ -609,6 +609,180 @@ async function runAttrib(modelUrl: string, promptUrl: string, genTokens: number,
   });
 }
 
+// Microbench attention split (fase 2 B2): kernel split-context in ISOLAMENTO
+// (pattern kernel-diag) — correttezza vs riferimento CPU f64 e vs attnFusedWgsl
+// sugli stessi input sintetici deterministici, tempi per-dispatch a più contesti
+// (molti dispatch nello stesso pass: gli hazard RW li serializzano ⇒ wall/reps ≈
+// costo per-layer per-token), proiezione sul gpuBusy misurato dall'attribuzione.
+async function runAttnBench(): Promise<void> {
+  const S = QWEN25_05B;
+  const { attnFusedWgsl: genFused, attnSplitPartWgsl: genPart, attnSplitReduceWgsl: genReduce } = await import("./kernels/wgsl");
+  const adapter = await navigator.gpu?.requestAdapter();
+  if (!adapter) throw new Error("no webgpu");
+  const device = await adapter.requestDevice({
+    requiredLimits: { maxComputeWorkgroupStorageSize: Math.min(adapter.limits.maxComputeWorkgroupStorageSize, 32768) },
+  });
+  device.addEventListener("uncapturederror", (e) => {
+    throw new Error(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message.slice(0, 200)}`);
+  });
+  const CTX_CAP = 1024, CHUNK = 64;
+  const S_MAX = Math.ceil(CTX_CAP / CHUNK);
+  const KVD = S.nKvHead * S.headDim;
+  const QKV_LEN = S.nHead * S.headDim + 2 * KVD;
+  const HALF = S.headDim / 2;
+  const REPS = 480; // ≈ 24 layer × 20 token
+  let seed = 1234;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+  const mk = (data: Float32Array, extra = 0) => {
+    const b = device.createBuffer({ size: Math.max(16, data.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | extra });
+    device.queue.writeBuffer(b, 0, data as BufferSource);
+    return b;
+  };
+  const mkPipe2 = (code: string) =>
+    device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code }), entryPoint: "main" } });
+  device.pushErrorScope("validation"); // landmine B1: pipeline invalida = submit droppati muti
+  const pipeFused = mkPipe2(genFused({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_CAP, freqBase: S.ropeFreqBase }));
+  const pipePart = mkPipe2(genPart({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_CAP, freqBase: S.ropeFreqBase, chunkP: CHUNK }));
+  const pipeReduce = mkPipe2(genReduce({ nHead: S.nHead, headDim: S.headDim, ctxMax: CTX_CAP, chunkP: CHUNK }));
+  const qkvArr = new Float32Array(QKV_LEN);
+  for (let i = 0; i < QKV_LEN; i++) qkvArr[i] = rnd();
+  const kInit = new Float32Array(CTX_CAP * KVD);
+  const vInit = new Float32Array(CTX_CAP * KVD);
+  for (let i = 0; i < kInit.length; i++) { kInit[i] = rnd(); vInit[i] = rnd(); }
+  const qkvB = mk(qkvArr);
+  const kB = mk(kInit); // il passato in cache è già "roped" per costruzione del test
+  const vB = mk(vInit);
+  const outFusedB = mk(new Float32Array(S.nHead * S.headDim), GPUBufferUsage.COPY_SRC);
+  const outSplitB = mk(new Float32Array(S.nHead * S.headDim), GPUBufferUsage.COPY_SRC);
+  const partialsB = mk(new Float32Array(S.nHead * S_MAX * (S.headDim + 2)));
+  const Pb = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const bgFor = (pipe: GPUComputePipeline, bufs: GPUBuffer[]) =>
+    device.createBindGroup({
+      layout: pipe.getBindGroupLayout(0),
+      entries: [...bufs.map((b, i) => ({ binding: i, resource: { buffer: b } })), { binding: bufs.length, resource: { buffer: Pb } }],
+    });
+  const bindFused = bgFor(pipeFused, [qkvB, kB, vB, outFusedB]);
+  const bindPart = bgFor(pipePart, [qkvB, kB, vB, partialsB]);
+  const bindReduce = bgFor(pipeReduce, [partialsB, outSplitB]);
+  const errPipe = await device.popErrorScope();
+  if (errPipe) throw new Error(`attnbench pipeline: ${errPipe.message.slice(0, 300)}`);
+  const readBuf = async (src: GPUBuffer, bytes: number): Promise<Float32Array> => {
+    const st = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(src, 0, st, 0, bytes);
+    device.queue.submit([enc.finish()]);
+    await st.mapAsync(GPUMapMode.READ);
+    const out = new Float32Array(st.getMappedRange().slice(0));
+    st.destroy();
+    return out;
+  };
+  // riferimento CPU (f64): rope di q e k_cur con la stessa formula dei kernel
+  const cpuRef = (pos: number): Float64Array => {
+    const out = new Float64Array(S.nHead * S.headDim);
+    for (let h = 0; h < S.nHead; h++) {
+      const kvHead = Math.floor(h / (S.nHead / S.nKvHead));
+      const qh = new Float64Array(S.headDim);
+      const khc = new Float64Array(S.headDim);
+      for (let t = 0; t < HALF; t++) {
+        const theta = pos * Math.pow(S.ropeFreqBase, -t / HALF);
+        const c = Math.cos(theta), s2 = Math.sin(theta);
+        const a = qkvArr[h * S.headDim + t], b = qkvArr[h * S.headDim + t + HALF];
+        qh[t] = a * c - b * s2; qh[t + HALF] = a * s2 + b * c;
+        const kb = S.nHead * S.headDim + kvHead * S.headDim;
+        const ka = qkvArr[kb + t], kb2 = qkvArr[kb + t + HALF];
+        khc[t] = ka * c - kb2 * s2; khc[t + HALF] = ka * s2 + kb2 * c;
+      }
+      const scores = new Float64Array(pos + 1);
+      for (let p = 0; p < pos; p++) {
+        let acc = 0;
+        for (let i = 0; i < S.headDim; i++) acc += qh[i] * kInit[p * KVD + kvHead * S.headDim + i];
+        scores[p] = acc / Math.sqrt(S.headDim);
+      }
+      { let acc = 0; for (let i = 0; i < S.headDim; i++) acc += qh[i] * khc[i]; scores[pos] = acc / Math.sqrt(S.headDim); }
+      let m = -Infinity;
+      for (let p = 0; p <= pos; p++) m = Math.max(m, scores[p]);
+      let sum = 0;
+      for (let p = 0; p <= pos; p++) { scores[p] = Math.exp(scores[p] - m); sum += scores[p]; }
+      const vOff = S.nHead * S.headDim + KVD + kvHead * S.headDim;
+      for (let i = 0; i < S.headDim; i++) {
+        let acc = scores[pos] * qkvArr[vOff + i];
+        for (let p = 0; p < pos; p++) acc += scores[p] * vInit[p * KVD + kvHead * S.headDim + i];
+        out[h * S.headDim + i] = acc / sum;
+      }
+    }
+    return out;
+  };
+  const maxDiff = (a: Float32Array, ref: Float64Array) => {
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d = Math.max(d, Math.abs(a[i] - ref[i]));
+    return d;
+  };
+  const runOnceAt = async (pos: number) => {
+    device.queue.writeBuffer(Pb, 0, new Uint32Array([pos, pos, 0, 0]));
+    device.pushErrorScope("validation");
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipeFused); pass.setBindGroup(0, bindFused); pass.dispatchWorkgroups(S.nHead, 1);
+    pass.setPipeline(pipePart); pass.setBindGroup(0, bindPart); pass.dispatchWorkgroups(S.nHead, S_MAX);
+    pass.setPipeline(pipeReduce); pass.setBindGroup(0, bindReduce); pass.dispatchWorkgroups(S.nHead, 1);
+    pass.end();
+    device.queue.submit([enc.finish()]);
+    const err = await device.popErrorScope();
+    if (err) throw new Error(`attnbench run: ${err.message.slice(0, 300)}`);
+  };
+  const timeAt = async (pos: number, kind: "fused" | "split"): Promise<number> => {
+    device.queue.writeBuffer(Pb, 0, new Uint32Array([pos, pos, 0, 0]));
+    const encode = () => {
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      for (let r = 0; r < REPS; r++) {
+        if (kind === "fused") {
+          pass.setPipeline(pipeFused); pass.setBindGroup(0, bindFused); pass.dispatchWorkgroups(S.nHead, 1);
+        } else {
+          pass.setPipeline(pipePart); pass.setBindGroup(0, bindPart); pass.dispatchWorkgroups(S.nHead, S_MAX);
+          pass.setPipeline(pipeReduce); pass.setBindGroup(0, bindReduce); pass.dispatchWorkgroups(S.nHead, 1);
+        }
+      }
+      pass.end();
+      device.queue.submit([enc.finish()]);
+    };
+    encode(); // warmup
+    await device.queue.onSubmittedWorkDone();
+    const t0 = performance.now();
+    encode();
+    await device.queue.onSubmittedWorkDone();
+    return (performance.now() - t0) / REPS;
+  };
+  const cases: { ctx: number; fusedVsCpu: number; splitVsCpu: number; fusedMsPerOp: number; splitMsPerOpPair: number; speedup: number }[] = [];
+  for (const ctx of [64, 256, 576, 1024]) {
+    const pos = ctx - 1;
+    progress(`attnbench ctx=${ctx}…`, cases.length / 4);
+    await runOnceAt(pos);
+    const ref = cpuRef(pos);
+    const fusedOut = await readBuf(outFusedB, S.nHead * S.headDim * 4);
+    const splitOut = await readBuf(outSplitB, S.nHead * S.headDim * 4);
+    const fusedMs = await timeAt(pos, "fused");
+    const splitMs = await timeAt(pos, "split");
+    cases.push({ ctx, fusedVsCpu: maxDiff(fusedOut, ref), splitVsCpu: maxDiff(splitOut, ref), fusedMsPerOp: fusedMs, splitMsPerOpPair: splitMs, speedup: fusedMs / splitMs });
+  }
+  // proiezione sui numeri dell'attribuzione it.1 (ctx bench ≈ 576):
+  // wall 8.09 = encode 0.05 + gpuBusy 6.46 + sync 1.59 (decode-attrib-4090-2026-07-30)
+  const ATTR = { encode: 0.05, gpuBusy: 6.46, sync: 1.59, nLayer: QWEN25_05B.nLayer };
+  const c576 = cases.find((c) => c.ctx === 576)!;
+  const attnSavedMs = ATTR.nLayer * (c576.fusedMsPerOp - c576.splitMsPerOpPair);
+  const gpuBusyNew = ATTR.gpuBusy - attnSavedMs;
+  const projection = {
+    attrInputs: ATTR, attnSavedMsPerToken: attnSavedMs, gpuBusyNewMsPerToken: gpuBusyNew,
+    wallK1: gpuBusyNew + ATTR.encode + ATTR.sync,
+    toksPerSecK1: 1000 / (gpuBusyNew + ATTR.encode + ATTR.sync),
+    wallK8: gpuBusyNew + ATTR.encode + ATTR.sync / 8,
+    toksPerSecK8: 1000 / (gpuBusyNew + ATTR.encode + ATTR.sync / 8),
+    note: "proiezione additiva: gpuBusy attrib − nLayer×(Δms kernel); K8 = sync/8 (loop multi-step fase 4)",
+  };
+  device.destroy();
+  post({ type: "done", report: { schemaVersion: 1, kind: "engine-attn-bench", chunkP: CHUNK, sMax: S_MAX, reps: REPS, cases, projection } });
+}
+
 self.onmessage = (e: MessageEvent) => {
   const m = e.data as {
     type: string; modelUrl: string; goldenUrl?: string; promptUrl?: string;
@@ -633,5 +807,7 @@ self.onmessage = (e: MessageEvent) => {
   } else if (m.type === "attrib") {
     const a = m as { prefixLen?: number };
     runAttrib(m.modelUrl, m.promptUrl!, m.genTokens ?? 192, m.replicates ?? 3, a.prefixLen).catch(fail);
+  } else if (m.type === "attnbench") {
+    runAttnBench().catch(fail);
   }
 };
