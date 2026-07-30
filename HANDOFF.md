@@ -1,80 +1,79 @@
-# HANDOFF — browser-llm-lab   (updated 2026-07-29, session 10)
+# HANDOFF — browser-llm-lab   (updated 2026-07-30, session 11)
 
 ## 1. Next decidable
 
-**Goal `engine-fase-b1` APERTO (2026-07-29): memoria I — prefill multi-token M≤8,
-rollback KV, prefix-cache OPFS.** Contratto approvato dal PI in chat (goal-brief,
-approvazione in blocco). SPLIT deciso dal PI: la fase B di direction §7 si divide in
-**B1** (questo goal, memoria/latenza di entrata) e **B2** (floor dispatch ≤100/token,
-goal separato futuro — in B1 vale solo la NON-regressione: ≥120 tok/s, ≤130 dispatch).
-Contratto: `.harness/goals/engine-fase-b1/GOAL.md`. Fasi 1+2 DONE (2026-07-29, branch
-`engine/fase-b1`): known-issue telemetria RISOLTO (bug nostro, mapAsync pre-submit —
-`docs/engine/tsq-diag-2026-07-29.md`), spec B1 scritta e **APPROVATA (ruling PI
-2026-07-30, decisioni a-g in blocco; registrato anche in §5)**. Rimandi di fase nel
-registro nuovo `docs/engine/ideas-ledger.md` §I (con trigger di riattivazione).
-**Next: fase 3** (kernel GEMM M≤8 + piano prefill + parità), poi 4-6 a cascata.
-Nel docket 2 del goal un dato che ri-inquadra B2: ~73% del decode è fuori GPU.
+**Goal `engine-fase-b1`, FASE 3: forward multi-token M≤8 + parità** — in sessione
+nuova, su branch `engine/fase-b1` (esiste su origin). Riancorarsi da:
+`.harness/goals/engine-fase-b1/{GOAL,PHASES,docket,journal}.md` + spec APPROVATA
+`docs/superpowers/specs/2026-07-29-engine-fase-b1-design.md` (§Forward multi-token =
+il piano; §Soglie = i gate) + `docs/engine/ideas-ledger.md` §I (rimandi con trigger).
+Done-when fase 3: `npm test` verde con unit chunking CPU-side; `conformance-engine.mjs`
+exit 0 (gate doppio) col percorso prefill M>1 attivo. Le fasi 4 (crop) → 5 (OPFS) →
+6 (bench+chiusura) seguono a cascata. Fase 3 è la più grossa: >4 iterazioni ⇒ split
+via docket, non in silenzio.
 
-## 2. State delta (sessione 10)
+## 2. State delta (sessione 11, 2026-07-29→30)
 
-- **`prof.html` + `src/prof/`**: dispatch profiler in-SPA (patch prototype in un worker
-  che delega allo stesso BenchServer; export JSON = forma del tool + BenchCell). Rende
-  i run cross-device manuali (~3 min/device). Test unit in `tests/prof.test.ts`.
-- **M1 chiusa** (`estimates.md` §8): run M4 (f32+f16) e S22 (f16) + cross-validazione
-  4090. Fatti: 269 dispatch/token e 7 submit/token **invarianti di device e quant**
-  (totali identici al byte); encode CPU M4 ~2.5 µs/dispatch, S22 **~67 µs**
-  (~18 ms/token solo encode); tok/s sotto patch non sostituiscono i bench (S22 −40%).
-- **Docket #10 e #11 chiusi**; 4 doc deep-dive corretti (270/7, non ~34/1).
-- **[VERIFY] ruling #13 chiusi**: GLM-4.7-Flash ha MTP nativa (`num_nextn_predict_layers:
-  1` in config.json) e benchmark indipendenti (AA Intelligence Index 23, #11/130 classe
-  4B-40B). Config verificata: MLA 576 float/layer/token, expert ~5.3 MB q4.
-- **`docs/engine/direction.md`** scritto: tesi, narrow per iscritto, scala modelli,
-  ordine fasi A-D, rischi, prime azioni.
-- **Goal `engine-fase-a` aperto** (GOAL/docket/journal/digests seedati).
-- Due ruling di processo (salvati in memoria harness): doc stale si corregge subito
-  senza chiedere; **push su origin/main autorizzato a fine task**. Primo push fatto
-  (ff5b3d7..ca65ae7 + questa sessione).
+- **Goal `engine-fase-b1` aperto** (split PI: B1 = memoria/latenza di entrata; B2 =
+  floor dispatch, goal futuro). Contratto + PHASES (6 fasi) approvati; tag
+  `goal-engine-fase-b1-start` su main; lavoro su branch `engine/fase-b1`.
+- **Soglia prefill fissata per simulazione** (criterio Pareto, ruling PI): **3×** vs
+  baseline seq same-day. Sim committata (`results/engine/prefill-sim-4090-*.json` +
+  `scripts/prefill-sim.mjs`): floor dei trucchi (no-readback + skip lm_head, zero
+  kernel nuovi) = 1.53×; analitico M=8 = 5-10×; knee submit-granularità ≈ 64 token.
+- **Fase 2 DONE — known-issue telemetria liv.2 RISOLTO**: era un bug NOSTRO di fase A
+  (mapAsync prima del submit ⇒ Dawn droppa l'intero command buffer: corruzione + zeri).
+  Fix `armTsq` post-submit in `gpuforward.ts`; matrice A/B pulita, gpuMs reali
+  ~2.2 ms/token, conformance GATE DOPPIO PASS con liv.2 attivo. Nota:
+  `docs/engine/tsq-diag-2026-07-29.md`.
+- **Fase 1 DONE — spec B1 scritta e APPROVATA** (ruling PI 2026-07-30, decisioni a-g
+  in blocco: chiave token-id, lookup v1 esatto, no logits nel checkpoint, LRU 512 MB,
+  contratto hard `pos===kvLen`, soglie).
+- **Registro rimandi creato**: `ideas-ledger.md` **§I** — 8 rimandi espliciti con fase
+  di ripresa e trigger di riattivazione (richiesta PI: le fasi future devono ritrovarli).
+- Verifier gate iterazione 2: PASS 8/8. `npm test` 122/122, tsc pulito.
 
 ## 3. Open threads
 
-- Fasi B-D del motore: B1 in corso (goal aperto); **B2 = floor dispatch ≤100** (goal
-  futuro, split PI 2026-07-29); poi C (MoE/paging) e D (spec-dec/LoRA/evals) da
-  direction §7, ciascuna con spec e goal propri.
-- S22 q4f32_1 non completa i run ("empty timeline", EOS immediato) — baseline S22 = f16;
-  nota aperta non bloccante (estimates §8.4).
-- Sweep fase 1b (wllama/transformersjs su S22) ancora fuori goal.
-- GLM-5 uscito (API): rivisitare il panorama §H del ledger quando si deciderà v2.
+- **Branch `engine/fase-b1` NON merged** (merge a goal chiuso, ruling permanente).
+- Goal B1 fasi 3-6: tutte ready/a cascata, nessun ruling pendente.
+- **B2 da ri-inquadrare al goal-brief** (docket goal B1, item 2): GPU busy ≈ 2.2 su
+  8.1 ms/token ⇒ ~73% del decode è sync/encode, non dispatch — la leva potrebbe non
+  essere il dispatch count.
+- Nota verifier per fase 3+: aggiungere campo `telemetryGpu` allo schema del report
+  di conformance (gate auto-evidente dal JSON).
+- La sim `prefillBatched` e i knob `tsqDiag` sono temporanei: si rimuovono quando il
+  piano prefill vero li sostituisce (detto in spec §Struttura).
+- Goal harness stale mai chiusi formalmente: `fase-1b-matrice` (11 docket item),
+  `fase-2-deep-dive` (5) — igiene da /weekly-maintenance.
+- Sweep fase 1b (wllama/transformersjs su S22) fuori goal; GLM-5 uscito → ledger §H a v2.
 
 ## 4. Landmines
 
-- Chrome headless Linux/NVIDIA → SwiftShader: driver Playwright con HEADED=1. Chrome
-  lanciato da shell sandboxata → SwiftShader anche headed (visto in sessione 10).
-- Chrome quantizza i timestamp GPU (~100 µs); `performance.now()` worker quanto 5 µs.
-- Device senza `requiredLimits` nasce a 128 MiB binding → garbage silenzioso.
-- Chrome branded Linux/NVIDIA NON espone shader-f16 (M4/S22 sì) → f32-first sul
-  dev-loop; equità da dichiarare nei confronti pubblici.
-- Il patch del profiler perturba i device CPU-encode-bound (S22 −40% tok/s): mai usare
-  i tok/s dei file prof come bench; telemetria del motore = zero-overhead da spenta.
-- Residuo non attribuito del budget 4090 = 33%: non assegnarlo a leve senza
-  timestamp-query nel runtime (si scioglie in fase A).
-- `erasableSyntaxOnly` in tsconfig; righe doc valide per `@mlc-ai/web-llm 0.2.84`.
-- Dev server vite di sessioni vecchie vivi su :5173-:5177 (ascoltano solo su [::1]).
-- llama.cpp = SOLO oracolo (ruling #14): mai vendored/linkato nel motore.
-- ~~timestamp-query nel motore azzerati~~ RISOLTO in fase B1 (2026-07-29): era mapAsync
-  prima del submit (bug nostro, non del browser) — docs/engine/tsq-diag-2026-07-29.md.
-  Resta vero: mai chiamare mapAsync su un buffer referenziato da un submit non ancora
-  emesso (Dawn droppa l'INTERO command buffer, in silenzio salvo uncapturederror).
-- L'oracolo llama.cpp CPU quantizza le attivazioni (q8 dot): parità esatta impossibile
-  by design, noise floor 98.05% su questo corpus (docket 3 del goal).
+- **mai mapAsync su un buffer referenziato da un submit non ancora emesso**: Dawn
+  droppa l'INTERO command buffer in silenzio (salvo uncapturederror) — root-cause del
+  falso "bug browser" di fase A (tsq-diag-2026-07-29.md).
+- Chrome headless Linux/NVIDIA → SwiftShader: driver Playwright con HEADED=1; Chrome
+  da shell sandboxata → SwiftShader anche headed (bench col sandbox disabilitato).
+- Vite: server di sessioni vecchie vivi su :5173-:5177 servono CODICE STALE — per i
+  run usare porta dedicata (`npx vite --port 5199 --strictPort`) e ucciderla a fine
+  sessione (pattern pkill: `"[v]ite --port"`, altrimenti si auto-matcha).
+- Device senza `requiredLimits` espliciti nasce a 128 MiB binding → garbage silenzioso;
+  grid > 65535/dim ⇒ submit no-op muto (uncapturederror fatale già nel motore).
+- Chrome branded Linux/NVIDIA NON espone shader-f16 → f32-first; timestamp GPU
+  quantizzati ~100 µs.
+- I tok/s sotto patch del profiler non sostituiscono i bench (S22 −40%); telemetria
+  del motore zero-overhead da spenta (liv.2 opt-in `telemetryGpu`, ora funzionante).
+- llama.cpp SOLO oracolo (mai vendored); oracolo CPU quantizza le attivazioni (q8):
+  noise floor 98.05% ⇒ gate doppio (cpuref-f64 ≥99% E golden ≥97%).
+- `erasableSyntaxOnly` in tsconfig; contratto B1: `pos === kvLen` hard su forwardToken
+  (chi usa pos libere si rompe by design — usare crop/reset).
 
 ## 5. Docket (decisioni PI pendenti)
 
 4-5. Ereditati: promozione skill `bottleneck-brainstorm`; #10-fase-1b qualityScore
-     (si aggancia alla sez. D del ledger, goal evals futuro); #8 sorveglianza wllama
-     (v3.1 ha WebGPU via LlamaWeb — rilevante per i confronti del benchmark pubblico).
-16. Headline del benchmark pubblico (ledger §E): curva di frontiera vs alternative —
-    ruling non urgente, serve prima del goal benchmark.
-17. RISOLTO (2026-07-30): ruling PI di approvazione della spec B1
-    (specs/2026-07-29-engine-fase-b1-design.md, decisioni a-g in blocco) — registrato
-    qui come richiesto dal DONE WHEN del goal engine-fase-b1; dettaglio nel docket
-    del goal, item 3. Rimandi documentati in ideas-ledger §I (richiesta PI).
+     (goal evals futuro); #8 sorveglianza wllama (v3.1 ha WebGPU — rilevante per il
+     benchmark pubblico).
+16. Headline del benchmark pubblico (ledger §E): serve prima del goal benchmark.
+17. RISOLTO (2026-07-30): ruling spec B1 (a-g in blocco) — dettaglio nel docket del
+    goal, item 3; rimandi in ideas-ledger §I.
