@@ -1,6 +1,13 @@
 # Docket — engine-fase-b2 (decisioni PI pendenti)
 
-2. **RULING RICHIESTO — re-scope del contratto** (2026-07-30, fase 1): l'attribuzione
+2. ~~**RULING RICHIESTO — re-scope del contratto**~~ RISOLTO (2026-07-30, ruling PI
+   in chat: "Opzione A, assolutamente. Non abbiamo fretta. L'obiettivo è quello di
+   scrivere il miglior motore in assoluto (o almeno, uno dei migliori)"). Re-scope
+   (a) adottato: GOAL.md riscritto (v2), PHASES ridisegnate (fasi 2-6, clausola di
+   split pre-negoziata sulla fase kernel), guard-rail gpuBusy sostituito da
+   parità+non-regressione+headline come da nota metodo. Testo originale:
+
+   **RULING RICHIESTO — re-scope del contratto** (2026-07-30, fase 1): l'attribuzione
    ha refutato la premessa del goal. Dati (2 JSON in results/engine/, journal it.1):
    quota fuori-GPU al contesto bench = **20%** (non 73% — quello era un confronto a
    contesti diversi: gpuBusy@ctx64 vs wall@ctx570); GPU busy scala con kvLen

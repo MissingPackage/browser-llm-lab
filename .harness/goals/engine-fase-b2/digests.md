@@ -15,3 +15,11 @@ gpuBusy@ctx64=2.43 riproduce il "2.2" della tsq-diag). GPU busy scala con kvLen
 Premessa del contratto refutata ⇒ RULING re-scope richiesto (docket item 2,
 raccomandata: leva attention split + K multi-step, gate ≥240 tok/s). STOP by
 design: fase 2 gated dal ruling. 2 JSON committati; doc stale corrette.
+
+2026-07-30 — re-scope v2 (ruling PI: opzione (a), "il miglior motore in
+assoluto"). GOAL.md riscritto: leva primaria attention split-context, secondaria
+multi-step K; gate provv. ≥240 tok/s da fissare in spec; guard gpuBusy rimosso
+(ridurlo È l'obiettivo), guard = parità+non-regressione+headline. PHASES v2:
+fase 2 = spec + microbench attn-split isolato (ready), fase 3 kernel (timebox 4
+it., clausola split pre-negoziata), 4 multi-step, 5 telemetria, 6 chiusura.
+Loop riparte: iterazione 2 = fase 2.
