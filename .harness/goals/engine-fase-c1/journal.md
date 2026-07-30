@@ -79,3 +79,24 @@ log/JSON e tok/s ✓, recon file:riga nel journal ✓ (corretto deepseek2).
 Verifier: **PASS** (agent loop-verifier, 2026-07-30 — tutti i punti con evidenza;
 drift none; violazioni none; note minori applicate: sizeBytes esatto 17216676192,
 ffn_moe_logits riga 1846). FASE 1 DONE.
+
+## it.2 — fase 2: spec C1 (2026-07-30)
+
+Spec scritta: `docs/superpowers/specs/2026-07-30-engine-fase-c1-design.md`,
+ancorata ai fatti misurati di it.1 (arch deepseek2, 46 MoE, gating
+sigmoid+exp_probs_b, pp/tg misurati). Sezioni: Strumentazione (tool C++
+standalone via cb_eval, zero patch; LOOKA online con estrazione pesi router e
+replica esatta dell'ordine di selezione di build_moe_ffn), Corpus (8 prompt,
+~16k posizioni, prefill/decode separati), Metriche (recall@K decode-only,
+baseline_prev, skew, working-set), Policy simulate (TS+vitest; LRU, LFRU
+tier.h, +pin split-temporale, +prefetch con replay e guard), Sanity-gate
+(la_tot 45/46 da metadati asseriti a runtime; autotest predittore ≥0.999),
+Timebox e fallback (3 it.), Rischi (5, incl. fedeltà predittore e osservatore).
+Richiesta ruling appesa: docket item 3, decisioni (a)-(f). Done-when fase 2:
+spec esiste con sezioni grep-abili ✓, entry docket ✓.
+STOP BY DESIGN dopo verifier: fasi 3-6 gated dal ruling PI.
+Verifier: **PASS** (loop-verifier, 2026-07-30 — 7 sezioni presenti; coerenza
+spec↔journal e spec↔GOAL verificate; claim tecnico sigmoid→+bias→top-k
+verificato NEL CODICE a commit 5f55650a e nei metadati GGUF, incl. esistenza di
+blk.N.ffn_gate_inp.weight/exp_probs_b.bias e ASSENZA di ffn_gate_inp.bias;
+src/engine intatto; drift none). FASE 2 DONE, ruling pendente (docket 3).

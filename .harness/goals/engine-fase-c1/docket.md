@@ -21,3 +21,22 @@
    KV di ds4/colibri è sullo stesso lineage). Nessuna azione in C1: la traccia
    routing non dipende dalla MTP. Riferimento: gguf-dump del file in journal
    it.1; ledger §H/§I da aggiornare in fase 6 (sintesi).
+
+3. **RULING RICHIESTO — spec C1** (2026-07-30, fase 2): approvazione di
+   `docs/superpowers/specs/2026-07-30-engine-fase-c1-design.md`. Decisioni
+   proposte da ratificare:
+   (a) predittore LOOKA = router di L+1 applicato a `ffn_norm(L)` (analogo
+       colibri kind-1; two-step NON in v1, solo rimando se il recall delude);
+   (b) LOOKA calcolato ONLINE nel tool (estrazione pesi router ~24 MB alla
+       load + replica esatta sigmoid→+bias→top-k), niente dump hidden da 6 GB;
+       autotest hard: predire lo stesso layer ⇒ recall ≥0.999;
+   (c) corpus 8 prompt eterogenei committati (~12k prefill + 4k decode ≈ 16k
+       posizioni, ~9-12 min/run); recall headline decode-only @4 e @8;
+   (d) simulatore TypeScript+vitest nel repo (npm test), policy {LRU, LFRU
+       tier.h, LFRU+pin split-temporale anti-leakage, LFRU+pin+prefetch con
+       replay delle predizioni vere e guard anti-eviction}, griglia budget
+       6 punti (1/16 → tutto il parco, ~1-15.6 GB);
+   (e) timebox fase 4 = 3 iterazioni (fallback ROUTE_TRACE-only da contratto);
+   (f) NESSUN gate numerico sul recall (misura, non target): il numero decide
+       il go/no-go PILOT in fase 6, decisione PI.
+   Le fasi 3-6 restano gated fino al ruling.

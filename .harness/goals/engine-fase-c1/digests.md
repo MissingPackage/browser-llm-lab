@@ -22,3 +22,13 @@ NextN/MTP — implicazioni per fase D (spec-dec) e per il reader GGUF di C2.
 46 layer MoE confermati dai metadati (sanity-gate fase 3 ok). Landmine nuova:
 llama-cli UI chat ignora -no-cnv e loop-a su stdin chiuso — sempre -st
 --simple-io nelle run scriptate. Next: fase 2 (spec C1) → ruling PI.
+
+2026-07-30 — it.2 (fase 2 DONE, verifier PASS, STOP BY DESIGN). Spec C1 scritta
+e ancorata ai numeri di it.1: tool C++ standalone via cb_eval (zero patch),
+LOOKA calcolato online (pesi router ~24 MB estratti alla load, replica esatta
+sigmoid→+bias→top-k — verificata dal verifier nel codice E nei tensori del
+GGUF), corpus 8 prompt ≈16k posizioni (~9-12 min/run), recall@{4,6,8}
+decode-only + baseline, simulatore TS+vitest con 4 policy × 6 budget, autotest
+predittore ≥0.999 come gate hard dello strumento, NESSUN gate numerico sul
+recall (misura, non target). RULING PI RICHIESTO: docket item 3, decisioni
+(a)-(f). Fasi 3-6 gated — il goal riprende al ruling.

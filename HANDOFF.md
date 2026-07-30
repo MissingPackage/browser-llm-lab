@@ -14,9 +14,12 @@ journal/JSON), oracolo llama.cpp 5f55650a CPU-only fuori repo
 corpus 16k pos ≈ 9 min/run. Finding: zero patch (cb_eval + ffn_moe_topk/
 ffn_moe_logits/ffn_norm — arch GGUF = deepseek2, 46 layer MoE); testa NextN/MTP
 ASSENTE nel GGUF → docket goal item 2 (PI-gated, tocca fase D e C2).
-**Next: fase 2 — spec C1** (strumentazione via cb_eval, corpus, metriche,
-policy, sanity-gate, timebox fase 4) → si chiude con richiesta ruling nel
-docket del goal; fasi 3-6 gated dal ruling. Riancorarsi da:
+**Fase 2 DONE (it.2, verifier PASS)**: spec C1 scritta
+(`docs/superpowers/specs/2026-07-30-engine-fase-c1-design.md`, 7 sezioni,
+LOOKA online con replica esatta della selezione — verificata nel codice
+oracolo e nei tensori GGUF). **Next: RULING PI su docket item 3 del goal
+(decisioni (a)-(f))** — fasi 3-6 (ROUTE_TRACE → LOOKA → simulatore →
+sintesi) gated fino al ruling. STOP BY DESIGN. Riancorarsi da:
 `.harness/goals/engine-fase-c1/{GOAL,PHASES,docket,journal,digests}.md`,
 `docs/engine/direction.md` §3+§7, `docs/engine/study/colibri.md` §1-2.
 Restano PI-gated fuori goal: headline benchmark pubblico (docket 16) e igiene
