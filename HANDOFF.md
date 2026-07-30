@@ -2,18 +2,20 @@
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-fase-b2`** (aperto 2026-07-30, iterazione 0 fatta —
-contratto approvato in chat al goal-brief, ri-inquadramento su sync/encode: gate
-sulla QUOTA fuori-GPU del decode wall [~73% → ≤ soglia da spec, provv. ≤50%] con
-guard-rail gpuBusy ≤ +5%; dispatch ≤100 retrocesso a soglia-da-spec). **PI-gated
-ADESSO: plan-check** — approvare `.harness/goals/engine-fase-b2/PHASES.md`
-(docket B2 item 1) prima dell'iterazione 1. Poi: fase 1 = attribuzione del decode
-wall (gpuBusy/readback/encode + predizione K∈{2,4,8}). Riancorarsi da:
-`.harness/goals/engine-fase-b2/{GOAL,PHASES,docket}.md`,
-`docs/engine/tsq-diag-2026-07-29.md` §Conseguenze (dato 2.2/8.1), ideas-ledger §I.
-Altri PI-gated (non bloccanti): igiene goal stale (fase-1b-matrice,
-fase-2-deep-dive) da /weekly-maintenance. Benchmark pubblico: FUORI dai goal
-engine (ruling 2026-07-30: contributo separato, repo/paper/sito propri).
+**GOAL ATTIVO: `engine-fase-b2`**, fase 1 DONE (2026-07-30, it.1) con **FINDING
+CHE REFUTA LA PREMESSA DEL CONTRATTO**: quota fuori-GPU al ctx bench = **20%**,
+non 73% (il 73% confrontava gpuBusy@ctx64 con wall@ctx570); il GPU busy scala
+con kvLen (attention decode 14 wg: 2.43 ms @ ctx64 → 6.46 @ ctx570), sync fissa
+~1.6 ms/token, de-sync pura ⇒ max ~1.22× (149 tok/s). **PI-gated ADESSO: RULING
+re-scope** (docket B2 item 2 — raccomandata (a): leva = attention split sul
+contesto + multi-step K, gate decode ≥240 @ ctx bench, PHASES da ridisegnare).
+STOP by design a valle del ruling. Riancorarsi da:
+`.harness/goals/engine-fase-b2/{GOAL,PHASES,docket,journal}.md`,
+results/engine/decode-attrib-4090-*2026-07-30*.json (2: ctx pieno + ctx32),
+tsq-diag §Conseguenze (CORRETTA). Branch: engine/fase-b2. Altri PI-gated (non
+bloccanti): igiene goal stale (fase-1b-matrice, fase-2-deep-dive) da
+/weekly-maintenance. Benchmark pubblico: FUORI dai goal engine (ruling
+2026-07-30: contributo separato, repo/paper/sito propri).
 
 ## 2. State delta (sessione 12, 2026-07-30 — goal B1 completo, iterazioni 3-6)
 

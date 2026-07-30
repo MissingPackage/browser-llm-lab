@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-decode-attrib",
+  "promptId": "bench-512-v1",
+  "promptTokens": 469,
+  "genTokens": 192,
+  "skipTokens": 8,
+  "replicates": 3,
+  "reps": [
+    {
+      "wallMsPerToken": {
+        "mean": 7.985963541393478,
+        "stdev": 0.900355069459651,
+        "p50": 7.879999995231628,
+        "p95": 9.675000011920929
+      },
+      "encodeCpuMsPerToken": 0.04169999808073044,
+      "gpuBusyMsPerToken": 6.446085333333335,
+      "syncMsPerToken": 1.4981782099794128
+    },
+    {
+      "wallMsPerToken": {
+        "mean": 8.173046875745058,
+        "stdev": 0.7408034509413122,
+        "p50": 8.040000021457672,
+        "p95": 9.4549999833107
+      },
+      "encodeCpuMsPerToken": 0.04884999871253967,
+      "gpuBusyMsPerToken": 6.444922666666664,
+      "syncMsPerToken": 1.679274210365855
+    },
+    {
+      "wallMsPerToken": {
+        "mean": 8.119114583358169,
+        "stdev": 0.8370640193268981,
+        "p50": 8.069999992847443,
+        "p95": 9.7049999833107
+      },
+      "encodeCpuMsPerToken": 0.0491499987244606,
+      "gpuBusyMsPerToken": 6.4885866666666665,
+      "syncMsPerToken": 1.5813779179670409
+    }
+  ],
+  "decomposition": {
+    "wallMsPerToken": 8.092708333498901,
+    "encodeCpuMsPerToken": 0.046566665172576904,
+    "gpuBusyMsPerToken": 6.459864888888888,
+    "syncMsPerToken": 1.5862767794374362,
+    "sumDeclared": 8.092708333498901,
+    "quotaFuoriGpu": 0.20176724247567804,
+    "note": "sync = wall − encode − gpuBusy (residuo: submit→GPU-start, GPU-end→mapAsync resolve, event loop, prep embedding); cross-check col probe"
+  },
+  "syncFloorProbe": {
+    "mapRoundTrip": {
+      "mean": 0.40726562589406967,
+      "stdev": 0.7851862243592144,
+      "p50": 0.07999998331069946,
+      "p95": 2.524999976158142
+    },
+    "workDoneRoundTrip": {
+      "mean": 0.1760937487706542,
+      "stdev": 0.450272814095569,
+      "p50": 0.06000000238418579,
+      "p95": 0.19499999284744263
+    },
+    "crossCheckNote": "mapRoundTrip.mean atteso ≈ syncMsPerToken (GPU ~vuota)"
+  },
+  "predictionByK": [
+    {
+      "K": 2,
+      "batched": {
+        "msPerToken": 7.299569943780183,
+        "toksPerSec": 136.99437195640272,
+        "quotaFuoriGpu": 0.11503486662344962
+      },
+      "pipelined": {
+        "msPerToken": 7.253003278607606,
+        "toksPerSec": 137.873920855579,
+        "quotaFuoriGpu": 0.10935309957159985
+      }
+    },
+    {
+      "K": 4,
+      "batched": {
+        "msPerToken": 6.9030007489208245,
+        "toksPerSec": 144.8645359275579,
+        "quotaFuoriGpu": 0.06419467071638567
+      },
+      "pipelined": {
+        "msPerToken": 6.856434083748248,
+        "toksPerSec": 145.84840863128724,
+        "quotaFuoriGpu": 0.05783898598242841
+      }
+    },
+    {
+      "K": 8,
+      "batched": {
+        "msPerToken": 6.704716151491144,
+        "toksPerSec": 149.14874506321908,
+        "quotaFuoriGpu": 0.03651925854427125
+      },
+      "pipelined": {
+        "msPerToken": 6.6581494863185675,
+        "toksPerSec": 150.1918817014908,
+        "quotaFuoriGpu": 0.029780736800386103
+      }
+    }
+  ],
+  "dispatchesPerToken": 123,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-30T14-03-15-652Z"
+}

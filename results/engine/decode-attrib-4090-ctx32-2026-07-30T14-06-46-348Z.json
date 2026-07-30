@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-decode-attrib",
+  "promptId": "bench-512-v1-cut32",
+  "promptTokens": 32,
+  "genTokens": 64,
+  "skipTokens": 8,
+  "replicates": 3,
+  "reps": [
+    {
+      "wallMsPerToken": {
+        "mean": 3.9510937510058284,
+        "stdev": 0.5402420591520488,
+        "p50": 3.9649999737739563,
+        "p95": 5.125
+      },
+      "encodeCpuMsPerToken": 0.0358333322736952,
+      "gpuBusyMsPerToken": 2.4252960000000003,
+      "syncMsPerToken": 1.489964418732133
+    },
+    {
+      "wallMsPerToken": {
+        "mean": 4.006406250409782,
+        "stdev": 0.5289766017610832,
+        "p50": 3.965000033378601,
+        "p95": 5.090000033378601
+      },
+      "encodeCpuMsPerToken": 0.03659722374545203,
+      "gpuBusyMsPerToken": 2.4130399999999996,
+      "syncMsPerToken": 1.5567690266643304
+    },
+    {
+      "wallMsPerToken": {
+        "mean": 4.020390623249114,
+        "stdev": 0.5180199652414749,
+        "p50": 3.959999978542328,
+        "p95": 5.055000007152557
+      },
+      "encodeCpuMsPerToken": 0.034305553469392985,
+      "gpuBusyMsPerToken": 2.4504639999999998,
+      "syncMsPerToken": 1.535621069779721
+    }
+  ],
+  "decomposition": {
+    "wallMsPerToken": 3.9926302082215748,
+    "encodeCpuMsPerToken": 0.03557870316284674,
+    "gpuBusyMsPerToken": 2.4296,
+    "syncMsPerToken": 1.5274515050587278,
+    "sumDeclared": 3.9926302082215748,
+    "quotaFuoriGpu": 0.39147883142370715,
+    "note": "sync = wall − encode − gpuBusy (residuo: submit→GPU-start, GPU-end→mapAsync resolve, event loop, prep embedding); cross-check col probe"
+  },
+  "syncFloorProbe": {
+    "mapRoundTrip": {
+      "mean": 0.8775781244039536,
+      "stdev": 1.0176997014019578,
+      "p50": 0.2399999499320984,
+      "p95": 2.4549999833106995
+    },
+    "workDoneRoundTrip": {
+      "mean": 0.8321874998509884,
+      "stdev": 1.0275532913155334,
+      "p50": 0.10500001907348633,
+      "p95": 2.3049999475479126
+    },
+    "crossCheckNote": "mapRoundTrip.mean atteso ≈ syncMsPerToken (GPU ~vuota)"
+  },
+  "predictionByK": [
+    {
+      "K": 2,
+      "batched": {
+        "msPerToken": 3.228904455692211,
+        "toksPerSec": 309.70256745662067,
+        "quotaFuoriGpu": 0.24754664210739433
+      },
+      "pipelined": {
+        "msPerToken": 3.193325752529364,
+        "toksPerSec": 313.1531442440289,
+        "quotaFuoriGpu": 0.23916312074470733
+      }
+    },
+    {
+      "K": 4,
+      "batched": {
+        "msPerToken": 2.847041579427529,
+        "toksPerSec": 351.241796827244,
+        "quotaFuoriGpu": 0.14662293042852786
+      },
+      "pipelined": {
+        "msPerToken": 2.8114628762646823,
+        "toksPerSec": 355.68671684849096,
+        "quotaFuoriGpu": 0.13582355274490632
+      }
+    },
+    {
+      "K": 8,
+      "batched": {
+        "msPerToken": 2.656110141295188,
+        "toksPerSec": 376.49041146779183,
+        "quotaFuoriGpu": 0.08527889629785289
+      },
+      "pipelined": {
+        "msPerToken": 2.6205314381323412,
+        "toksPerSec": 381.60198555477064,
+        "quotaFuoriGpu": 0.0728598158961292
+      }
+    }
+  ],
+  "dispatchesPerToken": 123,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-30T14-06-46-348Z"
+}

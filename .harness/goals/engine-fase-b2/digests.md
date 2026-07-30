@@ -6,3 +6,12 @@ dispatch ≤100 retrocesso a soglia-da-spec). 5 fasi sequenziali: attribuzione �
 spec → loop multi-step K/submit → telemetria+profiler → bench+chiusura. Primo
 target: fase 1 (scomposizione 8.1 ms/token + predizione K∈{2,4,8}).
 Docket-born: plan-check (item 1) — STOP prima dell'iterazione 1.
+
+2026-07-30 — it.1 (fase 1 DONE, finding maggiore). Attribuzione misurata: wall
+8.09 ms/tok @ ctx bench = gpuBusy 6.46 + sync 1.59 + encode 0.05 ⇒ quota
+fuori-GPU 20%, NON 73% (il dato del docket B1 confrontava contesti diversi:
+gpuBusy@ctx64=2.43 riproduce il "2.2" della tsq-diag). GPU busy scala con kvLen
+(attention decode, 14 wg). De-sync multi-step da sola: max 149 tok/s (1.22×).
+Premessa del contratto refutata ⇒ RULING re-scope richiesto (docket item 2,
+raccomandata: leva attention split + K multi-step, gate ≥240 tok/s). STOP by
+design: fase 2 gated dal ruling. 2 JSON committati; doc stale corrette.

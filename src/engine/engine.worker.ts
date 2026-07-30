@@ -495,6 +495,120 @@ async function runKernelDiag(modelUrl: string): Promise<void> {
   post({ type: "done", report: { schemaVersion: 1, kind: "engine-kernel-diag", cases: results } });
 }
 
+// Attribuzione del decode wall (fase 1 B2): scompone i ms/token di decode in
+// encode CPU (liv.1) / GPU busy (liv.2, tsq) / sync (residuo: submit→start,
+// end→mapAsync resolve, event loop) su una finestra di decode pura, più un probe
+// del floor di sync sullo stesso device (round-trip copy 4B + mapAsync ~zero GPU:
+// deve ≈ syncMsPerToken — cross-check dichiarato nel JSON). Predizione analitica
+// per K forward/submit con readback 1/K: batched = enc+gpu+sync/K; pipelined
+// (encode del batch successivo sovrapposto alla GPU) = max(enc,gpu)+sync/K.
+async function runAttrib(modelUrl: string, promptUrl: string, genTokens: number, replicates: number, prefixLen?: number): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const promptFull = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  // prefixLen (diag): finestra a contesto corto per il confronto col dato tsq-diag
+  // B1 (prefill 32/decode 64) — il GPU busy scala con kvLen (attention decode)
+  const promptFix = prefixLen ? { promptId: `${promptFull.promptId}-cut${prefixLen}`, tokens: promptFull.tokens.slice(0, prefixLen) } : promptFull;
+  const engine = await createEngine(gguf, progress, { telemetry: true, telemetryGpu: true });
+  const device = engine.device;
+  const SKIP = 8; // primi token post-prefill/crop scartati (cache/clock warm-up)
+  const stats = (xs: number[]) => {
+    const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const stdev = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, xs.length - 1));
+    const s = [...xs].sort((a, b) => a - b);
+    return { mean, stdev, p50: s[Math.floor(s.length * 0.5)], p95: s[Math.floor(s.length * 0.95)] };
+  };
+  // probe floor di sync: stesso device del motore, GPU ~vuota
+  const probeSrc = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const probeDst = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const probeMap = async (n: number): Promise<number[]> => {
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const t0 = performance.now();
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(probeSrc, 0, probeDst, 0, 16);
+      device.queue.submit([enc.finish()]);
+      await probeDst.mapAsync(GPUMapMode.READ);
+      probeDst.unmap();
+      out.push(performance.now() - t0);
+    }
+    return out;
+  };
+  const probeWorkDone = async (n: number): Promise<number[]> => {
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const t0 = performance.now();
+      device.queue.submit([]);
+      await device.queue.onSubmittedWorkDone();
+      out.push(performance.now() - t0);
+    }
+    return out;
+  };
+  const prefix = promptFix.tokens.slice(0, -1);
+  await engine.prefillChunked(prefix, 0);
+  const baseLen = engine.kvLen;
+  const lastTok = promptFix.tokens[promptFix.tokens.length - 1];
+  const telemTotals = async () => {
+    const t = await engine.getTelemetry(); // drena i batch tsq flushati fin qui
+    return { forwards: t.forwards, encodeTotal: t.encodeCpuMsPerToken * t.forwards, gpuMean: t.gpuMsPerToken };
+  };
+  // warmup (scartato): finestra piena, poi drain telemetria
+  progress("warmup…", 0.1);
+  { let pos = baseLen, prev = lastTok; for (let i = 0; i < genTokens + SKIP; i++) prev = await engine.forwardToken(prev, pos++); }
+  await telemTotals();
+  engine.crop(baseLen);
+  const reps: { wallMsPerToken: ReturnType<typeof stats>; encodeCpuMsPerToken: number; gpuBusyMsPerToken: number | null; syncMsPerToken: number }[] = [];
+  for (let r = 0; r < replicates; r++) {
+    const before = await telemTotals();
+    const walls: number[] = [];
+    let pos = baseLen, prev = lastTok;
+    for (let i = 0; i < genTokens + SKIP; i++) {
+      const t0 = performance.now();
+      prev = await engine.forwardToken(prev, pos++);
+      if (i >= SKIP) walls.push(performance.now() - t0);
+      if (i % 64 === 0) progress(`attrib replica ${r + 1}/${replicates}: ${i}/${genTokens + SKIP}`, (r + i / (genTokens + SKIP)) / replicates);
+    }
+    const after = await telemTotals();
+    engine.crop(baseLen);
+    const wall = stats(walls);
+    // delta encode sui forward della replica (contatori cumulativi liv.1); il gpu
+    // mean del drain post-replica copre SOLO i flush di questa replica (ring 64)
+    const encode = (after.encodeTotal - before.encodeTotal) / (after.forwards - before.forwards);
+    const gpu = after.gpuMean;
+    reps.push({ wallMsPerToken: wall, encodeCpuMsPerToken: encode, gpuBusyMsPerToken: gpu, syncMsPerToken: gpu === null ? NaN : wall.mean - encode - gpu });
+  }
+  progress("probe sync floor…", 0.9);
+  const mapProbe = stats(await probeMap(64));
+  const wdProbe = stats(await probeWorkDone(64));
+  const mean = (f: (x: typeof reps[number]) => number) => reps.reduce((a, x) => a + f(x), 0) / reps.length;
+  const wallMean = mean((x) => x.wallMsPerToken.mean);
+  const encMean = mean((x) => x.encodeCpuMsPerToken);
+  const gpuMean = mean((x) => x.gpuBusyMsPerToken ?? NaN);
+  const syncMean = wallMean - encMean - gpuMean;
+  const predict = (K: number) => ({
+    K,
+    batched: { msPerToken: encMean + gpuMean + syncMean / K, toksPerSec: 1000 / (encMean + gpuMean + syncMean / K), quotaFuoriGpu: (encMean + syncMean / K) / (encMean + gpuMean + syncMean / K) },
+    pipelined: { msPerToken: Math.max(encMean, gpuMean) + syncMean / K, toksPerSec: 1000 / (Math.max(encMean, gpuMean) + syncMean / K), quotaFuoriGpu: (Math.max(encMean, gpuMean) + syncMean / K - gpuMean) / (Math.max(encMean, gpuMean) + syncMean / K) },
+  });
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-decode-attrib", promptId: promptFix.promptId,
+      promptTokens: promptFix.tokens.length, genTokens, skipTokens: SKIP, replicates, reps,
+      decomposition: {
+        wallMsPerToken: wallMean, encodeCpuMsPerToken: encMean, gpuBusyMsPerToken: gpuMean,
+        syncMsPerToken: syncMean,
+        sumDeclared: encMean + gpuMean + syncMean, // ≡ wall by construction: sync è il residuo
+        quotaFuoriGpu: (wallMean - gpuMean) / wallMean,
+        note: "sync = wall − encode − gpuBusy (residuo: submit→GPU-start, GPU-end→mapAsync resolve, event loop, prep embedding); cross-check col probe",
+      },
+      syncFloorProbe: { mapRoundTrip: mapProbe, workDoneRoundTrip: wdProbe, crossCheckNote: "mapRoundTrip.mean atteso ≈ syncMsPerToken (GPU ~vuota)" },
+      predictionByK: [2, 4, 8].map(predict),
+      dispatchesPerToken: engine.dispatchesPerToken,
+    },
+  });
+}
+
 self.onmessage = (e: MessageEvent) => {
   const m = e.data as {
     type: string; modelUrl: string; goldenUrl?: string; promptUrl?: string;
@@ -516,5 +630,8 @@ self.onmessage = (e: MessageEvent) => {
     runPcSave(m.modelUrl, m.promptUrl!).catch(fail);
   } else if (m.type === "pcrestore") {
     runPcRestore(m.modelUrl, m.promptUrl!).catch(fail);
+  } else if (m.type === "attrib") {
+    const a = m as { prefixLen?: number };
+    runAttrib(m.modelUrl, m.promptUrl!, m.genTokens ?? 192, m.replicates ?? 3, a.prefixLen).catch(fail);
   }
 };
