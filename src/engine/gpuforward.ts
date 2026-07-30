@@ -14,8 +14,8 @@ import {
   siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, ARGMAX_CHUNK,
   gemvGrid, attnFusedWgsl,
   rmsGemvQ8FastWgsl, rmsPairGemvSiluFastWgsl, gemvResidualFastWgsl, rmsGemvQ4FastBiasWgsl,
-  rmsnormChunkWgsl, gemmQuantChunkWgsl, ropeChunkWgsl, kvAppendChunkWgsl,
-  attnPrefillChunkWgsl, siluMulChunkWgsl,
+  ropeChunkWgsl, kvAppendChunkWgsl, attnPrefillChunkWgsl,
+  rmsGemmQkvChunkFastWgsl, rmsPairGemmSiluChunkFastWgsl, gemmResidChunkFastWgsl,
 } from "./kernels/wgsl";
 import { planPrefill, PREFILL_M } from "./prefillplan";
 import { createKvLen } from "./kvlen";
@@ -351,11 +351,9 @@ export async function createEngine(
   const M_MAX = PREFILL_M;
   const QKV_DIM = S.dModel + 2 * KV_DIM;
   const xM = storage(M_MAX * S.dModel * 4);
-  const hnM = storage(M_MAX * S.dModel * 4);
   const qkvM = storage(M_MAX * QKV_DIM * 4);
   const attnOutM = storage(M_MAX * S.dModel * 4);
   const gateM = storage(M_MAX * S.dFfn * 4);
-  const upM = storage(M_MAX * S.dFfn * 4);
   const C = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   // slot uniform per chunk (stride 256, pattern della sim di fase 1): scritti in
   // blocco al via del prefill, copiati in C dentro l'encoder prima di ogni chunk
@@ -364,15 +362,13 @@ export async function createEngine(
     usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
   });
   const pipesPre = {
-    rmsC: mkPipe(rmsnormChunkWgsl(S.dModel, S.rmsEps, M_MAX)),
-    gemmQkvC: mkPipe(gemmQuantChunkWgsl({ kind: "q4_0", K: S.dModel, N: QKV_DIM, mMax: M_MAX, hasBias: true, residual: false })),
+    rmsQkvC: mkPipe(rmsGemmQkvChunkFastWgsl({ K: S.dModel, N: QKV_DIM, eps: S.rmsEps, mMax: M_MAX })),
     ropeC: mkPipe(ropeChunkWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, freqBase: S.ropeFreqBase, mMax: M_MAX })),
     kvAppC: mkPipe(kvAppendChunkWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, mMax: M_MAX })),
     attnC: mkPipe(attnPrefillChunkWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_MAX, mMax: M_MAX })),
-    gemmOC: mkPipe(gemmQuantChunkWgsl({ kind: "q4_0", K: S.dModel, N: S.dModel, mMax: M_MAX, hasBias: false, residual: true })),
-    gemmGUC: mkPipe(gemmQuantChunkWgsl({ kind: "q4_0", K: S.dModel, N: S.dFfn, mMax: M_MAX, hasBias: false, residual: false })),
-    siluC: mkPipe(siluMulChunkWgsl(S.dFfn, M_MAX)),
-    gemmDownC: mkPipe(gemmQuantChunkWgsl({ kind: "q4_0", K: S.dFfn, N: S.dModel, mMax: M_MAX, hasBias: false, residual: true })),
+    oResidC: mkPipe(gemmResidChunkFastWgsl({ K: S.dModel, N: S.dModel, mMax: M_MAX })),
+    pairSiluC: mkPipe(rmsPairGemmSiluChunkFastWgsl({ K: S.dModel, N: S.dFfn, eps: S.rmsEps, mMax: M_MAX })),
+    downResidC: mkPipe(gemmResidChunkFastWgsl({ K: S.dFfn, N: S.dModel, mMax: M_MAX })),
   };
   // La copy del tap (ultima riga del chunk, contratto spec §Tap) dipende da rows:
   // si risolve a encode-time, qui resta un marker con il buffer di destinazione.
@@ -381,17 +377,13 @@ export async function createEngine(
   const pushPre = (pipe: GPUComputePipeline, bufs: GPUBuffer[], wgs: number | [number, number]) =>
     preSteps.push({ kind: "compute", pipe, bind: bg(pipe, bufs, C), wgs: typeof wgs === "number" ? [wgs, 1] : wgs });
   for (const L of layers) {
-    pushPre(pipesPre.rmsC, [xM, L.attnNorm, hnM], [M_MAX, 1]);
-    pushPre(pipesPre.gemmQkvC, [L.qkv.qs, L.qkv.scales, hnM, qkvM, L.qkvBias], gemvGrid(QKV_DIM));
+    pushPre(pipesPre.rmsQkvC, [L.qkv.qs, L.qkv.scales, xM, L.attnNorm, qkvM, L.qkvBias], gemvGrid(QKV_DIM / 4));
     pushPre(pipesPre.ropeC, [qkvM], [Math.ceil(((S.nHead + S.nKvHead) * S.headDim / 2) / 64), M_MAX]);
     pushPre(pipesPre.kvAppC, [qkvM, L.kCache, L.vCache], [Math.ceil(KV_DIM / 64), M_MAX]);
     pushPre(pipesPre.attnC, [qkvM, L.kCache, L.vCache, attnOutM], [S.nHead, M_MAX]);
-    pushPre(pipesPre.gemmOC, [L.wo.qs, L.wo.scales, attnOutM, xM], gemvGrid(S.dModel));
-    pushPre(pipesPre.rmsC, [xM, L.ffnNorm, hnM], [M_MAX, 1]);
-    pushPre(pipesPre.gemmGUC, [L.wGate.qs, L.wGate.scales, hnM, gateM], gemvGrid(S.dFfn));
-    pushPre(pipesPre.gemmGUC, [L.wUp.qs, L.wUp.scales, hnM, upM], gemvGrid(S.dFfn));
-    pushPre(pipesPre.siluC, [gateM, upM], [Math.ceil(S.dFfn / 64), M_MAX]);
-    pushPre(pipesPre.gemmDownC, [L.wDown.qs, L.wDown.scales, gateM, xM], gemvGrid(S.dModel));
+    pushPre(pipesPre.oResidC, [L.wo.qs, L.wo.scales, attnOutM, xM], gemvGrid(S.dModel / 4));
+    pushPre(pipesPre.pairSiluC, [L.wGate.qs, L.wGate.scales, L.wUp.qs, L.wUp.scales, xM, L.ffnNorm, gateM], gemvGrid(S.dFfn / 4));
+    pushPre(pipesPre.downResidC, [L.wDown.qs, L.wDown.scales, gateM, xM], gemvGrid(S.dModel / 4));
     const tapDstP = tapBufs.get(layers.indexOf(L));
     if (tapDstP) preSteps.push({ kind: "tapLast", dst: tapDstP });
   }
@@ -460,6 +452,11 @@ export async function createEngine(
       if (n < 1) throw new Error("prefill vuoto");
       kv.assertNext(posStart, n); // posStart === kvLen o throw (+ capacità)
       const plan = planPrefill(n, posStart);
+      // Error scope come CONTRATTO del prefill (lezione fase 6): una pipeline
+      // invalida fa droppare a Dawn ogni submit IN SILENZIO e i readback restituiscono
+      // dati stale del run precedente — qui il throw è sincrono e attribuibile.
+      device.pushErrorScope("validation");
+      device.pushErrorScope("out-of-memory");
       // zero readback durante il prefill (l'input è il prompt, noto): embedding di
       // tutto il prompt dequantizzate CPU-side in un buffer unico, copy per chunk
       // nell'encoder; una sola sync a fine prefill (la mapAsync dell'argmax finale).
@@ -509,6 +506,9 @@ export async function createEngine(
       pass.end();
       enc.copyBufferToBuffer(amaxOut, 0, stagingId, 0, 4);
       device.queue.submit([enc.finish()]);
+      const errOom = await device.popErrorScope();
+      const errVal = await device.popErrorScope();
+      if (errOom || errVal) throw new Error(`prefill error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
       await stagingId.mapAsync(GPUMapMode.READ);
       const id = new Uint32Array(stagingId.getMappedRange())[0];
       stagingId.unmap();

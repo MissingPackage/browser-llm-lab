@@ -1,7 +1,9 @@
 // Test kernel GEMM chunk in isolamento vs dequant CPU (fase 3 B1; scaffolding di
 // fase, rimozione a fase 6 con gli altri knob diag). Uso: node scripts/kernel-diag.mjs
 // (dev server attivo su BASE_URL). Guardia contro il bug Tint decl-in-loop (vedi wgsl.ts).
-const BASE_URL = "http://localhost:5199";
+import { chromium } from "playwright";
+const PROFILE = process.env.E2E_PROFILE ?? "/tmp/blab-e2e-profile";
+const BASE_URL = process.env.BASE_URL ?? "http://localhost:5199";
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());

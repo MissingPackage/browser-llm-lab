@@ -95,12 +95,14 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   const gguf = await fetchBuf(modelUrl);
   const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
   const engine = await createEngine(gguf, progress);
+  // fase 6: il prefill delle repliche è il percorso CHUNKED M≤8 (il gate di spec
+  // §Soglie confronta prefillMs con la baseline sequenziale same-day, sotto)
   const runOnce = async (label: string): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number }> => {
-    let pos = 0;
     engine.reset(); // contratto kvLen (fase 4)
     const t0 = performance.now();
-    for (let i = 0; i < promptFix.tokens.length - 1; i++) await engine.forwardToken(promptFix.tokens[i], pos++);
+    await engine.prefillChunked(promptFix.tokens.slice(0, -1), 0);
     const tPrefill = performance.now();
+    let pos = promptFix.tokens.length - 1;
     let prev = promptFix.tokens[promptFix.tokens.length - 1];
     let tFirst = 0;
     for (let i = 0; i < genTokens; i++) {
@@ -114,6 +116,15 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
       prefillMs: tPrefill - t0,
       msPerTokenDecode: (tEnd - tFirst) / (genTokens - 1),
     };
+  };
+  // baseline sequenziale SAME-DAY (spec §Soglie: prefillMs.mean ≤ 1/3 di questa):
+  // stesso prefisso, forwardToken con await per token come il bench di fase A
+  const seqPrefillOnce = async (): Promise<number> => {
+    engine.reset();
+    let pos = 0;
+    const t0 = performance.now();
+    for (let i = 0; i < promptFix.tokens.length - 1; i++) await engine.forwardToken(promptFix.tokens[i], pos++);
+    return performance.now() - t0;
   };
   const stats = (rs: { decodeToksPerSec: number }[]) => {
     const rates = rs.map((r) => r.decodeToksPerSec);
@@ -133,15 +144,30 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   const on = stats(repsOn);
   const off = stats(repsOff);
   const overheadPct = ((1 / on.mean - 1 / off.mean) / (1 / off.mean)) * 100;
+  progress("baseline seq same-day…", 0.9);
+  const seqReps: number[] = [];
+  for (let r = 0; r < replicates; r++) seqReps.push(await seqPrefillOnce());
+  const prefillVals = repsOff.map((x) => x.prefillMs);
+  const prefillMean = prefillVals.reduce((a, b) => a + b, 0) / prefillVals.length;
+  const seqMean = seqReps.reduce((a, b) => a + b, 0) / seqReps.length;
   post({
     type: "done",
     report: {
-      schemaVersion: 2, kind: "engine-bench", promptId: promptFix.promptId,
+      schemaVersion: 3, kind: "engine-bench", promptId: promptFix.promptId,
       promptTokens: promptFix.tokens.length, genTokens, replicates,
       warmup, reps: repsOff, decodeToksPerSec: off, // headline = telemetria spenta
       telemetryOn: { reps: repsOn, decodeToksPerSec: on },
       telemetry, telemetryOverheadPct: overheadPct,
       dispatchesPerToken: engine.dispatchesPerToken,
+      // gate prefill (spec §Soglie 1, ruling Pareto): chunked vs seq same-day
+      prefill: {
+        path: "chunked", mMax: PREFILL_M, submitTokens: PREFILL_SUBMIT_TOKENS,
+        prefillMs: { mean: prefillMean, reps: prefillVals },
+        seqBaselineMs: { mean: seqMean, reps: seqReps },
+        speedupVsSeq: seqMean / prefillMean,
+        thresholdMs: seqMean / 3,
+        gatePass: prefillMean <= seqMean / 3,
+      },
       quant: "Q4_0 (gguf)", note: "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
     },
   });
@@ -213,12 +239,16 @@ async function runPcRestore(modelUrl: string, promptUrl: string): Promise<void> 
   progress("restore da OPFS…", 0.4);
   const t0 = performance.now();
   const buf = await store.load(kvFileName(key)); // miss ⇒ NotFoundError: il chiamante fa fallback a prefill pieno
+  const tLoad = performance.now();
   const ck = decodeKv(buf, { modelSha256, layoutVersion: KV_LAYOUT_VERSION, nLayer: QWEN25_05B.nLayer, kvDim: KV_DIM_SHAPE, ctxMax: CTX_MAX });
   // lookup v1 = match esatto full-prefix: la chiave lo implica, i token lo PROVANO
   if (ck.tokens.length !== prefix.length || prefix.some((t, i) => ck.tokens[i] !== t)) throw new Error("kvcache: tokens mismatch");
+  const tDecode = performance.now();
   engine.writeKv(ck.payload, ck.meta.tokenCount);
+  const tWrite = performance.now();
   await engine.device.queue.onSubmittedWorkDone(); // il restore include l'upload GPU (misura onesta)
   const restoreMs = performance.now() - t0;
+  const restoreBreakdown = { opfsLoadMs: tLoad - t0, decodeMs: tDecode - tLoad, writeKvMs: tWrite - tDecode, gpuSyncMs: restoreMs - (tWrite - t0) };
   progress("continuazione da restore…", 0.6);
   const contTokens = await genGreedy(engine, prefix.length, promptFix.tokens[promptFix.tokens.length - 1], PC_CONT);
   progress("re-prefill di confronto…", 0.8);
@@ -231,7 +261,7 @@ async function runPcRestore(modelUrl: string, promptUrl: string): Promise<void> 
     report: {
       schemaVersion: 1, kind: "engine-pc-restore", promptId: promptFix.promptId,
       key, prefixTokens: prefix.length, hitCount: ck.hitCount,
-      restoreMs, reprefillMs, contTokens,
+      restoreMs, restoreBreakdown, reprefillMs, contTokens,
     },
   });
 }
@@ -301,12 +331,69 @@ async function runPrefillDiag(modelUrl: string, promptUrl: string): Promise<void
   const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
   const TAPS = [0, 11, 23]; // bisezione per stadio: post-layer 0 / metà / ultimo
   const engine = await createEngine(gguf, progress, { telemetry: false, taps: TAPS });
-  const lens = [1, 2, 3, 8, 9, 16, 64, 65, 128];
+  // lunghezze scelte per coprire OGNI rows dell'ultimo chunk (1..8) anche in
+  // regime multi-chunk: il buco di copertura di fase 6 (rows 2-7 dopo chunk pieni)
+  const lens = [1, 3, 8, 9, 12, 15, 16, 20, 36, 64, 65, 68, 128];
   const maxAbsDiff = (a: Float32Array, b: Float32Array) => {
     let d = 0;
     for (let i = 0; i < a.length; i++) d = Math.max(d, Math.abs(a[i] - b[i]));
     return d;
   };
+  // riproduzione ESATTA dello scenario conformance, PRIMA di ogni altro lavoro sul
+  // motore (variabile: il prefill chunked come PRIMA operazione, motore freddo):
+  // per ogni prompt golden, chunk PRIMA di seq, decode teacher-forced vs golden.
+  const golden = JSON.parse(new TextDecoder().decode(await fetchBuf("/results/engine/golden/golden-qwen25-05b-q4_0.json"))) as
+    { prompts: { id: string; promptTokens: number[]; positions: { argmax: number }[] }[] };
+  const goldenCases: { id: string; len: number; agreeChunk: number; agreeChunk2: number; agreeSeq: number; total: number; chunkEqSeq: boolean; chunk2EqSeq: boolean; badRows: string[] }[] = [];
+  for (const p of golden.prompts) {
+    const toks = p.promptTokens;
+    const DEC = Math.min(64, p.positions.length);
+    const teacherDecode = async (): Promise<number[]> => {
+      const ids: number[] = [];
+      let pos = toks.length - 1;
+      let prev = toks[toks.length - 1];
+      for (let i = 0; i < DEC; i++) { ids.push(await engine.forwardToken(prev, pos++)); prev = p.positions[i].argmax; }
+      return ids;
+    };
+    engine.reset();
+    await engine.prefillChunked(toks.slice(0, -1), 0);
+    const kvChunk = await engine.readKv(); // dump cache POST-prefill, PRIMA del decode
+    const chunkIds = await teacherDecode();
+    // secondo giro chunk IDENTICO: se questo è corretto e il primo no, la falla è
+    // una race read-before-write mascherata dallo stato lasciato dal giro prima
+    engine.reset();
+    await engine.prefillChunked(toks.slice(0, -1), 0);
+    const chunk2Ids = await teacherDecode();
+    engine.reset();
+    let pos = 0;
+    for (let i = 0; i < toks.length - 1; i++) await engine.forwardToken(toks[i], pos++);
+    const kvSeq = await engine.readKv();
+    const seqIds = await teacherDecode();
+    // confronto cache riga-per-riga: layout per layer [K righe | V righe], n righe
+    const nRows = toks.length - 1;
+    const KVD = KV_DIM_SHAPE;
+    const badRows: string[] = [];
+    for (let l = 0; l < QWEN25_05B.nLayer && badRows.length < 12; l++) {
+      for (const half of [0, 1]) {
+        for (let rr = 0; rr < nRows; rr++) {
+          const off = (l * 2 + half) * nRows * KVD + rr * KVD;
+          let d = 0;
+          for (let i = 0; i < KVD; i++) d = Math.max(d, Math.abs(kvChunk[off + i] - kvSeq[off + i]));
+          if (d > 1e-4) { badRows.push(`L${l}${half ? "V" : "K"}r${rr}:${d.toFixed(3)}`); if (badRows.length >= 12) break; }
+        }
+        if (badRows.length >= 12) break;
+      }
+    }
+    goldenCases.push({
+      id: p.id, len: toks.length, total: DEC,
+      agreeChunk: chunkIds.filter((v, i) => v === p.positions[i].argmax).length,
+      agreeChunk2: chunk2Ids.filter((v, i) => v === p.positions[i].argmax).length,
+      agreeSeq: seqIds.filter((v, i) => v === p.positions[i].argmax).length,
+      chunkEqSeq: chunkIds.every((v, i) => v === seqIds[i]),
+      chunk2EqSeq: chunk2Ids.every((v, i) => v === seqIds[i]),
+      badRows,
+    });
+  }
   const results: { L: number; argmaxMatch: boolean; refArgmax: number; gotArgmax: number; maxDlogit: number; tapDiff: Record<number, number> }[] = [];
   for (const L of lens) {
     progress(`diag L=${L}…`, results.length / lens.length);
@@ -327,7 +414,7 @@ async function runPrefillDiag(modelUrl: string, promptUrl: string): Promise<void
   }
   post({
     type: "done",
-    report: { schemaVersion: 1, kind: "engine-prefill-diag", promptId: promptFix.promptId, lens: results },
+    report: { schemaVersion: 1, kind: "engine-prefill-diag", promptId: promptFix.promptId, lens: results, goldenCases },
   });
 }
 
@@ -356,7 +443,7 @@ async function runKernelDiag(modelUrl: string): Promise<void> {
     { name: "o(K=896)", tensor: "blk.0.attn_output.weight", K: 896, N: 896 },
   ];
   const results: { name: string; maxErrPerRow: number[] }[] = [];
-  const { gemmQuantChunkWgsl: gen } = await import("./kernels/wgsl");
+  const { gemmResidChunkFastWgsl: gen } = await import("./kernels/wgsl");
   const { repackQ4_0: rp } = await import("./quant");
   for (const cs of cases) {
     const info = f.tensors.find((t) => t.name === cs.tensor)!;
@@ -374,7 +461,7 @@ async function runKernelDiag(modelUrl: string): Promise<void> {
     const cB = mk(new Uint32Array([0, M, 0, 0]), GPUBufferUsage.UNIFORM);
     const pipe = device.createComputePipeline({
       layout: "auto",
-      compute: { module: device.createShaderModule({ code: gen({ kind: "q4_0", K: cs.K, N: cs.N, mMax: M, hasBias: false, residual: true }) }), entryPoint: "main" },
+      compute: { module: device.createShaderModule({ code: gen({ K: cs.K, N: cs.N, mMax: M }) }), entryPoint: "main" },
     });
     const bind = device.createBindGroup({
       layout: pipe.getBindGroupLayout(0),
@@ -382,7 +469,7 @@ async function runKernelDiag(modelUrl: string): Promise<void> {
     });
     const enc = device.createCommandEncoder();
     const pass = enc.beginComputePass();
-    pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.dispatchWorkgroups(cs.N, 1);
+    pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.dispatchWorkgroups(Math.ceil(cs.N / 4), 1);
     pass.end();
     const st = device.createBuffer({ size: M * cs.N * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     enc.copyBufferToBuffer(yB, 0, st, 0, M * cs.N * 4);

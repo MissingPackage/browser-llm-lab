@@ -18,3 +18,4 @@ const report = await page.evaluate(() => window.__report ?? null);
 await browser.close();
 if (status !== "done" || !report) { console.error("[pdiag] FALLITO:", status); process.exit(2); }
 for (const v of report.lens) console.log(`[pdiag] L=${v.L}: argmaxMatch=${v.argmaxMatch} (ref=${v.refArgmax} got=${v.gotArgmax}) maxDlogit=${v.maxDlogit.toFixed(4)} tapDiff=${JSON.stringify(v.tapDiff)}`);
+if (report.goldenCases) for (const g of report.goldenCases) console.log(`[pdiag] golden ${g.id} (len ${g.len}): chunk ${g.agreeChunk} chunk2 ${g.agreeChunk2} seq ${g.agreeSeq} /${g.total} eq=${g.chunkEqSeq},${g.chunk2EqSeq} badRows=${JSON.stringify(g.badRows)}`);

@@ -668,140 +668,221 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 
 export const CHUNK_PARAMS_WGSL = `struct ChunkParams { posBase: u32, rows: u32 };`;
 
-// RMSNorm per-riga su un chunk [M×D]: un workgroup per riga (grid = (mMax, 1)).
-export function rmsnormChunkWgsl(D: number, eps: number, mMax: number): string {
-  return `${CHUNK_PARAMS_WGSL}
-@group(0) @binding(0) var<storage, read> x: array<f32>;
-@group(0) @binding(1) var<storage, read> w: array<f32>;
-@group(0) @binding(2) var<storage, read_write> out: array<f32>;
-@group(0) @binding(3) var<uniform> C: ChunkParams;
-const D = ${D}u;
-const EPS = ${eps};
-const M_MAX = ${mMax}u;
-var<workgroup> partial: array<f32, 256>;
-@compute @workgroup_size(256)
-fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let m = wid.x;
-  if (m >= C.rows) { return; } // uniforme per workgroup: barriere sotto ok
-  let off = m * D;
-  let t = lid.x;
-  var ss = 0.0;
-  for (var i = t; i < D; i = i + 256u) { ss = ss + x[off + i] * x[off + i]; }
-  partial[t] = ss;
-  workgroupBarrier();
-  var stride = 128u;
-  while (stride > 0u) {
-    if (t < stride) { partial[t] = partial[t] + partial[t + stride]; }
+// ---- GEMM small-batch FAST (architettura dei kernel fusi di fase A, per chunk) ----
+// 4 righe di peso per workgroup, 16 lane/riga, load vec4<u32>; gli M accumulatori
+// sono SCALARI GENERATI dal template (acc0..accM-1): niente array privati
+// indicizzati, che su NVIDIA finiscono in scratch memory — la prima versione
+// (1 riga/wg, array acc[m]/bd[m], load scalari) faceva ~6.6 ms/token di prefill,
+// PEGGIO della baseline sequenziale; la variante vec4 1-riga/wg ~2.35 ms/token;
+// questa architettura (fusioni + 4 righe/wg) serve la soglia 3× di spec.
+// La riga di peso si legge una volta e serve le M attivazioni (banda pesi /M).
+// x del chunk in shared vec4 dove ci sta (K=896: 28.7 KB ≤ 32 KB richiesti);
+// down-proj (K=4864) legge da storage (broadcast fra wg ⇒ L2). Solo q4_0: la
+// variante q8_0 M-colonne non ha consumer (lm_head solo sull'ultima posizione).
+
+const mRange = (mMax: number) => Array.from({ length: mMax }, (_, m) => m);
+
+// Preambolo condiviso: load di x del chunk in shared vec4 (+ rms per riga fusa,
+// normalizzazione in place — le righe m ≥ rows restano a zero e sono mascherate
+// in scrittura). Usa partial[0..63] come scratch di riduzione.
+function chunkXsPreamble(opts: { v4PerRow: number; rms: boolean; K: number; eps?: number }): string {
+  const { v4PerRow, rms, K, eps } = opts;
+  const load = `for (var i = t; i < C.rows * ${v4PerRow}u; i = i + 64u) { xs4[i] = xv4[i]; }
+  workgroupBarrier();`;
+  if (!rms) return load;
+  return `${load}
+  for (var mr = 0u; mr < C.rows; mr = mr + 1u) { // bound uniforme: barriere legali
+    var ss = 0.0;
+    for (var i = t; i < ${v4PerRow}u; i = i + 64u) { let v = xs4[mr * ${v4PerRow}u + i]; ss = ss + dot(v, v); }
+    partial[t] = ss;
     workgroupBarrier();
-    stride = stride >> 1u;
+    var rstride = 32u;
+    while (rstride > 0u) {
+      if (t < rstride) { partial[t] = partial[t] + partial[t + rstride]; }
+      workgroupBarrier();
+      rstride = rstride >> 1u;
+    }
+    let rms = 1.0 / sqrt(partial[0] / ${K}.0 + ${eps});
+    workgroupBarrier();
+    for (var i = t; i < ${v4PerRow}u; i = i + 64u) {
+      xs4[mr * ${v4PerRow}u + i] = xs4[mr * ${v4PerRow}u + i] * rms *
+        vec4(normW[i * 4u], normW[i * 4u + 1u], normW[i * 4u + 2u], normW[i * 4u + 3u]);
+    }
+    workgroupBarrier();
+  }`;
+}
+
+// Corpo del dot per blocco q4_0 (load vec4, nibble → vec4, dot con xs4/xv4).
+function chunkBlockDot(ms: number[], xsExpr: (m: number, idx: string) => string, qsName: string, bd: string): string {
+  return `let w4 = ${qsName}[gb];
+      ${ms.map((m) => `${bd}${m} = 0.0;`).join(" ")}
+      for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+        let word = w4[wi];
+        let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu)) - 8.0;
+        let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu)) - 8.0;
+        ${ms.map((m) => `${bd}${m} = ${bd}${m} + dot(nibLo, ${xsExpr(m, "x4 + wi")}) + dot(nibHi, ${xsExpr(m, "x4 + 4u + wi")});`).join("\n        ")}
+      }`;
+}
+
+// Riduzione fra le 16 lane di ciascuna (riga, m): partial[m*64 + t]. In un blocco
+// a scope proprio: pairSilu la emette DUE volte nello stesso body e WGSL vieta la
+// ridichiarazione di `stride` nello stesso scope (trovato in fase 6: il modulo non
+// compilava e Dawn droppava in silenzio ogni submit con la pipeline invalida).
+const chunkLaneReduce = (ms: number[], acc: string) => `${ms.map((m) => `partial[${m * 64}u + t] = ${acc}${m};`).join(" ")}
+  workgroupBarrier();
+  {
+    var stride = 8u;
+    while (stride > 0u) {
+      if (lane < stride) {
+        for (var m = 0u; m < M_MAX; m = m + 1u) {
+          partial[m * 64u + t] = partial[m * 64u + t] + partial[m * 64u + t + stride];
+        }
+      }
+      workgroupBarrier();
+      stride = stride >> 1u;
+    }
+  }`;
+
+// QKV di chunk: rms fusa + GEMM Q4_0 con bias.
+export function rmsGemmQkvChunkFastWgsl(opts: { K: number; N: number; eps: number; mMax: number }): string {
+  const { K, N, eps, mMax } = opts;
+  const v4PerRow = K / 4;
+  const ms = mRange(mMax);
+  return `${CHUNK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> xv4: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> normW: array<f32>;
+@group(0) @binding(4) var<storage, read_write> y: array<f32>;
+@group(0) @binding(5) var<storage, read> bias: array<f32>;
+@group(0) @binding(6) var<uniform> C: ChunkParams;
+const BLOCKS_PER_ROW = ${K / 32}u;
+const M_MAX = ${mMax}u;
+var<workgroup> xs4: array<vec4<f32>, ${mMax * v4PerRow}>;
+var<workgroup> partial: array<f32, ${64 * mMax}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  ${chunkXsPreamble({ v4PerRow, rms: true, K, eps })}
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  ${ms.map((m) => `var acc${m} = 0.0; var bd${m} = 0.0;`).join(" ")}
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+      let x4 = b * 8u;
+      ${chunkBlockDot(ms, (m, idx) => `xs4[${m * v4PerRow}u + ${idx}]`, "qs4", "bd")}
+      ${ms.map((m) => `acc${m} = acc${m} + sc * bd${m};`).join(" ")}
+    }
   }
-  let rms = 1.0 / sqrt(partial[0] / f32(D) + EPS);
-  for (var i = t; i < D; i = i + 256u) { out[off + i] = x[off + i] * rms * w[i]; }
+  ${chunkLaneReduce(ms, "acc")}
+  if (lane == 0u && r < ${N}u) {
+    for (var m = 0u; m < C.rows; m = m + 1u) { y[m * ${N}u + r] = partial[m * 64u + sub * 16u] + bias[r]; }
+  }
 }`;
 }
 
-// GEMM small-batch dequant-fusa: y[m][r] = Σ_b scale(b)·Σ_j q_j·x[m][...] (+bias /
-// +residual). Un workgroup da 64 per RIGA DI PESO r: la riga si legge una volta e
-// serve le M attivazioni (banda pesi /M — la tesi della spec). x del chunk in
-// shared quando ci sta (K=896: 28.7 KB ≤ limite 32 KB richiesto al device);
-// per K=4864 (down-proj) si legge da storage (broadcast fra wg ⇒ L2).
-export function gemmQuantChunkWgsl(opts: {
-  kind: "q4_0" | "q8_0"; K: number; N: number; mMax: number;
-  hasBias: boolean; residual: boolean;
-}): string {
-  const { kind, K, N, mMax, hasBias, residual } = opts;
-  if (K % 32 !== 0) throw new Error("gemmChunk: K non multiplo di 32");
-  if (hasBias && residual) throw new Error("gemmChunk: bias+residual non previsto");
-  const blocksPerRow = K / 32;
-  const useShared = mMax * K * 4 <= 28672;
-  const biasBinding = hasBias ? `@group(0) @binding(4) var<storage, read> bias: array<f32>;` : "";
-  const uniBinding = hasBias ? 5 : 4;
-  const xsDecl = useShared ? `var<workgroup> xs: array<f32, ${mMax * K}>;` : "";
-  // zero-init di var<workgroup> garantita da WGSL: le righe m >= rows leggono 0
-  const xsLoad = useShared
-    ? `for (var i = t; i < C.rows * ${K}u; i = i + 64u) { xs[i] = x[i]; }
-  workgroupBarrier();`
-    : "";
-  const getx = useShared
-    ? `fn getx(m: u32, i: u32) -> f32 { return xs[m * ${K}u + i]; }`
-    : `fn getx(m: u32, i: u32) -> f32 { return x[m * ${K}u + i]; }`;
-  const blockDot = kind === "q4_0"
-    ? `
-      for (var w = 0u; w < 4u; w = w + 1u) {
-        let word = qs[gb * 4u + w];
-        for (var by = 0u; by < 4u; by = by + 1u) {
-          let byte = (word >> (by * 8u)) & 0xffu;
-          let j = w * 4u + by;
-          let vLo = f32(byte & 0xfu) - 8.0;
-          let vHi = f32(byte >> 4u) - 8.0;
-          for (var m = 0u; m < M_MAX; m = m + 1u) {
-            bd[m] = bd[m] + vLo * getx(m, xBase + j) + vHi * getx(m, xBase + 16u + j);
-          }
-        }
-      }`
-    : `
-      for (var w = 0u; w < 8u; w = w + 1u) {
-        let word = qs[gb * 8u + w];
-        for (var by = 0u; by < 4u; by = by + 1u) {
-          let v = f32((i32((word >> (by * 8u)) & 0xffu) << 24u) >> 24u);
-          let j = w * 4u + by;
-          for (var m = 0u; m < M_MAX; m = m + 1u) {
-            bd[m] = bd[m] + v * getx(m, xBase + j);
-          }
-        }
-      }`;
-  const writeOut = residual
-    ? `y[m * ${N}u + r] = y[m * ${N}u + r] + partial[m * 64u];`
-    : hasBias
-      ? `y[m * ${N}u + r] = partial[m * 64u] + bias[r];`
-      : `y[m * ${N}u + r] = partial[m * 64u];`;
+// Pair gate/up di chunk: rms fusa + due GEMM + silu, un dispatch (come pairSilu decode).
+export function rmsPairGemmSiluChunkFastWgsl(opts: { K: number; N: number; eps: number; mMax: number }): string {
+  const { K, N, eps, mMax } = opts;
+  const v4PerRow = K / 4;
+  const ms = mRange(mMax);
   return `${CHUNK_PARAMS_WGSL}
-@group(0) @binding(0) var<storage, read> qs: array<u32>;
+@group(0) @binding(0) var<storage, read> gQs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> gScales: array<u32>;
+@group(0) @binding(2) var<storage, read> uQs4: array<vec4<u32>>;
+@group(0) @binding(3) var<storage, read> uScales: array<u32>;
+@group(0) @binding(4) var<storage, read> xv4: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read> normW: array<f32>;
+@group(0) @binding(6) var<storage, read_write> out: array<f32>;
+@group(0) @binding(7) var<uniform> C: ChunkParams;
+const BLOCKS_PER_ROW = ${K / 32}u;
+const M_MAX = ${mMax}u;
+var<workgroup> xs4: array<vec4<f32>, ${mMax * v4PerRow}>;
+var<workgroup> partial: array<f32, ${64 * mMax}>;
+var<workgroup> gRes: array<f32, ${4 * mMax}>; // g ridotto, per (m, sub)
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  ${chunkXsPreamble({ v4PerRow, rms: true, K, eps })}
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  ${ms.map((m) => `var accG${m} = 0.0; var accU${m} = 0.0; var bdG${m} = 0.0; var bdU${m} = 0.0;`).join(" ")}
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let x4 = b * 8u;
+      {
+        ${chunkBlockDot(ms, (m, idx) => `xs4[${m * v4PerRow}u + ${idx}]`, "gQs4", "bdG")}
+        let sc = unpack2x16float(gScales[gb >> 1u])[gb & 1u];
+        ${ms.map((m) => `accG${m} = accG${m} + sc * bdG${m};`).join(" ")}
+      }
+      {
+        ${chunkBlockDot(ms, (m, idx) => `xs4[${m * v4PerRow}u + ${idx}]`, "uQs4", "bdU")}
+        let sc = unpack2x16float(uScales[gb >> 1u])[gb & 1u];
+        ${ms.map((m) => `accU${m} = accU${m} + sc * bdU${m};`).join(" ")}
+      }
+    }
+  }
+  ${chunkLaneReduce(ms, "accG")}
+  if (lane == 0u) {
+    for (var m = 0u; m < M_MAX; m = m + 1u) { gRes[m * 4u + sub] = partial[m * 64u + sub * 16u]; }
+  }
+  workgroupBarrier();
+  ${chunkLaneReduce(ms, "accU")}
+  if (lane == 0u && r < ${N}u) {
+    for (var m = 0u; m < C.rows; m = m + 1u) {
+      let g = gRes[m * 4u + sub];
+      out[m * ${N}u + r] = (g / (1.0 + exp(-g))) * partial[m * 64u + sub * 16u];
+    }
+  }
+}`;
+}
+
+// GEMM+residual di chunk (o-proj e down-proj): niente rms; shared se K ci sta.
+export function gemmResidChunkFastWgsl(opts: { K: number; N: number; mMax: number }): string {
+  const { K, N, mMax } = opts;
+  const v4PerRow = K / 4;
+  const ms = mRange(mMax);
+  const useShared = mMax * K * 4 <= 28672;
+  const xsDecl = useShared ? `var<workgroup> xs4: array<vec4<f32>, ${mMax * v4PerRow}>;` : "";
+  const xsLoad = useShared ? chunkXsPreamble({ v4PerRow, rms: false, K }) : "";
+  const xsExpr = (m: number, idx: string) => useShared
+    ? `xs4[${m * v4PerRow}u + ${idx}]`
+    : `xv4[${m * v4PerRow}u + ${idx}]`;
+  return `${CHUNK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
 @group(0) @binding(1) var<storage, read> scales: array<u32>;
-@group(0) @binding(2) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read> xv4: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> y: array<f32>;
-${biasBinding}
-@group(0) @binding(${uniBinding}) var<uniform> C: ChunkParams;
-const BLOCKS_PER_ROW = ${blocksPerRow}u;
+@group(0) @binding(4) var<uniform> C: ChunkParams;
+const BLOCKS_PER_ROW = ${K / 32}u;
 const M_MAX = ${mMax}u;
 ${xsDecl}
 var<workgroup> partial: array<f32, ${64 * mMax}>;
-${getx}
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
   let t = lid.x;
   ${xsLoad}
-  var acc: array<f32, M_MAX>;
-  var bd: array<f32, M_MAX>;
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  ${ms.map((m) => `var acc${m} = 0.0; var bd${m} = 0.0;`).join(" ")}
   if (r < ${N}u) {
-    for (var b = t; b < BLOCKS_PER_ROW; b = b + 64u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
       let gb = r * BLOCKS_PER_ROW + b;
-      let sWord = scales[gb >> 1u];
-      let sc = unpack2x16float(sWord)[gb & 1u];
-      let xBase = b * 32u;
-      // azzeramento ESPLICITO per iterazione: il decl-in-loop contava sull'azzerato
-      // implicito, che su Chrome/Tint NON avviene a ogni giro (bug trovato in fase 3:
-      // con >64 blocchi/riga le iterazioni successive ereditavano bd della precedente)
-      for (var m = 0u; m < M_MAX; m = m + 1u) { bd[m] = 0.0; }
-      ${blockDot}
-      for (var m = 0u; m < M_MAX; m = m + 1u) { acc[m] = acc[m] + sc * bd[m]; }
+      let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+      let x4 = b * 8u;
+      ${chunkBlockDot(ms, xsExpr, "qs4", "bd")}
+      ${ms.map((m) => `acc${m} = acc${m} + sc * bd${m};`).join(" ")}
     }
   }
-  for (var m = 0u; m < M_MAX; m = m + 1u) { partial[m * 64u + t] = acc[m]; }
-  workgroupBarrier();
-  var stride = 32u;
-  while (stride > 0u) {
-    if (t < stride) {
-      for (var m = 0u; m < M_MAX; m = m + 1u) {
-        partial[m * 64u + t] = partial[m * 64u + t] + partial[m * 64u + t + stride];
-      }
-    }
-    workgroupBarrier();
-    stride = stride >> 1u;
-  }
-  if (t == 0u && r < ${N}u) {
-    for (var m = 0u; m < C.rows; m = m + 1u) { ${writeOut} }
+  ${chunkLaneReduce(ms, "acc")}
+  if (lane == 0u && r < ${N}u) {
+    for (var m = 0u; m < C.rows; m = m + 1u) { y[m * ${N}u + r] = y[m * ${N}u + r] + partial[m * 64u + sub * 16u]; }
   }
 }`;
 }
@@ -956,24 +1037,6 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     }
     out[m * Q_DIM + h * HEAD_DIM + i] = acc / sAll;
   }
-}`;
-}
-
-// silu(gate)*up per chunk [M×D], in-place su gate.
-export function siluMulChunkWgsl(D: number, mMax: number): string {
-  return `${CHUNK_PARAMS_WGSL}
-@group(0) @binding(0) var<storage, read_write> gate: array<f32>;
-@group(0) @binding(1) var<storage, read> up: array<f32>;
-@group(0) @binding(2) var<uniform> C: ChunkParams;
-const D = ${D}u;
-const M_MAX = ${mMax}u;
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let i = gid.x;
-  let m = gid.y;
-  if (i >= D || m >= C.rows) { return; }
-  let g = gate[m * D + i];
-  gate[m * D + i] = (g / (1.0 + exp(-g))) * up[m * D + i];
 }`;
 }
 
