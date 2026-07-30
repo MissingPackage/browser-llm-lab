@@ -150,3 +150,38 @@ Dato per fase 6: gpuBusy col kernel split ≈ 2.86 ms/token (dall'idcheck tsq, d
 rimisurare nel bench col protocollo §Metodologia gpuBusy).
 Next: fase 6 (bench canonico k=8 + baseline k=1 same-day + gpuBusy liv.2,
 non-regressione rollback/prefix-cache, checklist DONE WHEN, chiusura+merge).
+
+2026-07-30 — Iterazione 6, FASE 6 DONE e GOAL CHIUSO. Bench canonico: runBench
+esteso con baseline K=1 same-day (runOnce(label, kRun)) e repliche liv.2
+DEDICATE per gpuBusy (secondo engine con tsq, senza taps — caveat verifier it.5
+— stessa finestra post-primo-batch; headline sempre dalle repliche OFF); gates
+auto-evidenti nel report (decode ≥230, overhead ≤2, prefill ≤810 assoluto).
+
+CHECKLIST DONE WHEN DEL CONTRATTO v2 (7/7):
+1. [x] Spec B2 v2 scritta e approvata (ruling PI 2026-07-30, docket 3: soglia
+   230, token_embd su GPU, dispatch archiviato).
+2. [x] Attribuzione decode wall: 2 JSON (ctx pieno + ctx32), it.1 — quota reale
+   20%, gpuBusy scala con kvLen; verifier PASS.
+3. [x] Decode più veloce: bench-4090-2026-07-30T19-24-35 — headline K=8 OFF
+   287.5 ±2.3 tok/s ≥230 (2.35x vs B1 122.4), baseline K=1 same-day 238.3,
+   msPerToken ~3.48, quota fuori-GPU 13.2% (gpuBusy 3.06, repliche liv.2
+   dedicate), warmup+3 repliche HEADED, schemaVersion 3.
+4. [x] Token-identity multi-step: K=8/K=5/K=1 IDENTICI su 256 token vs oracolo
+   (it.4; ri-verificato it.5 con tsq ATTIVO).
+5. [x] Parità INVARIATA: conformance GATE DOPPIO PASS 98.05/100.00 (512/512)
+   col kernel split (it.3), post multi-step (it.4) e con telemetryGpu:true
+   (it.5) — identica alla B1.
+6. [x] Non-regressione prefill e persistenza: prefill 697.8 ms ≤810 (assoluto
+   di spec); kv-rollback-4090-2026-07-30T19-24-58 PASS exit 0;
+   prefix-cache-4090-2026-07-30T19-25-06 PASS (restore worker nuovo 173.3 ms <
+   re-prefill 700 ms, continuazione identica).
+7. [x] Telemetria viva: gpuMs 2.86-3.06 REALE nel loop nuovo (it.5 + bench);
+   overhead da spenta -0.002% (≤2); profiler exit 0 (0 bindGroup, submit 1/8
+   esatto, 148 dispatch/forward ≤160); dispatch ≤100 ARCHIVIATO nel ledger §I
+   con trigger mobile (ruling f).
+
+RISULTATO DEL GOAL: decode al ctx bench 122.4 → 287.5 tok/s (2.35x), wall
+8.17 → 3.48 ms/token, quota fuori-GPU 73%(apparente)/20%(reale) → 13.2%,
+parità e persistenza intatte. Le due leve hanno reso: kernel split ~2x,
+multi-step +16% (238→287.5 same-day). Chiusura: merge su main + push (ruling
+permanente 2026-07-29) DOPO verifier gate.

@@ -93,6 +93,9 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
 // Gate prefill: assoluto (spec B2 §Soglie) — 810 ms = 1/3 della baseline seq di B1
 // (2410.9 ms, bench-4090-2026-07-30T08-09) congelata a quel giorno.
 const PREFILL_GATE_MS = 810;
+// Gate decode (spec B2 §Soglie, ruling PI 2026-07-30): ≥230 tok/s mean, repliche
+// OFF — sopra entrambi i plateau a leva singola (sync-only 149, kernel-only 185).
+const DECODE_GATE_TOKS = 230;
 async function runBench(modelUrl: string, promptUrl: string, genTokens: number, replicates: number, k = 8): Promise<void> {
   progress("fetch modello…", 0);
   const gguf = await fetchBuf(modelUrl);
@@ -103,7 +106,7 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   // per-token forwardToken (baseline/oracolo). Finestra di rate: dal termine del
   // PRIMO batch all'ultimo (esclude il boundary del prefill, come il tFirst di
   // fase A escludeva il primo token) — dichiarata nel report.
-  const runOnce = async (label: string): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number }> => {
+  const runOnce = async (label: string, kRun = k): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number }> => {
     engine.reset(); // contratto kvLen (fase 4)
     const t0 = performance.now();
     await engine.prefillChunked(promptFix.tokens.slice(0, -1), 0);
@@ -112,7 +115,7 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
     let prev = promptFix.tokens[promptFix.tokens.length - 1];
     let tFirst = 0;
     let done = 0;
-    if (k === 1) {
+    if (kRun === 1) {
       for (let i = 0; i < genTokens; i++) {
         prev = await engine.forwardToken(prev, pos++);
         if (i === 0) tFirst = performance.now();
@@ -122,14 +125,14 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
     } else {
       let generated = 0;
       while (generated < genTokens) {
-        const kk = Math.min(k, genTokens - generated);
+        const kk = Math.min(kRun, genTokens - generated);
         const got = await engine.decodeBatch(prev, engine.kvLen, kk);
         prev = got[got.length - 1];
         generated += got.length;
         if (tFirst === 0) tFirst = performance.now(); // fine del PRIMO batch
         if (generated % 32 === 0) progress(`${label}: ${generated}/${genTokens}`, generated / genTokens);
       }
-      done = genTokens - Math.min(k, genTokens); // rate sui token POST primo batch
+      done = genTokens - Math.min(kRun, genTokens); // rate sui token POST primo batch
     }
     const tEnd = performance.now();
     return {
@@ -165,12 +168,56 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   const on = stats(repsOn);
   const off = stats(repsOff);
   const overheadPct = ((1 / on.mean - 1 / off.mean) / (1 / off.mean)) * 100;
+  // baseline same-day K=1 (per-token, l'oracolo — spec B2 §Soglie: headline con
+  // baseline nello stesso report; solo per k>1)
+  let baselineK1: { decodeToksPerSec: { mean: number; stdev: number }; reps: { decodeToksPerSec: number }[] } | null = null;
+  if (k > 1) {
+    const repsK1 = [];
+    for (let r = 0; r < replicates; r++) repsK1.push(await runOnce(`baseline K=1 ${r + 1}/${replicates}`, 1));
+    baselineK1 = { decodeToksPerSec: stats(repsK1), reps: repsK1 };
+  }
   progress("baseline seq same-day…", 0.9);
   const seqReps: number[] = [];
   for (let r = 0; r < replicates; r++) seqReps.push(await seqPrefillOnce());
   const prefillVals = repsOff.map((x) => x.prefillMs);
   const prefillMean = prefillVals.reduce((a, b) => a + b, 0) / prefillVals.length;
   const seqMean = seqReps.reduce((a, b) => a + b, 0) / seqReps.length;
+  // gpuBusy da repliche liv.2 DEDICATE (spec §Metodologia gpuBusy: l'headline resta
+  // dalle repliche OFF; qui secondo engine con timestamp-query, SENZA taps — un
+  // tap spezzerebbe il pass e il tsq coprirebbe solo il primo segmento — stessa
+  // finestra di decode; MAI confrontare gpuBusy e wall di finestre diverse)
+  let gpuBusy: { replicates: number; gpuMsPerToken: number | null; wallMsPerToken: number; quotaFuoriGpu: number | null; note: string } | null = null;
+  if (k > 1) {
+    progress("repliche liv.2 dedicate (gpuBusy)…", 0.93);
+    engine.destroy();
+    const engine2 = await createEngine(gguf, progress, { telemetry: true, telemetryGpu: true });
+    const decodeWindow = async (): Promise<number> => {
+      engine2.reset();
+      await engine2.prefillChunked(promptFix.tokens.slice(0, -1), 0);
+      let prev = promptFix.tokens[promptFix.tokens.length - 1];
+      let generated = 0, tFirst = 0;
+      while (generated < genTokens) {
+        const got = await engine2.decodeBatch(prev, engine2.kvLen, Math.min(k, genTokens - generated));
+        prev = got[got.length - 1];
+        generated += got.length;
+        if (tFirst === 0) tFirst = performance.now();
+      }
+      return (performance.now() - tFirst) / (genTokens - Math.min(k, genTokens));
+    };
+    await decodeWindow(); // warmup (scartato)
+    await engine2.getTelemetry(); // drena i tsq del warmup
+    const walls: number[] = [];
+    const TSQ_REPS = 2;
+    for (let r = 0; r < TSQ_REPS; r++) walls.push(await decodeWindow());
+    const tel2 = await engine2.getTelemetry();
+    const wallMean = walls.reduce((a, b) => a + b, 0) / walls.length;
+    gpuBusy = {
+      replicates: TSQ_REPS, gpuMsPerToken: tel2.gpuMsPerToken, wallMsPerToken: wallMean,
+      quotaFuoriGpu: tel2.gpuMsPerToken === null ? null : (wallMean - tel2.gpuMsPerToken) / wallMean,
+      note: "repliche dedicate liv.2 senza taps (diagnostica, non gate — spec B2 §Metodologia); headline dalle repliche OFF",
+    };
+    engine2.destroy();
+  }
   post({
     type: "done",
     report: {
@@ -179,6 +226,14 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
       // fase B2: percorso decode del bench (k>1 = decodeBatch multi-step; la
       // finestra di rate esclude il primo batch, dichiarato in runOnce)
       decodePath: k === 1 ? "per-token" : "multi-step", k, rateWindow: "post-primo-batch",
+      baselineK1, gpuBusy,
+      // gate di spec B2 §Soglie, auto-evidenti nel report (nota verifier B1 fase 2)
+      gates: {
+        decodeGateToksPerSec: DECODE_GATE_TOKS,
+        decodeGatePass: off.mean >= DECODE_GATE_TOKS,
+        overheadGatePct: 2,
+        overheadGatePass: Math.abs(overheadPct) <= 2,
+      },
       warmup, reps: repsOff, decodeToksPerSec: off, // headline = telemetria spenta
       telemetryOn: { reps: repsOn, decodeToksPerSec: on },
       telemetry, telemetryOverheadPct: overheadPct,
