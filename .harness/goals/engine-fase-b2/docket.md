@@ -1,6 +1,12 @@
 # Docket — engine-fase-b2 (decisioni PI pendenti)
 
-3. **RULING RICHIESTO — spec B2 v2** (2026-07-30, fase 2): approvazione di
+3. ~~**RULING RICHIESTO — spec B2 v2**~~ RISOLTO (2026-07-30, ruling PI in chat:
+   "facciamo come dici, mi torna" — decisioni (a)-(g) ratificate con le scelte
+   raccomandate: SOGLIA decode ≥230 tok/s, token_embd su GPU, dispatch ≤100
+   ARCHIVIATO con trigger mobile nel ledger §I). Spec → stato approvato, soglia
+   fissata in §Soglie, fasi 3-6 sbloccate (3 ready, 4-6 a cascata). Testo originale:
+
+   **RULING RICHIESTO — spec B2 v2** (2026-07-30, fase 2): approvazione di
    `docs/superpowers/specs/2026-07-30-engine-fase-b2-design.md`. Decisioni proposte
    da ratificare:
    (a) attention split CHUNK=64, griglia fissa (14,16), due pass con log-sum-exp —

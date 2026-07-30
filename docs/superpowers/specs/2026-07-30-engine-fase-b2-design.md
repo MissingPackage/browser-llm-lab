@@ -1,6 +1,8 @@
 # Engine fase B2 — floor di decode (attention split + multi-step): Design
 
-**Data**: 2026-07-30 · **Stato**: PROPOSTO (ruling PI richiesto — docket goal item 3)
+**Data**: 2026-07-30 · **Stato**: **approvato** (ruling PI 2026-07-30, docket goal
+item 3 — decisioni a-g con le raccomandate: soglia 230, token_embd su GPU,
+dispatch ≤100 archiviato)
 **Direction**: `docs/engine/direction.md` §7 (fase B) · **Contratto**: `.harness/goals/engine-fase-b2/GOAL.md` (v2, re-scope opzione (a))
 **Riferimenti**: attribuzione `results/engine/decode-attrib-4090-*2026-07-30*.json`
 (ctx pieno + ctx32), microbench `results/engine/attn-bench-4090-2026-07-30T14-59-*.json`,
@@ -98,8 +100,8 @@ satura a ~149; kernel-only (senza multi-step) a ~185.
 
 - **decode ≥ 230 tok/s** (mean, telemetria OFF, baseline same-day nello stesso
   report): sopra ENTRAMBI i plateau a leva singola ⇒ prova che kernel E multi-step
-  funzionano insieme; margine ~8% sotto la predizione 249. [Alternativa ambiziosa
-  ≥240, margine 3.6% — scelta al PI nel ruling.]
+  funzionano insieme; margine ~8% sotto la predizione 249. [FISSATA dal ruling PI
+  2026-07-30: 230, non 240 — il gate è un minimo, non un tetto.]
 - **prefill ≤ 810 ms** (soglia 3× B1 invariata — il percorso prefill non si tocca).
 - **token-identity K>1 vs K=1**: ≥256 token IDENTICI, exit 0.
 - **conformance**: gate doppio invariato (≥99% cpuref-f64 E ≥97% golden, ≥512 tok).

@@ -12,12 +12,14 @@ import { QWEN25_05B as S, validateQwen25_05B } from "./shape";
 import {
   gemvQuantWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl, attnDecodeWgsl,
   siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, ARGMAX_CHUNK,
-  gemvGrid, attnFusedWgsl,
+  gemvGrid,
   rmsGemvQ8FastWgsl, rmsPairGemvSiluFastWgsl, gemvResidualFastWgsl, rmsGemvQ4FastBiasWgsl,
   ropeChunkWgsl, kvAppendChunkWgsl, attnPrefillChunkWgsl,
   rmsGemmQkvChunkFastWgsl, rmsPairGemmSiluChunkFastWgsl, gemmResidChunkFastWgsl,
+  attnSplitPartWgsl, attnSplitReduceWgsl,
 } from "./kernels/wgsl";
 import { planPrefill, PREFILL_M } from "./prefillplan";
+import { ATTN_CHUNK_P, attnSMax, attnPartialsLen } from "./attnsplit";
 import { createKvLen } from "./kvlen";
 import type { RepackedQuant } from "./quant";
 
@@ -197,6 +199,9 @@ export async function createEngine(
   const gateB = storage(S.dFfn * 4);
   const upB = storage(S.dFfn * 4);
   const logits = storage(S.vocab * 4);
+  // attention split (spec B2): partial {out|m|l} per (head, partizione) — griglia
+  // fissa (nHead, S_MAX), il piano statico resta immutabile
+  const attnPartials = storage(attnPartialsLen(S.nHead, S.headDim, CTX_MAX) * 4);
   const pmax = storage(N_PARTIALS * 4);
   const pidx = storage(N_PARTIALS * 4);
   const amaxOut = storage(16);
@@ -266,7 +271,11 @@ export async function createEngine(
     am2: mkPipe(argmaxStage2Wgsl(N_PARTIALS)),
     // fusi (L3)
     rmsQkv: mkPipe(rmsGemvQ4FastBiasWgsl({ K: S.dModel, N: S.dModel + 2 * KV_DIM, eps: S.rmsEps })),
-    attnF: mkPipe(attnFusedWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_MAX, freqBase: S.ropeFreqBase })),
+    // attention split (spec B2, sostituisce attnFusedWgsl nel piano di produzione:
+    // quello resta nel sorgente per microbench/debug — il fuso a 14 wg scala
+    // linearmente col contesto, lo split è ~piatto: attn-bench-4090-2026-07-30)
+    attnPart: mkPipe(attnSplitPartWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_MAX, freqBase: S.ropeFreqBase, chunkP: ATTN_CHUNK_P })),
+    attnReduce: mkPipe(attnSplitReduceWgsl({ nHead: S.nHead, headDim: S.headDim, ctxMax: CTX_MAX, chunkP: ATTN_CHUNK_P })),
     oResid: mkPipe(gemvResidualFastWgsl({ K: S.dModel, N: S.dModel })),
     pairSilu: mkPipe(rmsPairGemvSiluFastWgsl({ K: S.dModel, N: S.dFfn, eps: S.rmsEps })),
     downResid: mkPipe(gemvResidualFastWgsl({ K: S.dFfn, N: S.dModel })),
@@ -299,7 +308,8 @@ export async function createEngine(
   for (const L of layers) {
     if (fused) {
       push(pipes.rmsQkv, [L.qkv.qs, L.qkv.scales, x, L.attnNorm, qkvB, L.qkvBias], gemvGrid((S.dModel + 2 * KV_DIM) / 4));
-      push(pipes.attnF, [qkvB, L.kCache, L.vCache, attnOut], S.nHead, P);
+      push(pipes.attnPart, [qkvB, L.kCache, L.vCache, attnPartials], [S.nHead, attnSMax(CTX_MAX)], P);
+      push(pipes.attnReduce, [attnPartials, attnOut], S.nHead, P);
       push(pipes.oResid, [L.wo.qs, L.wo.scales, attnOut, x], gemvGrid(S.dModel / 4));
       push(pipes.pairSilu, [L.wGate.qs, L.wGate.scales, L.wUp.qs, L.wUp.scales, x, L.ffnNorm, gateB], gemvGrid(S.dFfn / 4));
       push(pipes.downResid, [L.wDown.qs, L.wDown.scales, gateB, x], gemvGrid(S.dModel / 4));

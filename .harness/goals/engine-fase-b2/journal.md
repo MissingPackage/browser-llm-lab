@@ -70,3 +70,34 @@ archiviazione motivata (floor GEMV = lavoro reale; +24 dispatch dello split e il
 wall scende comunque), bound sanity 160. Decisione grossa in spec: token_embd su
 GPU (~68 MB) per il feedback on-GPU (embedGatherQ4), deviazione dichiarata dalla
 fase A. Next: STOP by design — fasi 3-6 gated dal ruling spec (docket 3).
+
+2026-07-30 — Iterazione 3, FASE 3 DONE (1 iterazione su timebox 4). Ruling spec
+incassato a inizio ciclo (docket 3: soglia 230, token_embd su GPU, dispatch
+archiviato). Integrazione del kernel split nel piano fuso: attnF sostituito da
+attnPart (griglia (14,16)) + attnReduce (14) in gpuforward.ts, buffer attnPartials
+(14×16×66 f32), modulo puro attnsplit.ts (CHUNK/sMax/owner/range + lseReduce di
+riferimento) usato per il sizing e testato (5 unit nuove: geometria partizioni +
+proprietà "lseReduce ≡ softmax monolitica" anche con score estremi). attnFusedWgsl
+resta nel sorgente (microbench/debug), fuori dal piano di produzione.
+
+GATE (tutti PASS):
+- npm test 161/161 (156+5); tsc pulito.
+- Conformance col kernel split: GATE DOPPIO PASS 98.05% golden / 100.00% cpuref
+  (512/512) — IDENTICA alla B1 (conformance-4090-2026-07-30T18-44-19).
+- prefill-diag cold-start: argmaxMatch=true su tutte le L, chunk≡seq, badRows
+  vuote; kernel-diag: maxErr ~1e-7.
+- Profiler finestra decode: createBindGroup=0, submit/token 1.036,
+  dispatch/token 147 (≤160 da spec; engine-prof-4090 JSON).
+
+SORPRESA POSITIVA (bench informale, bench-4090-2026-07-30T18-45-56):
+decode 248.3 ±3.9 tok/s GIÀ A K=1 — la proiezione additiva (185 kernel-only) era
+PESSIMISTA: il gate 230 è superato prima del multi-step. Lettura: parte della
+"sync" dell'attribuzione era coda GPU dietro i kernel lenti, non costo fisso.
+Overhead telemetria 0.65%. Prefill 701 ms invariato (≤810 ✓); la baseline seq
+same-day è scesa a 1907 ms (anche lei usa lo split) ⇒ il gatePass RELATIVO del
+bench era diventato fuorviante: ancorato all'ASSOLUTO di spec (PREFILL_GATE_MS
+810, deviazione dichiarata: campo report, non percorso di calcolo).
+Nota fase 4: il margine sul gate non cambia il contratto — il multi-step resta
+in scope (la sync residua ~0.9 ms/token si amortizza comunque, e serve al
+contratto streaming/spec-dec §I); la predizione K=8 va rifatta coi numeri nuovi.
+Next: fase 4 (decode loop multi-step K + token-identity).

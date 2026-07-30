@@ -90,6 +90,9 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
 
 // Bench decode: protocollo del repo (warmup scartato + N repliche, stesso prompt,
 // greedy self-feeding). Il decode rate è misurato dal primo all'ultimo token generato.
+// Gate prefill: assoluto (spec B2 §Soglie) — 810 ms = 1/3 della baseline seq di B1
+// (2410.9 ms, bench-4090-2026-07-30T08-09) congelata a quel giorno.
+const PREFILL_GATE_MS = 810;
 async function runBench(modelUrl: string, promptUrl: string, genTokens: number, replicates: number): Promise<void> {
   progress("fetch modello…", 0);
   const gguf = await fetchBuf(modelUrl);
@@ -159,14 +162,17 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
       telemetryOn: { reps: repsOn, decodeToksPerSec: on },
       telemetry, telemetryOverheadPct: overheadPct,
       dispatchesPerToken: engine.dispatchesPerToken,
-      // gate prefill (spec §Soglie 1, ruling Pareto): chunked vs seq same-day
+      // gate prefill ASSOLUTO (spec B2 §Soglie: ≤810 ms = soglia 3x di B1 congelata
+      // al giorno della misura — il gate relativo alla seq same-day è diventato
+      // fuorviante in B2: la baseline seq migliora con lo split attention per
+      // ragioni che nulla c'entrano col prefill). speedupVsSeq resta informativo.
       prefill: {
         path: "chunked", mMax: PREFILL_M, submitTokens: PREFILL_SUBMIT_TOKENS,
         prefillMs: { mean: prefillMean, reps: prefillVals },
         seqBaselineMs: { mean: seqMean, reps: seqReps },
         speedupVsSeq: seqMean / prefillMean,
-        thresholdMs: seqMean / 3,
-        gatePass: prefillMean <= seqMean / 3,
+        thresholdMs: PREFILL_GATE_MS,
+        gatePass: prefillMean <= PREFILL_GATE_MS,
       },
       quant: "Q4_0 (gguf)", note: "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
     },
