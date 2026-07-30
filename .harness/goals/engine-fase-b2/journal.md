@@ -126,3 +126,27 @@ GATE (tutti PASS):
   di sync residua, coerente con l'attesa post-fase 3.
 Next: fase 5 (telemetria liv.2 + profiler nel nuovo loop: run tsq con gpuMs
 reale, profiler con submit/token 1/K, dispatch target di spec ≤160 già ok).
+
+2026-07-30 — Iterazione 5, FASE 5 DONE. Telemetria e profiler sul loop
+multi-step: (1) runBench portato sul percorso decodeBatch (k=8 default di spec,
+k=1 = per-token per baseline; finestra di rate post-primo-batch, dichiarata nel
+report); (2) idcheck con telemetryGpu: liv.2 ATTIVO sul loop multi-step
+(timestampWrites per step) con identità INVARIATA e gpuMs REALE; (3) engine-prof
+K-aware (schemaVersion 2: submit/forward atteso 1/k, dispatch atteso
+dispatchesPerToken+1 per l'embedGather, bound spec ≤160); (4) ledger §I: riga
+floor-dispatch aggiornata ad ARCHIVIATO-su-desktop con trigger mobile (ruling f).
+
+GATE (tutti PASS):
+- npm test 166/166; tsc pulito.
+- Liv.2 sul loop nuovo (token-identity-4090-2026-07-30T19-13-14, tsq attivo):
+  K=8/K=5/K=1 match=true, gpuMs/token 2.862 REALE (non-null) — il liv.2 non
+  perturba il multi-step e misura davvero.
+- Conformance con telemetryGpu:true: GATE DOPPIO PASS 98.05/100.00 invariata
+  (conformance-4090-2026-07-30T19-13-34).
+- Profiler sul bench multi-step (engine-prof-4090-2026-07-30T19-13-54, exit 0):
+  bindGroup 0, submit/forward 0.125 = 1/8 ESATTO, mapAsync/forward 0.125,
+  dispatch/forward 148 = 147+1 (embedGather), ≤160 ✓.
+Dato per fase 6: gpuBusy col kernel split ≈ 2.86 ms/token (dall'idcheck tsq, da
+rimisurare nel bench col protocollo §Metodologia gpuBusy).
+Next: fase 6 (bench canonico k=8 + baseline k=1 same-day + gpuBusy liv.2,
+non-regressione rollback/prefix-cache, checklist DONE WHEN, chiusura+merge).

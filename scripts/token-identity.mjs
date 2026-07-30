@@ -10,7 +10,8 @@ const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService"
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
 page.on("pageerror", (e) => console.log("[idcheck][pageerror]", e.message.slice(0, 300)));
-await page.goto(`${BASE_URL}/engine.html?idcheck=1`, { waitUntil: "load" });
+const TSQ = process.env.TSQ === "1" ? "&tsq=1" : ""; // fase 5: liv.2 sul loop multi-step
+await page.goto(`${BASE_URL}/engine.html?idcheck=1${TSQ}`, { waitUntil: "load" });
 await page.waitForFunction(
   () => {
     const s = document.querySelector("#status")?.textContent ?? "";
@@ -25,6 +26,7 @@ if (status !== "done" || !report) { console.error("[idcheck] FALLITO:", status);
 for (const c of report.checks) console.log(`[idcheck] ${c.name}: match=${c.match}${c.divergeAt !== null ? ` divergeAt=${c.divergeAt}` : ""}`);
 const t = report.msPerTokenInformal;
 console.log(`[idcheck] ms/token informali: per-token ${t.perToken.toFixed(2)} · K=8 ${t.k8.toFixed(2)} · K=5 ${t.k5.toFixed(2)} · K=1-batch ${t.k1.toFixed(2)}`);
+if (report.telemetryGpu) console.log(`[idcheck] tsq: gpuMs/token ${report.telemetry?.gpuMsPerToken?.toFixed(3) ?? "NULL"} (${report.telemetry?.timestampNote ?? ""})`);
 mkdirSync("results/engine", { recursive: true });
 const ts = new Date().toISOString().replace(/[:.]/g, "-");
 writeFileSync(`results/engine/token-identity-4090-${ts}.json`, JSON.stringify({ ...report, deviceLabel: "4090-linux", ts }, null, 2));

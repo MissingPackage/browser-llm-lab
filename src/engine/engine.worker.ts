@@ -93,13 +93,16 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
 // Gate prefill: assoluto (spec B2 §Soglie) — 810 ms = 1/3 della baseline seq di B1
 // (2410.9 ms, bench-4090-2026-07-30T08-09) congelata a quel giorno.
 const PREFILL_GATE_MS = 810;
-async function runBench(modelUrl: string, promptUrl: string, genTokens: number, replicates: number): Promise<void> {
+async function runBench(modelUrl: string, promptUrl: string, genTokens: number, replicates: number, k = 8): Promise<void> {
   progress("fetch modello…", 0);
   const gguf = await fetchBuf(modelUrl);
   const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
   const engine = await createEngine(gguf, progress);
-  // fase 6: il prefill delle repliche è il percorso CHUNKED M≤8 (il gate di spec
-  // §Soglie confronta prefillMs con la baseline sequenziale same-day, sotto)
+  // fase B2: il decode delle repliche è il loop MULTI-STEP (decodeBatch, K=8 di
+  // spec — feedback token on-GPU, 1 mapAsync/batch); k=1 mantiene il percorso
+  // per-token forwardToken (baseline/oracolo). Finestra di rate: dal termine del
+  // PRIMO batch all'ultimo (esclude il boundary del prefill, come il tFirst di
+  // fase A escludeva il primo token) — dichiarata nel report.
   const runOnce = async (label: string): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number }> => {
     engine.reset(); // contratto kvLen (fase 4)
     const t0 = performance.now();
@@ -108,16 +111,31 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
     let pos = promptFix.tokens.length - 1;
     let prev = promptFix.tokens[promptFix.tokens.length - 1];
     let tFirst = 0;
-    for (let i = 0; i < genTokens; i++) {
-      prev = await engine.forwardToken(prev, pos++);
-      if (i === 0) tFirst = performance.now();
-      if (i % 32 === 0) progress(`${label}: ${i}/${genTokens}`, i / genTokens);
+    let done = 0;
+    if (k === 1) {
+      for (let i = 0; i < genTokens; i++) {
+        prev = await engine.forwardToken(prev, pos++);
+        if (i === 0) tFirst = performance.now();
+        if (i % 32 === 0) progress(`${label}: ${i}/${genTokens}`, i / genTokens);
+      }
+      done = genTokens - 1; // rate dal primo token generato (formula fase A)
+    } else {
+      let generated = 0;
+      while (generated < genTokens) {
+        const kk = Math.min(k, genTokens - generated);
+        const got = await engine.decodeBatch(prev, engine.kvLen, kk);
+        prev = got[got.length - 1];
+        generated += got.length;
+        if (tFirst === 0) tFirst = performance.now(); // fine del PRIMO batch
+        if (generated % 32 === 0) progress(`${label}: ${generated}/${genTokens}`, generated / genTokens);
+      }
+      done = genTokens - Math.min(k, genTokens); // rate sui token POST primo batch
     }
     const tEnd = performance.now();
     return {
-      decodeToksPerSec: ((genTokens - 1) / (tEnd - tFirst)) * 1000,
+      decodeToksPerSec: (done / (tEnd - tFirst)) * 1000,
       prefillMs: tPrefill - t0,
-      msPerTokenDecode: (tEnd - tFirst) / (genTokens - 1),
+      msPerTokenDecode: (tEnd - tFirst) / done,
     };
   };
   // baseline sequenziale SAME-DAY (spec §Soglie: prefillMs.mean ≤ 1/3 di questa):
@@ -158,6 +176,9 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
     report: {
       schemaVersion: 3, kind: "engine-bench", promptId: promptFix.promptId,
       promptTokens: promptFix.tokens.length, genTokens, replicates,
+      // fase B2: percorso decode del bench (k>1 = decodeBatch multi-step; la
+      // finestra di rate esclude il primo batch, dichiarato in runOnce)
+      decodePath: k === 1 ? "per-token" : "multi-step", k, rateWindow: "post-primo-batch",
       warmup, reps: repsOff, decodeToksPerSec: off, // headline = telemetria spenta
       telemetryOn: { reps: repsOn, decodeToksPerSec: on },
       telemetry, telemetryOverheadPct: overheadPct,
@@ -794,11 +815,14 @@ async function runAttnBench(): Promise<void> {
 // sequenze IDENTICHE ≥256 token. Tre confronti: K=8 (default di spec), K=5
 // (non divisore: boundary dell'ultimo batch parziale gestito dal chiamante),
 // K=1 via decodeBatch (il percorso batch degenere deve coincidere anch'esso).
-async function runIdCheck(modelUrl: string, promptUrl: string, genTokens: number): Promise<void> {
+async function runIdCheck(modelUrl: string, promptUrl: string, genTokens: number, telemetryGpu = false): Promise<void> {
   progress("fetch modello…", 0);
   const gguf = await fetchBuf(modelUrl);
   const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
-  const engine = await createEngine(gguf, progress, { telemetry: false });
+  // telemetryGpu (fase 5): il liv.2 ATTIVO sul loop multi-step non deve perturbare
+  // l'identità (stesso gate di B1 "conformance con tsq attivo") e deve produrre
+  // gpuMs REALE (timestampWrites per step, mapAsync solo post-submit)
+  const engine = await createEngine(gguf, progress, { telemetry: telemetryGpu, telemetryGpu });
   const prefix = promptFix.tokens.slice(0, -1);
   await engine.prefillChunked(prefix, 0);
   const baseLen = engine.kvLen;
@@ -833,12 +857,14 @@ async function runIdCheck(modelUrl: string, promptUrl: string, genTokens: number
   progress("batch K=1…", 0.9);
   const k1 = await runBatched(1);
   const checks = [cmp("K=8", k8.ids), cmp("K=5", k5.ids), cmp("K=1-degenere", k1.ids)];
+  const telemetry = telemetryGpu ? await engine.getTelemetry() : null;
   post({
     type: "done",
     report: {
       schemaVersion: 1, kind: "engine-token-identity", promptId: promptFix.promptId,
       prefixTokens: prefix.length, genTokens, checks,
-      pass: checks.every((c) => c.match),
+      pass: checks.every((c) => c.match) && (!telemetryGpu || (telemetry?.gpuMsPerToken ?? null) !== null),
+      telemetryGpu, telemetry, // fase 5: gpuMs reale non-null quando tsq attivo
       msPerTokenInformal: { perToken: refMs, k8: k8.msPerToken, k5: k5.msPerToken, k1: k1.msPerToken },
       note: "tempi informali (una passata, niente repliche): il bench di fase 6 è la misura",
     },
@@ -855,7 +881,7 @@ self.onmessage = (e: MessageEvent) => {
   if (m.type === "conformance") {
     runConformance(m.modelUrl, m.goldenUrl!, m.sampleEvery ?? 16, (m as { telemetryGpu?: boolean }).telemetryGpu ?? false).catch(fail);
   } else if (m.type === "bench") {
-    runBench(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, m.replicates ?? 3).catch(fail);
+    runBench(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, m.replicates ?? 3, (m as { k?: number }).k ?? 8).catch(fail);
   } else if (m.type === "prefilldiag") {
     runPrefillDiag(m.modelUrl, m.promptUrl!).catch(fail);
   } else if (m.type === "kerneldiag") {
@@ -872,6 +898,6 @@ self.onmessage = (e: MessageEvent) => {
   } else if (m.type === "attnbench") {
     runAttnBench().catch(fail);
   } else if (m.type === "idcheck") {
-    runIdCheck(m.modelUrl, m.promptUrl!, m.genTokens ?? 256).catch(fail);
+    runIdCheck(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, (m as { telemetryGpu?: boolean }).telemetryGpu ?? false).catch(fail);
   }
 };

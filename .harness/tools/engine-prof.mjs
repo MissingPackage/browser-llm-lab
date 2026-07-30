@@ -69,12 +69,20 @@ const d = {
   mapAsync: atEnd.mapAsync - atStart.mapAsync,
 };
 const forwardsInWindow = totalForwards;
+// fase B2: col decode multi-step (report.k>1) i gate cambiano forma —
+// submit/forward atteso = 1/k (una submit+mapAsync per batch), dispatch/forward
+// atteso = dispatchesPerToken + 1 (l'embedGather per step non è nel piano
+// statico contato da dispatchesPerToken). Bound di spec §Soglie: ≤160.
+const k = report.k ?? 1;
+const dispPerForward = d.dispatch / forwardsInWindow;
+const expectedDisp = report.dispatchesPerToken + (k > 1 ? 1 : 0);
 const out = {
-  schemaVersion: 1, kind: "engine-prof", ts: new Date().toISOString(),
+  schemaVersion: 2, kind: "engine-prof", ts: new Date().toISOString(),
   deviceLabel: "4090-linux", totalForwardsExpected: totalForwards,
+  decodePath: report.decodePath ?? "per-token", k,
   deltasDuranteRun: d,
   perForward: {
-    dispatch: d.dispatch / forwardsInWindow,
+    dispatch: dispPerForward,
     submit: d.submit / forwardsInWindow,
     bindGroup: d.bindGroup / forwardsInWindow,
     writeBufferPerForward: d.writeBuffer / forwardsInWindow,
@@ -82,11 +90,14 @@ const out = {
   },
   gates: {
     L1_bindGroupZero: d.bindGroup === 0,
-    L2_unSubmitPerToken: Math.abs(d.dispatch / d.submit - report.dispatchesPerToken) < 0.5,
-    L3_dispatchPerToken: d.dispatch / d.submit,
+    L2_submitPerForward: Math.abs(d.submit / forwardsInWindow - 1 / k) < 0.1,
+    L3_dispatchPerToken: dispPerForward,
+    L3_matchesPlan: Math.abs(dispPerForward - expectedDisp) < 0.5,
+    specBoundLe160: dispPerForward <= 160,
   },
 };
 console.log(JSON.stringify(out, null, 2));
 mkdirSync("results/engine", { recursive: true });
 writeFileSync(`results/engine/engine-prof-4090-${out.ts.replace(/[:.]/g, "-")}.json`, JSON.stringify(out, null, 2));
-process.exit(out.gates.L1_bindGroupZero && out.gates.L2_unSubmitPerToken ? 0 : 1);
+const pass = out.gates.L1_bindGroupZero && out.gates.L2_submitPerForward && out.gates.L3_matchesPlan && out.gates.specBoundLe160;
+process.exit(pass ? 0 : 1);

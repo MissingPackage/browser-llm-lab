@@ -80,6 +80,7 @@ if (params.get("conformance") === "1") {
     type: "bench",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+    k: params.get("k") ? Number(params.get("k")) : undefined, // default 8 (spec B2)
   });
 } else if (params.get("prefilldiag") === "1") {
   worker.postMessage({
@@ -110,6 +111,7 @@ if (params.get("conformance") === "1") {
     type: "idcheck",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+    telemetryGpu: params.get("tsq") === "1", // fase 5: liv.2 sul loop multi-step
   });
 } else if (params.get("pcsave") === "1" || params.get("pcrestore") === "1") {
   worker.postMessage({
