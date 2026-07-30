@@ -56,3 +56,12 @@ engine-prof v2 K-aware exit 0 (0 bindGroup, submit/forward 0.125 = 1/8 esatto,
 dispatch ≤100 archiviato-desktop con trigger mobile. Next: fase 6 = bench
 canonico (k=8 + baseline k=1 + gpuBusy da metodologia spec), non-regressione
 rollback/prefix-cache, checklist 7/7, chiusura + merge.
+
+2026-07-30 — it.6 (fase 6 DONE, GOAL CHIUSO). Bench canonico: **287.5 ±2.3
+tok/s a K=8** (gate 230, **2.35× vs B1** 122.4), baseline K=1 same-day 238.3,
+gpuBusy 3.06 ms/token da repliche liv.2 dedicate (quota fuori-GPU 13.2%),
+overhead telemetria −0.002%, prefill 697.8 ms ≤810; kv-rollback e prefix-cache
+re-run PASS (restore worker nuovo 173 ms < re-prefill 700). Checklist DONE WHEN
+7/7 nel journal; verifier finale PASS; merge su main da ruling permanente.
+Residuo: nessun docket aperto — prossimo goal su iniziativa PI (fase C paging,
+o rimandi §I).
