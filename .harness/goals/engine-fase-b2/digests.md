@@ -33,3 +33,11 @@ scelta al PI) e archiviazione motivata del dispatch ≤100. Verifier: sostanza
 PASS (matematica split verificata a mano, diff additivo, 156/156), FAIL
 iniziale su digest/HANDOFF stale → corretto in questo commit. STOP by design:
 fasi 3-6 gated dal ruling spec (docket item 3, decisioni a-g).
+
+2026-07-30 — it.3 (fase 3 DONE in 1 iterazione). Ruling spec incassato (230 /
+token_embd GPU / dispatch archiviato). Kernel split integrato nel piano fuso:
+conformance IDENTICA a B1 (98.05/100.00), prefill-diag/kernel-diag PASS,
+profiler 0 bindGroup / 1.04 submit / 147 dispatch per token. SORPRESA: decode
+248.3 tok/s GIÀ a K=1 (proiezione kernel-only diceva 185; parte della "sync"
+era coda GPU) — gate 230 superato prima del multi-step. Prefill 701 ms ≤810;
+gate bench ancorato all'assoluto di spec. Next: fase 4 (multi-step + identity).
