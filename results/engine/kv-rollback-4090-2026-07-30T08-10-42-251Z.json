@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-kv-rollback",
+  "promptId": "bench-512-v1",
+  "prefixTokens": 48,
+  "genTokens": 64,
+  "cropMid": 16,
+  "kvLenAfterGen": 111,
+  "kvLenOk": true,
+  "checks": [
+    {
+      "name": "crop-al-prefisso-rigenera",
+      "match": true,
+      "divergeAt": null
+    },
+    {
+      "name": "crop-a-meta-generazione",
+      "match": true,
+      "divergeAt": null
+    },
+    {
+      "name": "run-fresco-stesso-prefisso",
+      "match": true,
+      "divergeAt": null
+    }
+  ],
+  "pass": true,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-30T08-10-42-251Z"
+}

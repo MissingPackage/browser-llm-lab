@@ -37,14 +37,6 @@ worker.onmessage = (e: MessageEvent) => {
       $("status").textContent = "done";
       return;
     }
-    if ((r as { kind?: string }).kind === "engine-tsq-diag") {
-      const s = r as unknown as { variants: { label: string; idsMatch: boolean | null; maxDlogit: number | null; gpuMsPerToken: number | null }[] };
-      $("results").innerHTML = s.variants
-        .map((v) => `<p>${v.label}: idsMatch=${v.idsMatch} · maxΔlogit=${v.maxDlogit?.toFixed(4) ?? "—"} · gpuMs=${v.gpuMsPerToken?.toFixed(3) ?? "null"}</p>`)
-        .join("");
-      $("status").textContent = "done";
-      return;
-    }
     if (!("perPrompt" in (r as object))) {
       // report bench
       const b = r as unknown as {
@@ -86,12 +78,6 @@ if (params.get("conformance") === "1") {
 } else if (params.get("bench") === "1") {
   worker.postMessage({
     type: "bench",
-    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
-    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
-  });
-} else if (params.get("tsqdiag") === "1") {
-  worker.postMessage({
-    type: "tsqdiag",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
   });

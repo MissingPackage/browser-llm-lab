@@ -37,12 +37,18 @@ await worker.evaluate(() => {
 });
 console.log("[eprof] patch installata");
 
-// snapshot all'inizio del decode (primo status "warmup")
-await page.waitForFunction(
-  () => (document.querySelector("#status")?.textContent ?? "").includes("warmup"),
-  null, { timeout: 300000, polling: 200 },
+// FINESTRA DECODE PURA (fase B1: il prefill è chunked, non più una sequenza di
+// forward — la finestra fase-A "dal warmup a fine run" mescolerebbe i due profili):
+// snapshot fra i progress i=32 e i=224 dell'ULTIMA replica OFF ⇒ 192 forward di
+// decode esatti fra i due snapshot (progress ogni 32 token; skew di polling ≤50 ms).
+const waitStatus = async (needle) => page.waitForFunction(
+  (n) => (document.querySelector("#status")?.textContent ?? "").includes(n),
+  needle, { timeout: 900000, polling: 50 },
 );
+await waitStatus("replica OFF 3/3: 32/");
 const atStart = await worker.evaluate(() => ({ ...self.__prof }));
+await waitStatus("replica OFF 3/3: 224/");
+const atEnd = await worker.evaluate(() => ({ ...self.__prof }));
 await page.waitForFunction(
   () => {
     const s = document.querySelector("#status")?.textContent ?? "";
@@ -50,15 +56,11 @@ await page.waitForFunction(
   },
   null, { timeout: 900000, polling: 1000 },
 );
-const atEnd = await worker.evaluate(() => ({ ...self.__prof }));
 const report = await page.evaluate(() => window.__report ?? null);
 await browser.close();
 if (!report) { console.error("[eprof] niente report"); process.exit(2); }
 
-// forwards nella finestra misurata: (warmup + repliche) × (prefill-1 + gen)
-// atStart è scattato DENTRO il warmup: usiamo il totale run e togliamo il pre-start
-const perRep = (report.promptTokens - 1) + report.genTokens;
-const totalForwards = perRep * (1 + report.replicates);
+const totalForwards = 192; // finestra deterministica (i=32 → i=224)
 const d = {
   dispatch: atEnd.dispatch - atStart.dispatch,
   bindGroup: atEnd.bindGroup - atStart.bindGroup,
@@ -66,8 +68,7 @@ const d = {
   writeBuffer: atEnd.writeBuffer - atStart.writeBuffer,
   mapAsync: atEnd.mapAsync - atStart.mapAsync,
 };
-// i forward già consumati quando è scattato atStart:
-const forwardsInWindow = d.submit; // 1 submit per forward by design: cross-check sotto
+const forwardsInWindow = totalForwards;
 const out = {
   schemaVersion: 1, kind: "engine-prof", ts: new Date().toISOString(),
   deviceLabel: "4090-linux", totalForwardsExpected: totalForwards,

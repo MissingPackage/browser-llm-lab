@@ -122,3 +122,45 @@ la soglia 3× (~810 ms). La fase 6 deve applicare il trattamento fast-kernel di 
 A al GEMM chunk (4 righe/wg, vec4, shared già presente) e/o il fallback M della
 spec §Rischi prima di rinegoziare soglie via docket. Next: fase 6 (bench +
 non-regressione + chiusura goal).
+
+
+2026-07-30 — Iterazione 6, FASE 6 DONE e GOAL CHIUSO. Percorso: (1) il GEMM chunk
+"correctness-first" era 6.6 ms/token (peggio del seq) -> riscritto vec4 1-riga/wg
+(2.35 ms/tok, reale) -> architettura FUSA di fase A per chunk (rmsGemmQkvChunkFast,
+rmsPairGemmSiluChunkFast con silu, gemmResidChunkFast; 4 righe/wg, 16 lane, M
+srotolato in SCALARI generati dal template — niente array privati -> scratch memory,
+prima causa di lentezza) => 7 dispatch/layer (era 11). (2) ROOT-CAUSE conformance
+53%: `var stride` ridichiarata nello stesso scope WGSL (chunkLaneReduce emessa 2x
+in pairSilu) => modulo non compilato => pipeline invalida => Dawn DROPPAVA OGNI
+SUBMIT del prefill in silenzio e i readback restituivano DATI STALE del run seq
+precedente — per questo il diag "bitwise-perfetto" mentiva (misurava il seq!).
+Diagnosi: cold-start + doppio giro chunk + dump KV riga-per-riga (readKv) + error
+scope. FIX: scope block nella riduzione + error scope validation/oom PROMOSSO A
+CONTRATTO di prefillChunked (throw sincrono e attribuibile). Lezione landmine: una
+pipeline invalida non urla al submit — urla SOLO su uncapturederror (che finiva
+nei pageerror troncati) e i risultati stale sembrano plausibili. (3) runBench
+portato su prefillChunked + baseline seq same-day nello stesso report
+(schemaVersion 3, gate auto-evidente); profiler engine-prof con FINESTRA DECODE
+PURA (192 forward fra i progress i=32->224 dell'ultima replica OFF — la finestra
+fase-A mescolava il prefill chunked). (4) Cleanup: knob tsqDiag+runTsqDiag+
+tsq-diag.mjs RIMOSSI (diagnosi stabile, da spec); prefill-diag e kernel-diag
+TENUTI e promossi a harness di parità permanente del percorso chunk (deviazione
+motivata dalla nota "rimozione a fase 6": due root-cause trovate oggi grazie a
+loro; il prefill-diag ora include cold-start golden + confronto KV riga-per-riga).
+
+CHECKLIST DONE WHEN DEL GOAL (8/8):
+1. [x] Spec B1 approvata (ruling PI 2026-07-30, docket 3).
+2. [x] npm test 156/156 con unit nuovi: chunking M<=8 (13), crop (8), kvstore (13).
+3. [x] Parità INVARIATA col prefill M>1: conformance GATE DOPPIO PASS 98.05% golden
+   / 100.00% cpuref (512/512), anche con telemetryGpu attivo (run post-cleanup).
+4. [x] Prefill >=3x: 700.5 ms vs 2410.9 ms seq same-day = 3.44x (soglia 804 ms) —
+   bench-4090-2026-07-30T08-09-39-624Z.json (warmup+3 repliche HEADED).
+5. [x] Rollback KV meccanico: 3 check sequenze IDENTICHE, exit 0
+   (kv-rollback-4090-2026-07-30T08-10-42-251Z.json, kernel fusi).
+6. [x] Prefix-cache OPFS e2e: restore in worker NUOVO 106.5 ms < re-prefill 699 ms,
+   continuazione token-identica (prefix-cache-4090-2026-07-30T08-10-58-866Z.json).
+7. [x] Non-regressione decode: 122.4 +-1.1 tok/s >=120 (fase A: 122.0); profiler
+   finestra decode: createBindGroup=0, submit/token=1.005, dispatch/token 123.6
+   <=130 (engine-prof-4090 JSON); overhead telemetria -0.85% (rumore).
+8. [x] Diagnosi telemetria liv.2: fase 2 (root-cause mapAsync, fixata, nota
+   tsq-diag-2026-07-29.md); knob diagnostici rimossi a diagnosi stabile.

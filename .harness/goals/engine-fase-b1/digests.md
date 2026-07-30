@@ -46,3 +46,14 @@ ininterrotto, restore 104 ms vs re-prefill 2977 ms (~29×), JSON committato,
 156/156 unit. FLAG per fase 6: il prefill chunked è oggi ~3.1 s/468 tok — sopra la
 baseline seq (2.44 s): serve il trattamento fast-kernel sul GEMM chunk per la
 soglia 3× (~810 ms). Next: fase 6 (bench + chiusura).
+
+
+## Iterazione 6 (2026-07-30) — fase 6 DONE, GOAL CHIUSO
+Prefill alla soglia: kernel chunk fusi stile fase A (4 righe/wg, M in scalari
+generati) => 700.5 ms vs 2410.9 seq same-day = 3.44x (gate 3x PASS); decode 122.4
+invariato; profiler decode pulito (0/1/123.6). Root-cause pesante trovata per
+strada: `var stride` ridichiarata in WGSL => pipeline invalida => Dawn droppava i
+submit IN SILENZIO e i readback davano dati stale plausibili — scoperta con
+cold-start + dump KV; error scope ora contratto del prefill. Rollback e
+prefix-cache riconfermati coi kernel nuovi (restore 106.5 < re-prefill 699).
+Cleanup tsqDiag fatto; DONE WHEN 8/8. Prossimo: merge su main (ruling permanente).

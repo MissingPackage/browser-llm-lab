@@ -75,11 +75,6 @@ export async function createEngine(
   onProgress: (text: string, frac: number) => void,
   opts: {
     taps?: number[]; fused?: boolean; telemetry?: boolean; telemetryGpu?: boolean;
-    // Diagnosi known-issue liv.2 (fase B1, timeboxed): knob per l'A/B a una variabile.
-    // ring = dimensione del ring di query; resolveEnc = dove vive resolve+copy
-    // ("same" = encoder del forward, comportamento fase A; "own" = encoder+submit
-    // dedicato; "none" = solo timestampWrites, mai resolve).
-    tsqDiag?: { ring?: number; resolveEnc?: "same" | "own" | "none" };
   } = {},
 ): Promise<EngineHandle> {
   const adapter = await navigator.gpu?.requestAdapter();
@@ -212,8 +207,7 @@ export async function createEngine(
   let telemetryOn = opts.telemetry ?? true;
   let tForwards = 0;
   let tEncodeCpuMs = 0;
-  const TSQ_RING = opts.tsqDiag?.ring ?? 64; // token per batch di resolve (lazy, mai bloccante)
-  const tsqResolveEnc = opts.tsqDiag?.resolveEnc ?? "same";
+  const TSQ_RING = 64; // token per batch di resolve (lazy, mai bloccante)
   // Livello 2 dietro opt-in (feature di misura: zero-overhead da spenta by design).
   // Il known-issue fase A (timestamp azzerati + corruzione compute) e' stato
   // root-causato e RISOLTO in fase B1 (2026-07-29): era mapAsync chiamata prima del
@@ -423,22 +417,15 @@ export async function createEngine(
       }
       pass.end();
       enc.copyBufferToBuffer(amaxOut, 0, stagingId, 0, 4);
-      let flushOwn = false;
       let tsqStaging: GPUBuffer | null = null;
       if (telemetryOn && querySet) {
         tsqIdx++;
         if (tsqIdx === TSQ_RING) {
-          if (tsqResolveEnc === "same") tsqStaging = flushTsq(enc, TSQ_RING);
-          flushOwn = tsqResolveEnc === "own";
+          tsqStaging = flushTsq(enc, TSQ_RING);
           tsqIdx = 0;
         }
       }
       device.queue.submit([enc.finish()]);
-      if (flushOwn) {
-        const enc2 = device.createCommandEncoder();
-        tsqStaging = flushTsq(enc2, TSQ_RING);
-        device.queue.submit([enc2.finish()]);
-      }
       if (tsqStaging) armTsq(tsqStaging, TSQ_RING); // mapAsync SOLO dopo il submit
       if (telemetryOn) { tEncodeCpuMs += performance.now() - tEnc0; tForwards++; }
       await stagingId.mapAsync(GPUMapMode.READ);
