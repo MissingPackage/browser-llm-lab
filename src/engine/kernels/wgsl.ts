@@ -1106,3 +1106,224 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   if (lane == 0u && r < ${N}u) { y[r] = red[sub * 16u] + bias[r]; }
 }`;
 }
+
+// Attention decode SPLIT sul contesto (fase B2, stile flash-decoding) — sostituisce
+// il collo di attnFusedWgsl al crescere di kvLen: quel kernel ha nHead workgroup
+// totali (GPU quasi vuota) e nella fase output ogni thread itera SEQUENZIALMENTE
+// su tutto il contesto (~pos iterazioni). Qui il contesto è partizionato in blocchi
+// da CHUNK posizioni: griglia FISSA (nHead, sMax) — il piano statico resta
+// immutabile, le partizioni oltre n escono subito — pass 1 scrive per partizione
+// {max locale m, somma locale l, out parziale non normalizzato} nel buffer
+// partials [nHead × sMax × (headDim+2)], pass 2 (attnSplitReduceWgsl) combina in
+// log-sum-exp esatto. La partizione che contiene pos fa anche rope di k_cur e
+// append in cache (stesso owner-rule di attnFusedWgsl: nessuna dipendenza
+// cross-workgroup, il corrente si legge dalle copie locali).
+export function attnSplitPartWgsl(opts: {
+  nHead: number; nKvHead: number; headDim: number; ctxMax: number; freqBase: number; chunkP: number;
+}): string {
+  const { nHead, nKvHead, headDim, ctxMax, freqBase, chunkP } = opts;
+  const groups = nHead / nKvHead;
+  const kvDim = nKvHead * headDim;
+  const half = headDim / 2;
+  const sMax = Math.ceil(ctxMax / chunkP);
+  if (chunkP !== 64) throw new Error("attnSplitPartWgsl: chunkP=64 assunto (1 posizione/thread)");
+  return `${TOK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> qkv: array<f32>; // [${nHead * headDim} q | ${kvDim} k | ${kvDim} v]
+@group(0) @binding(1) var<storage, read_write> kCache: array<f32>;
+@group(0) @binding(2) var<storage, read_write> vCache: array<f32>;
+@group(0) @binding(3) var<storage, read_write> partials: array<f32>; // [head][part][${headDim} out | m | l]
+@group(0) @binding(4) var<uniform> P: TokParams;
+const HEAD_DIM = ${headDim}u;
+const HALF = ${half}u;
+const KV_DIM = ${kvDim}u;
+const GROUPS = ${groups}u;
+const K_OFF = ${nHead * headDim}u;
+const V_OFF = ${nHead * headDim + kvDim}u;
+const CHUNK = ${chunkP}u;
+const S_MAX = ${sMax}u;
+const PART_STRIDE = ${headDim + 2}u;
+const SCALE = ${1 / Math.sqrt(headDim)};
+var<workgroup> qh: array<f32, ${headDim}>;
+var<workgroup> kh: array<f32, ${headDim}>;
+var<workgroup> vh: array<f32, ${headDim}>;
+var<workgroup> ex: array<f32, ${chunkP}>;
+var<workgroup> red: array<f32, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let h = wid.x;
+  let part = wid.y;
+  let t = lid.x;
+  let pos = P.pos;
+  let n = pos + 1u;
+  let begin = part * CHUNK;
+  if (begin >= n) { return; } // partizione oltre il contesto: griglia fissa, uscita immediata
+  let end = min(begin + CHUNK, n);
+  let kvHead = h / GROUPS;
+  let isOwner = pos >= begin && pos < begin + CHUNK; // partizione del token corrente
+  // A) rope locale di q (ogni wg: costo HALF, replicato per partizione); la sola
+  // partizione owner fa anche rope di k_cur + copia v_cur
+  if (t < HALF) {
+    let theta = f32(pos) * pow(${freqBase}.0, -f32(t) / f32(HALF));
+    let c = cos(theta); let s = sin(theta);
+    let qb = h * HEAD_DIM;
+    let a = qkv[qb + t]; let b = qkv[qb + t + HALF];
+    qh[t] = a * c - b * s;
+    qh[t + HALF] = a * s + b * c;
+    if (isOwner) {
+      let kb = K_OFF + kvHead * HEAD_DIM;
+      let ka = qkv[kb + t]; let kb2 = qkv[kb + t + HALF];
+      kh[t] = ka * c - kb2 * s;
+      kh[t + HALF] = ka * s + kb2 * c;
+    }
+  }
+  if (isOwner && t < HEAD_DIM) { vh[t] = qkv[V_OFF + kvHead * HEAD_DIM + t]; }
+  workgroupBarrier();
+  // B) append in cache: owner-rule di attnFusedWgsl (un solo wg per kv-head scrive)
+  if (isOwner && h % GROUPS == 0u && t < HEAD_DIM) {
+    kCache[pos * KV_DIM + kvHead * HEAD_DIM + t] = kh[t];
+    vCache[pos * KV_DIM + kvHead * HEAD_DIM + t] = vh[t];
+  }
+  // C) score della posizione begin+t (1 posizione/thread): passato dalla cache,
+  // corrente dalle copie locali (mai visibile cross-wg dentro il dispatch)
+  let p = begin + t;
+  var sc = -3.0e38;
+  if (p < end) {
+    var acc = 0.0;
+    if (p == pos) {
+      for (var i = 0u; i < HEAD_DIM; i = i + 1u) { acc = acc + qh[i] * kh[i]; }
+    } else {
+      let kOff = p * KV_DIM + kvHead * HEAD_DIM;
+      for (var i = 0u; i < HEAD_DIM; i = i + 1u) { acc = acc + qh[i] * kCache[kOff + i]; }
+    }
+    sc = acc * SCALE;
+  }
+  // D) max locale (riduzione) + exp condivise
+  red[t] = sc;
+  workgroupBarrier();
+  {
+    var stride = 32u;
+    while (stride > 0u) {
+      if (t < stride) { red[t] = max(red[t], red[t + stride]); }
+      workgroupBarrier();
+      stride = stride >> 1u;
+    }
+  }
+  let m = red[0];
+  workgroupBarrier();
+  var e = 0.0;
+  if (p < end) { e = exp(sc - m); }
+  ex[t] = e;
+  red[t] = e;
+  workgroupBarrier();
+  {
+    var stride = 32u;
+    while (stride > 0u) {
+      if (t < stride) { red[t] = red[t] + red[t + stride]; }
+      workgroupBarrier();
+      stride = stride >> 1u;
+    }
+  }
+  let l = red[0];
+  workgroupBarrier();
+  // E) out parziale NON normalizzato: thread t = dimensione t, loop sulle sole
+  // posizioni della partizione (≤CHUNK, vs tutto il contesto di attnFusedWgsl)
+  let base = (h * S_MAX + part) * PART_STRIDE;
+  if (t < HEAD_DIM) {
+    var acc = 0.0;
+    for (var pp = begin; pp < end; pp = pp + 1u) {
+      if (pp == pos) {
+        acc = acc + ex[pp - begin] * vh[t];
+      } else {
+        acc = acc + ex[pp - begin] * vCache[pp * KV_DIM + kvHead * HEAD_DIM + t];
+      }
+    }
+    partials[base + t] = acc;
+  }
+  if (t == 0u) {
+    partials[base + HEAD_DIM] = m;
+    partials[base + HEAD_DIM + 1u] = l;
+  }
+}`;
+}
+
+// Pass 2 dello split: combina le partizioni in log-sum-exp esatto (stessa
+// matematica di una softmax monolitica: M=max m_p, L=Σ l_p·exp(m_p−M),
+// out=Σ o_p·exp(m_p−M)/L). Griglia (nHead,1), lavoro minuscolo.
+export function attnSplitReduceWgsl(opts: {
+  nHead: number; headDim: number; ctxMax: number; chunkP: number;
+}): string {
+  const { headDim, ctxMax, chunkP } = opts;
+  const sMax = Math.ceil(ctxMax / chunkP);
+  return `${TOK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> partials: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@group(0) @binding(2) var<uniform> P: TokParams;
+const HEAD_DIM = ${headDim}u;
+const S_MAX = ${sMax}u;
+const CHUNK = ${chunkP}u;
+const PART_STRIDE = ${headDim + 2}u;
+var<workgroup> mAll: f32;
+var<workgroup> lAll: f32;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let h = wid.x;
+  let t = lid.x;
+  let nParts = P.pos / CHUNK + 1u; // n = pos+1 ⇒ ceil(n/CHUNK)
+  let base = h * S_MAX * PART_STRIDE;
+  // M e L su un solo thread (nParts ≤ ${sMax}: riduzione seriale più corta del
+  // costo di una riduzione parallela)
+  if (t == 0u) {
+    var m = -3.0e38;
+    for (var p2 = 0u; p2 < nParts; p2 = p2 + 1u) { m = max(m, partials[base + p2 * PART_STRIDE + HEAD_DIM]); }
+    var l = 0.0;
+    for (var p2 = 0u; p2 < nParts; p2 = p2 + 1u) {
+      l = l + partials[base + p2 * PART_STRIDE + HEAD_DIM + 1u] * exp(partials[base + p2 * PART_STRIDE + HEAD_DIM] - m);
+    }
+    mAll = m;
+    lAll = l;
+  }
+  workgroupBarrier();
+  if (t < HEAD_DIM) {
+    var acc = 0.0;
+    for (var p2 = 0u; p2 < nParts; p2 = p2 + 1u) {
+      let b2 = base + p2 * PART_STRIDE;
+      acc = acc + partials[b2 + t] * exp(partials[b2 + HEAD_DIM] - mAll);
+    }
+    out[h * HEAD_DIM + t] = acc / lAll;
+  }
+}`;
+}
+
+// Embedding gather on-GPU (fase B2 §Decode loop multi-step): dequant della riga
+// `ids[0]` di token_embd (Q4_0 repackato) direttamente in x — il token id viene
+// dal buffer amaxOut scritto dall'argmax dello step precedente (feedback on-GPU,
+// niente readback per token). Stessa aritmetica ESATTA di dequantQ4_0Row (quant.ts):
+// la dequant f32 non arrotonda oltre la scala f16 ⇒ x identica al percorso CPU.
+export function embedGatherQ4Wgsl(opts: { K: number }): string {
+  const { K } = opts;
+  if (K % 32 !== 0) throw new Error("embedGatherQ4: K deve essere multiplo di 32");
+  return `
+@group(0) @binding(0) var<storage, read> qs: array<u32>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> ids: array<u32>; // [0] = token id (amaxOut o seed)
+@group(0) @binding(3) var<storage, read_write> x: array<f32>;
+const K = ${K}u;
+const BPR = ${K / 32}u; // blocchi per riga
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let e = gid.x;
+  if (e >= K) { return; }
+  let row = ids[0];
+  let b = e >> 5u;         // blocco nella riga
+  let j = e & 31u;         // peso nel blocco
+  let gb = row * BPR + b;  // blocco globale nel tensore
+  // layout repackQ4_0: peso j<16 = low nibble del byte j; j>=16 = high del byte j-16
+  let lo = j < 16u;
+  let jj = select(j - 16u, j, lo);
+  let word = qs[gb * 4u + (jj >> 2u)];
+  let byte = (word >> ((jj & 3u) * 8u)) & 0xffu;
+  let nib = select(byte >> 4u, byte & 0xfu, lo);
+  let scale = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+  x[e] = (f32(nib) - 8.0) * scale;
+}`;
+}

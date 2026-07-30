@@ -90,14 +90,23 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
 
 // Bench decode: protocollo del repo (warmup scartato + N repliche, stesso prompt,
 // greedy self-feeding). Il decode rate è misurato dal primo all'ultimo token generato.
-async function runBench(modelUrl: string, promptUrl: string, genTokens: number, replicates: number): Promise<void> {
+// Gate prefill: assoluto (spec B2 §Soglie) — 810 ms = 1/3 della baseline seq di B1
+// (2410.9 ms, bench-4090-2026-07-30T08-09) congelata a quel giorno.
+const PREFILL_GATE_MS = 810;
+// Gate decode (spec B2 §Soglie, ruling PI 2026-07-30): ≥230 tok/s mean, repliche
+// OFF — sopra entrambi i plateau a leva singola (sync-only 149, kernel-only 185).
+const DECODE_GATE_TOKS = 230;
+async function runBench(modelUrl: string, promptUrl: string, genTokens: number, replicates: number, k = 8): Promise<void> {
   progress("fetch modello…", 0);
   const gguf = await fetchBuf(modelUrl);
   const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
   const engine = await createEngine(gguf, progress);
-  // fase 6: il prefill delle repliche è il percorso CHUNKED M≤8 (il gate di spec
-  // §Soglie confronta prefillMs con la baseline sequenziale same-day, sotto)
-  const runOnce = async (label: string): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number }> => {
+  // fase B2: il decode delle repliche è il loop MULTI-STEP (decodeBatch, K=8 di
+  // spec — feedback token on-GPU, 1 mapAsync/batch); k=1 mantiene il percorso
+  // per-token forwardToken (baseline/oracolo). Finestra di rate: dal termine del
+  // PRIMO batch all'ultimo (esclude il boundary del prefill, come il tFirst di
+  // fase A escludeva il primo token) — dichiarata nel report.
+  const runOnce = async (label: string, kRun = k): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number }> => {
     engine.reset(); // contratto kvLen (fase 4)
     const t0 = performance.now();
     await engine.prefillChunked(promptFix.tokens.slice(0, -1), 0);
@@ -105,16 +114,31 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
     let pos = promptFix.tokens.length - 1;
     let prev = promptFix.tokens[promptFix.tokens.length - 1];
     let tFirst = 0;
-    for (let i = 0; i < genTokens; i++) {
-      prev = await engine.forwardToken(prev, pos++);
-      if (i === 0) tFirst = performance.now();
-      if (i % 32 === 0) progress(`${label}: ${i}/${genTokens}`, i / genTokens);
+    let done = 0;
+    if (kRun === 1) {
+      for (let i = 0; i < genTokens; i++) {
+        prev = await engine.forwardToken(prev, pos++);
+        if (i === 0) tFirst = performance.now();
+        if (i % 32 === 0) progress(`${label}: ${i}/${genTokens}`, i / genTokens);
+      }
+      done = genTokens - 1; // rate dal primo token generato (formula fase A)
+    } else {
+      let generated = 0;
+      while (generated < genTokens) {
+        const kk = Math.min(kRun, genTokens - generated);
+        const got = await engine.decodeBatch(prev, engine.kvLen, kk);
+        prev = got[got.length - 1];
+        generated += got.length;
+        if (tFirst === 0) tFirst = performance.now(); // fine del PRIMO batch
+        if (generated % 32 === 0) progress(`${label}: ${generated}/${genTokens}`, generated / genTokens);
+      }
+      done = genTokens - Math.min(kRun, genTokens); // rate sui token POST primo batch
     }
     const tEnd = performance.now();
     return {
-      decodeToksPerSec: ((genTokens - 1) / (tEnd - tFirst)) * 1000,
+      decodeToksPerSec: (done / (tEnd - tFirst)) * 1000,
       prefillMs: tPrefill - t0,
-      msPerTokenDecode: (tEnd - tFirst) / (genTokens - 1),
+      msPerTokenDecode: (tEnd - tFirst) / done,
     };
   };
   // baseline sequenziale SAME-DAY (spec §Soglie: prefillMs.mean ≤ 1/3 di questa):
@@ -144,29 +168,87 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   const on = stats(repsOn);
   const off = stats(repsOff);
   const overheadPct = ((1 / on.mean - 1 / off.mean) / (1 / off.mean)) * 100;
+  // baseline same-day K=1 (per-token, l'oracolo — spec B2 §Soglie: headline con
+  // baseline nello stesso report; solo per k>1)
+  let baselineK1: { decodeToksPerSec: { mean: number; stdev: number }; reps: { decodeToksPerSec: number }[] } | null = null;
+  if (k > 1) {
+    const repsK1 = [];
+    for (let r = 0; r < replicates; r++) repsK1.push(await runOnce(`baseline K=1 ${r + 1}/${replicates}`, 1));
+    baselineK1 = { decodeToksPerSec: stats(repsK1), reps: repsK1 };
+  }
   progress("baseline seq same-day…", 0.9);
   const seqReps: number[] = [];
   for (let r = 0; r < replicates; r++) seqReps.push(await seqPrefillOnce());
   const prefillVals = repsOff.map((x) => x.prefillMs);
   const prefillMean = prefillVals.reduce((a, b) => a + b, 0) / prefillVals.length;
   const seqMean = seqReps.reduce((a, b) => a + b, 0) / seqReps.length;
+  // gpuBusy da repliche liv.2 DEDICATE (spec §Metodologia gpuBusy: l'headline resta
+  // dalle repliche OFF; qui secondo engine con timestamp-query, SENZA taps — un
+  // tap spezzerebbe il pass e il tsq coprirebbe solo il primo segmento — stessa
+  // finestra di decode; MAI confrontare gpuBusy e wall di finestre diverse)
+  let gpuBusy: { replicates: number; gpuMsPerToken: number | null; wallMsPerToken: number; quotaFuoriGpu: number | null; note: string } | null = null;
+  if (k > 1) {
+    progress("repliche liv.2 dedicate (gpuBusy)…", 0.93);
+    engine.destroy();
+    const engine2 = await createEngine(gguf, progress, { telemetry: true, telemetryGpu: true });
+    const decodeWindow = async (): Promise<number> => {
+      engine2.reset();
+      await engine2.prefillChunked(promptFix.tokens.slice(0, -1), 0);
+      let prev = promptFix.tokens[promptFix.tokens.length - 1];
+      let generated = 0, tFirst = 0;
+      while (generated < genTokens) {
+        const got = await engine2.decodeBatch(prev, engine2.kvLen, Math.min(k, genTokens - generated));
+        prev = got[got.length - 1];
+        generated += got.length;
+        if (tFirst === 0) tFirst = performance.now();
+      }
+      return (performance.now() - tFirst) / (genTokens - Math.min(k, genTokens));
+    };
+    await decodeWindow(); // warmup (scartato)
+    await engine2.getTelemetry(); // drena i tsq del warmup
+    const walls: number[] = [];
+    const TSQ_REPS = 2;
+    for (let r = 0; r < TSQ_REPS; r++) walls.push(await decodeWindow());
+    const tel2 = await engine2.getTelemetry();
+    const wallMean = walls.reduce((a, b) => a + b, 0) / walls.length;
+    gpuBusy = {
+      replicates: TSQ_REPS, gpuMsPerToken: tel2.gpuMsPerToken, wallMsPerToken: wallMean,
+      quotaFuoriGpu: tel2.gpuMsPerToken === null ? null : (wallMean - tel2.gpuMsPerToken) / wallMean,
+      note: "repliche dedicate liv.2 senza taps (diagnostica, non gate — spec B2 §Metodologia); headline dalle repliche OFF",
+    };
+    engine2.destroy();
+  }
   post({
     type: "done",
     report: {
       schemaVersion: 3, kind: "engine-bench", promptId: promptFix.promptId,
       promptTokens: promptFix.tokens.length, genTokens, replicates,
+      // fase B2: percorso decode del bench (k>1 = decodeBatch multi-step; la
+      // finestra di rate esclude il primo batch, dichiarato in runOnce)
+      decodePath: k === 1 ? "per-token" : "multi-step", k, rateWindow: "post-primo-batch",
+      baselineK1, gpuBusy,
+      // gate di spec B2 §Soglie, auto-evidenti nel report (nota verifier B1 fase 2)
+      gates: {
+        decodeGateToksPerSec: DECODE_GATE_TOKS,
+        decodeGatePass: off.mean >= DECODE_GATE_TOKS,
+        overheadGatePct: 2,
+        overheadGatePass: Math.abs(overheadPct) <= 2,
+      },
       warmup, reps: repsOff, decodeToksPerSec: off, // headline = telemetria spenta
       telemetryOn: { reps: repsOn, decodeToksPerSec: on },
       telemetry, telemetryOverheadPct: overheadPct,
       dispatchesPerToken: engine.dispatchesPerToken,
-      // gate prefill (spec §Soglie 1, ruling Pareto): chunked vs seq same-day
+      // gate prefill ASSOLUTO (spec B2 §Soglie: ≤810 ms = soglia 3x di B1 congelata
+      // al giorno della misura — il gate relativo alla seq same-day è diventato
+      // fuorviante in B2: la baseline seq migliora con lo split attention per
+      // ragioni che nulla c'entrano col prefill). speedupVsSeq resta informativo.
       prefill: {
         path: "chunked", mMax: PREFILL_M, submitTokens: PREFILL_SUBMIT_TOKENS,
         prefillMs: { mean: prefillMean, reps: prefillVals },
         seqBaselineMs: { mean: seqMean, reps: seqReps },
         speedupVsSeq: seqMean / prefillMean,
-        thresholdMs: seqMean / 3,
-        gatePass: prefillMean <= seqMean / 3,
+        thresholdMs: PREFILL_GATE_MS,
+        gatePass: prefillMean <= PREFILL_GATE_MS,
       },
       quant: "Q4_0 (gguf)", note: "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
     },
@@ -495,6 +577,355 @@ async function runKernelDiag(modelUrl: string): Promise<void> {
   post({ type: "done", report: { schemaVersion: 1, kind: "engine-kernel-diag", cases: results } });
 }
 
+// Attribuzione del decode wall (fase 1 B2): scompone i ms/token di decode in
+// encode CPU (liv.1) / GPU busy (liv.2, tsq) / sync (residuo: submit→start,
+// end→mapAsync resolve, event loop) su una finestra di decode pura, più un probe
+// del floor di sync sullo stesso device (round-trip copy 4B + mapAsync ~zero GPU:
+// deve ≈ syncMsPerToken — cross-check dichiarato nel JSON). Predizione analitica
+// per K forward/submit con readback 1/K: batched = enc+gpu+sync/K; pipelined
+// (encode del batch successivo sovrapposto alla GPU) = max(enc,gpu)+sync/K.
+async function runAttrib(modelUrl: string, promptUrl: string, genTokens: number, replicates: number, prefixLen?: number): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const promptFull = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  // prefixLen (diag): finestra a contesto corto per il confronto col dato tsq-diag
+  // B1 (prefill 32/decode 64) — il GPU busy scala con kvLen (attention decode)
+  const promptFix = prefixLen ? { promptId: `${promptFull.promptId}-cut${prefixLen}`, tokens: promptFull.tokens.slice(0, prefixLen) } : promptFull;
+  const engine = await createEngine(gguf, progress, { telemetry: true, telemetryGpu: true });
+  const device = engine.device;
+  const SKIP = 8; // primi token post-prefill/crop scartati (cache/clock warm-up)
+  const stats = (xs: number[]) => {
+    const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const stdev = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, xs.length - 1));
+    const s = [...xs].sort((a, b) => a - b);
+    return { mean, stdev, p50: s[Math.floor(s.length * 0.5)], p95: s[Math.floor(s.length * 0.95)] };
+  };
+  // probe floor di sync: stesso device del motore, GPU ~vuota
+  const probeSrc = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const probeDst = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const probeMap = async (n: number): Promise<number[]> => {
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const t0 = performance.now();
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(probeSrc, 0, probeDst, 0, 16);
+      device.queue.submit([enc.finish()]);
+      await probeDst.mapAsync(GPUMapMode.READ);
+      probeDst.unmap();
+      out.push(performance.now() - t0);
+    }
+    return out;
+  };
+  const probeWorkDone = async (n: number): Promise<number[]> => {
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const t0 = performance.now();
+      device.queue.submit([]);
+      await device.queue.onSubmittedWorkDone();
+      out.push(performance.now() - t0);
+    }
+    return out;
+  };
+  const prefix = promptFix.tokens.slice(0, -1);
+  await engine.prefillChunked(prefix, 0);
+  const baseLen = engine.kvLen;
+  const lastTok = promptFix.tokens[promptFix.tokens.length - 1];
+  const telemTotals = async () => {
+    const t = await engine.getTelemetry(); // drena i batch tsq flushati fin qui
+    return { forwards: t.forwards, encodeTotal: t.encodeCpuMsPerToken * t.forwards, gpuMean: t.gpuMsPerToken };
+  };
+  // warmup (scartato): finestra piena, poi drain telemetria
+  progress("warmup…", 0.1);
+  { let pos = baseLen, prev = lastTok; for (let i = 0; i < genTokens + SKIP; i++) prev = await engine.forwardToken(prev, pos++); }
+  await telemTotals();
+  engine.crop(baseLen);
+  const reps: { wallMsPerToken: ReturnType<typeof stats>; encodeCpuMsPerToken: number; gpuBusyMsPerToken: number | null; syncMsPerToken: number }[] = [];
+  for (let r = 0; r < replicates; r++) {
+    const before = await telemTotals();
+    const walls: number[] = [];
+    let pos = baseLen, prev = lastTok;
+    for (let i = 0; i < genTokens + SKIP; i++) {
+      const t0 = performance.now();
+      prev = await engine.forwardToken(prev, pos++);
+      if (i >= SKIP) walls.push(performance.now() - t0);
+      if (i % 64 === 0) progress(`attrib replica ${r + 1}/${replicates}: ${i}/${genTokens + SKIP}`, (r + i / (genTokens + SKIP)) / replicates);
+    }
+    const after = await telemTotals();
+    engine.crop(baseLen);
+    const wall = stats(walls);
+    // delta encode sui forward della replica (contatori cumulativi liv.1); il gpu
+    // mean del drain post-replica copre SOLO i flush di questa replica (ring 64)
+    const encode = (after.encodeTotal - before.encodeTotal) / (after.forwards - before.forwards);
+    const gpu = after.gpuMean;
+    reps.push({ wallMsPerToken: wall, encodeCpuMsPerToken: encode, gpuBusyMsPerToken: gpu, syncMsPerToken: gpu === null ? NaN : wall.mean - encode - gpu });
+  }
+  progress("probe sync floor…", 0.9);
+  const mapProbe = stats(await probeMap(64));
+  const wdProbe = stats(await probeWorkDone(64));
+  const mean = (f: (x: typeof reps[number]) => number) => reps.reduce((a, x) => a + f(x), 0) / reps.length;
+  const wallMean = mean((x) => x.wallMsPerToken.mean);
+  const encMean = mean((x) => x.encodeCpuMsPerToken);
+  const gpuMean = mean((x) => x.gpuBusyMsPerToken ?? NaN);
+  const syncMean = wallMean - encMean - gpuMean;
+  const predict = (K: number) => ({
+    K,
+    batched: { msPerToken: encMean + gpuMean + syncMean / K, toksPerSec: 1000 / (encMean + gpuMean + syncMean / K), quotaFuoriGpu: (encMean + syncMean / K) / (encMean + gpuMean + syncMean / K) },
+    pipelined: { msPerToken: Math.max(encMean, gpuMean) + syncMean / K, toksPerSec: 1000 / (Math.max(encMean, gpuMean) + syncMean / K), quotaFuoriGpu: (Math.max(encMean, gpuMean) + syncMean / K - gpuMean) / (Math.max(encMean, gpuMean) + syncMean / K) },
+  });
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-decode-attrib", promptId: promptFix.promptId,
+      promptTokens: promptFix.tokens.length, genTokens, skipTokens: SKIP, replicates, reps,
+      decomposition: {
+        wallMsPerToken: wallMean, encodeCpuMsPerToken: encMean, gpuBusyMsPerToken: gpuMean,
+        syncMsPerToken: syncMean,
+        sumDeclared: encMean + gpuMean + syncMean, // ≡ wall by construction: sync è il residuo
+        quotaFuoriGpu: (wallMean - gpuMean) / wallMean,
+        note: "sync = wall − encode − gpuBusy (residuo: submit→GPU-start, GPU-end→mapAsync resolve, event loop, prep embedding); cross-check col probe",
+      },
+      syncFloorProbe: { mapRoundTrip: mapProbe, workDoneRoundTrip: wdProbe, crossCheckNote: "mapRoundTrip.mean atteso ≈ syncMsPerToken (GPU ~vuota)" },
+      predictionByK: [2, 4, 8].map(predict),
+      dispatchesPerToken: engine.dispatchesPerToken,
+    },
+  });
+}
+
+// Microbench attention split (fase 2 B2): kernel split-context in ISOLAMENTO
+// (pattern kernel-diag) — correttezza vs riferimento CPU f64 e vs attnFusedWgsl
+// sugli stessi input sintetici deterministici, tempi per-dispatch a più contesti
+// (molti dispatch nello stesso pass: gli hazard RW li serializzano ⇒ wall/reps ≈
+// costo per-layer per-token), proiezione sul gpuBusy misurato dall'attribuzione.
+async function runAttnBench(): Promise<void> {
+  const S = QWEN25_05B;
+  const { attnFusedWgsl: genFused, attnSplitPartWgsl: genPart, attnSplitReduceWgsl: genReduce } = await import("./kernels/wgsl");
+  const adapter = await navigator.gpu?.requestAdapter();
+  if (!adapter) throw new Error("no webgpu");
+  const device = await adapter.requestDevice({
+    requiredLimits: { maxComputeWorkgroupStorageSize: Math.min(adapter.limits.maxComputeWorkgroupStorageSize, 32768) },
+  });
+  device.addEventListener("uncapturederror", (e) => {
+    throw new Error(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message.slice(0, 200)}`);
+  });
+  const CTX_CAP = 1024, CHUNK = 64;
+  const S_MAX = Math.ceil(CTX_CAP / CHUNK);
+  const KVD = S.nKvHead * S.headDim;
+  const QKV_LEN = S.nHead * S.headDim + 2 * KVD;
+  const HALF = S.headDim / 2;
+  const REPS = 480; // ≈ 24 layer × 20 token
+  let seed = 1234;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+  const mk = (data: Float32Array, extra = 0) => {
+    const b = device.createBuffer({ size: Math.max(16, data.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | extra });
+    device.queue.writeBuffer(b, 0, data as BufferSource);
+    return b;
+  };
+  const mkPipe2 = (code: string) =>
+    device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code }), entryPoint: "main" } });
+  device.pushErrorScope("validation"); // landmine B1: pipeline invalida = submit droppati muti
+  const pipeFused = mkPipe2(genFused({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_CAP, freqBase: S.ropeFreqBase }));
+  const pipePart = mkPipe2(genPart({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_CAP, freqBase: S.ropeFreqBase, chunkP: CHUNK }));
+  const pipeReduce = mkPipe2(genReduce({ nHead: S.nHead, headDim: S.headDim, ctxMax: CTX_CAP, chunkP: CHUNK }));
+  const qkvArr = new Float32Array(QKV_LEN);
+  for (let i = 0; i < QKV_LEN; i++) qkvArr[i] = rnd();
+  const kInit = new Float32Array(CTX_CAP * KVD);
+  const vInit = new Float32Array(CTX_CAP * KVD);
+  for (let i = 0; i < kInit.length; i++) { kInit[i] = rnd(); vInit[i] = rnd(); }
+  const qkvB = mk(qkvArr);
+  const kB = mk(kInit); // il passato in cache è già "roped" per costruzione del test
+  const vB = mk(vInit);
+  const outFusedB = mk(new Float32Array(S.nHead * S.headDim), GPUBufferUsage.COPY_SRC);
+  const outSplitB = mk(new Float32Array(S.nHead * S.headDim), GPUBufferUsage.COPY_SRC);
+  const partialsB = mk(new Float32Array(S.nHead * S_MAX * (S.headDim + 2)));
+  const Pb = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const bgFor = (pipe: GPUComputePipeline, bufs: GPUBuffer[]) =>
+    device.createBindGroup({
+      layout: pipe.getBindGroupLayout(0),
+      entries: [...bufs.map((b, i) => ({ binding: i, resource: { buffer: b } })), { binding: bufs.length, resource: { buffer: Pb } }],
+    });
+  const bindFused = bgFor(pipeFused, [qkvB, kB, vB, outFusedB]);
+  const bindPart = bgFor(pipePart, [qkvB, kB, vB, partialsB]);
+  const bindReduce = bgFor(pipeReduce, [partialsB, outSplitB]);
+  const errPipe = await device.popErrorScope();
+  if (errPipe) throw new Error(`attnbench pipeline: ${errPipe.message.slice(0, 300)}`);
+  const readBuf = async (src: GPUBuffer, bytes: number): Promise<Float32Array> => {
+    const st = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(src, 0, st, 0, bytes);
+    device.queue.submit([enc.finish()]);
+    await st.mapAsync(GPUMapMode.READ);
+    const out = new Float32Array(st.getMappedRange().slice(0));
+    st.destroy();
+    return out;
+  };
+  // riferimento CPU (f64): rope di q e k_cur con la stessa formula dei kernel
+  const cpuRef = (pos: number): Float64Array => {
+    const out = new Float64Array(S.nHead * S.headDim);
+    for (let h = 0; h < S.nHead; h++) {
+      const kvHead = Math.floor(h / (S.nHead / S.nKvHead));
+      const qh = new Float64Array(S.headDim);
+      const khc = new Float64Array(S.headDim);
+      for (let t = 0; t < HALF; t++) {
+        const theta = pos * Math.pow(S.ropeFreqBase, -t / HALF);
+        const c = Math.cos(theta), s2 = Math.sin(theta);
+        const a = qkvArr[h * S.headDim + t], b = qkvArr[h * S.headDim + t + HALF];
+        qh[t] = a * c - b * s2; qh[t + HALF] = a * s2 + b * c;
+        const kb = S.nHead * S.headDim + kvHead * S.headDim;
+        const ka = qkvArr[kb + t], kb2 = qkvArr[kb + t + HALF];
+        khc[t] = ka * c - kb2 * s2; khc[t + HALF] = ka * s2 + kb2 * c;
+      }
+      const scores = new Float64Array(pos + 1);
+      for (let p = 0; p < pos; p++) {
+        let acc = 0;
+        for (let i = 0; i < S.headDim; i++) acc += qh[i] * kInit[p * KVD + kvHead * S.headDim + i];
+        scores[p] = acc / Math.sqrt(S.headDim);
+      }
+      { let acc = 0; for (let i = 0; i < S.headDim; i++) acc += qh[i] * khc[i]; scores[pos] = acc / Math.sqrt(S.headDim); }
+      let m = -Infinity;
+      for (let p = 0; p <= pos; p++) m = Math.max(m, scores[p]);
+      let sum = 0;
+      for (let p = 0; p <= pos; p++) { scores[p] = Math.exp(scores[p] - m); sum += scores[p]; }
+      const vOff = S.nHead * S.headDim + KVD + kvHead * S.headDim;
+      for (let i = 0; i < S.headDim; i++) {
+        let acc = scores[pos] * qkvArr[vOff + i];
+        for (let p = 0; p < pos; p++) acc += scores[p] * vInit[p * KVD + kvHead * S.headDim + i];
+        out[h * S.headDim + i] = acc / sum;
+      }
+    }
+    return out;
+  };
+  const maxDiff = (a: Float32Array, ref: Float64Array) => {
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d = Math.max(d, Math.abs(a[i] - ref[i]));
+    return d;
+  };
+  const runOnceAt = async (pos: number) => {
+    device.queue.writeBuffer(Pb, 0, new Uint32Array([pos, pos, 0, 0]));
+    device.pushErrorScope("validation");
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipeFused); pass.setBindGroup(0, bindFused); pass.dispatchWorkgroups(S.nHead, 1);
+    pass.setPipeline(pipePart); pass.setBindGroup(0, bindPart); pass.dispatchWorkgroups(S.nHead, S_MAX);
+    pass.setPipeline(pipeReduce); pass.setBindGroup(0, bindReduce); pass.dispatchWorkgroups(S.nHead, 1);
+    pass.end();
+    device.queue.submit([enc.finish()]);
+    const err = await device.popErrorScope();
+    if (err) throw new Error(`attnbench run: ${err.message.slice(0, 300)}`);
+  };
+  const timeAt = async (pos: number, kind: "fused" | "split"): Promise<number> => {
+    device.queue.writeBuffer(Pb, 0, new Uint32Array([pos, pos, 0, 0]));
+    const encode = () => {
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      for (let r = 0; r < REPS; r++) {
+        if (kind === "fused") {
+          pass.setPipeline(pipeFused); pass.setBindGroup(0, bindFused); pass.dispatchWorkgroups(S.nHead, 1);
+        } else {
+          pass.setPipeline(pipePart); pass.setBindGroup(0, bindPart); pass.dispatchWorkgroups(S.nHead, S_MAX);
+          pass.setPipeline(pipeReduce); pass.setBindGroup(0, bindReduce); pass.dispatchWorkgroups(S.nHead, 1);
+        }
+      }
+      pass.end();
+      device.queue.submit([enc.finish()]);
+    };
+    encode(); // warmup
+    await device.queue.onSubmittedWorkDone();
+    const t0 = performance.now();
+    encode();
+    await device.queue.onSubmittedWorkDone();
+    return (performance.now() - t0) / REPS;
+  };
+  const cases: { ctx: number; fusedVsCpu: number; splitVsCpu: number; fusedMsPerOp: number; splitMsPerOpPair: number; speedup: number }[] = [];
+  for (const ctx of [64, 256, 576, 1024]) {
+    const pos = ctx - 1;
+    progress(`attnbench ctx=${ctx}…`, cases.length / 4);
+    await runOnceAt(pos);
+    const ref = cpuRef(pos);
+    const fusedOut = await readBuf(outFusedB, S.nHead * S.headDim * 4);
+    const splitOut = await readBuf(outSplitB, S.nHead * S.headDim * 4);
+    const fusedMs = await timeAt(pos, "fused");
+    const splitMs = await timeAt(pos, "split");
+    cases.push({ ctx, fusedVsCpu: maxDiff(fusedOut, ref), splitVsCpu: maxDiff(splitOut, ref), fusedMsPerOp: fusedMs, splitMsPerOpPair: splitMs, speedup: fusedMs / splitMs });
+  }
+  // proiezione sui numeri dell'attribuzione it.1 (ctx bench ≈ 576):
+  // wall 8.09 = encode 0.05 + gpuBusy 6.46 + sync 1.59 (decode-attrib-4090-2026-07-30)
+  const ATTR = { encode: 0.05, gpuBusy: 6.46, sync: 1.59, nLayer: QWEN25_05B.nLayer };
+  const c576 = cases.find((c) => c.ctx === 576)!;
+  const attnSavedMs = ATTR.nLayer * (c576.fusedMsPerOp - c576.splitMsPerOpPair);
+  const gpuBusyNew = ATTR.gpuBusy - attnSavedMs;
+  const projection = {
+    attrInputs: ATTR, attnSavedMsPerToken: attnSavedMs, gpuBusyNewMsPerToken: gpuBusyNew,
+    wallK1: gpuBusyNew + ATTR.encode + ATTR.sync,
+    toksPerSecK1: 1000 / (gpuBusyNew + ATTR.encode + ATTR.sync),
+    wallK8: gpuBusyNew + ATTR.encode + ATTR.sync / 8,
+    toksPerSecK8: 1000 / (gpuBusyNew + ATTR.encode + ATTR.sync / 8),
+    note: "proiezione additiva: gpuBusy attrib − nLayer×(Δms kernel); K8 = sync/8 (loop multi-step fase 4)",
+  };
+  device.destroy();
+  post({ type: "done", report: { schemaVersion: 1, kind: "engine-attn-bench", chunkP: CHUNK, sMax: S_MAX, reps: REPS, cases, projection } });
+}
+
+// Token-identity multi-step (fase 4 B2, done-when di PHASES): run "loop K>1" vs
+// run per-token (forwardToken, l'oracolo) dallo stesso prefisso, greedy —
+// sequenze IDENTICHE ≥256 token. Tre confronti: K=8 (default di spec), K=5
+// (non divisore: boundary dell'ultimo batch parziale gestito dal chiamante),
+// K=1 via decodeBatch (il percorso batch degenere deve coincidere anch'esso).
+async function runIdCheck(modelUrl: string, promptUrl: string, genTokens: number, telemetryGpu = false): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  // telemetryGpu (fase 5): il liv.2 ATTIVO sul loop multi-step non deve perturbare
+  // l'identità (stesso gate di B1 "conformance con tsq attivo") e deve produrre
+  // gpuMs REALE (timestampWrites per step, mapAsync solo post-submit)
+  const engine = await createEngine(gguf, progress, { telemetry: telemetryGpu, telemetryGpu });
+  const prefix = promptFix.tokens.slice(0, -1);
+  await engine.prefillChunked(prefix, 0);
+  const baseLen = engine.kvLen;
+  const seed = promptFix.tokens[promptFix.tokens.length - 1];
+  // riferimento: per-token (K=1 oracolo), con tempo informale
+  progress("riferimento per-token…", 0.2);
+  const t0 = performance.now();
+  const ref: number[] = [];
+  { let pos = baseLen, prev = seed; for (let i = 0; i < genTokens; i++) { prev = await engine.forwardToken(prev, pos++); ref.push(prev); } }
+  const refMs = (performance.now() - t0) / genTokens;
+  const runBatched = async (k: number): Promise<{ ids: number[]; msPerToken: number }> => {
+    engine.crop(baseLen);
+    const ids: number[] = [];
+    let prev = seed;
+    const tB = performance.now();
+    while (ids.length < genTokens) {
+      const kk = Math.min(k, genTokens - ids.length);
+      const got = await engine.decodeBatch(prev, engine.kvLen, kk);
+      ids.push(...got);
+      prev = got[got.length - 1];
+    }
+    return { ids, msPerToken: (performance.now() - tB) / ids.length };
+  };
+  const cmp = (name: string, a: number[]) => {
+    const at = a.findIndex((v, i) => v !== ref[i]);
+    return { name, match: a.length === ref.length && at === -1, divergeAt: at === -1 ? null : at };
+  };
+  progress("batch K=8…", 0.5);
+  const k8 = await runBatched(8);
+  progress("batch K=5…", 0.7);
+  const k5 = await runBatched(5);
+  progress("batch K=1…", 0.9);
+  const k1 = await runBatched(1);
+  const checks = [cmp("K=8", k8.ids), cmp("K=5", k5.ids), cmp("K=1-degenere", k1.ids)];
+  const telemetry = telemetryGpu ? await engine.getTelemetry() : null;
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-token-identity", promptId: promptFix.promptId,
+      prefixTokens: prefix.length, genTokens, checks,
+      pass: checks.every((c) => c.match) && (!telemetryGpu || (telemetry?.gpuMsPerToken ?? null) !== null),
+      telemetryGpu, telemetry, // fase 5: gpuMs reale non-null quando tsq attivo
+      msPerTokenInformal: { perToken: refMs, k8: k8.msPerToken, k5: k5.msPerToken, k1: k1.msPerToken },
+      note: "tempi informali (una passata, niente repliche): il bench di fase 6 è la misura",
+    },
+  });
+}
+
 self.onmessage = (e: MessageEvent) => {
   const m = e.data as {
     type: string; modelUrl: string; goldenUrl?: string; promptUrl?: string;
@@ -505,7 +936,7 @@ self.onmessage = (e: MessageEvent) => {
   if (m.type === "conformance") {
     runConformance(m.modelUrl, m.goldenUrl!, m.sampleEvery ?? 16, (m as { telemetryGpu?: boolean }).telemetryGpu ?? false).catch(fail);
   } else if (m.type === "bench") {
-    runBench(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, m.replicates ?? 3).catch(fail);
+    runBench(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, m.replicates ?? 3, (m as { k?: number }).k ?? 8).catch(fail);
   } else if (m.type === "prefilldiag") {
     runPrefillDiag(m.modelUrl, m.promptUrl!).catch(fail);
   } else if (m.type === "kerneldiag") {
@@ -516,5 +947,12 @@ self.onmessage = (e: MessageEvent) => {
     runPcSave(m.modelUrl, m.promptUrl!).catch(fail);
   } else if (m.type === "pcrestore") {
     runPcRestore(m.modelUrl, m.promptUrl!).catch(fail);
+  } else if (m.type === "attrib") {
+    const a = m as { prefixLen?: number };
+    runAttrib(m.modelUrl, m.promptUrl!, m.genTokens ?? 192, m.replicates ?? 3, a.prefixLen).catch(fail);
+  } else if (m.type === "attnbench") {
+    runAttnBench().catch(fail);
+  } else if (m.type === "idcheck") {
+    runIdCheck(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, (m as { telemetryGpu?: boolean }).telemetryGpu ?? false).catch(fail);
   }
 };

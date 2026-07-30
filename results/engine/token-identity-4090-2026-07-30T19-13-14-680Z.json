@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-token-identity",
+  "promptId": "bench-512-v1",
+  "prefixTokens": 468,
+  "genTokens": 256,
+  "checks": [
+    {
+      "name": "K=8",
+      "match": true,
+      "divergeAt": null
+    },
+    {
+      "name": "K=5",
+      "match": true,
+      "divergeAt": null
+    },
+    {
+      "name": "K=1-degenere",
+      "match": true,
+      "divergeAt": null
+    }
+  ],
+  "pass": true,
+  "telemetryGpu": true,
+  "telemetry": {
+    "forwards": 1024,
+    "encodeCpuMsPerToken": 0.026801758038345724,
+    "gpuMsPerToken": 2.862290000000003,
+    "timestampNote": "quantizzazione Chrome ~100us, media su batch (ring)"
+  },
+  "msPerTokenInformal": {
+    "perToken": 4.093710937537253,
+    "k8": 3.461230468703434,
+    "k5": 3.558300781296566,
+    "k1": 4.01003906247206
+  },
+  "note": "tempi informali (una passata, niente repliche): il bench di fase 6 è la misura",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-30T19-13-14-680Z"
+}

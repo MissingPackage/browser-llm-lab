@@ -24,7 +24,7 @@ worker.onmessage = (e: MessageEvent) => {
   } else if (m.type === "done" && m.report) {
     window.__report = m.report;
     const r = m.report;
-    if (["engine-kernel-diag", "engine-kv-rollback", "engine-pc-save", "engine-pc-restore"].includes((r as { kind?: string }).kind ?? "")) {
+    if (["engine-kernel-diag", "engine-kv-rollback", "engine-pc-save", "engine-pc-restore", "engine-decode-attrib", "engine-attn-bench", "engine-token-identity"].includes((r as { kind?: string }).kind ?? "")) {
       $("results").textContent = JSON.stringify(r);
       $("status").textContent = "done";
       return;
@@ -80,6 +80,7 @@ if (params.get("conformance") === "1") {
     type: "bench",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+    k: params.get("k") ? Number(params.get("k")) : undefined, // default 8 (spec B2)
   });
 } else if (params.get("prefilldiag") === "1") {
   worker.postMessage({
@@ -94,6 +95,23 @@ if (params.get("conformance") === "1") {
     type: "rollback",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+  });
+} else if (params.get("attrib") === "1") {
+  worker.postMessage({
+    type: "attrib",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+    prefixLen: params.get("prefixLen") ? Number(params.get("prefixLen")) : undefined,
+    genTokens: params.get("gen") ? Number(params.get("gen")) : undefined,
+  });
+} else if (params.get("attnbench") === "1") {
+  worker.postMessage({ type: "attnbench", modelUrl: "" });
+} else if (params.get("idcheck") === "1") {
+  worker.postMessage({
+    type: "idcheck",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+    telemetryGpu: params.get("tsq") === "1", // fase 5: liv.2 sul loop multi-step
   });
 } else if (params.get("pcsave") === "1" || params.get("pcrestore") === "1") {
   worker.postMessage({

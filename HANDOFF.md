@@ -1,71 +1,79 @@
-# HANDOFF — browser-llm-lab   (updated 2026-07-30, session 12)
+# HANDOFF — browser-llm-lab   (updated 2026-07-30, session 13)
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-fase-b2`** (aperto 2026-07-30, iterazione 0 fatta —
-contratto approvato in chat al goal-brief, ri-inquadramento su sync/encode: gate
-sulla QUOTA fuori-GPU del decode wall [~73% → ≤ soglia da spec, provv. ≤50%] con
-guard-rail gpuBusy ≤ +5%; dispatch ≤100 retrocesso a soglia-da-spec). **PI-gated
-ADESSO: plan-check** — approvare `.harness/goals/engine-fase-b2/PHASES.md`
-(docket B2 item 1) prima dell'iterazione 1. Poi: fase 1 = attribuzione del decode
-wall (gpuBusy/readback/encode + predizione K∈{2,4,8}). Riancorarsi da:
-`.harness/goals/engine-fase-b2/{GOAL,PHASES,docket}.md`,
-`docs/engine/tsq-diag-2026-07-29.md` §Conseguenze (dato 2.2/8.1), ideas-ledger §I.
-Altri PI-gated (non bloccanti): igiene goal stale (fase-1b-matrice,
-fase-2-deep-dive) da /weekly-maintenance. Benchmark pubblico: FUORI dai goal
-engine (ruling 2026-07-30: contributo separato, repo/paper/sito propri).
+**GOAL `engine-fase-b2` CHIUSO** (2026-07-30, checklist DONE WHEN 7/7 nel journal,
+verifier gate finale PASS + merge su main da ruling permanente). Risultato: decode
+al ctx bench **122.4 → 287.5 tok/s (2.35×)**, wall 8.17 → 3.48 ms/token, parità e
+persistenza intatte. Il residuo è **PI-gated**: (a) prossimo goal engine — il
+candidato da direction §7 è la **fase C** (memoria II: MoE e paging, metodo LOOKA
+sull'oracolo prima del meccanismo) oppure un rimando §I maturato; (b) headline
+benchmark pubblico (docket 16 — contributo SEPARATO dall'engine, ruling
+2026-07-30: repo/paper/sito propri); (c) igiene goal stale (fase-1b-matrice,
+fase-2-deep-dive) da /weekly-maintenance. Riancorarsi da:
+`.harness/goals/engine-fase-b2/{GOAL,PHASES,docket,journal,digests}.md`
+(chiusura), `docs/engine/direction.md` §7 (fase C), ideas-ledger §I (rimandi con
+trigger: longest-prefix→C, logits-nel-checkpoint→C/D, parametro M→D, dispatch
+≤100→mobile).
 
-## 2. State delta (sessione 12, 2026-07-30 — goal B1 completo, iterazioni 3-6)
+## 2. State delta (sessione 13, 2026-07-30 — goal B2 completo, iterazioni 0-6)
 
-- **Fase 3**: forward multi-token M≤8 (prefillplan puro, kernel chunk, prefillChunked
-  zero-readback, submit/64, lm_head solo ultima posizione). Bug Tint #1 trovato:
-  var array in loop non ri-azzerata.
-- **Fase 4**: length pointer `kvLen` (kvlen.ts puro, contratto hard pos===kvLen,
-  crop zero-GPU, reset≡crop(0)); rollback meccanico PASS.
-- **Fase 5**: prefix-cache OPFS (kvstore.ts: envelope BKV1 + chiave token-id + LRU
-  puri; I/O SyncAccessHandle budget 512 MB); readKv/writeKv; restore in worker
-  nuovo token-identico.
-- **Fase 6**: kernel chunk FUSI stile fase A (4 righe/wg, M srotolato in scalari
-  generati; 7 dispatch/layer) ⇒ **prefill 700.5 ms vs 2410.9 seq same-day = 3.44×**
-  (gate 3×, soglia 804 ms); decode **122.4 ±1.1** (≥120, = fase A); profiler
-  finestra decode 0 createBindGroup / 1 submit / 123.6 dispatch per token;
-  restore 106.5 ms < re-prefill 699 ms; conformance GATE DOPPIO PASS (98.05/100.00)
-  anche con telemetryGpu. Bug WGSL #2 (vedi Landmine): `var stride` ridichiarata ⇒
-  pipeline invalida ⇒ submit droppati in silenzio con readback STALE plausibili.
-- **Cleanup**: sim prefillBatched (fase 3) e knob tsqDiag + tsq-diag.mjs (fase 6)
-  RIMOSSI da spec. TENUTI come harness di parità permanenti: `prefill-diag.mjs`
-  (cold-start golden + confronto KV riga-per-riga), `kernel-diag.mjs` (GEMM chunk
-  vs dequant CPU), gate `kv-rollback.mjs` e `prefix-cache.mjs`.
-- Report estesi: conformance {telemetryGpu, prefill}; bench schemaVersion 3 con
-  {prefillMs, seqBaselineMs, speedupVsSeq, gatePass}; engine-prof a finestra decode.
+- **Fase 1 (attribuzione)**: modalità `attrib` (wall per-token + delta liv.1/liv.2
+  + probe sync-floor + predizione K). FINDING: il "73% fuori GPU" del docket B1
+  era un artefatto (gpuBusy@ctx64 vs wall@ctx570); quota reale 20%, gpuBusy scala
+  con kvLen (attention 14 wg). → contratto rifatto (v2, ruling opzione (a)).
+- **Fase 2 (spec+microbench)**: kernel attention SPLIT sul contesto (2 pass,
+  CHUNK=64, griglia fissa (14,16), log-sum-exp esatto) misurato in isolamento:
+  ~32 µs/layer PIATTO da ctx 64 a 1024 vs 29→219 del fuso; parità identica al
+  fuso vs CPU f64. Spec approvata: soglia 230, token_embd su GPU, dispatch ≤100
+  ARCHIVIATO-desktop (trigger mobile, ledger §I).
+- **Fase 3**: split nel piano fuso (attnPart+attnReduce, `attnsplit.ts` puro) —
+  conformance IDENTICA a B1, **decode 248.3 tok/s già a K=1**.
+- **Fase 4**: decodeBatch K≤8 — feedback token on-GPU (`embedGatherQ4`,
+  token_embd ~68 MB su GPU, dequant esatta), UNA mapAsync/batch, EOS via crop
+  (`decodebatch.ts` + trimAtEos); token-identity K=8/5/1 IDENTICI su 256 token.
+- **Fase 5**: liv.2 sul loop nuovo (timestampWrites per step, gpuMs reale,
+  identità invariata con tsq ON); engine-prof v2 K-aware (0 bindGroup, submit
+  1/8 esatto, 148 dispatch/forward); bench su decodeBatch (k=8 default).
+- **Fase 6**: bench canonico — **headline K=8 287.5 ±2.3 tok/s** (gate 230),
+  baseline K=1 same-day 238.3, gpuBusy 3.06 ms/token da repliche liv.2 DEDICATE
+  (quota fuori-GPU 13.2%), overhead telemetria −0.002%, prefill 697.8 ms ≤810
+  (gate ASSOLUTO di spec: il gate relativo alla seq è fuorviante ora che la seq
+  usa lo split); rollback + prefix-cache PASS (restore worker nuovo 173 ms).
+- Unit 156→166 (attnsplit 5, decodebatch 5); attnFusedWgsl resta nel sorgente
+  per microbench/debug, fuori dal piano di produzione.
 
 ## 3. Open threads
 
 - **Merge su main**: fatto a goal chiuso dopo verifier PASS (ruling permanente) —
   se questa riga è presente e il merge non risulta in `git log main`, il merge è
-  stato interrotto: rifarlo (fast-forward di engine/fase-b1).
-- **B2 plan-check** (PI-gated): PHASES.md da approvare (docket B2 item 1);
-  contratto già approvato in chat 2026-07-30.
+  stato interrotto: rifarlo (merge di engine/fase-b2).
 - Goal harness stale mai chiusi: `fase-1b-matrice` (11 docket item),
   `fase-2-deep-dive` (5) — igiene da /weekly-maintenance.
 - Sweep fase 1b (wllama/transformersjs su S22) fuori goal; GLM-5 uscito → ledger §H a v2.
-- Rimandi di fase registrati in ideas-ledger §I (longest-prefix, chiave testuale,
-  logits nel checkpoint, scoring eviction, fusioni, parametro M, telemetria liv.3).
+- Rimandi di fase in ideas-ledger §I (longest-prefix, chiave testuale, logits nel
+  checkpoint, scoring eviction, parametro M, telemetria liv.3, dispatch≤100→mobile).
+- Nota per il futuro bench: il rate K=1 usa la finestra fase-A (post-primo-token),
+  il K>1 post-primo-batch — differenza non materiale (verifier it.6: <1σ), ma da
+  uniformare se il confronto diventasse un gate.
 
 ## 4. Landmines
 
+- **MAI confrontare gpuBusy e wall misurati a contesti/finestre diversi**: il GPU
+  busy scala con kvLen (attention) — il "73% fuori GPU" di B1 era questo errore
+  (tsq-diag §Conseguenze, corretta). Constraint di contratto da B2 in poi.
+- **Coi tap ATTIVI il tsq copre solo il primo segmento del pass** (la copy del tap
+  spezza il pass, i segmenti riaperti non hanno timestampWrites): le misure
+  gpuBusy si fanno SENZA taps (il bench lo fa; engine con tap ⇒ gpuMs parziale).
 - **Pipeline WebGPU invalida = submit droppati IN SILENZIO con readback STALE
-  plausibili**: un errore di compilazione WGSL (es. ridichiarazione di variabile
-  nello stesso scope — kernel generati che emettono lo stesso snippet due volte!)
-  invalida la pipeline; ogni submit che la contiene viene droppato da Dawn; le
-  mapAsync successive risolvono coi dati del run precedente ⇒ "parità perfetta"
-  fasulla. Difese nel repo: error scope validation/oom come CONTRATTO di
-  prefillChunked; diag a COLD-START (mai fidarsi di un confronto dopo un run che
-  ha già scritto gli stessi buffer); gli uncapturederror arrivano come pageerror
-  ASINCRONI — mai troncarli via `tail`/filtri.
+  plausibili**: errore di compilazione WGSL (es. ridichiarazione di variabile
+  nello stesso scope) ⇒ Dawn droppa ogni submit; le mapAsync risolvono coi dati
+  del run precedente ⇒ "parità perfetta" fasulla. Difese: error scope
+  validation/oom come CONTRATTO di prefillChunked E decodeBatch; diag a
+  COLD-START; gli uncapturederror arrivano come pageerror ASINCRONI — mai
+  troncarli via `tail`/filtri.
 - **WGSL/Tint: mai fidarsi dell'azzeramento implicito di una `var` array dichiarata
-  nel body di un loop** — non viene ri-azzerata a ogni iterazione: azzerare
-  esplicitamente (guardia: `scripts/kernel-diag.mjs`).
+  nel body di un loop** — azzerare esplicitamente (guardia: kernel-diag).
 - **mai mapAsync su un buffer referenziato da un submit non ancora emesso**: Dawn
   droppa l'INTERO command buffer in silenzio (tsq-diag-2026-07-29.md).
 - Chrome headless Linux/NVIDIA → SwiftShader: driver Playwright con HEADED=1; Chrome
@@ -78,8 +86,8 @@ engine (ruling 2026-07-30: contributo separato, repo/paper/sito propri).
   quantizzati ~100 µs.
 - llama.cpp SOLO oracolo (mai vendored); oracolo CPU quantizza le attivazioni (q8):
   noise floor 98.05% ⇒ gate doppio (cpuref-f64 ≥99% E golden ≥97%).
-- `erasableSyntaxOnly`; contratto `pos === kvLen` hard su forwardToken/prefillChunked
-  (pos libere ⇒ throw; usare crop/reset).
+- `erasableSyntaxOnly`; contratto `pos === kvLen` hard su
+  forwardToken/prefillChunked/decodeBatch (pos libere ⇒ throw; usare crop/reset).
 
 ## 5. Docket (decisioni PI pendenti)
 
@@ -87,9 +95,10 @@ engine (ruling 2026-07-30: contributo separato, repo/paper/sito propri).
      (goal evals futuro); #8 sorveglianza wllama (v3.1 ha WebGPU — rilevante per il
      benchmark pubblico).
 16. Headline del benchmark pubblico (ledger §E): serve prima del goal benchmark.
-    Nota 2026-07-30: il benchmark è un CONTRIBUTO SEPARATO dall'engine (ruling PI:
+    Il benchmark è un CONTRIBUTO SEPARATO dall'engine (ruling PI 2026-07-30:
     repo/paper/sito propri, confronto imparziale che include il nostro engine;
     split repo rimandato alla pubblicazione) — ci si torna su iniziativa PI.
-18. ~~B2 goal-brief da approvare~~ RISOLTO (2026-07-30, ruling PI in chat:
-    contratto B2 approvato col gate a quota fuori-GPU + guard-rail gpuBusy;
-    goal `engine-fase-b2` aperto). Resta il plan-check (docket B2 item 1).
+19. **Prossimo goal engine da scegliere** (quando il PI vuole): candidato
+    naturale fase C (direction §7: metodo LOOKA sull'oracolo → slab/tier/paging
+    in browser, hero-demo M4); alternative: rimandi §I maturi. Goal-brief da
+    fare al momento.

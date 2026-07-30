@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-attn-bench",
+  "chunkP": 64,
+  "sMax": 16,
+  "reps": 480,
+  "cases": [
+    {
+      "ctx": 64,
+      "fusedVsCpu": 5.719294962625021e-8,
+      "splitVsCpu": 5.719294962625021e-8,
+      "fusedMsPerOp": 0.02908333328862985,
+      "splitMsPerOpPair": 0.03788541667163372,
+      "speedup": 0.7676656572291488
+    },
+    {
+      "ctx": 256,
+      "fusedVsCpu": 0.0037301934181400848,
+      "splitVsCpu": 0.0037301990060755325,
+      "fusedMsPerOp": 0.07883333327869574,
+      "splitMsPerOpPair": 0.028052083402872085,
+      "speedup": 2.8102487842533814
+    },
+    {
+      "ctx": 576,
+      "fusedVsCpu": 0.0031756294170631368,
+      "splitVsCpu": 0.003175638730288883,
+      "fusedMsPerOp": 0.1442812499900659,
+      "splitMsPerOpPair": 0.031833333397905034,
+      "speedup": 4.532395278452401
+    },
+    {
+      "ctx": 1024,
+      "fusedVsCpu": 0.0025293931948530447,
+      "splitVsCpu": 0.0025293866755950224,
+      "fusedMsPerOp": 0.21877083343764145,
+      "splitMsPerOpPair": 0.03045833334326744,
+      "speedup": 7.182626540069663
+    }
+  ],
+  "projection": {
+    "attrInputs": {
+      "encode": 0.05,
+      "gpuBusy": 6.46,
+      "sync": 1.59,
+      "nLayer": 24
+    },
+    "attnSavedMsPerToken": 2.6987499982118606,
+    "gpuBusyNewMsPerToken": 3.7612500017881394,
+    "wallK1": 5.4012500017881395,
+    "toksPerSecK1": 185.1423281034834,
+    "wallK8": 4.010000001788139,
+    "toksPerSecK8": 249.37655849228926,
+    "note": "proiezione additiva: gpuBusy attrib − nLayer×(Δms kernel); K8 = sync/8 (loop multi-step fase 4)"
+  },
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-30T14-59-18-433Z"
+}
