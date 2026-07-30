@@ -37,3 +37,12 @@ integrato in forwardToken+prefillChunked, call-site a riavvio esplicito. Prova
 meccanica PASS sui 3 check (crop al prefisso, crop a metà generazione, run fresco:
 sequenze token identiche), JSON committato, conformance invariante PASS
 98.05/100.00, 143/143 unit. Next: fase 5 (prefix-cache OPFS).
+
+## Iterazione 5 (2026-07-30) — fase 5 DONE
+Prefix-cache OPFS chiusa in 1 iterazione: kvstore.ts (codec BKV1 + chiave + LRU
+puri, 13 unit CI; I/O SyncAccessHandle con eviction a budget), readKv/writeKv nel
+motore, restore in WORKER NUOVO: continuazione 64 token identica al run
+ininterrotto, restore 104 ms vs re-prefill 2977 ms (~29×), JSON committato,
+156/156 unit. FLAG per fase 6: il prefill chunked è oggi ~3.1 s/468 tok — sopra la
+baseline seq (2.44 s): serve il trattamento fast-kernel sul GEMM chunk per la
+soglia 3× (~810 ms). Next: fase 6 (bench + chiusura).

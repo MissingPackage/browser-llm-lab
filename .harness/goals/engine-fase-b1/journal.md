@@ -96,3 +96,29 @@ contabile esatto (111=47+64), exit 0, JSON committato
 (135+8 unit crop), tsc pulito, conformance invariante GATE DOPPIO PASS 98.05%
 golden / 100.00% cpuref (spina: parità a ogni passo). Next: fase 5 (prefix-cache
 OPFS — kvstore.ts codec puro + I/O SyncAccessHandle, restore in worker nuovo).
+
+2026-07-30 — Iterazione 5, FASE 5 DONE: prefix-cache OPFS end-to-end in 1 iterazione.
+Nuovo src/engine/kvstore.ts in due metà nette: (1) PURE, CI-testabili — codec
+envelope BKV1 (header a offset fissi con lastUsedMs f64/hitCount per l'update in
+place, meta JSON padded a 4B, payload per-layer K|V; validazione hard: magic,
+version, meta vs atteso, dimensione totale ⇒ throw), chiave SHA-256 di
+layoutVersion‖sha256(GGUF)‖tokenIds u32 LE (ruling a), pickEvictions LRU pura
+(ruling d, budget 512 MB ruling f); (2) I/O OPFS KvStoreOpfs via SyncAccessHandle
+(save con eviction proattiva a budget + retry singolo su QuotaExceededError da spec
+§Quota; load con touch LRU in place). gpuforward: readKv (copy GPU→staging unica
+→CPU nel layout esatto dell'envelope) e writeKv (writeBuffer per layer + pointer
+reset+advance — niente logits, ruling c: si ricalcola il forward). Worker: modalità
+pcsave/pcrestore; scripts/prefix-cache.mjs orchestra DUE page load ⇒ il restore
+avviene in un WORKER NUOVO (sessione fredda). ESITO (JSON committato
+prefix-cache-4090-2026-07-30T07-35-18-558Z.json): checkpoint 11.5 MB, save 4.4 ms,
+restore 104.2 ms vs re-prefill 2977 ms (restore<reprefill ✓, margine ~29×),
+continuazione 64 token IDENTICA al run ininterrotto ✓ (misura warm, dichiarato nel
+JSON). Unit: 156/156 (143+13 kvstore: roundtrip, offset fissi, mismatch⇒throw,
+chiave, LRU). tsc pulito.
+OSSERVAZIONE LOAD-BEARING per fase 6: prefill chunked misurato ~3.0-3.2 s su 468
+token (~6.6 ms/tok) nei run pcsave/pcrestore — SOPRA la baseline seq fase A
+(~2.44 s): il GEMM chunk correctness-first (64 thread/riga, load scalari) non regge
+la soglia 3× (~810 ms). La fase 6 deve applicare il trattamento fast-kernel di fase
+A al GEMM chunk (4 righe/wg, vec4, shared già presente) e/o il fallback M della
+spec §Rischi prima di rinegoziare soglie via docket. Next: fase 6 (bench +
+non-regressione + chiusura goal).

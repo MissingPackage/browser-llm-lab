@@ -2,17 +2,19 @@
 
 ## 1. Next decidable
 
-**Goal `engine-fase-b1`, FASE 5: prefix-cache OPFS** — su branch `engine/fase-b1`.
-Riancorarsi da: `.harness/goals/engine-fase-b1/{GOAL,PHASES,docket,journal}.md` +
-spec `docs/superpowers/specs/2026-07-29-engine-fase-b1-design.md` §Formato
-prefix-cache + §Quota/eviction (envelope BKV1, chiave SHA-256 di
-layoutVersion‖sha256(GGUF)‖tokenIds, niente logits, LRU 512 MB, mismatch ⇒ throw).
-Struttura: `src/engine/kvstore.ts` = codec envelope PURO (CI senza OPFS/GPU) + I/O
-`FileSystemSyncAccessHandle` dietro interfaccia; `saveKv/loadKv` in gpuforward
-(copy GPU↔CPU); restore in **worker nuovo** (sessione fredda) con continuazione
-token-identica. Done-when: unit indice/codec verdi; report JSON committato:
-continuazione identica al run ininterrotto + tempo restore < tempo re-prefill
-(entrambi nel JSON). Poi fase 6 (bench+chiusura, merge a goal chiuso).
+**Goal `engine-fase-b1`, FASE 6: bench + non-regressione + chiusura** — su branch
+`engine/fase-b1`. Riancorarsi da: `.harness/goals/engine-fase-b1/{GOAL,PHASES,
+docket,journal}.md` + spec §Soglie. Done-when: bench JSON committato con
+prefillMs.mean ≤ ~810 ms (1/3 della baseline seq same-day, da rimisurare) E
+decodeToksPerSec.mean ≥ 120; profiler decode invariato (createBindGroup=0,
+submit/token=1, dispatch/token ≤130); checklist DONE WHEN 8/8 nel journal; rimozione
+scaffolding (tsqDiag, prefilldiag/kerneldiag); merge+push a goal chiuso DOPO
+verifier PASS (ruling permanente). **ATTENZIONE (flag it.5)**: il prefill chunked
+correctness-first misura ~3.1 s/468 tok — SOPRA la baseline seq (~2.44 s): per la
+soglia 3× serve il trattamento fast-kernel di fase A sul GEMM chunk (4 righe/wg,
+load vec4 — shared xs già presente) e/o fallback M=4/2 (spec §Rischi) PRIMA di
+rinegoziare via docket. runBench va inoltre portato su prefillChunked (oggi usa il
+prefill sequenziale).
 
 ## 2. State delta (sessione 12, 2026-07-30)
 
@@ -29,14 +31,21 @@ continuazione identica al run ininterrotto + tempo restore < tempo re-prefill
   crop-prefisso, crop-metà-generazione, run fresco — sequenze IDENTICHE), JSON
   `kv-rollback-4090-*.json`; conformance invariante PASS; 143/143 unit.
 - **Sim rimossa** (spec): `prefillBatched`+`prefillsim`+script. Scaffolding di fase
-  (rimozione a fase 6): `prefill-diag.mjs`, `kernel-diag.mjs`, modalità `rollback`
-  (questa resta: è il gate di fase 4).
+  (rimozione a fase 6): `prefill-diag.mjs`, `kernel-diag.mjs`; restano i gate di
+  fase `rollback` e `prefix-cache`.
 - Report conformance esteso: `telemetryGpu` e `prefill{path,mMax,submitTokens}`.
+- **FASE 5 DONE (it.5)**: prefix-cache OPFS — `src/engine/kvstore.ts` (codec BKV1
+  puro + chiave token-id + LRU pura, 13 unit CI; I/O `SyncAccessHandle` con budget
+  512 MB), `readKv/writeKv` nel motore, modalità `pcsave`/`pcrestore` + script
+  `prefix-cache.mjs` (due page load ⇒ restore in worker NUOVO). Esito: checkpoint
+  11.5 MB, save 4.4 ms, restore 104 ms vs re-prefill 2977 ms, continuazione
+  token-identica; 156/156 unit. FLAG fase 6: prefill chunked ~3.1 s/468 tok, sopra
+  baseline seq — vedi §1.
 
 ## 3. Open threads
 
 - **Branch `engine/fase-b1` NON merged** (merge a goal chiuso, ruling permanente).
-- Goal B1: fasi 5-6 a cascata, nessun ruling pendente.
+- Goal B1: resta la fase 6, nessun ruling pendente (soglie già PI-ruled).
 - **B2 da ri-inquadrare al goal-brief** (docket goal B1, item 2): GPU busy ≈2.2 su
   8.1 ms/token ⇒ ~73% del decode è sync/encode, non dispatch.
 - Scaffolding temporaneo da rimuovere a fase 6: knob `tsqDiag`, modalità

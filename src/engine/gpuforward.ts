@@ -44,6 +44,11 @@ export interface EngineHandle {
   // sono garbage mai letto: si sovrascrivono al prossimo forward per posizione.
   crop(toLen: number): void;
   readonly kvLen: number;
+  // Prefix-cache (spec §Formato): payload per-layer [K righe [0,kvLen) | V righe]
+  // nel layout ESATTO dell'envelope BKV1 — readKv per il save (copy GPU→staging→CPU),
+  // writeKv per il restore (writeBuffer per layer + pointer impostato).
+  readKv(): Promise<Float32Array>;
+  writeKv(payload: Float32Array, tokenCount: number): void;
   // Prefill multi-token M≤8 (spec B1 §Forward multi-token): piano a chunk con GEMM
   // small-batch, zero readback durante il prefill (embedding dequantizzate CPU-side
   // in un buffer unico, copy per chunk nell'encoder), submit ogni ~64 token,
@@ -146,7 +151,13 @@ export async function createEngine(
   // --- pesi su GPU ---
   const T = (name: string) => byName.get(name)!;
   onProgress("upload pesi…", 0);
-  const layers = [];
+  interface LayerBufs {
+    qkv: QuantBufs; qkvBias: GPUBuffer; attnNorm: GPUBuffer;
+    wq: QuantBufs; bq: GPUBuffer; wk: QuantBufs; bk: GPUBuffer; wv: QuantBufs; bv: GPUBuffer;
+    wo: QuantBufs; ffnNorm: GPUBuffer; wGate: QuantBufs; wUp: QuantBufs; wDown: QuantBufs;
+    kCache: GPUBuffer; vCache: GPUBuffer;
+  }
+  const layers: LayerBufs[] = [];
   for (let l = 0; l < S.nLayer; l++) {
     const p = (n: string) => T(`blk.${l}.${n}`);
     const qkvConcat = repackConcat([p("attn_q.weight"), p("attn_k.weight"), p("attn_v.weight")]);
@@ -504,6 +515,40 @@ export async function createEngine(
       embBuf.destroy();
       kv.advance(n); // il piano prefill avanza il pointer dell'intero chunk-set
       return id;
+    },
+    async readKv(): Promise<Float32Array> {
+      const n = kv.len;
+      if (n < 1) throw new Error("readKv: cache vuota");
+      const rowBytes = n * KV_DIM * 4;
+      const staging = device.createBuffer({
+        size: S.nLayer * 2 * rowBytes,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+      const enc = device.createCommandEncoder();
+      layers.forEach((L, l) => {
+        enc.copyBufferToBuffer(L.kCache, 0, staging, (l * 2) * rowBytes, rowBytes);
+        enc.copyBufferToBuffer(L.vCache, 0, staging, (l * 2 + 1) * rowBytes, rowBytes);
+      });
+      device.queue.submit([enc.finish()]);
+      await staging.mapAsync(GPUMapMode.READ);
+      const out = new Float32Array(staging.getMappedRange().slice(0));
+      staging.destroy();
+      return out;
+    },
+    writeKv(payload: Float32Array, tokenCount: number): void {
+      if (!Number.isInteger(tokenCount) || tokenCount < 1 || tokenCount > CTX_MAX) {
+        throw new Error(`writeKv: tokenCount non valido (${tokenCount})`);
+      }
+      const rowElems = tokenCount * KV_DIM;
+      if (payload.length !== S.nLayer * 2 * rowElems) {
+        throw new Error(`writeKv: payload ${payload.length} !== atteso ${S.nLayer * 2 * rowElems}`);
+      }
+      layers.forEach((L, l) => {
+        device.queue.writeBuffer(L.kCache, 0, payload.subarray((l * 2) * rowElems, (l * 2 + 1) * rowElems) as unknown as BufferSource);
+        device.queue.writeBuffer(L.vCache, 0, payload.subarray((l * 2 + 1) * rowElems, (l * 2 + 2) * rowElems) as unknown as BufferSource);
+      });
+      kv.reset();
+      kv.advance(tokenCount); // il pointer riparte dal checkpoint restaurato
     },
     setTelemetry(on: boolean): void {
       telemetryOn = on;

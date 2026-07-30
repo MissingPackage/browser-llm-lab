@@ -1,10 +1,12 @@
 // Worker del motore — fase A. Modalità conformance: corpus in token-id, teacher
 // forcing sul golden (confronto per-posizione pulito), campionamento periodico dei
 // logit per il Δ sui top-32 golden (riportato, non gated).
-import { createEngine, type EngineHandle } from "./gpuforward";
+import { createEngine, CTX_MAX, type EngineHandle } from "./gpuforward";
 import { PREFILL_M, PREFILL_SUBMIT_TOKENS } from "./prefillplan";
 import { parseGguf } from "./gguf";
 import { dequantQ4_0Row } from "./quant";
+import { QWEN25_05B } from "./shape";
+import { encodeKv, decodeKv, kvKey, kvFileName, KvStoreOpfs, KV_LAYOUT_VERSION, type KvMeta } from "./kvstore";
 
 interface GoldenPos { argmax: number; top: [number, number][] }
 interface Golden {
@@ -141,6 +143,95 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
       telemetry, telemetryOverheadPct: overheadPct,
       dispatchesPerToken: engine.dispatchesPerToken,
       quant: "Q4_0 (gguf)", note: "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
+    },
+  });
+}
+
+// Prefix-cache OPFS (fase 5). Due modalità complementari, orchestrate dallo script
+// scripts/prefix-cache.mjs con DUE page load (⇒ il restore avviene in un worker
+// NUOVO, sessione fredda, come da done-when):
+//  - pcsave: prefill del prefisso, save del checkpoint su OPFS, poi continuazione
+//    greedy ininterrotta (il riferimento);
+//  - pcrestore: lookup per chiave, decode hard-validato, writeKv, continuazione
+//    greedy (deve essere token-identica) + misura re-prefill dello stesso prefisso.
+const PC_CONT = 64;
+const KV_DIM_SHAPE = QWEN25_05B.nKvHead * QWEN25_05B.headDim;
+
+const sha256Hex = async (buf: ArrayBuffer): Promise<string> =>
+  [...new Uint8Array(await crypto.subtle.digest("SHA-256", buf))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+const genGreedy = async (engine: EngineHandle, fromPos: number, prev: number, n: number): Promise<number[]> => {
+  const out: number[] = [];
+  let pos = fromPos, p = prev;
+  for (let i = 0; i < n; i++) { p = await engine.forwardToken(p, pos++); out.push(p); }
+  return out;
+};
+
+async function runPcSave(modelUrl: string, promptUrl: string): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const modelSha256 = await sha256Hex(gguf);
+  const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  const engine = await createEngine(gguf, progress, { telemetry: false });
+  const prefix = promptFix.tokens.slice(0, -1);
+  const t0 = performance.now();
+  await engine.prefillChunked(prefix, 0);
+  const prefillMs = performance.now() - t0;
+  progress("save checkpoint…", 0.5);
+  const payload = await engine.readKv();
+  const meta: KvMeta = {
+    modelSha256, layoutVersion: KV_LAYOUT_VERSION, nLayer: QWEN25_05B.nLayer,
+    kvDim: KV_DIM_SHAPE, ctxMax: CTX_MAX, tokenCount: prefix.length, createdAt: Date.now(),
+  };
+  const bytes = encodeKv(meta, Uint32Array.from(prefix), payload, Date.now(), 0);
+  const key = await kvKey(KV_LAYOUT_VERSION, modelSha256, prefix);
+  const store = await KvStoreOpfs.open();
+  const tS = performance.now();
+  const { evicted } = await store.save(kvFileName(key), bytes);
+  const saveMs = performance.now() - tS;
+  progress("continuazione ininterrotta…", 0.7);
+  const contTokens = await genGreedy(engine, prefix.length, promptFix.tokens[promptFix.tokens.length - 1], PC_CONT);
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-pc-save", promptId: promptFix.promptId,
+      key, file: kvFileName(key), prefixTokens: prefix.length, checkpointBytes: bytes.byteLength,
+      prefillMs, saveMs, evicted, contTokens,
+    },
+  });
+}
+
+async function runPcRestore(modelUrl: string, promptUrl: string): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const modelSha256 = await sha256Hex(gguf);
+  const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  const engine = await createEngine(gguf, progress, { telemetry: false });
+  const prefix = promptFix.tokens.slice(0, -1);
+  const key = await kvKey(KV_LAYOUT_VERSION, modelSha256, prefix);
+  const store = await KvStoreOpfs.open();
+  progress("restore da OPFS…", 0.4);
+  const t0 = performance.now();
+  const buf = await store.load(kvFileName(key)); // miss ⇒ NotFoundError: il chiamante fa fallback a prefill pieno
+  const ck = decodeKv(buf, { modelSha256, layoutVersion: KV_LAYOUT_VERSION, nLayer: QWEN25_05B.nLayer, kvDim: KV_DIM_SHAPE, ctxMax: CTX_MAX });
+  // lookup v1 = match esatto full-prefix: la chiave lo implica, i token lo PROVANO
+  if (ck.tokens.length !== prefix.length || prefix.some((t, i) => ck.tokens[i] !== t)) throw new Error("kvcache: tokens mismatch");
+  engine.writeKv(ck.payload, ck.meta.tokenCount);
+  await engine.device.queue.onSubmittedWorkDone(); // il restore include l'upload GPU (misura onesta)
+  const restoreMs = performance.now() - t0;
+  progress("continuazione da restore…", 0.6);
+  const contTokens = await genGreedy(engine, prefix.length, promptFix.tokens[promptFix.tokens.length - 1], PC_CONT);
+  progress("re-prefill di confronto…", 0.8);
+  engine.reset();
+  const t1 = performance.now();
+  await engine.prefillChunked(prefix, 0);
+  const reprefillMs = performance.now() - t1;
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-pc-restore", promptId: promptFix.promptId,
+      key, prefixTokens: prefix.length, hitCount: ck.hitCount,
+      restoreMs, reprefillMs, contTokens,
     },
   });
 }
@@ -391,5 +482,9 @@ self.onmessage = (e: MessageEvent) => {
     runKernelDiag(m.modelUrl).catch(fail);
   } else if (m.type === "rollback") {
     runRollback(m.modelUrl, m.promptUrl!).catch(fail);
+  } else if (m.type === "pcsave") {
+    runPcSave(m.modelUrl, m.promptUrl!).catch(fail);
+  } else if (m.type === "pcrestore") {
+    runPcRestore(m.modelUrl, m.promptUrl!).catch(fail);
   }
 };
