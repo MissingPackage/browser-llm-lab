@@ -789,6 +789,62 @@ async function runAttnBench(): Promise<void> {
   post({ type: "done", report: { schemaVersion: 1, kind: "engine-attn-bench", chunkP: CHUNK, sMax: S_MAX, reps: REPS, cases, projection } });
 }
 
+// Token-identity multi-step (fase 4 B2, done-when di PHASES): run "loop K>1" vs
+// run per-token (forwardToken, l'oracolo) dallo stesso prefisso, greedy —
+// sequenze IDENTICHE ≥256 token. Tre confronti: K=8 (default di spec), K=5
+// (non divisore: boundary dell'ultimo batch parziale gestito dal chiamante),
+// K=1 via decodeBatch (il percorso batch degenere deve coincidere anch'esso).
+async function runIdCheck(modelUrl: string, promptUrl: string, genTokens: number): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  const engine = await createEngine(gguf, progress, { telemetry: false });
+  const prefix = promptFix.tokens.slice(0, -1);
+  await engine.prefillChunked(prefix, 0);
+  const baseLen = engine.kvLen;
+  const seed = promptFix.tokens[promptFix.tokens.length - 1];
+  // riferimento: per-token (K=1 oracolo), con tempo informale
+  progress("riferimento per-token…", 0.2);
+  const t0 = performance.now();
+  const ref: number[] = [];
+  { let pos = baseLen, prev = seed; for (let i = 0; i < genTokens; i++) { prev = await engine.forwardToken(prev, pos++); ref.push(prev); } }
+  const refMs = (performance.now() - t0) / genTokens;
+  const runBatched = async (k: number): Promise<{ ids: number[]; msPerToken: number }> => {
+    engine.crop(baseLen);
+    const ids: number[] = [];
+    let prev = seed;
+    const tB = performance.now();
+    while (ids.length < genTokens) {
+      const kk = Math.min(k, genTokens - ids.length);
+      const got = await engine.decodeBatch(prev, engine.kvLen, kk);
+      ids.push(...got);
+      prev = got[got.length - 1];
+    }
+    return { ids, msPerToken: (performance.now() - tB) / ids.length };
+  };
+  const cmp = (name: string, a: number[]) => {
+    const at = a.findIndex((v, i) => v !== ref[i]);
+    return { name, match: a.length === ref.length && at === -1, divergeAt: at === -1 ? null : at };
+  };
+  progress("batch K=8…", 0.5);
+  const k8 = await runBatched(8);
+  progress("batch K=5…", 0.7);
+  const k5 = await runBatched(5);
+  progress("batch K=1…", 0.9);
+  const k1 = await runBatched(1);
+  const checks = [cmp("K=8", k8.ids), cmp("K=5", k5.ids), cmp("K=1-degenere", k1.ids)];
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-token-identity", promptId: promptFix.promptId,
+      prefixTokens: prefix.length, genTokens, checks,
+      pass: checks.every((c) => c.match),
+      msPerTokenInformal: { perToken: refMs, k8: k8.msPerToken, k5: k5.msPerToken, k1: k1.msPerToken },
+      note: "tempi informali (una passata, niente repliche): il bench di fase 6 è la misura",
+    },
+  });
+}
+
 self.onmessage = (e: MessageEvent) => {
   const m = e.data as {
     type: string; modelUrl: string; goldenUrl?: string; promptUrl?: string;
@@ -815,5 +871,7 @@ self.onmessage = (e: MessageEvent) => {
     runAttrib(m.modelUrl, m.promptUrl!, m.genTokens ?? 192, m.replicates ?? 3, a.prefixLen).catch(fail);
   } else if (m.type === "attnbench") {
     runAttnBench().catch(fail);
+  } else if (m.type === "idcheck") {
+    runIdCheck(m.modelUrl, m.promptUrl!, m.genTokens ?? 256).catch(fail);
   }
 };

@@ -16,10 +16,11 @@ import {
   rmsGemvQ8FastWgsl, rmsPairGemvSiluFastWgsl, gemvResidualFastWgsl, rmsGemvQ4FastBiasWgsl,
   ropeChunkWgsl, kvAppendChunkWgsl, attnPrefillChunkWgsl,
   rmsGemmQkvChunkFastWgsl, rmsPairGemmSiluChunkFastWgsl, gemmResidChunkFastWgsl,
-  attnSplitPartWgsl, attnSplitReduceWgsl,
+  attnSplitPartWgsl, attnSplitReduceWgsl, embedGatherQ4Wgsl,
 } from "./kernels/wgsl";
 import { planPrefill, PREFILL_M } from "./prefillplan";
 import { ATTN_CHUNK_P, attnSMax, attnPartialsLen } from "./attnsplit";
+import { planDecodeBatch, DECODE_K_MAX, DECODE_SLOT_STRIDE } from "./decodebatch";
 import { createKvLen } from "./kvlen";
 import type { RepackedQuant } from "./quant";
 
@@ -51,6 +52,14 @@ export interface EngineHandle {
   // writeKv per il restore (writeBuffer per layer + pointer impostato).
   readKv(): Promise<Float32Array>;
   writeKv(payload: Float32Array, tokenCount: number): void;
+  // Decode multi-step K≤8 (spec B2 §Decode loop multi-step): K forward in un solo
+  // submit con feedback del token on-GPU (l'argmax dello step i è l'input
+  // dell'embedding gather dello step i+1 — token_embd vive su GPU) e UNA mapAsync
+  // per batch. pos parte da posStart === kvLen (contratto hard); kvLen += k a
+  // batch riuscito. Ritorna i k argmax id (greedy). EOS mid-batch: il chiamante
+  // taglia con crop() (semantica trimAtEos, esatta per il rollback B1).
+  // K=1 NON sostituisce forwardToken: quello resta l'oracolo di identità.
+  decodeBatch(prevToken: number, posStart: number, k: number): Promise<number[]>;
   // Prefill multi-token M≤8 (spec B1 §Forward multi-token): piano a chunk con GEMM
   // small-batch, zero readback durante il prefill (embedding dequantizzate CPU-side
   // in un buffer unico, copy per chunk nell'encoder), submit ogni ~64 token,
@@ -181,10 +190,14 @@ export async function createEngine(
   }
   const outNorm = f32Buf(T("output_norm.weight"));
   const wOut = quantBufs(T("output.weight"));
-  // token_embd resta CPU-side: una riga dequantizzata per token via writeBuffer
+  // token_embd: CPU-side per forwardToken/prefill (una riga dequantizzata via
+  // writeBuffer, invariato) E repackato su GPU (~68 MB q4) per il feedback
+  // on-GPU del decode multi-step (spec B2, ruling 2026-07-30 decisione c)
   const embdInfo = T("token_embd.weight");
   const embdOff = f.dataOffset + embdInfo.offset;
   const embdRow = new Float32Array(S.dModel);
+  onProgress("repack token_embd per GPU…", 0.94);
+  const wEmbd = quantBufs(embdInfo);
   onProgress("compilazione pipeline…", 0.96);
 
   // --- attivazioni ---
@@ -280,6 +293,7 @@ export async function createEngine(
     pairSilu: mkPipe(rmsPairGemvSiluFastWgsl({ K: S.dModel, N: S.dFfn, eps: S.rmsEps })),
     downResid: mkPipe(gemvResidualFastWgsl({ K: S.dFfn, N: S.dModel })),
     rmsLmHead: mkPipe(rmsGemvQ8FastWgsl({ K: S.dModel, N: S.vocab, eps: S.rmsEps })),
+    embedGather: mkPipe(embedGatherQ4Wgsl({ K: S.dModel })),
   };
   const bg = (pipe: GPUComputePipeline, bufs: GPUBuffer[], uni?: GPUBuffer) =>
     device.createBindGroup({
@@ -393,6 +407,17 @@ export async function createEngine(
   }
   // coda del piano decode (lm_head [+rms] + argmax): riusata a fine prefill
   const tailSteps = steps.slice(steps.length - (fused ? 3 : 4));
+  // --- decode multi-step (spec B2): bind group dell'embed gather + slot P + staging ids ---
+  const bgEmbed = bg(pipes.embedGather, [wEmbd.qs, wEmbd.scales, amaxOut, x]);
+  const dbSlots = device.createBuffer({
+    size: DECODE_K_MAX * DECODE_SLOT_STRIDE,
+    usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+  });
+  const idsBatch = storage(DECODE_K_MAX * 4); // COPY_SRC/COPY_DST inclusi da storage()
+  const stagingIds = device.createBuffer({
+    label: "staging-batch-ids", size: DECODE_K_MAX * 4,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
   // length pointer della KV (spec §Crop): unica verità sulla posizione
   const kv = createKvLen(CTX_MAX);
   onProgress("pronto", 1);
@@ -443,6 +468,65 @@ export async function createEngine(
       stagingId.unmap();
       kv.advance(); // a forward riuscito
       return id;
+    },
+    async decodeBatch(prevToken: number, posStart: number, k: number): Promise<number[]> {
+      kv.assertNext(posStart, k); // posStart === kvLen o throw (+ capacità)
+      const plan = planDecodeBatch(posStart, k, CTX_MAX);
+      // seed del feedback: amaxOut = prevToken (lo step 0 legge il seme, gli step
+      // successivi l'argmax scritto dallo step precedente — stesso buffer)
+      device.queue.writeBuffer(amaxOut, 0, new Uint32Array([prevToken, 0, 0, 0]));
+      const slots = new Uint32Array(k * (DECODE_SLOT_STRIDE / 4));
+      plan.forEach((s, i) => { slots[i * 64] = s.pos; slots[i * 64 + 1] = s.pos; });
+      device.queue.writeBuffer(dbSlots, 0, slots as unknown as BufferSource);
+      // Error scope come CONTRATTO di ogni percorso di encode nuovo (landmine B1:
+      // pipeline invalida ⇒ submit droppati muti e readback stale plausibili)
+      device.pushErrorScope("validation");
+      device.pushErrorScope("out-of-memory");
+      const tEnc0 = telemetryOn ? performance.now() : 0;
+      const enc = device.createCommandEncoder();
+      let tsqStaging: GPUBuffer | null = null;
+      for (let i = 0; i < k; i++) {
+        enc.copyBufferToBuffer(dbSlots, plan[i].slotOffset, P, 0, 16);
+        const passDesc: GPUComputePassDescriptor = telemetryOn && querySet
+          ? { timestampWrites: { querySet, beginningOfPassWriteIndex: tsqIdx * 2, endOfPassWriteIndex: tsqIdx * 2 + 1 } }
+          : {};
+        let pass = enc.beginComputePass(passDesc);
+        pass.setPipeline(pipes.embedGather);
+        pass.setBindGroup(0, bgEmbed);
+        pass.dispatchWorkgroups(Math.ceil(S.dModel / 64));
+        for (const s of steps) {
+          if (s.kind === "copy") {
+            pass.end();
+            enc.copyBufferToBuffer(s.src, 0, s.dst, 0, s.bytes);
+            pass = enc.beginComputePass(); // i pass riaperti dello step non ri-scrivono timestamp
+            continue;
+          }
+          pass.setPipeline(s.pipe);
+          pass.setBindGroup(0, s.bind);
+          pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
+        }
+        pass.end();
+        enc.copyBufferToBuffer(amaxOut, 0, idsBatch, i * 4, 4);
+        if (telemetryOn && querySet) {
+          tsqIdx++;
+          if (tsqIdx === TSQ_RING) {
+            tsqStaging = flushTsq(enc, TSQ_RING); // al più un flush per batch (k ≤ 8 < ring)
+            tsqIdx = 0;
+          }
+        }
+      }
+      enc.copyBufferToBuffer(idsBatch, 0, stagingIds, 0, k * 4);
+      device.queue.submit([enc.finish()]);
+      if (tsqStaging) armTsq(tsqStaging, TSQ_RING); // mapAsync SOLO dopo il submit
+      if (telemetryOn) { tEncodeCpuMs += performance.now() - tEnc0; tForwards += k; }
+      const errOom = await device.popErrorScope();
+      const errVal = await device.popErrorScope();
+      if (errOom || errVal) throw new Error(`decodeBatch error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
+      await stagingIds.mapAsync(GPUMapMode.READ);
+      const ids = [...new Uint32Array(stagingIds.getMappedRange()).subarray(0, k)];
+      stagingIds.unmap();
+      kv.advance(k); // a batch riuscito
+      return ids;
     },
     async prefillChunked(tokens: number[], posStart: number): Promise<number> {
       const n = tokens.length;

@@ -101,3 +101,28 @@ Nota fase 4: il margine sul gate non cambia il contratto — il multi-step resta
 in scope (la sync residua ~0.9 ms/token si amortizza comunque, e serve al
 contratto streaming/spec-dec §I); la predizione K=8 va rifatta coi numeri nuovi.
 Next: fase 4 (decode loop multi-step K + token-identity).
+
+2026-07-30 — Iterazione 4, FASE 4 DONE. Decode loop multi-step da spec:
+(1) kernel embedGatherQ4 (dequant riga token_embd on-GPU, id letto da amaxOut —
+stessa aritmetica ESATTA di dequantQ4_0Row, quindi x identica al percorso CPU);
+token_embd repackato su GPU (~68 MB, ruling decisione c) SENZA togliere il
+percorso CPU di forwardToken (oracolo intatto). (2) decodeBatch(prev, posStart,
+k≤8): K forward in un submit, seed del feedback via writeBuffer(amaxOut), P
+per-step da dbSlots (pattern pcSlots), copy amaxOut→idsBatch per step, UNA
+mapAsync per batch su stagingIds; error scope validation/oom come CONTRATTO
+(landmine B1); tsq per-step (timestampWrites per pass, al più un flush/batch);
+kvLen advance(k). (3) modulo puro decodebatch.ts (planDecodeBatch + trimAtEos
+per EOS mid-batch via crop) con 5 unit. (4) worker mode idcheck + script
+token-identity.mjs (exit 0 solo su pass).
+
+GATE (tutti PASS):
+- npm test 166/166 (161+5); tsc pulito.
+- Token-identity (token-identity-4090-2026-07-30T19-00-43): K=8, K=5 (non
+  divisore) e K=1-degenere TUTTI match=true su 256 token vs oracolo per-token.
+- Conformance INVARIATA post-integrazione: GATE DOPPIO PASS 98.05/100.00
+  (conformance-4090-2026-07-30T19-00-59).
+- Tempi informali (nota nel JSON, non sono il bench): per-token 3.97 ms/tok,
+  K=8 3.46 (~289 tok/s), K=5 3.53 — il multi-step amortizza ~0.5 ms/token
+  di sync residua, coerente con l'attesa post-fase 3.
+Next: fase 5 (telemetria liv.2 + profiler nel nuovo loop: run tsq con gpuMs
+reale, profiler con submit/token 1/K, dispatch target di spec ≤160 già ok).

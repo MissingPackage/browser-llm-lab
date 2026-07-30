@@ -1293,3 +1293,37 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   }
 }`;
 }
+
+// Embedding gather on-GPU (fase B2 §Decode loop multi-step): dequant della riga
+// `ids[0]` di token_embd (Q4_0 repackato) direttamente in x — il token id viene
+// dal buffer amaxOut scritto dall'argmax dello step precedente (feedback on-GPU,
+// niente readback per token). Stessa aritmetica ESATTA di dequantQ4_0Row (quant.ts):
+// la dequant f32 non arrotonda oltre la scala f16 ⇒ x identica al percorso CPU.
+export function embedGatherQ4Wgsl(opts: { K: number }): string {
+  const { K } = opts;
+  if (K % 32 !== 0) throw new Error("embedGatherQ4: K deve essere multiplo di 32");
+  return `
+@group(0) @binding(0) var<storage, read> qs: array<u32>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> ids: array<u32>; // [0] = token id (amaxOut o seed)
+@group(0) @binding(3) var<storage, read_write> x: array<f32>;
+const K = ${K}u;
+const BPR = ${K / 32}u; // blocchi per riga
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let e = gid.x;
+  if (e >= K) { return; }
+  let row = ids[0];
+  let b = e >> 5u;         // blocco nella riga
+  let j = e & 31u;         // peso nel blocco
+  let gb = row * BPR + b;  // blocco globale nel tensore
+  // layout repackQ4_0: peso j<16 = low nibble del byte j; j>=16 = high del byte j-16
+  let lo = j < 16u;
+  let jj = select(j - 16u, j, lo);
+  let word = qs[gb * 4u + (jj >> 2u)];
+  let byte = (word >> ((jj & 3u) * 8u)) & 0xffu;
+  let nib = select(byte >> 4u, byte & 0xfu, lo);
+  let scale = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+  x[e] = (f32(nib) - 8.0) * scale;
+}`;
+}

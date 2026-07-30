@@ -24,7 +24,7 @@ worker.onmessage = (e: MessageEvent) => {
   } else if (m.type === "done" && m.report) {
     window.__report = m.report;
     const r = m.report;
-    if (["engine-kernel-diag", "engine-kv-rollback", "engine-pc-save", "engine-pc-restore", "engine-decode-attrib", "engine-attn-bench"].includes((r as { kind?: string }).kind ?? "")) {
+    if (["engine-kernel-diag", "engine-kv-rollback", "engine-pc-save", "engine-pc-restore", "engine-decode-attrib", "engine-attn-bench", "engine-token-identity"].includes((r as { kind?: string }).kind ?? "")) {
       $("results").textContent = JSON.stringify(r);
       $("status").textContent = "done";
       return;
@@ -105,6 +105,12 @@ if (params.get("conformance") === "1") {
   });
 } else if (params.get("attnbench") === "1") {
   worker.postMessage({ type: "attnbench", modelUrl: "" });
+} else if (params.get("idcheck") === "1") {
+  worker.postMessage({
+    type: "idcheck",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+  });
 } else if (params.get("pcsave") === "1" || params.get("pcrestore") === "1") {
   worker.postMessage({
     type: params.get("pcsave") === "1" ? "pcsave" : "pcrestore",
