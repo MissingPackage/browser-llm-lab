@@ -8,9 +8,15 @@ contatori-only) che dimensionano il paging esperti su GLM-4.7-Flash — recall
 lookahead LOOKA, skew/heat/working-set, curve hit-rate vs budget da simulazione
 trace-driven. Split della fase C approvato: C1 = oracolo (questo goal), C2 =
 MoE+MLA nel motore, C3 = paging+instant-on; hero-demo M4 PI-gated.
-**Next: PLAN-CHECK (docket item 1)** — il PI approva PHASES.md (6 fasi
-sequenziali), poi iterazione 1 = fase 1 (download GGUF ~17 GB autorizzato, build
-llama.cpp dedicata, smoke run, recon punti di tap). Riancorarsi da:
+**Fase 1 DONE (it.1, verifier PASS)**: GGUF unsloth Q4_0 17.2 GB (sha in
+journal/JSON), oracolo llama.cpp 5f55650a CPU-only fuori repo
+(~/Projects/llama.cpp-oracle), smoke exit 0, pp512 56.6 / tg64 13.4 t/s ⇒
+corpus 16k pos ≈ 9 min/run. Finding: zero patch (cb_eval + ffn_moe_topk/
+ffn_moe_logits/ffn_norm — arch GGUF = deepseek2, 46 layer MoE); testa NextN/MTP
+ASSENTE nel GGUF → docket goal item 2 (PI-gated, tocca fase D e C2).
+**Next: fase 2 — spec C1** (strumentazione via cb_eval, corpus, metriche,
+policy, sanity-gate, timebox fase 4) → si chiude con richiesta ruling nel
+docket del goal; fasi 3-6 gated dal ruling. Riancorarsi da:
 `.harness/goals/engine-fase-c1/{GOAL,PHASES,docket,journal,digests}.md`,
 `docs/engine/direction.md` §3+§7, `docs/engine/study/colibri.md` §1-2.
 Restano PI-gated fuori goal: headline benchmark pubblico (docket 16) e igiene
@@ -88,6 +94,9 @@ Chiusura B2 (decode 122.4 → 287.5 tok/s, 2.35×): vedi §2 e
   quantizzati ~100 µs.
 - llama.cpp SOLO oracolo (mai vendored); oracolo CPU quantizza le attivazioni (q8):
   noise floor 98.05% ⇒ gate doppio (cpuref-f64 ≥99% E golden ≥97%).
+- **llama-cli (build ≥2026-07, UI chat) IGNORA `-no-cnv` e loop-a all'infinito su
+  stdin chiuso** (676 MB di "> " in un log prima del kill): run scriptate SEMPRE
+  con `-st --simple-io` (o llama-bench); mai fidarsi che esca da solo.
 - `erasableSyntaxOnly`; contratto `pos === kvLen` hard su
   forwardToken/prefillChunked/decodeBatch (pos libere ⇒ throw; usare crop/reset).
 

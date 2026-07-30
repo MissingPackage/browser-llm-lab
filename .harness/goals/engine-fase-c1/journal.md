@@ -25,7 +25,7 @@ llama.cpp espone un eval-callback di scheduling (`cb_eval`, `include/llama.h:375
 `common/debug.cpp:143-185` (filtro regex sul nome tensore + `ggml_backend_tensor_get`)
 e `examples/eval-callback/`. I tensori che servono sono GIÀ nominati per layer via
 `cb(...)`:
-- `ffn_moe_logits` — logits del router (`src/llama-graph.cpp:1847`);
+- `ffn_moe_logits` — logits del router (`src/llama-graph.cpp:1846`);
 - `ffn_moe_probs` / `ffn_moe_probs_biased` — probs sigmoid + bias di selezione
   (gating GLM = SIGMOID di default, `src/models/glm4-moe.cpp:17-20`; exp_probs_b
   stile DeepSeek-V3, `llama-graph.cpp:1883-1887`);
@@ -46,6 +46,36 @@ metadati GGUF — `n_layer_dense_lead` e `n_layer_nextn` sono hparams
 (`glm4-moe.cpp:52-53`). Il "46 MoE attesi" del GOAL va verificato (47 layer di
 config upstream − dense lead − NextN: la spec fissa il numero esatto dai metadati).
 
-**Resta per chiudere la fase 1**: SHA-256 del GGUF, smoke run greedy exit 0 con
-log in results/engine/moe-oracle/ + tok/s dell'oracolo (dimensiona il corpus in
-spec). Poi verifier e chiusura iterazione.
+**Completamento (stessa iterazione, dopo il download):**
+
+- **GGUF verificato**: 17.22 GB in `~/.cache/blab-models/GLM-4.7-Flash-Q4_0.gguf`,
+  SHA-256 `d0bbdfcde6e323ebf90a8b9e95da57100e972be1ec6f0bfa0fad0feaa426557e`.
+- **CORREZIONE recon**: il GGUF unsloth è arch **`deepseek2`**, NON `glm4moe`
+  (gguf-dump). Il builder effettivo è `src/models/deepseek2.cpp`; `build_moe_ffn`
+  è condiviso ⇒ `ffn_moe_logits`/`ffn_moe_probs`/`ffn_moe_topk` restano validi
+  (llama-graph.cpp:1847/1874/1929); il tap hidden post-attention in deepseek2 si
+  chiama **`ffn_norm`** (`deepseek2.cpp:376`; alternative: `attn_out`:231,
+  `l_out`:419). MLA confermata dai metadati (q_lora 768, kv_lora 512, rope 64 —
+  direction §3 ok). **Niente NextN nel GGUF** (testa MTP droppata dalla
+  conversione) → FINDING fuori-scope a docket item 2 (implicazioni fase D e C2).
+- **Conteggio per sanity-gate fase 3 CONFERMATO**: block_count 47, dense lead 1,
+  niente layer NextN nel forward ⇒ **46 layer MoE routed** (64 expert top-4 +
+  1 shared, gating sigmoid, exp_probs_b stile DeepSeek-V3).
+- **Smoke greedy exit 0**: `llama-cli -st --simple-io --temp 0 -t 16 -n 64` —
+  output coerente (Rayleigh), log committato. NOTA STRUMENTO: la nuova UI chat
+  di llama-cli IGNORA `-no-cnv` e loop-a all'infinito su stdin chiuso (676 MB di
+  "> " nel primo tentativo, processo killato) ⇒ per run scriptate SEMPRE
+  `-st --simple-io`, o llama-bench. Landmine da riportare in HANDOFF.
+- **Throughput oracolo (llama-bench, 16 thread, r=2, cache calda)**:
+  **pp512 56.58 ± 3.74 t/s; tg64 13.43 ± 0.10 t/s** (stddev decode minima ⇒
+  niente thrashing nonostante host RAM 31 GB — il working set MoE per token è
+  piccolo, effetto-colibri osservato di passaggio). Fattibilità corpus: 16k
+  posizioni ≈ 9 min/run ⇒ la spec può permettersi corpus 2-3× senza problemi.
+- Artefatti: `results/engine/moe-oracle/{oracle-smoke-2026-07-30.json,
+  smoke-glm47flash-q4_0-2026-07-30.log, llama-bench-glm47flash-q4_0-2026-07-30.json}`.
+
+**Done-when fase 1**: GGUF+SHA ✓, build+commit registrati ✓, smoke exit 0 con
+log/JSON e tok/s ✓, recon file:riga nel journal ✓ (corretto deepseek2).
+Verifier: **PASS** (agent loop-verifier, 2026-07-30 — tutti i punti con evidenza;
+drift none; violazioni none; note minori applicate: sizeBytes esatto 17216676192,
+ffn_moe_logits riga 1846). FASE 1 DONE.
