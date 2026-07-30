@@ -9,12 +9,14 @@ kernel a 14 wg vale ~4 ms/token a ctx 570), (2) loop multi-step K (~1.5 ms di
 sync), gate provvisorio decode ≥240 tok/s da fissare in spec. Fase 1 DONE
 (attribuzione: quota fuori-GPU reale 20%, non 73%). Fasi 2-3 DONE (ruling spec
 2026-07-30: soglia 230, token_embd su GPU, dispatch ≤100 archiviato). Kernel
-split INTEGRATO nel piano fuso: conformance identica a B1, profiler 0/1.04/147,
-**decode 248.3 tok/s già a K=1** (gate 230 superato; proiezione era pessimista —
-parte della "sync" era coda GPU). **Prossimo: fase 4** = decode loop multi-step
-K (token feedback on-GPU via embedGatherQ4, token_embd ~68 MB su GPU, readback
-1/K) + gate token-identity ≥256 vs K=1; poi fase 5 (telemetria/profiler) e 6
-(bench+chiusura). Nessun PI-gate pendente sul goal. Riancorarsi da:
+split INTEGRATO (decode 248.3 a K=1, conformance identica a B1). Fase 4 DONE
+(it.4): decodeBatch K≤8 con feedback token on-GPU (embedGatherQ4, token_embd
+~68 MB su GPU), UNA mapAsync/batch, EOS via crop — token-identity PASS (K=8/5/1
+identici su 256 vs oracolo), conformance invariata, informale K=8 ~3.46 ms/tok
+(~289 tok/s). **Prossimo: fase 5** = telemetria liv.2 + profiler nel nuovo loop
+(gpuMs reale non-null, submit/token ~1/K, dispatch ≤160), poi fase 6
+(bench+chiusura, gate decode ≥230 + non-regressione). Nessun PI-gate pendente.
+Riancorarsi da:
 `.harness/goals/engine-fase-b2/{GOAL,PHASES,docket,journal}.md`,
 results/engine/decode-attrib-4090-*2026-07-30*.json, tsq-diag §Conseguenze
 (CORRETTA). Branch: engine/fase-b2. Altri PI-gated (non bloccanti): igiene goal

@@ -41,3 +41,10 @@ profiler 0 bindGroup / 1.04 submit / 147 dispatch per token. SORPRESA: decode
 248.3 tok/s GIÀ a K=1 (proiezione kernel-only diceva 185; parte della "sync"
 era coda GPU) — gate 230 superato prima del multi-step. Prefill 701 ms ≤810;
 gate bench ancorato all'assoluto di spec. Next: fase 4 (multi-step + identity).
+
+2026-07-30 — it.4 (fase 4 DONE). Multi-step operativo: embedGatherQ4 (token_embd
+su GPU, dequant esatta), decodeBatch K≤8 con feedback on-GPU e UNA mapAsync per
+batch, EOS via crop (trimAtEos puro). Token-identity PASS: K=8, K=5 e K=1
+degenere IDENTICI su 256 token vs oracolo per-token; conformance invariata
+(98.05/100.00); 166/166 unit. Informale: 3.97→3.46 ms/token con K=8 (~289
+tok/s). Next: fase 5 (telemetria liv.2 + profiler nel nuovo loop).
