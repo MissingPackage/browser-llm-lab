@@ -24,21 +24,23 @@ worker.onmessage = (e: MessageEvent) => {
   } else if (m.type === "done" && m.report) {
     window.__report = m.report;
     const r = m.report;
-    if ((r as { kind?: string }).kind === "engine-tsq-diag") {
-      const s = r as unknown as { variants: { label: string; idsMatch: boolean | null; maxDlogit: number | null; gpuMsPerToken: number | null }[] };
-      $("results").innerHTML = s.variants
-        .map((v) => `<p>${v.label}: idsMatch=${v.idsMatch} · maxΔlogit=${v.maxDlogit?.toFixed(4) ?? "—"} · gpuMs=${v.gpuMsPerToken?.toFixed(3) ?? "null"}</p>`)
+    if ((r as { kind?: string }).kind === "engine-kernel-diag") {
+      $("results").textContent = JSON.stringify(r);
+      $("status").textContent = "done";
+      return;
+    }
+    if ((r as { kind?: string }).kind === "engine-prefill-diag") {
+      const s = r as unknown as { lens: { L: number; argmaxMatch: boolean; maxDlogit: number }[] };
+      $("results").innerHTML = s.lens
+        .map((v) => `<p>L=${v.L}: argmaxMatch=${v.argmaxMatch} · maxΔlogit=${v.maxDlogit.toFixed(4)}</p>`)
         .join("");
       $("status").textContent = "done";
       return;
     }
-    if ((r as { kind?: string }).kind === "engine-prefill-sim") {
-      const s = r as unknown as {
-        prefillTokens: number;
-        variants: { label: string; msPerToken: number; decodeMatch: boolean }[];
-      };
+    if ((r as { kind?: string }).kind === "engine-tsq-diag") {
+      const s = r as unknown as { variants: { label: string; idsMatch: boolean | null; maxDlogit: number | null; gpuMsPerToken: number | null }[] };
       $("results").innerHTML = s.variants
-        .map((v) => `<p>${v.label}: <b>${v.msPerToken.toFixed(2)} ms/token</b> · decodeMatch=${v.decodeMatch}</p>`)
+        .map((v) => `<p>${v.label}: idsMatch=${v.idsMatch} · maxΔlogit=${v.maxDlogit?.toFixed(4) ?? "—"} · gpuMs=${v.gpuMsPerToken?.toFixed(3) ?? "null"}</p>`)
         .join("");
       $("status").textContent = "done";
       return;
@@ -87,18 +89,20 @@ if (params.get("conformance") === "1") {
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
   });
-} else if (params.get("prefillsim") === "1") {
-  worker.postMessage({
-    type: "prefillsim",
-    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
-    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
-  });
 } else if (params.get("tsqdiag") === "1") {
   worker.postMessage({
     type: "tsqdiag",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
   });
+} else if (params.get("prefilldiag") === "1") {
+  worker.postMessage({
+    type: "prefilldiag",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+  });
+} else if (params.get("kerneldiag") === "1") {
+  worker.postMessage({ type: "kerneldiag", modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf" });
 } else {
-  $("status").textContent = "aggiungi ?conformance=1, ?bench=1 o ?prefillsim=1 per il run";
+  $("status").textContent = "aggiungi ?conformance=1 o ?bench=1 per il run";
 }

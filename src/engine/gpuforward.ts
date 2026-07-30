@@ -14,7 +14,10 @@ import {
   siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, ARGMAX_CHUNK,
   gemvGrid, attnFusedWgsl,
   rmsGemvQ8FastWgsl, rmsPairGemvSiluFastWgsl, gemvResidualFastWgsl, rmsGemvQ4FastBiasWgsl,
+  rmsnormChunkWgsl, gemmQuantChunkWgsl, ropeChunkWgsl, kvAppendChunkWgsl,
+  attnPrefillChunkWgsl, siluMulChunkWgsl,
 } from "./kernels/wgsl";
+import { planPrefill, PREFILL_M } from "./prefillplan";
 import type { RepackedQuant } from "./quant";
 
 export const CTX_MAX = 1024; // bench: prompt ~469 + warmup/gen 256 (scores in shared: 4 KB, ok)
@@ -33,11 +36,12 @@ export interface EngineTelemetry {
 export interface EngineHandle {
   device: GPUDevice;
   forwardToken(token: number, pos: number): Promise<number>; // ritorna argmax id
-  // SIM fase B1 (misura per la soglia di spec, non il percorso definitivo): prefill
-  // batched sul piano M=1 attuale — niente readback per token (l'input del token i+1
-  // è il prompt, noto), embedding e pos pre-caricati, submit ogni tokensPerSubmit.
-  // Misura il floor "solo de-sync" che il vero percorso M≤8 (GEMM) dovrà battere.
-  prefillBatched(tokens: number[], posStart: number, tokensPerSubmit: number, skipHeadExceptLast?: boolean): Promise<void>;
+  // Prefill multi-token M≤8 (spec B1 §Forward multi-token): piano a chunk con GEMM
+  // small-batch, zero readback durante il prefill (embedding dequantizzate CPU-side
+  // in un buffer unico, copy per chunk nell'encoder), submit ogni ~64 token,
+  // lm_head+argmax SOLO sull'ultima posizione. Ritorna l'argmax id dell'ultima
+  // posizione (come farebbe forwardToken sequenziale sull'ultimo token).
+  prefillChunked(tokens: number[], posStart: number): Promise<number>;
   readLogits(): Promise<Float32Array>;
   // Telemetria nativa (spec §Telemetria): livello 1 = encode CPU (2 letture clock/
   // token); livello 2 = GPU ms via timestamp-query (ring, resolve lazy ogni 64 token,
@@ -318,6 +322,62 @@ export async function createEngine(
   }
   push(pipes.am1, [logits, pmax, pidx], N_PARTIALS);
   push(pipes.am2, [pmax, pidx, amaxOut], 1);
+
+  // --- piano prefill M≤8 (compilato a parte, spec B1 §Forward multi-token) ---
+  // Stessi step logici del piano fuso decode ma per chunk di M righe: GEMM
+  // small-batch (riga di peso riusata per M attivazioni), attention con maschera
+  // causale intra-chunk, KV append di M righe in un dispatch, RoPE con pos
+  // per-riga. lm_head/argmax NON sono nel piano: girano una volta sola a fine
+  // prefill riusando la coda del piano decode (tailSteps).
+  const M_MAX = PREFILL_M;
+  const QKV_DIM = S.dModel + 2 * KV_DIM;
+  const xM = storage(M_MAX * S.dModel * 4);
+  const hnM = storage(M_MAX * S.dModel * 4);
+  const qkvM = storage(M_MAX * QKV_DIM * 4);
+  const attnOutM = storage(M_MAX * S.dModel * 4);
+  const gateM = storage(M_MAX * S.dFfn * 4);
+  const upM = storage(M_MAX * S.dFfn * 4);
+  const C = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  // slot uniform per chunk (stride 256, pattern della sim di fase 1): scritti in
+  // blocco al via del prefill, copiati in C dentro l'encoder prima di ogni chunk
+  const pcSlots = device.createBuffer({
+    size: Math.ceil(CTX_MAX / M_MAX) * 256,
+    usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+  });
+  const pipesPre = {
+    rmsC: mkPipe(rmsnormChunkWgsl(S.dModel, S.rmsEps, M_MAX)),
+    gemmQkvC: mkPipe(gemmQuantChunkWgsl({ kind: "q4_0", K: S.dModel, N: QKV_DIM, mMax: M_MAX, hasBias: true, residual: false })),
+    ropeC: mkPipe(ropeChunkWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, freqBase: S.ropeFreqBase, mMax: M_MAX })),
+    kvAppC: mkPipe(kvAppendChunkWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, mMax: M_MAX })),
+    attnC: mkPipe(attnPrefillChunkWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_MAX, mMax: M_MAX })),
+    gemmOC: mkPipe(gemmQuantChunkWgsl({ kind: "q4_0", K: S.dModel, N: S.dModel, mMax: M_MAX, hasBias: false, residual: true })),
+    gemmGUC: mkPipe(gemmQuantChunkWgsl({ kind: "q4_0", K: S.dModel, N: S.dFfn, mMax: M_MAX, hasBias: false, residual: false })),
+    siluC: mkPipe(siluMulChunkWgsl(S.dFfn, M_MAX)),
+    gemmDownC: mkPipe(gemmQuantChunkWgsl({ kind: "q4_0", K: S.dFfn, N: S.dModel, mMax: M_MAX, hasBias: false, residual: true })),
+  };
+  // La copy del tap (ultima riga del chunk, contratto spec §Tap) dipende da rows:
+  // si risolve a encode-time, qui resta un marker con il buffer di destinazione.
+  type PreStep = Step | { kind: "tapLast"; dst: GPUBuffer };
+  const preSteps: PreStep[] = [];
+  const pushPre = (pipe: GPUComputePipeline, bufs: GPUBuffer[], wgs: number | [number, number]) =>
+    preSteps.push({ kind: "compute", pipe, bind: bg(pipe, bufs, C), wgs: typeof wgs === "number" ? [wgs, 1] : wgs });
+  for (const L of layers) {
+    pushPre(pipesPre.rmsC, [xM, L.attnNorm, hnM], [M_MAX, 1]);
+    pushPre(pipesPre.gemmQkvC, [L.qkv.qs, L.qkv.scales, hnM, qkvM, L.qkvBias], gemvGrid(QKV_DIM));
+    pushPre(pipesPre.ropeC, [qkvM], [Math.ceil(((S.nHead + S.nKvHead) * S.headDim / 2) / 64), M_MAX]);
+    pushPre(pipesPre.kvAppC, [qkvM, L.kCache, L.vCache], [Math.ceil(KV_DIM / 64), M_MAX]);
+    pushPre(pipesPre.attnC, [qkvM, L.kCache, L.vCache, attnOutM], [S.nHead, M_MAX]);
+    pushPre(pipesPre.gemmOC, [L.wo.qs, L.wo.scales, attnOutM, xM], gemvGrid(S.dModel));
+    pushPre(pipesPre.rmsC, [xM, L.ffnNorm, hnM], [M_MAX, 1]);
+    pushPre(pipesPre.gemmGUC, [L.wGate.qs, L.wGate.scales, hnM, gateM], gemvGrid(S.dFfn));
+    pushPre(pipesPre.gemmGUC, [L.wUp.qs, L.wUp.scales, hnM, upM], gemvGrid(S.dFfn));
+    pushPre(pipesPre.siluC, [gateM, upM], [Math.ceil(S.dFfn / 64), M_MAX]);
+    pushPre(pipesPre.gemmDownC, [L.wDown.qs, L.wDown.scales, gateM, xM], gemvGrid(S.dModel));
+    const tapDstP = tapBufs.get(layers.indexOf(L));
+    if (tapDstP) preSteps.push({ kind: "tapLast", dst: tapDstP });
+  }
+  // coda del piano decode (lm_head [+rms] + argmax): riusata a fine prefill
+  const tailSteps = steps.slice(steps.length - (fused ? 3 : 4));
   onProgress("pronto", 1);
 
   return {
@@ -371,36 +431,33 @@ export async function createEngine(
       stagingId.unmap();
       return id;
     },
-    async prefillBatched(tokens: number[], posStart: number, tokensPerSubmit: number, skipHeadExceptLast = false): Promise<void> {
+    async prefillChunked(tokens: number[], posStart: number): Promise<number> {
       const n = tokens.length;
+      if (n < 1) throw new Error("prefill vuoto");
       if (posStart + n > CTX_MAX) throw new Error("contesto pieno");
-      // Embedding di tutti i token in un buffer solo (dequant CPU una volta) + array
-      // di uniform pos a stride 256; dentro il command buffer si copia riga/pos in
-      // x/P prima del pass di ciascun token: stessi bind group del decode, zero sync.
+      const plan = planPrefill(n, posStart);
+      // zero readback durante il prefill (l'input è il prompt, noto): embedding di
+      // tutto il prompt dequantizzate CPU-side in un buffer unico, copy per chunk
+      // nell'encoder; una sola sync a fine prefill (la mapAsync dell'argmax finale).
       const emb = new Float32Array(n * S.dModel);
       for (let i = 0; i < n; i++)
         dequantQ4_0Row(bytes, embdOff, S.dModel, tokens[i], emb.subarray(i * S.dModel, (i + 1) * S.dModel));
       const embBuf = storage(emb.byteLength);
       device.queue.writeBuffer(embBuf, 0, emb as unknown as BufferSource);
-      const posArr = new Uint32Array(n * 64); // stride 256 B (allineamento copy safe)
-      for (let i = 0; i < n; i++) { posArr[i * 64] = posStart + i; posArr[i * 64 + 1] = posStart + i; }
-      const posBuf = storage(posArr.byteLength);
-      device.queue.writeBuffer(posBuf, 0, posArr as unknown as BufferSource);
+      const slots = new Uint32Array(plan.length * 64); // stride 256 B (copy safe)
+      plan.forEach((c, ci) => { slots[ci * 64] = c.posBase; slots[ci * 64 + 1] = c.rows; });
+      device.queue.writeBuffer(pcSlots, 0, slots as unknown as BufferSource);
 
-      // lm_head+argmax servono solo all'ultima posizione del prefill: gli step di
-      // coda (fuso: rmsLmHead+am1+am2; naive: rms+gemvOut+am1+am2) si saltano per
-      // i<n-1 quando richiesto — è ciò che il percorso M≤8 farà by design.
-      const headSteps = fused ? 3 : 4;
       let enc = device.createCommandEncoder();
-      for (let i = 0; i < n; i++) {
-        const stepsTok = skipHeadExceptLast && i < n - 1 ? steps.slice(0, steps.length - headSteps) : steps;
-        enc.copyBufferToBuffer(embBuf, i * S.dModel * 4, x, 0, S.dModel * 4);
-        enc.copyBufferToBuffer(posBuf, i * 256, P, 0, 16);
+      for (let ci = 0; ci < plan.length; ci++) {
+        const c = plan[ci];
+        enc.copyBufferToBuffer(embBuf, c.start * S.dModel * 4, xM, 0, c.rows * S.dModel * 4);
+        enc.copyBufferToBuffer(pcSlots, ci * 256, C, 0, 16);
         let pass = enc.beginComputePass();
-        for (const s of stepsTok) {
-          if (s.kind === "copy") { // tap attivo: stessa semantica del decode
+        for (const s of preSteps) {
+          if (s.kind !== "compute") { // tapLast: hidden dell'ULTIMO token del chunk
             pass.end();
-            enc.copyBufferToBuffer(s.src, 0, s.dst, 0, s.bytes);
+            enc.copyBufferToBuffer(xM, (c.rows - 1) * S.dModel * 4, s.dst, 0, S.dModel * 4);
             pass = enc.beginComputePass();
             continue;
           }
@@ -409,15 +466,30 @@ export async function createEngine(
           pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
         }
         pass.end();
-        if ((i + 1) % tokensPerSubmit === 0) {
+        if (c.submitAfter && ci < plan.length - 1) {
           device.queue.submit([enc.finish()]);
           enc = device.createCommandEncoder();
         }
       }
-      if (n % tokensPerSubmit !== 0) device.queue.submit([enc.finish()]);
-      await device.queue.onSubmittedWorkDone();
+      // lm_head + argmax SOLO sull'ultima posizione dell'ultimo chunk: si copia
+      // l'ultima riga di xM nell'x del decode e si riusa la coda del piano fuso.
+      const last = plan[plan.length - 1];
+      enc.copyBufferToBuffer(xM, (last.rows - 1) * S.dModel * 4, x, 0, S.dModel * 4);
+      let pass = enc.beginComputePass();
+      for (const s of tailSteps) {
+        if (s.kind !== "compute") continue; // la coda non contiene copy
+        pass.setPipeline(s.pipe);
+        pass.setBindGroup(0, s.bind);
+        pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
+      }
+      pass.end();
+      enc.copyBufferToBuffer(amaxOut, 0, stagingId, 0, 4);
+      device.queue.submit([enc.finish()]);
+      await stagingId.mapAsync(GPUMapMode.READ);
+      const id = new Uint32Array(stagingId.getMappedRange())[0];
+      stagingId.unmap();
       embBuf.destroy();
-      posBuf.destroy();
+      return id;
     },
     setTelemetry(on: boolean): void {
       telemetryOn = on;

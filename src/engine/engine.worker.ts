@@ -2,6 +2,9 @@
 // forcing sul golden (confronto per-posizione pulito), campionamento periodico dei
 // logit per il Δ sui top-32 golden (riportato, non gated).
 import { createEngine, type EngineHandle } from "./gpuforward";
+import { PREFILL_M, PREFILL_SUBMIT_TOKENS } from "./prefillplan";
+import { parseGguf } from "./gguf";
+import { dequantQ4_0Row } from "./quant";
 
 interface GoldenPos { argmax: number; top: [number, number][] }
 interface Golden {
@@ -36,8 +39,13 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
 
   for (const p of golden.prompts) {
     let pos = 0;
-    // prefill sequenziale (riparte da pos 0: la cache si sovrascrive per posizione)
-    for (let i = 0; i < p.promptTokens.length - 1; i++) await engine.forwardToken(p.promptTokens[i], pos++);
+    // prefill CHUNKED M≤8 (fase B1: la conformance gira col percorso M>1 attivo —
+    // stesse posizioni confrontate, cambia solo come si riempie la KV; riparte da
+    // pos 0: la cache si sovrascrive per posizione)
+    if (p.promptTokens.length > 1) {
+      await engine.prefillChunked(p.promptTokens.slice(0, -1), 0);
+      pos = p.promptTokens.length - 1;
+    }
     let prev = p.promptTokens[p.promptTokens.length - 1];
     const row = { id: p.id, agree: 0, total: 0, got: [] as number[], mismatches: [] as { pos: number; got: number; gold: number }[] };
     for (let i = 0; i < p.positions.length; i++) {
@@ -71,6 +79,9 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
       top1Pct: (agree / total) * 100, agree, total, maxDlogitSampled: maxDlogit, tapCheck,
       perPrompt, dispatchesPerToken: engine.dispatchesPerToken,
       wallMs, msPerForward: wallMs / Math.max(1, forwards * golden.prompts.length),
+      // stato dei knob del run nel JSON (nota verifier fase 2: gate auto-evidenti)
+      telemetryGpu,
+      prefill: { path: "chunked", mMax: PREFILL_M, submitTokens: PREFILL_SUBMIT_TOKENS },
     },
   });
 }
@@ -133,73 +144,119 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   });
 }
 
-// Simulazione fase B1 (per fissare la soglia prefill della spec, criterio Pareto):
-// misura il floor "de-sync only" — prefill batched sul piano M=1 attuale, senza
-// readback per token, a granularità di submit variabile. Il percorso vero M≤8 (GEMM,
-// lm_head solo sull'ultima posizione) dovrà battere questo floor, altrimenti non
-// aggiunge nulla al semplice batching dei submit.
-async function runPrefillSim(modelUrl: string, promptUrl: string, replicates: number): Promise<void> {
+// Diag parità prefill chunked (fase 3, TEMPORANEA finché il percorso M>1 non è
+// stabile): confronta i logits dell'ultima posizione fra prefill sequenziale e
+// chunked sugli stessi token, bisecando per lunghezza. Discrimina: L=1 ⇒ bug
+// GEMM/rms/rope; L∈[2,8] ⇒ maschera causale intra-chunk / append; L≥9 ⇒ cross-chunk.
+async function runPrefillDiag(modelUrl: string, promptUrl: string): Promise<void> {
   progress("fetch modello…", 0);
   const gguf = await fetchBuf(modelUrl);
   const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
-  const engine = await createEngine(gguf, progress, { telemetry: false });
-  const prefillTokens = promptFix.tokens.slice(0, -1); // stesso perimetro del bench
-  const CHECK_DECODE = 8;
-
-  // baseline: prefill sequenziale con await per token (identico al bench fase A)
-  const seqOnce = async (): Promise<{ ms: number; decoded: number[] }> => {
+  const TAPS = [0, 11, 23]; // bisezione per stadio: post-layer 0 / metà / ultimo
+  const engine = await createEngine(gguf, progress, { telemetry: false, taps: TAPS });
+  const lens = [1, 2, 3, 8, 9, 16, 64, 65, 128];
+  const maxAbsDiff = (a: Float32Array, b: Float32Array) => {
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d = Math.max(d, Math.abs(a[i] - b[i]));
+    return d;
+  };
+  const results: { L: number; argmaxMatch: boolean; refArgmax: number; gotArgmax: number; maxDlogit: number; tapDiff: Record<number, number> }[] = [];
+  for (const L of lens) {
+    progress(`diag L=${L}…`, results.length / lens.length);
+    const toks = promptFix.tokens.slice(0, L);
     let pos = 0;
-    const t0 = performance.now();
-    for (const t of prefillTokens) await engine.forwardToken(t, pos++);
-    const ms = performance.now() - t0;
-    let prev = promptFix.tokens[promptFix.tokens.length - 1];
-    const decoded: number[] = [];
-    for (let i = 0; i < CHECK_DECODE; i++) { prev = await engine.forwardToken(prev, pos++); decoded.push(prev); }
-    return { ms, decoded };
-  };
-  const batchedOnce = async (tokensPerSubmit: number, skipHead = false): Promise<{ ms: number; decoded: number[] }> => {
-    const t0 = performance.now();
-    await engine.prefillBatched(prefillTokens, 0, tokensPerSubmit, skipHead);
-    const ms = performance.now() - t0;
-    let pos = prefillTokens.length;
-    let prev = promptFix.tokens[promptFix.tokens.length - 1];
-    const decoded: number[] = [];
-    for (let i = 0; i < CHECK_DECODE; i++) { prev = await engine.forwardToken(prev, pos++); decoded.push(prev); }
-    return { ms, decoded };
-  };
-
-  const variants: { label: string; run: () => Promise<{ ms: number; decoded: number[] }> }[] = [
-    { label: "seq-await", run: seqOnce },
-    { label: "batched-1", run: () => batchedOnce(1) },
-    { label: "batched-8", run: () => batchedOnce(8) },
-    { label: "batched-64", run: () => batchedOnce(64) },
-    { label: `batched-all`, run: () => batchedOnce(prefillTokens.length) },
-    { label: "batched-64-nohead", run: () => batchedOnce(64, true) },
-  ];
-  const ref = await seqOnce(); // warmup + sequenza di riferimento per il check
-  const results: { label: string; prefillMs: number[]; msPerToken: number; decodeMatch: boolean }[] = [];
-  for (const v of variants) {
-    const times: number[] = [];
-    let match = true;
-    for (let r = 0; r < replicates; r++) {
-      progress(`${v.label}: replica ${r + 1}/${replicates}`, 0.5);
-      const out = await v.run();
-      times.push(out.ms);
-      match &&= out.decoded.every((id, i) => id === ref.decoded[i]);
-    }
-    const mean = times.reduce((a, b) => a + b, 0) / times.length;
-    results.push({ label: v.label, prefillMs: times, msPerToken: mean / prefillTokens.length, decodeMatch: match });
+    let refId = -1;
+    for (const t of toks) refId = await engine.forwardToken(t, pos++);
+    const refLogits = await engine.readLogits();
+    const refTaps = new Map<number, Float32Array>();
+    for (const l of TAPS) refTaps.set(l, await engine.readTap(l));
+    const gotId = await engine.prefillChunked(toks, 0);
+    const logits = await engine.readLogits();
+    const tapDiff: Record<number, number> = {};
+    for (const l of TAPS) tapDiff[l] = maxAbsDiff(await engine.readTap(l), refTaps.get(l)!);
+    results.push({ L, argmaxMatch: gotId === refId, refArgmax: refId, gotArgmax: gotId, maxDlogit: maxAbsDiff(logits, refLogits), tapDiff });
   }
   post({
     type: "done",
-    report: {
-      schemaVersion: 1, kind: "engine-prefill-sim", promptId: promptFix.promptId,
-      prefillTokens: prefillTokens.length, replicates, checkDecodeTokens: CHECK_DECODE,
-      dispatchesPerToken: engine.dispatchesPerToken,
-      note: "floor de-sync-only sul piano M=1 fuso (lm_head+argmax ancora per ogni posizione, come la baseline); il percorso M<=8 GEMM deve battere questo",
-      variants: results,
-    },
+    report: { schemaVersion: 1, kind: "engine-prefill-diag", promptId: promptFix.promptId, lens: results },
   });
+}
+
+// Test kernel GEMM chunk in ISOLAMENTO (fase 3, TEMPORANEO): pesi reali repackati,
+// input deterministico, un dispatch, confronto vs dequant CPU — separa "kernel
+// sbagliato" da "piano/cablaggio sbagliato".
+async function runKernelDiag(modelUrl: string): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const f = parseGguf(gguf);
+  const bytes = new Uint8Array(gguf);
+  const adapter = await navigator.gpu?.requestAdapter();
+  if (!adapter) throw new Error("no webgpu");
+  const device = await adapter.requestDevice({
+    requiredLimits: { maxComputeWorkgroupStorageSize: Math.min(adapter.limits.maxComputeWorkgroupStorageSize, 32768) },
+  });
+  device.addEventListener("uncapturederror", (e) => {
+    throw new Error(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message.slice(0, 200)}`);
+  });
+  const M = 8;
+  // LCG deterministico per l'input
+  let seed = 42;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+  const cases: { name: string; tensor: string; K: number; N: number }[] = [
+    { name: "down(K=4864)", tensor: "blk.0.ffn_down.weight", K: 4864, N: 896 },
+    { name: "o(K=896)", tensor: "blk.0.attn_output.weight", K: 896, N: 896 },
+  ];
+  const results: { name: string; maxErrPerRow: number[] }[] = [];
+  const { gemmQuantChunkWgsl: gen } = await import("./kernels/wgsl");
+  const { repackQ4_0: rp } = await import("./quant");
+  for (const cs of cases) {
+    const info = f.tensors.find((t) => t.name === cs.tensor)!;
+    const nBlocks = cs.K * cs.N / 32;
+    const rpk = rp(bytes, f.dataOffset + info.offset, nBlocks);
+    const mk = (data: Uint32Array | Float32Array, usage = GPUBufferUsage.STORAGE) => {
+      const b = device.createBuffer({ size: data.byteLength, usage: usage | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(b, 0, data as BufferSource);
+      return b;
+    };
+    const xArr = new Float32Array(M * cs.K);
+    for (let i = 0; i < xArr.length; i++) xArr[i] = rnd();
+    const qsB = mk(rpk.qs); const scB = mk(rpk.scales); const xB = mk(xArr);
+    const yB = device.createBuffer({ size: M * cs.N * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const cB = mk(new Uint32Array([0, M, 0, 0]), GPUBufferUsage.UNIFORM);
+    const pipe = device.createComputePipeline({
+      layout: "auto",
+      compute: { module: device.createShaderModule({ code: gen({ kind: "q4_0", K: cs.K, N: cs.N, mMax: M, hasBias: false, residual: true }) }), entryPoint: "main" },
+    });
+    const bind = device.createBindGroup({
+      layout: pipe.getBindGroupLayout(0),
+      entries: [qsB, scB, xB, yB, cB].map((b, i) => ({ binding: i, resource: { buffer: b } })),
+    });
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.dispatchWorkgroups(cs.N, 1);
+    pass.end();
+    const st = device.createBuffer({ size: M * cs.N * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    enc.copyBufferToBuffer(yB, 0, st, 0, M * cs.N * 4);
+    device.queue.submit([enc.finish()]);
+    await st.mapAsync(GPUMapMode.READ);
+    const y = new Float32Array(st.getMappedRange().slice(0));
+    st.unmap();
+    // riferimento CPU (y parte da zero: residual ≡ output puro)
+    const wRow = new Float32Array(cs.K);
+    const maxErrPerRow = new Array(M).fill(0);
+    for (let r = 0; r < cs.N; r++) {
+      dequantQ4_0Row(bytes, f.dataOffset + info.offset, cs.K, r, wRow);
+      for (let m = 0; m < M; m++) {
+        let acc = 0;
+        for (let i = 0; i < cs.K; i++) acc += wRow[i] * xArr[m * cs.K + i];
+        maxErrPerRow[m] = Math.max(maxErrPerRow[m], Math.abs(y[m * cs.N + r] - acc));
+      }
+    }
+    results.push({ name: cs.name, maxErrPerRow });
+    progress(`${cs.name} fatto`, 0.5);
+  }
+  device.destroy();
+  post({ type: "done", report: { schemaVersion: 1, kind: "engine-kernel-diag", cases: results } });
 }
 
 // Diagnosi known-issue telemetria liv.2 (fase B1, timeboxed): matrice A/B a una
@@ -268,9 +325,11 @@ self.onmessage = (e: MessageEvent) => {
     runConformance(m.modelUrl, m.goldenUrl!, m.sampleEvery ?? 16, (m as { telemetryGpu?: boolean }).telemetryGpu ?? false).catch(fail);
   } else if (m.type === "bench") {
     runBench(m.modelUrl, m.promptUrl!, m.genTokens ?? 256, m.replicates ?? 3).catch(fail);
-  } else if (m.type === "prefillsim") {
-    runPrefillSim(m.modelUrl, m.promptUrl!, m.replicates ?? 3).catch(fail);
   } else if (m.type === "tsqdiag") {
     runTsqDiag(m.modelUrl, m.promptUrl!).catch(fail);
+  } else if (m.type === "prefilldiag") {
+    runPrefillDiag(m.modelUrl, m.promptUrl!).catch(fail);
+  } else if (m.type === "kerneldiag") {
+    runKernelDiag(m.modelUrl).catch(fail);
   }
 };
