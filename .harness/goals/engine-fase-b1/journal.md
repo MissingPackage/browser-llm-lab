@@ -79,3 +79,20 @@ Rimossi (spec §Struttura): sim prefillBatched + modalità prefillsim + script
 prefill-sim.mjs. Restano come scaffolding di fase (rimozione a fase 6 coi knob
 tsqDiag): prefill-diag.mjs (parità per lunghezza), kernel-diag.mjs (kernel vs CPU,
 guardia sul bug Tint). Fase 3 chiusa in 1 iterazione (cap: 4). Next: fase 4 (crop).
+
+2026-07-30 — Iterazione 4, FASE 4 DONE: rollback KV (crop/length-pointer) in 1
+iterazione. Nuovo src/engine/kvlen.ts: pointer PURO (CI-testabile) con contratto
+hard spec §Crop — assertNext(pos,count) pre-encode (pos===kvLen o throw, capacità),
+advance post-forward, crop(toLen≤kvLen) zero-GPU, reset()≡crop(0). Integrato in
+gpuforward: forwardToken valida pos===kvLen e avanza a forward riuscito;
+prefillChunked valida posStart===kvLen e avanza di n; handle espone crop() e kvLen
+(getter). Call-site aggiornati al riavvio esplicito (reset() in conformance
+per-prompt, bench runOnce, prefill-diag). Prova meccanica: modalità worker rollback
++ scripts/kv-rollback.mjs — prefill 47 tok, genera 64 greedy, poi (1) crop al
+prefisso e rigenera, (2) crop a metà generazione (P=62) e rigenera la coda,
+(3) reset+re-prefill fresco: sequenze IDENTICHE su tutti e tre i check, kvLen
+contabile esatto (111=47+64), exit 0, JSON committato
+(kv-rollback-4090-2026-07-30T07-20-23-512Z.json). VERIFICA: npm test 143/143
+(135+8 unit crop), tsc pulito, conformance invariante GATE DOPPIO PASS 98.05%
+golden / 100.00% cpuref (spina: parità a ogni passo). Next: fase 5 (prefix-cache
+OPFS — kvstore.ts codec puro + I/O SyncAccessHandle, restore in worker nuovo).

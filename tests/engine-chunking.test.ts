@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { planPrefill, causalLen, PREFILL_M, PREFILL_SUBMIT_TOKENS } from "../src/engine/prefillplan";
+import { createKvLen } from "../src/engine/kvlen";
 
 // Unit CPU-side sul piano di chunking M≤8 (spec B1 §Forward multi-token) —
 // convenzione CI-senza-GPU della fase A: la geometria del piano (copertura,
@@ -116,5 +117,74 @@ describe("planPrefill — validazione hard (postura ds4)", () => {
   it("costanti del piano coerenti con la spec (M≤8, submit ~64)", () => {
     expect(PREFILL_M).toBe(8);
     expect(PREFILL_SUBMIT_TOKENS).toBe(64);
+  });
+});
+
+describe("kvLen — semantica crop (spec B1 §Crop, contratto hard)", () => {
+  it("decode sequenziale: assertNext(pos)+advance() avanzano il pointer", () => {
+    const kv = createKvLen(16);
+    for (let pos = 0; pos < 5; pos++) {
+      kv.assertNext(pos);
+      kv.advance();
+    }
+    expect(kv.len).toBe(5);
+  });
+
+  it("pos !== kvLen: throw (niente posizioni libere)", () => {
+    const kv = createKvLen(16);
+    kv.assertNext(0); kv.advance();
+    expect(() => kv.assertNext(0)).toThrow(/pos 0 !== kvLen 1/);
+    expect(() => kv.assertNext(2)).toThrow(/pos 2 !== kvLen 1/);
+  });
+
+  it("prefill a chunk: assertNext(posStart, n) + advance(n) — il piano avanza di M", () => {
+    const kv = createKvLen(1024);
+    kv.assertNext(0, 469);
+    kv.advance(469);
+    expect(kv.len).toBe(469);
+    expect(() => kv.assertNext(0, 8)).toThrow(); // prefill da pos già consumate: crop prima
+  });
+
+  it("capacità: assertNext oltre ctxMax ⇒ contesto pieno", () => {
+    const kv = createKvLen(8);
+    kv.assertNext(0, 8); kv.advance(8);
+    expect(() => kv.assertNext(8)).toThrow(/contesto pieno/);
+    const kv2 = createKvLen(8);
+    expect(() => kv2.assertNext(0, 9)).toThrow(/contesto pieno/);
+  });
+
+  it("crop(P): riporta il pointer indietro; il decode riparte ESATTAMENTE da P", () => {
+    const kv = createKvLen(64);
+    kv.advance(48); // prefisso
+    kv.advance(16); // generazione
+    kv.crop(48);
+    expect(kv.len).toBe(48);
+    kv.assertNext(48); kv.advance();
+    expect(kv.len).toBe(49);
+  });
+
+  it("crop in avanti, negativo o non-intero: throw (validazione hard)", () => {
+    const kv = createKvLen(64);
+    kv.advance(10);
+    expect(() => kv.crop(11)).toThrow(/crop non valido/);
+    expect(() => kv.crop(-1)).toThrow(/crop non valido/);
+    expect(() => kv.crop(2.5)).toThrow(/crop non valido/);
+    kv.crop(10); // no-op legale (toLen === len)
+    expect(kv.len).toBe(10);
+  });
+
+  it("reset() ≡ crop(0)", () => {
+    const kv = createKvLen(64);
+    kv.advance(20);
+    kv.reset();
+    expect(kv.len).toBe(0);
+    kv.assertNext(0); kv.advance();
+    expect(kv.len).toBe(1);
+  });
+
+  it("ctxMax non valido alla creazione: throw", () => {
+    expect(() => createKvLen(0)).toThrow();
+    expect(() => createKvLen(-1)).toThrow();
+    expect(() => createKvLen(1.5)).toThrow();
   });
 });

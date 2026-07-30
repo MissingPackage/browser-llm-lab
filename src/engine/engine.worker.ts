@@ -39,9 +39,9 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
 
   for (const p of golden.prompts) {
     let pos = 0;
+    engine.reset(); // contratto kvLen (fase 4): il riavvio da pos 0 è esplicito
     // prefill CHUNKED M≤8 (fase B1: la conformance gira col percorso M>1 attivo —
-    // stesse posizioni confrontate, cambia solo come si riempie la KV; riparte da
-    // pos 0: la cache si sovrascrive per posizione)
+    // stesse posizioni confrontate, cambia solo come si riempie la KV)
     if (p.promptTokens.length > 1) {
       await engine.prefillChunked(p.promptTokens.slice(0, -1), 0);
       pos = p.promptTokens.length - 1;
@@ -95,6 +95,7 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   const engine = await createEngine(gguf, progress);
   const runOnce = async (label: string): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number }> => {
     let pos = 0;
+    engine.reset(); // contratto kvLen (fase 4)
     const t0 = performance.now();
     for (let i = 0; i < promptFix.tokens.length - 1; i++) await engine.forwardToken(promptFix.tokens[i], pos++);
     const tPrefill = performance.now();
@@ -144,6 +145,61 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   });
 }
 
+// Prova meccanica rollback KV (fase 4, done-when di PHASES): "genera N, crop a P,
+// rigenera" vs run fresco dallo stesso prefisso — sequenze token IDENTICHE (greedy
+// deterministico). Tre check: crop al prefisso, crop a metà generazione (pos
+// arbitraria ammessa dal contratto), reset+re-prefill.
+async function runRollback(modelUrl: string, promptUrl: string): Promise<void> {
+  progress("fetch modello…", 0);
+  const gguf = await fetchBuf(modelUrl);
+  const promptFix = JSON.parse(new TextDecoder().decode(await fetchBuf(promptUrl))) as { promptId: string; tokens: number[] };
+  const engine = await createEngine(gguf, progress, { telemetry: false });
+  const PREFIX = 48, GEN = 64, MID = 16;
+  const prefix = promptFix.tokens.slice(0, PREFIX);
+  const gen = async (fromPos: number, prev: number, n: number): Promise<number[]> => {
+    const out: number[] = [];
+    let pos = fromPos, p = prev;
+    for (let i = 0; i < n; i++) { p = await engine.forwardToken(p, pos++); out.push(p); }
+    return out;
+  };
+  const cmp = (name: string, a: number[], b: number[]) => {
+    const at = a.findIndex((v, i) => v !== b[i]);
+    return { name, match: a.length === b.length && at === -1, divergeAt: at === -1 ? null : at };
+  };
+  // run A: prefill del prefisso (kvLen = PREFIX-1), genera GEN token greedy
+  await engine.prefillChunked(prefix.slice(0, -1), 0);
+  const seqA = await gen(PREFIX - 1, prefix[PREFIX - 1], GEN);
+  const kvAfterGen = engine.kvLen; // atteso PREFIX-1+GEN
+  // check 1: crop a P = PREFIX-1, rigenera dallo stesso token
+  progress("crop al prefisso…", 0.4);
+  engine.crop(PREFIX - 1);
+  const seqB = await gen(PREFIX - 1, prefix[PREFIX - 1], GEN);
+  // check 2: crop a metà generazione (P = PREFIX-1+MID), rigenera la coda
+  progress("crop a metà generazione…", 0.6);
+  engine.crop(PREFIX - 1 + MID);
+  const seqTail = await gen(PREFIX - 1 + MID, seqA[MID - 1], GEN - MID);
+  // check 3: run fresco — reset + re-prefill dello stesso prefisso
+  progress("run fresco…", 0.8);
+  engine.reset();
+  await engine.prefillChunked(prefix.slice(0, -1), 0);
+  const seqC = await gen(PREFIX - 1, prefix[PREFIX - 1], GEN);
+  const checks = [
+    cmp("crop-al-prefisso-rigenera", seqB, seqA),
+    cmp("crop-a-meta-generazione", seqTail, seqA.slice(MID)),
+    cmp("run-fresco-stesso-prefisso", seqC, seqA),
+  ];
+  const kvLenOk = kvAfterGen === PREFIX - 1 + GEN;
+  post({
+    type: "done",
+    report: {
+      schemaVersion: 1, kind: "engine-kv-rollback", promptId: promptFix.promptId,
+      prefixTokens: PREFIX, genTokens: GEN, cropMid: MID,
+      kvLenAfterGen: kvAfterGen, kvLenOk, checks,
+      pass: kvLenOk && checks.every((c) => c.match),
+    },
+  });
+}
+
 // Diag parità prefill chunked (fase 3, TEMPORANEA finché il percorso M>1 non è
 // stabile): confronta i logits dell'ultima posizione fra prefill sequenziale e
 // chunked sugli stessi token, bisecando per lunghezza. Discrimina: L=1 ⇒ bug
@@ -166,10 +222,12 @@ async function runPrefillDiag(modelUrl: string, promptUrl: string): Promise<void
     const toks = promptFix.tokens.slice(0, L);
     let pos = 0;
     let refId = -1;
+    engine.reset(); // contratto kvLen (fase 4)
     for (const t of toks) refId = await engine.forwardToken(t, pos++);
     const refLogits = await engine.readLogits();
     const refTaps = new Map<number, Float32Array>();
     for (const l of TAPS) refTaps.set(l, await engine.readTap(l));
+    engine.reset();
     const gotId = await engine.prefillChunked(toks, 0);
     const logits = await engine.readLogits();
     const tapDiff: Record<number, number> = {};
@@ -331,5 +389,7 @@ self.onmessage = (e: MessageEvent) => {
     runPrefillDiag(m.modelUrl, m.promptUrl!).catch(fail);
   } else if (m.type === "kerneldiag") {
     runKernelDiag(m.modelUrl).catch(fail);
+  } else if (m.type === "rollback") {
+    runRollback(m.modelUrl, m.promptUrl!).catch(fail);
   }
 };

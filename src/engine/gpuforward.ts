@@ -18,6 +18,7 @@ import {
   attnPrefillChunkWgsl, siluMulChunkWgsl,
 } from "./kernels/wgsl";
 import { planPrefill, PREFILL_M } from "./prefillplan";
+import { createKvLen } from "./kvlen";
 import type { RepackedQuant } from "./quant";
 
 export const CTX_MAX = 1024; // bench: prompt ~469 + warmup/gen 256 (scores in shared: 4 KB, ok)
@@ -35,7 +36,14 @@ export interface EngineTelemetry {
 
 export interface EngineHandle {
   device: GPUDevice;
-  forwardToken(token: number, pos: number): Promise<number>; // ritorna argmax id
+  // Contratto hard (spec B1 §Crop): pos === kvLen o throw — il length pointer è
+  // l'unica verità sulla posizione; chi usava pos libere si rompe by design
+  // (usare crop/reset). kvLen++ a forward riuscito. Ritorna l'argmax id.
+  forwardToken(token: number, pos: number): Promise<number>;
+  // Rollback zero-GPU: kvLen = toLen (toLen ≤ kvLen o throw). Le righe oltre kvLen
+  // sono garbage mai letto: si sovrascrivono al prossimo forward per posizione.
+  crop(toLen: number): void;
+  readonly kvLen: number;
   // Prefill multi-token M≤8 (spec B1 §Forward multi-token): piano a chunk con GEMM
   // small-batch, zero readback durante il prefill (embedding dequantizzate CPU-side
   // in un buffer unico, copy per chunk nell'encoder), submit ogni ~64 token,
@@ -378,14 +386,18 @@ export async function createEngine(
   }
   // coda del piano decode (lm_head [+rms] + argmax): riusata a fine prefill
   const tailSteps = steps.slice(steps.length - (fused ? 3 : 4));
+  // length pointer della KV (spec §Crop): unica verità sulla posizione
+  const kv = createKvLen(CTX_MAX);
   onProgress("pronto", 1);
 
   return {
     device,
     dispatchesPerToken: steps.filter((st) => st.kind === "compute").length,
-    reset() { /* le cache si sovrascrivono per posizione: basta ripartire da pos 0 */ },
+    reset() { kv.reset(); }, // ≡ crop(0): le righe si sovrascrivono per posizione
+    crop(toLen: number) { kv.crop(toLen); }, // zero lavoro GPU (spec §Crop)
+    get kvLen() { return kv.len; },
     async forwardToken(token: number, pos: number): Promise<number> {
-      if (pos >= CTX_MAX) throw new Error("contesto pieno");
+      kv.assertNext(pos); // pos === kvLen o throw (+ capacità)
       dequantQ4_0Row(bytes, embdOff, S.dModel, token, embdRow);
       device.queue.writeBuffer(x, 0, embdRow as unknown as BufferSource);
       device.queue.writeBuffer(P, 0, new Uint32Array([pos, pos, 0, 0]));
@@ -429,12 +441,13 @@ export async function createEngine(
       await stagingId.mapAsync(GPUMapMode.READ);
       const id = new Uint32Array(stagingId.getMappedRange())[0];
       stagingId.unmap();
+      kv.advance(); // a forward riuscito
       return id;
     },
     async prefillChunked(tokens: number[], posStart: number): Promise<number> {
       const n = tokens.length;
       if (n < 1) throw new Error("prefill vuoto");
-      if (posStart + n > CTX_MAX) throw new Error("contesto pieno");
+      kv.assertNext(posStart, n); // posStart === kvLen o throw (+ capacità)
       const plan = planPrefill(n, posStart);
       // zero readback durante il prefill (l'input è il prompt, noto): embedding di
       // tutto il prompt dequantizzate CPU-side in un buffer unico, copy per chunk
@@ -489,6 +502,7 @@ export async function createEngine(
       const id = new Uint32Array(stagingId.getMappedRange())[0];
       stagingId.unmap();
       embBuf.destroy();
+      kv.advance(n); // il piano prefill avanza il pointer dell'intero chunk-set
       return id;
     },
     setTelemetry(on: boolean): void {

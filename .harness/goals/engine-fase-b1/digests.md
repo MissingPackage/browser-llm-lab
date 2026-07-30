@@ -29,3 +29,11 @@ Chrome/Tint (var array nel body di un loop WGSL non ri-azzerata per iterazione,
 colpiva solo il down-proj a 152 blocchi/riga) → fix azzeramento esplicito →
 GATE DOPPIO PASS 98.05% golden / 100.00% cpuref, anche con telemetria liv.2 attiva.
 Sim prefillBatched rimossa (da spec). Landmine nuova in HANDOFF. Next: fase 4 (crop).
+
+## Iterazione 4 (2026-07-30) — fase 4 DONE
+Rollback KV chiuso in 1 iterazione: length pointer kvLen come modulo puro
+(kvlen.ts, contratto hard pos===kvLen / crop≤kvLen / reset≡crop(0), 8 unit CI),
+integrato in forwardToken+prefillChunked, call-site a riavvio esplicito. Prova
+meccanica PASS sui 3 check (crop al prefisso, crop a metà generazione, run fresco:
+sequenze token identiche), JSON committato, conformance invariante PASS
+98.05/100.00, 143/143 unit. Next: fase 5 (prefix-cache OPFS).
