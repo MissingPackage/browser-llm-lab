@@ -19,6 +19,10 @@
        chiude presto ma lascia la leva grossa a un goal B3.
    (c) split: B2 = de-sync minimale (K multi-step), B3 = attention/kernel — due
        goal piccoli, più overhead di processo.
+   NOTA dal verifier (it.1): nelle predizioni, "pipelined" rende solo +1% su
+   "batched" perché encode (0.05 ms) ≪ gpuBusy — il fallback pipelining del
+   readback previsto dal DONE-WHEN ha valore ~nullo su questa GPU (resta
+   rilevante solo per device a encode alto, es. S22 ~18 ms).
    NOTA metodo: qualunque opzione, la soglia va rifissata sui dati di attribuzione
    (Pareto), e il guard-rail anti-gaming sul gpuBusy va RIFORMULATO (ridurre il
    GPU busy diventa l'obiettivo, non un imbroglio: il guard giusto è sulla parità
