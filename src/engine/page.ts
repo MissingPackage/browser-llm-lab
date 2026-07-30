@@ -24,6 +24,19 @@ worker.onmessage = (e: MessageEvent) => {
   } else if (m.type === "done" && m.report) {
     window.__report = m.report;
     const r = m.report;
+    if (["engine-kernel-diag", "engine-kv-rollback", "engine-pc-save", "engine-pc-restore"].includes((r as { kind?: string }).kind ?? "")) {
+      $("results").textContent = JSON.stringify(r);
+      $("status").textContent = "done";
+      return;
+    }
+    if ((r as { kind?: string }).kind === "engine-prefill-diag") {
+      const s = r as unknown as { lens: { L: number; argmaxMatch: boolean; maxDlogit: number }[] };
+      $("results").innerHTML = s.lens
+        .map((v) => `<p>L=${v.L}: argmaxMatch=${v.argmaxMatch} · maxΔlogit=${v.maxDlogit.toFixed(4)}</p>`)
+        .join("");
+      $("status").textContent = "done";
+      return;
+    }
     if (!("perPrompt" in (r as object))) {
       // report bench
       const b = r as unknown as {
@@ -60,10 +73,31 @@ if (params.get("conformance") === "1") {
     type: "conformance",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     goldenUrl: "/results/engine/golden/golden-qwen25-05b-q4_0.json",
+    telemetryGpu: params.get("tsq") === "1", // fase B1: gate "liv.2 attivo non perturba"
   });
 } else if (params.get("bench") === "1") {
   worker.postMessage({
     type: "bench",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+  });
+} else if (params.get("prefilldiag") === "1") {
+  worker.postMessage({
+    type: "prefilldiag",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+  });
+} else if (params.get("kerneldiag") === "1") {
+  worker.postMessage({ type: "kerneldiag", modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf" });
+} else if (params.get("rollback") === "1") {
+  worker.postMessage({
+    type: "rollback",
+    modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
+    promptUrl: "/tests/fixtures/engine-bench-prompt.json",
+  });
+} else if (params.get("pcsave") === "1" || params.get("pcrestore") === "1") {
+  worker.postMessage({
+    type: params.get("pcsave") === "1" ? "pcsave" : "pcrestore",
     modelUrl: "/models/qwen2.5-0.5b-instruct-q4_0.gguf",
     promptUrl: "/tests/fixtures/engine-bench-prompt.json",
   });

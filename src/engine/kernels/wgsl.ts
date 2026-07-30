@@ -660,6 +660,386 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 }`;
 }
 
+// ======================= KERNEL PREFILL MULTI-TOKEN (B1) =======================
+// Percorso chunk M≤8 (spec B1 §Forward multi-token). Stato dinamico per chunk:
+// l'uniform ChunkParams {posBase, rows} — rows < M solo sull'ultimo chunk parziale,
+// e OGNI kernel maschera m >= rows (le righe oltre non devono toccare cache/output).
+// M (mMax) è baked come le altre shape; il valore vive in prefillplan.ts.
+
+export const CHUNK_PARAMS_WGSL = `struct ChunkParams { posBase: u32, rows: u32 };`;
+
+// ---- GEMM small-batch FAST (architettura dei kernel fusi di fase A, per chunk) ----
+// 4 righe di peso per workgroup, 16 lane/riga, load vec4<u32>; gli M accumulatori
+// sono SCALARI GENERATI dal template (acc0..accM-1): niente array privati
+// indicizzati, che su NVIDIA finiscono in scratch memory — la prima versione
+// (1 riga/wg, array acc[m]/bd[m], load scalari) faceva ~6.6 ms/token di prefill,
+// PEGGIO della baseline sequenziale; la variante vec4 1-riga/wg ~2.35 ms/token;
+// questa architettura (fusioni + 4 righe/wg) serve la soglia 3× di spec.
+// La riga di peso si legge una volta e serve le M attivazioni (banda pesi /M).
+// x del chunk in shared vec4 dove ci sta (K=896: 28.7 KB ≤ 32 KB richiesti);
+// down-proj (K=4864) legge da storage (broadcast fra wg ⇒ L2). Solo q4_0: la
+// variante q8_0 M-colonne non ha consumer (lm_head solo sull'ultima posizione).
+
+const mRange = (mMax: number) => Array.from({ length: mMax }, (_, m) => m);
+
+// Preambolo condiviso: load di x del chunk in shared vec4 (+ rms per riga fusa,
+// normalizzazione in place — le righe m ≥ rows restano a zero e sono mascherate
+// in scrittura). Usa partial[0..63] come scratch di riduzione.
+function chunkXsPreamble(opts: { v4PerRow: number; rms: boolean; K: number; eps?: number }): string {
+  const { v4PerRow, rms, K, eps } = opts;
+  const load = `for (var i = t; i < C.rows * ${v4PerRow}u; i = i + 64u) { xs4[i] = xv4[i]; }
+  workgroupBarrier();`;
+  if (!rms) return load;
+  return `${load}
+  for (var mr = 0u; mr < C.rows; mr = mr + 1u) { // bound uniforme: barriere legali
+    var ss = 0.0;
+    for (var i = t; i < ${v4PerRow}u; i = i + 64u) { let v = xs4[mr * ${v4PerRow}u + i]; ss = ss + dot(v, v); }
+    partial[t] = ss;
+    workgroupBarrier();
+    var rstride = 32u;
+    while (rstride > 0u) {
+      if (t < rstride) { partial[t] = partial[t] + partial[t + rstride]; }
+      workgroupBarrier();
+      rstride = rstride >> 1u;
+    }
+    let rms = 1.0 / sqrt(partial[0] / ${K}.0 + ${eps});
+    workgroupBarrier();
+    for (var i = t; i < ${v4PerRow}u; i = i + 64u) {
+      xs4[mr * ${v4PerRow}u + i] = xs4[mr * ${v4PerRow}u + i] * rms *
+        vec4(normW[i * 4u], normW[i * 4u + 1u], normW[i * 4u + 2u], normW[i * 4u + 3u]);
+    }
+    workgroupBarrier();
+  }`;
+}
+
+// Corpo del dot per blocco q4_0 (load vec4, nibble → vec4, dot con xs4/xv4).
+function chunkBlockDot(ms: number[], xsExpr: (m: number, idx: string) => string, qsName: string, bd: string): string {
+  return `let w4 = ${qsName}[gb];
+      ${ms.map((m) => `${bd}${m} = 0.0;`).join(" ")}
+      for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+        let word = w4[wi];
+        let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu)) - 8.0;
+        let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu)) - 8.0;
+        ${ms.map((m) => `${bd}${m} = ${bd}${m} + dot(nibLo, ${xsExpr(m, "x4 + wi")}) + dot(nibHi, ${xsExpr(m, "x4 + 4u + wi")});`).join("\n        ")}
+      }`;
+}
+
+// Riduzione fra le 16 lane di ciascuna (riga, m): partial[m*64 + t]. In un blocco
+// a scope proprio: pairSilu la emette DUE volte nello stesso body e WGSL vieta la
+// ridichiarazione di `stride` nello stesso scope (trovato in fase 6: il modulo non
+// compilava e Dawn droppava in silenzio ogni submit con la pipeline invalida).
+const chunkLaneReduce = (ms: number[], acc: string) => `${ms.map((m) => `partial[${m * 64}u + t] = ${acc}${m};`).join(" ")}
+  workgroupBarrier();
+  {
+    var stride = 8u;
+    while (stride > 0u) {
+      if (lane < stride) {
+        for (var m = 0u; m < M_MAX; m = m + 1u) {
+          partial[m * 64u + t] = partial[m * 64u + t] + partial[m * 64u + t + stride];
+        }
+      }
+      workgroupBarrier();
+      stride = stride >> 1u;
+    }
+  }`;
+
+// QKV di chunk: rms fusa + GEMM Q4_0 con bias.
+export function rmsGemmQkvChunkFastWgsl(opts: { K: number; N: number; eps: number; mMax: number }): string {
+  const { K, N, eps, mMax } = opts;
+  const v4PerRow = K / 4;
+  const ms = mRange(mMax);
+  return `${CHUNK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> xv4: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> normW: array<f32>;
+@group(0) @binding(4) var<storage, read_write> y: array<f32>;
+@group(0) @binding(5) var<storage, read> bias: array<f32>;
+@group(0) @binding(6) var<uniform> C: ChunkParams;
+const BLOCKS_PER_ROW = ${K / 32}u;
+const M_MAX = ${mMax}u;
+var<workgroup> xs4: array<vec4<f32>, ${mMax * v4PerRow}>;
+var<workgroup> partial: array<f32, ${64 * mMax}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  ${chunkXsPreamble({ v4PerRow, rms: true, K, eps })}
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  ${ms.map((m) => `var acc${m} = 0.0; var bd${m} = 0.0;`).join(" ")}
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+      let x4 = b * 8u;
+      ${chunkBlockDot(ms, (m, idx) => `xs4[${m * v4PerRow}u + ${idx}]`, "qs4", "bd")}
+      ${ms.map((m) => `acc${m} = acc${m} + sc * bd${m};`).join(" ")}
+    }
+  }
+  ${chunkLaneReduce(ms, "acc")}
+  if (lane == 0u && r < ${N}u) {
+    for (var m = 0u; m < C.rows; m = m + 1u) { y[m * ${N}u + r] = partial[m * 64u + sub * 16u] + bias[r]; }
+  }
+}`;
+}
+
+// Pair gate/up di chunk: rms fusa + due GEMM + silu, un dispatch (come pairSilu decode).
+export function rmsPairGemmSiluChunkFastWgsl(opts: { K: number; N: number; eps: number; mMax: number }): string {
+  const { K, N, eps, mMax } = opts;
+  const v4PerRow = K / 4;
+  const ms = mRange(mMax);
+  return `${CHUNK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> gQs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> gScales: array<u32>;
+@group(0) @binding(2) var<storage, read> uQs4: array<vec4<u32>>;
+@group(0) @binding(3) var<storage, read> uScales: array<u32>;
+@group(0) @binding(4) var<storage, read> xv4: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read> normW: array<f32>;
+@group(0) @binding(6) var<storage, read_write> out: array<f32>;
+@group(0) @binding(7) var<uniform> C: ChunkParams;
+const BLOCKS_PER_ROW = ${K / 32}u;
+const M_MAX = ${mMax}u;
+var<workgroup> xs4: array<vec4<f32>, ${mMax * v4PerRow}>;
+var<workgroup> partial: array<f32, ${64 * mMax}>;
+var<workgroup> gRes: array<f32, ${4 * mMax}>; // g ridotto, per (m, sub)
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  ${chunkXsPreamble({ v4PerRow, rms: true, K, eps })}
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  ${ms.map((m) => `var accG${m} = 0.0; var accU${m} = 0.0; var bdG${m} = 0.0; var bdU${m} = 0.0;`).join(" ")}
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let x4 = b * 8u;
+      {
+        ${chunkBlockDot(ms, (m, idx) => `xs4[${m * v4PerRow}u + ${idx}]`, "gQs4", "bdG")}
+        let sc = unpack2x16float(gScales[gb >> 1u])[gb & 1u];
+        ${ms.map((m) => `accG${m} = accG${m} + sc * bdG${m};`).join(" ")}
+      }
+      {
+        ${chunkBlockDot(ms, (m, idx) => `xs4[${m * v4PerRow}u + ${idx}]`, "uQs4", "bdU")}
+        let sc = unpack2x16float(uScales[gb >> 1u])[gb & 1u];
+        ${ms.map((m) => `accU${m} = accU${m} + sc * bdU${m};`).join(" ")}
+      }
+    }
+  }
+  ${chunkLaneReduce(ms, "accG")}
+  if (lane == 0u) {
+    for (var m = 0u; m < M_MAX; m = m + 1u) { gRes[m * 4u + sub] = partial[m * 64u + sub * 16u]; }
+  }
+  workgroupBarrier();
+  ${chunkLaneReduce(ms, "accU")}
+  if (lane == 0u && r < ${N}u) {
+    for (var m = 0u; m < C.rows; m = m + 1u) {
+      let g = gRes[m * 4u + sub];
+      out[m * ${N}u + r] = (g / (1.0 + exp(-g))) * partial[m * 64u + sub * 16u];
+    }
+  }
+}`;
+}
+
+// GEMM+residual di chunk (o-proj e down-proj): niente rms; shared se K ci sta.
+export function gemmResidChunkFastWgsl(opts: { K: number; N: number; mMax: number }): string {
+  const { K, N, mMax } = opts;
+  const v4PerRow = K / 4;
+  const ms = mRange(mMax);
+  const useShared = mMax * K * 4 <= 28672;
+  const xsDecl = useShared ? `var<workgroup> xs4: array<vec4<f32>, ${mMax * v4PerRow}>;` : "";
+  const xsLoad = useShared ? chunkXsPreamble({ v4PerRow, rms: false, K }) : "";
+  const xsExpr = (m: number, idx: string) => useShared
+    ? `xs4[${m * v4PerRow}u + ${idx}]`
+    : `xv4[${m * v4PerRow}u + ${idx}]`;
+  return `${CHUNK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> xv4: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<uniform> C: ChunkParams;
+const BLOCKS_PER_ROW = ${K / 32}u;
+const M_MAX = ${mMax}u;
+${xsDecl}
+var<workgroup> partial: array<f32, ${64 * mMax}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  ${xsLoad}
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  ${ms.map((m) => `var acc${m} = 0.0; var bd${m} = 0.0;`).join(" ")}
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+      let x4 = b * 8u;
+      ${chunkBlockDot(ms, xsExpr, "qs4", "bd")}
+      ${ms.map((m) => `acc${m} = acc${m} + sc * bd${m};`).join(" ")}
+    }
+  }
+  ${chunkLaneReduce(ms, "acc")}
+  if (lane == 0u && r < ${N}u) {
+    for (var m = 0u; m < C.rows; m = m + 1u) { y[m * ${N}u + r] = y[m * ${N}u + r] + partial[m * 64u + sub * 16u]; }
+  }
+}`;
+}
+
+// RoPE NEOX in-place sul buffer QKV di chunk [M×qkvDim], pos per-riga = posBase+m.
+// Copre q e k in un dispatch: coppie 0..QPAIRS-1 = q, il resto = k.
+export function ropeChunkWgsl(opts: {
+  nHead: number; nKvHead: number; headDim: number; freqBase: number; mMax: number;
+}): string {
+  const { nHead, nKvHead, headDim, freqBase, mMax } = opts;
+  const half = headDim / 2;
+  const qkvDim = (nHead + 2 * nKvHead) * headDim;
+  return `${CHUNK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read_write> qkv: array<f32>;
+@group(0) @binding(1) var<uniform> C: ChunkParams;
+const HALF = ${half}u;
+const HEAD_DIM = ${headDim}u;
+const Q_PAIRS = ${nHead * half}u;
+const TOTAL_PAIRS = ${(nHead + nKvHead) * half}u;
+const QKV_DIM = ${qkvDim}u;
+const K_OFF = ${nHead * headDim}u;
+const M_MAX = ${mMax}u;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  let m = gid.y;
+  if (i >= TOTAL_PAIRS || m >= C.rows) { return; }
+  var h: u32; var j: u32; var base: u32;
+  if (i < Q_PAIRS) {
+    h = i / HALF; j = i % HALF;
+    base = m * QKV_DIM + h * HEAD_DIM;
+  } else {
+    let ik = i - Q_PAIRS;
+    h = ik / HALF; j = ik % HALF;
+    base = m * QKV_DIM + K_OFF + h * HEAD_DIM;
+  }
+  let theta = f32(C.posBase + m) * pow(${freqBase}.0, -f32(j) / f32(HALF));
+  let c = cos(theta);
+  let s = sin(theta);
+  let a = qkv[base + j];
+  let b = qkv[base + j + HALF];
+  qkv[base + j] = a * c - b * s;
+  qkv[base + j + HALF] = a * s + b * c;
+}`;
+}
+
+// Append delle M righe k/v del chunk nelle cache, un dispatch per layer:
+// cache[(posBase+m)*KV_DIM + i] = qkv[m][K_OFF/V_OFF + i].
+export function kvAppendChunkWgsl(opts: {
+  nHead: number; nKvHead: number; headDim: number; mMax: number;
+}): string {
+  const { nHead, nKvHead, headDim, mMax } = opts;
+  const kvDim = nKvHead * headDim;
+  const qkvDim = (nHead + 2 * nKvHead) * headDim;
+  return `${CHUNK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> qkv: array<f32>;
+@group(0) @binding(1) var<storage, read_write> kCache: array<f32>;
+@group(0) @binding(2) var<storage, read_write> vCache: array<f32>;
+@group(0) @binding(3) var<uniform> C: ChunkParams;
+const KV_DIM = ${kvDim}u;
+const QKV_DIM = ${qkvDim}u;
+const K_OFF = ${nHead * headDim}u;
+const V_OFF = ${nHead * headDim + kvDim}u;
+const M_MAX = ${mMax}u;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  let m = gid.y;
+  if (i >= KV_DIM || m >= C.rows) { return; }
+  let pos = C.posBase + m;
+  kCache[pos * KV_DIM + i] = qkv[m * QKV_DIM + K_OFF + i];
+  vCache[pos * KV_DIM + i] = qkv[m * QKV_DIM + V_OFF + i];
+}`;
+}
+
+// Attention di chunk (GQA): un workgroup da 64 per (head, riga m); maschera causale
+// intra-chunk: la riga m vede KV [0, posBase+m] (le righe del chunk sono GIÀ in
+// cache via kvAppendChunk; le righe future del chunk esistono in cache ma n le
+// esclude). q dal buffer QKV post-rope, out [M×nHead*headDim].
+export function attnPrefillChunkWgsl(opts: {
+  nHead: number; nKvHead: number; headDim: number; ctxMax: number; mMax: number;
+}): string {
+  const { nHead, nKvHead, headDim, ctxMax, mMax } = opts;
+  const groups = nHead / nKvHead;
+  const kvDim = nKvHead * headDim;
+  const qkvDim = (nHead + 2 * nKvHead) * headDim;
+  return `${CHUNK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> qkv: array<f32>;
+@group(0) @binding(1) var<storage, read> kCache: array<f32>;
+@group(0) @binding(2) var<storage, read> vCache: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@group(0) @binding(4) var<uniform> C: ChunkParams;
+const HEAD_DIM = ${headDim}u;
+const KV_DIM = ${kvDim}u;
+const GROUPS = ${groups}u;
+const Q_DIM = ${nHead * headDim}u;
+const QKV_DIM = ${qkvDim}u;
+const SCALE = ${1 / Math.sqrt(headDim)};
+const M_MAX = ${mMax}u;
+var<workgroup> qh: array<f32, ${headDim}>;
+var<workgroup> scores: array<f32, ${ctxMax}>;
+var<workgroup> red: array<f32, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let h = wid.x;
+  let m = wid.y;
+  if (m >= C.rows) { return; } // uniforme per workgroup: barriere sotto ok
+  let t = lid.x;
+  let kvHead = h / GROUPS;
+  let n = C.posBase + m + 1u; // causale: la riga m vede [0, posBase+m]
+  if (t < HEAD_DIM) { qh[t] = qkv[m * QKV_DIM + h * HEAD_DIM + t]; }
+  workgroupBarrier();
+  for (var p = t; p < n; p = p + 64u) {
+    let kOff = p * KV_DIM + kvHead * HEAD_DIM;
+    var acc = 0.0;
+    for (var i = 0u; i < HEAD_DIM; i = i + 1u) { acc = acc + qh[i] * kCache[kOff + i]; }
+    scores[p] = acc * SCALE;
+  }
+  workgroupBarrier();
+  var mx = -3.0e38;
+  for (var p = t; p < n; p = p + 64u) { mx = max(mx, scores[p]); }
+  red[t] = mx;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { red[t] = max(red[t], red[t + stride]); }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  let mAll = red[0];
+  workgroupBarrier();
+  var s = 0.0;
+  for (var p = t; p < n; p = p + 64u) {
+    let e = exp(scores[p] - mAll);
+    scores[p] = e;
+    s = s + e;
+  }
+  red[t] = s;
+  workgroupBarrier();
+  stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { red[t] = red[t] + red[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  let sAll = red[0];
+  workgroupBarrier();
+  for (var i = t; i < HEAD_DIM; i = i + 64u) {
+    var acc = 0.0;
+    for (var p = 0u; p < n; p = p + 1u) {
+      acc = acc + scores[p] * vCache[p * KV_DIM + kvHead * HEAD_DIM + i];
+    }
+    out[m * Q_DIM + h * HEAD_DIM + i] = acc / sAll;
+  }
+}`;
+}
+
 // QKV veloce: rms fusa + GEMV Q4_0 con bias, 4 righe/wg, load vec4 (stessa
 // architettura del pair, un solo accumulatore + bias).
 export function rmsGemvQ4FastBiasWgsl(opts: { K: number; N: number; eps: number }): string {

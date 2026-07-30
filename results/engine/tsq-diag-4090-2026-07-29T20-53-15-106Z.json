@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-tsq-diag",
+  "promptId": "bench-512-v1",
+  "prefillTokens": 32,
+  "decodeTokens": 64,
+  "variants": [
+    {
+      "label": "off",
+      "hyp": "baseline",
+      "idsMatch": true,
+      "divergeAt": null,
+      "maxDlogit": 0,
+      "gpuMsPerToken": null,
+      "timestampNote": "livello 2 spento di default (known-issue 2026-07-29: valori azzerati + corruzione compute quando attivo su Chrome/Linux/NVIDIA — opt-in telemetryGpu, diagnosi fase B)"
+    },
+    {
+      "label": "on-ring64-same",
+      "hyp": "comportamento fase A (sintomo atteso)",
+      "idsMatch": false,
+      "divergeAt": 32,
+      "maxDlogit": 22.489990234375,
+      "gpuMsPerToken": null,
+      "timestampNote": "timestamp azzerati (known-issue)"
+    },
+    {
+      "label": "on-ring1-same",
+      "hyp": "H3: ring lungo",
+      "idsMatch": false,
+      "divergeAt": 0,
+      "maxDlogit": 20.013141632080078,
+      "gpuMsPerToken": null,
+      "timestampNote": "timestamp azzerati (known-issue)"
+    },
+    {
+      "label": "on-ring1-own",
+      "hyp": "H2: resolve nello stesso encoder",
+      "idsMatch": true,
+      "divergeAt": null,
+      "maxDlogit": 0,
+      "gpuMsPerToken": null,
+      "timestampNote": "timestamp azzerati (known-issue)"
+    },
+    {
+      "label": "on-writes-only",
+      "hyp": "H1: timestampWrites da solo",
+      "idsMatch": true,
+      "divergeAt": null,
+      "maxDlogit": 0,
+      "gpuMsPerToken": null,
+      "timestampNote": "timestamp azzerati (known-issue)"
+    }
+  ],
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-29T20-53-15-106Z"
+}

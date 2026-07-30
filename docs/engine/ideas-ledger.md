@@ -141,3 +141,19 @@ la 4090/16 GB, dove le risposte sono paging o ricetta asimmetrica ds4 + evals.
 - È ricerca/tecnologia/benchmark, non prodotto: Chrome built-in non è un concorrente,
   la tassa-browser sulla residenza è un parametro, i moonshot sono capitoli legittimi.
 - Le evals di perdita d'intelligenza sono parte del progetto, non un afterthought.
+
+## I. Rimandi espliciti di fase (registro; aperto in B1, ruling PI 2026-07-30)
+
+Ogni riga è una generalità deliberatamente NON costruita, col momento in cui torna
+utile e il trigger che la riattiva. Chi apre una fase nuova legge questa tabella.
+
+| Rimando | Deciso in | Riprende in | Trigger di riattivazione | Riferimento |
+|---|---|---|---|---|
+| Lookup longest-prefix nella prefix-cache (ds4 `find_text_prefix`: vince il prefisso salvato più lungo) | B1 (v1 = match esatto) | fase C | il paging rende normali i prompt che crescono tra sessioni; >~50 entry in cache | spec B1 §Formato prefix-cache; study/ds4.md §2 |
+| Chiave della cache su testo renderizzato (anti-ritokenizzazione BPE) + migrazione della chiave token-id | B1 (chiave = hash token-id) | quando arriva il tokenizer (D/evals) | primo caso d'uso con testo libero in ingresso | spec B1 §Formato prefix-cache (layoutVersion nell'envelope = punto di migrazione) |
+| Logits dell'ultima posizione nel checkpoint KV (ds4 li salva per riprendere il sampling senza forward extra) | B1 (si ricalcola 1 forward, ~8 ms) | D (spec-dec) o instant-on fase C | il costo del forward di ripresa smette di essere trascurabile (batch di sessioni, modelli grandi) | spec B1 §Formato prefix-cache |
+| Eviction con scoring a densità (ds4: half-life hit 6h, fattore 2× per anchor) | B1 (LRU semplice) | fase C | la cache supera ~100 entry o compaiono pattern di riuso non-LRU | study/ds4.md §2; spec B1 §Quota/eviction |
+| Floor dispatch ≤100/token | split B1/B2 (PI 2026-07-29) | B2 | goal-brief B2 — DA RI-INQUADRARE: col liv.2 funzionante, GPU busy ≈2.2 ms/token vs 8.1 wall ⇒ ~73% del decode è sync/encode, non dispatch | docket goal B1 item 2; tsq-diag-2026-07-29.md §Conseguenze |
+| Fusioni cross-layer/megakernel viste durante B1 ma non implementate | B1 (must-docket da contratto) | B2 | si annotano nel docket del goal B1 man mano | GOAL.md B1 §must-docket |
+| Parametro M del piano prefill riusato come batch di verifica spec-dec | A (spec §Piano statico) | D | costruzione del verificatore speculativo | spec A §Piano statico; spec B1 §Forward multi-token |
+| Telemetria livello 3 (un pass per step, timestamp per-op) | A (mai default) | diagnostica ad-hoc | solo per indagini; mai nei numeri pubblicati | spec A §Telemetria |

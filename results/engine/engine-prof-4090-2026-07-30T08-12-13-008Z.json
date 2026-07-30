@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "kind": "engine-prof",
+  "ts": "2026-07-30T08:12:13.008Z",
+  "deviceLabel": "4090-linux",
+  "totalForwardsExpected": 2896,
+  "deltasDuranteRun": {
+    "dispatch": 451122,
+    "bindGroup": 0,
+    "submit": 3232,
+    "writeBuffer": 6380,
+    "mapAsync": 3190
+  },
+  "perForward": {
+    "dispatch": 139.57982673267327,
+    "submit": 1,
+    "bindGroup": 0,
+    "writeBufferPerForward": 1.974009900990099,
+    "mapAsync": 0.9870049504950495
+  },
+  "gates": {
+    "L1_bindGroupZero": true,
+    "L2_unSubmitPerToken": false,
+    "L3_dispatchPerToken": 139.57982673267327
+  }
+}

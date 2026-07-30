@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 3,
+  "kind": "engine-bench",
+  "promptId": "bench-512-v1",
+  "promptTokens": 469,
+  "genTokens": 256,
+  "replicates": 3,
+  "warmup": {
+    "decodeToksPerSec": 123.19703554000169,
+    "prefillMs": 872.1200000047684,
+    "msPerTokenDecode": 8.117078431447347
+  },
+  "reps": [
+    {
+      "decodeToksPerSec": 123.43796516159206,
+      "prefillMs": 693.5849999785423,
+      "msPerTokenDecode": 8.101235294108298
+    },
+    {
+      "decodeToksPerSec": 122.47368016696956,
+      "prefillMs": 700.0249999761581,
+      "msPerTokenDecode": 8.165019607777689
+    },
+    {
+      "decodeToksPerSec": 121.21990002868584,
+      "prefillMs": 707.7749999761581,
+      "msPerTokenDecode": 8.249470588272693
+    }
+  ],
+  "decodeToksPerSec": {
+    "mean": 122.37718178574916,
+    "stdev": 1.112176778501147
+  },
+  "telemetryOn": {
+    "reps": [
+      {
+        "decodeToksPerSec": 123.53095055912438,
+        "prefillMs": 695.7049999833107,
+        "msPerTokenDecode": 8.095137254864563
+      },
+      {
+        "decodeToksPerSec": 124.40966395072672,
+        "prefillMs": 699.7650000452995,
+        "msPerTokenDecode": 8.037960784108032
+      },
+      {
+        "decodeToksPerSec": 122.3385371192313,
+        "prefillMs": 698.4499999880791,
+        "msPerTokenDecode": 8.174039215667575
+      }
+    ],
+    "decodeToksPerSec": {
+      "mean": 123.42638387636082,
+      "stdev": 1.0395153829516894
+    }
+  },
+  "telemetry": {
+    "forwards": 1024,
+    "encodeCpuMsPerToken": 0.037441405991557986,
+    "gpuMsPerToken": null,
+    "timestampNote": "livello 2 opt-in (telemetryGpu) — spento: zero-overhead by design"
+  },
+  "telemetryOverheadPct": -0.8500630559367849,
+  "dispatchesPerToken": 123,
+  "prefill": {
+    "path": "chunked",
+    "mMax": 8,
+    "submitTokens": 64,
+    "prefillMs": {
+      "mean": 700.4616666436195,
+      "reps": [
+        693.5849999785423,
+        700.0249999761581,
+        707.7749999761581
+      ]
+    },
+    "seqBaselineMs": {
+      "mean": 2410.881666680177,
+      "reps": [
+        2446.2049999833107,
+        2373.7200000286102,
+        2412.7200000286102
+      ]
+    },
+    "speedupVsSeq": 3.441846686960507,
+    "thresholdMs": 803.6272222267257,
+    "gatePass": true
+  },
+  "quant": "Q4_0 (gguf)",
+  "note": "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-30T08-09-39-624Z"
+}

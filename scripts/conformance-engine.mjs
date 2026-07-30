@@ -21,7 +21,7 @@ page.on("console", (m) => {
     console.log(`[conf][console:${m.type()}]`, t.slice(0, 500));
   }
 });
-await page.goto(`${BASE_URL}/engine.html?conformance=1`, { waitUntil: "load" });
+await page.goto(`${BASE_URL}/engine.html?conformance=1${process.env.TSQ === "1" ? "&tsq=1" : ""}`, { waitUntil: "load" });
 
 let lastStatus = "";
 const poll = setInterval(async () => {

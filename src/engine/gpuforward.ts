@@ -14,7 +14,11 @@ import {
   siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, ARGMAX_CHUNK,
   gemvGrid, attnFusedWgsl,
   rmsGemvQ8FastWgsl, rmsPairGemvSiluFastWgsl, gemvResidualFastWgsl, rmsGemvQ4FastBiasWgsl,
+  ropeChunkWgsl, kvAppendChunkWgsl, attnPrefillChunkWgsl,
+  rmsGemmQkvChunkFastWgsl, rmsPairGemmSiluChunkFastWgsl, gemmResidChunkFastWgsl,
 } from "./kernels/wgsl";
+import { planPrefill, PREFILL_M } from "./prefillplan";
+import { createKvLen } from "./kvlen";
 import type { RepackedQuant } from "./quant";
 
 export const CTX_MAX = 1024; // bench: prompt ~469 + warmup/gen 256 (scores in shared: 4 KB, ok)
@@ -32,7 +36,25 @@ export interface EngineTelemetry {
 
 export interface EngineHandle {
   device: GPUDevice;
-  forwardToken(token: number, pos: number): Promise<number>; // ritorna argmax id
+  // Contratto hard (spec B1 §Crop): pos === kvLen o throw — il length pointer è
+  // l'unica verità sulla posizione; chi usava pos libere si rompe by design
+  // (usare crop/reset). kvLen++ a forward riuscito. Ritorna l'argmax id.
+  forwardToken(token: number, pos: number): Promise<number>;
+  // Rollback zero-GPU: kvLen = toLen (toLen ≤ kvLen o throw). Le righe oltre kvLen
+  // sono garbage mai letto: si sovrascrivono al prossimo forward per posizione.
+  crop(toLen: number): void;
+  readonly kvLen: number;
+  // Prefix-cache (spec §Formato): payload per-layer [K righe [0,kvLen) | V righe]
+  // nel layout ESATTO dell'envelope BKV1 — readKv per il save (copy GPU→staging→CPU),
+  // writeKv per il restore (writeBuffer per layer + pointer impostato).
+  readKv(): Promise<Float32Array>;
+  writeKv(payload: Float32Array, tokenCount: number): void;
+  // Prefill multi-token M≤8 (spec B1 §Forward multi-token): piano a chunk con GEMM
+  // small-batch, zero readback durante il prefill (embedding dequantizzate CPU-side
+  // in un buffer unico, copy per chunk nell'encoder), submit ogni ~64 token,
+  // lm_head+argmax SOLO sull'ultima posizione. Ritorna l'argmax id dell'ultima
+  // posizione (come farebbe forwardToken sequenziale sull'ultimo token).
+  prefillChunked(tokens: number[], posStart: number): Promise<number>;
   readLogits(): Promise<Float32Array>;
   // Telemetria nativa (spec §Telemetria): livello 1 = encode CPU (2 letture clock/
   // token); livello 2 = GPU ms via timestamp-query (ring, resolve lazy ogni 64 token,
@@ -51,7 +73,9 @@ export interface EngineHandle {
 export async function createEngine(
   gguf: ArrayBuffer,
   onProgress: (text: string, frac: number) => void,
-  opts: { taps?: number[]; fused?: boolean; telemetry?: boolean; telemetryGpu?: boolean } = {},
+  opts: {
+    taps?: number[]; fused?: boolean; telemetry?: boolean; telemetryGpu?: boolean;
+  } = {},
 ): Promise<EngineHandle> {
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("WebGPU non disponibile");
@@ -122,7 +146,13 @@ export async function createEngine(
   // --- pesi su GPU ---
   const T = (name: string) => byName.get(name)!;
   onProgress("upload pesi…", 0);
-  const layers = [];
+  interface LayerBufs {
+    qkv: QuantBufs; qkvBias: GPUBuffer; attnNorm: GPUBuffer;
+    wq: QuantBufs; bq: GPUBuffer; wk: QuantBufs; bk: GPUBuffer; wv: QuantBufs; bv: GPUBuffer;
+    wo: QuantBufs; ffnNorm: GPUBuffer; wGate: QuantBufs; wUp: QuantBufs; wDown: QuantBufs;
+    kCache: GPUBuffer; vCache: GPUBuffer;
+  }
+  const layers: LayerBufs[] = [];
   for (let l = 0; l < S.nLayer; l++) {
     const p = (n: string) => T(`blk.${l}.${n}`);
     const qkvConcat = repackConcat([p("attn_q.weight"), p("attn_k.weight"), p("attn_v.weight")]);
@@ -171,29 +201,38 @@ export async function createEngine(
   const pidx = storage(N_PARTIALS * 4);
   const amaxOut = storage(16);
   const P = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const stagingId = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const stagingId = device.createBuffer({ label: "staging-argmax-id", size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
   // --- telemetria ---
   let telemetryOn = opts.telemetry ?? true;
   let tForwards = 0;
   let tEncodeCpuMs = 0;
   const TSQ_RING = 64; // token per batch di resolve (lazy, mai bloccante)
-  // Livello 2 SOLO dietro opt-in esplicito: su Chrome/Linux/NVIDIA i timestamp
-  // risultano azzerati E la loro attivazione corrompe il compute (visto 2026-07-29:
-  // conformance 98.05% -> 93.4% con maxDlogit 5.8 a parita' di tutto). Known-issue,
-  // diagnosi in fase B; il livello 1 (encode CPU) e' innocuo per costruzione.
+  // Livello 2 dietro opt-in (feature di misura: zero-overhead da spenta by design).
+  // Il known-issue fase A (timestamp azzerati + corruzione compute) e' stato
+  // root-causato e RISOLTO in fase B1 (2026-07-29): era mapAsync chiamata prima del
+  // submit — vedi armTsq e docs/engine/tsq-diag-2026-07-29.md. Col liv.2 attivo la
+  // conformance resta PASS (gate doppio) e i timestamp sono reali (~2.2 ms/token GPU).
   const wantGpuTs = hasTsq && opts.telemetryGpu === true;
   const querySet = wantGpuTs ? device.createQuerySet({ type: "timestamp", count: TSQ_RING * 2 }) : null;
   const tsqResolve = wantGpuTs
-    ? device.createBuffer({ size: TSQ_RING * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
+    ? device.createBuffer({ label: "tsq-resolve", size: TSQ_RING * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
     : null;
   const pendingTsq: Promise<number[]>[] = [];
   let tsqIdx = 0;
-  const flushTsq = (enc: GPUCommandEncoder, count: number): void => {
-    if (!querySet || !tsqResolve) return;
+  // Root-cause del known-issue fase A (diagnosi 2026-07-29, tsq-diag): mapAsync era
+  // chiamata DENTRO flushTsq, cioè prima del submit che contiene la copy verso lo
+  // staging — Dawn valida "buffer used in submit while mapped" e DROPPA l'intero
+  // command buffer (⇒ token saltato = corruzione; copy mai eseguita = timestamp a
+  // zero). Fix: flushTsq encoda soltanto; armTsq (la mapAsync) parte DOPO il submit.
+  const flushTsq = (enc: GPUCommandEncoder, count: number): GPUBuffer | null => {
+    if (!querySet || !tsqResolve) return null;
     enc.resolveQuerySet(querySet, 0, count * 2, tsqResolve, 0);
-    const staging = device.createBuffer({ size: count * 2 * 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const staging = device.createBuffer({ label: "tsq-staging", size: count * 2 * 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     enc.copyBufferToBuffer(tsqResolve, 0, staging, 0, count * 2 * 8);
+    return staging;
+  };
+  const armTsq = (staging: GPUBuffer, count: number): void => {
     pendingTsq.push(
       (async () => {
         await staging.mapAsync(GPUMapMode.READ);
@@ -296,14 +335,66 @@ export async function createEngine(
   }
   push(pipes.am1, [logits, pmax, pidx], N_PARTIALS);
   push(pipes.am2, [pmax, pidx, amaxOut], 1);
+
+  // --- piano prefill M≤8 (compilato a parte, spec B1 §Forward multi-token) ---
+  // Stessi step logici del piano fuso decode ma per chunk di M righe: GEMM
+  // small-batch (riga di peso riusata per M attivazioni), attention con maschera
+  // causale intra-chunk, KV append di M righe in un dispatch, RoPE con pos
+  // per-riga. lm_head/argmax NON sono nel piano: girano una volta sola a fine
+  // prefill riusando la coda del piano decode (tailSteps).
+  const M_MAX = PREFILL_M;
+  const QKV_DIM = S.dModel + 2 * KV_DIM;
+  const xM = storage(M_MAX * S.dModel * 4);
+  const qkvM = storage(M_MAX * QKV_DIM * 4);
+  const attnOutM = storage(M_MAX * S.dModel * 4);
+  const gateM = storage(M_MAX * S.dFfn * 4);
+  const C = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  // slot uniform per chunk (stride 256, pattern della sim di fase 1): scritti in
+  // blocco al via del prefill, copiati in C dentro l'encoder prima di ogni chunk
+  const pcSlots = device.createBuffer({
+    size: Math.ceil(CTX_MAX / M_MAX) * 256,
+    usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+  });
+  const pipesPre = {
+    rmsQkvC: mkPipe(rmsGemmQkvChunkFastWgsl({ K: S.dModel, N: QKV_DIM, eps: S.rmsEps, mMax: M_MAX })),
+    ropeC: mkPipe(ropeChunkWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, freqBase: S.ropeFreqBase, mMax: M_MAX })),
+    kvAppC: mkPipe(kvAppendChunkWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, mMax: M_MAX })),
+    attnC: mkPipe(attnPrefillChunkWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_MAX, mMax: M_MAX })),
+    oResidC: mkPipe(gemmResidChunkFastWgsl({ K: S.dModel, N: S.dModel, mMax: M_MAX })),
+    pairSiluC: mkPipe(rmsPairGemmSiluChunkFastWgsl({ K: S.dModel, N: S.dFfn, eps: S.rmsEps, mMax: M_MAX })),
+    downResidC: mkPipe(gemmResidChunkFastWgsl({ K: S.dFfn, N: S.dModel, mMax: M_MAX })),
+  };
+  // La copy del tap (ultima riga del chunk, contratto spec §Tap) dipende da rows:
+  // si risolve a encode-time, qui resta un marker con il buffer di destinazione.
+  type PreStep = Step | { kind: "tapLast"; dst: GPUBuffer };
+  const preSteps: PreStep[] = [];
+  const pushPre = (pipe: GPUComputePipeline, bufs: GPUBuffer[], wgs: number | [number, number]) =>
+    preSteps.push({ kind: "compute", pipe, bind: bg(pipe, bufs, C), wgs: typeof wgs === "number" ? [wgs, 1] : wgs });
+  for (const L of layers) {
+    pushPre(pipesPre.rmsQkvC, [L.qkv.qs, L.qkv.scales, xM, L.attnNorm, qkvM, L.qkvBias], gemvGrid(QKV_DIM / 4));
+    pushPre(pipesPre.ropeC, [qkvM], [Math.ceil(((S.nHead + S.nKvHead) * S.headDim / 2) / 64), M_MAX]);
+    pushPre(pipesPre.kvAppC, [qkvM, L.kCache, L.vCache], [Math.ceil(KV_DIM / 64), M_MAX]);
+    pushPre(pipesPre.attnC, [qkvM, L.kCache, L.vCache, attnOutM], [S.nHead, M_MAX]);
+    pushPre(pipesPre.oResidC, [L.wo.qs, L.wo.scales, attnOutM, xM], gemvGrid(S.dModel / 4));
+    pushPre(pipesPre.pairSiluC, [L.wGate.qs, L.wGate.scales, L.wUp.qs, L.wUp.scales, xM, L.ffnNorm, gateM], gemvGrid(S.dFfn / 4));
+    pushPre(pipesPre.downResidC, [L.wDown.qs, L.wDown.scales, gateM, xM], gemvGrid(S.dModel / 4));
+    const tapDstP = tapBufs.get(layers.indexOf(L));
+    if (tapDstP) preSteps.push({ kind: "tapLast", dst: tapDstP });
+  }
+  // coda del piano decode (lm_head [+rms] + argmax): riusata a fine prefill
+  const tailSteps = steps.slice(steps.length - (fused ? 3 : 4));
+  // length pointer della KV (spec §Crop): unica verità sulla posizione
+  const kv = createKvLen(CTX_MAX);
   onProgress("pronto", 1);
 
   return {
     device,
     dispatchesPerToken: steps.filter((st) => st.kind === "compute").length,
-    reset() { /* le cache si sovrascrivono per posizione: basta ripartire da pos 0 */ },
+    reset() { kv.reset(); }, // ≡ crop(0): le righe si sovrascrivono per posizione
+    crop(toLen: number) { kv.crop(toLen); }, // zero lavoro GPU (spec §Crop)
+    get kvLen() { return kv.len; },
     async forwardToken(token: number, pos: number): Promise<number> {
-      if (pos >= CTX_MAX) throw new Error("contesto pieno");
+      kv.assertNext(pos); // pos === kvLen o throw (+ capacità)
       dequantQ4_0Row(bytes, embdOff, S.dModel, token, embdRow);
       device.queue.writeBuffer(x, 0, embdRow as unknown as BufferSource);
       device.queue.writeBuffer(P, 0, new Uint32Array([pos, pos, 0, 0]));
@@ -326,16 +417,125 @@ export async function createEngine(
       }
       pass.end();
       enc.copyBufferToBuffer(amaxOut, 0, stagingId, 0, 4);
+      let tsqStaging: GPUBuffer | null = null;
       if (telemetryOn && querySet) {
         tsqIdx++;
-        if (tsqIdx === TSQ_RING) { flushTsq(enc, TSQ_RING); tsqIdx = 0; }
+        if (tsqIdx === TSQ_RING) {
+          tsqStaging = flushTsq(enc, TSQ_RING);
+          tsqIdx = 0;
+        }
       }
       device.queue.submit([enc.finish()]);
+      if (tsqStaging) armTsq(tsqStaging, TSQ_RING); // mapAsync SOLO dopo il submit
       if (telemetryOn) { tEncodeCpuMs += performance.now() - tEnc0; tForwards++; }
       await stagingId.mapAsync(GPUMapMode.READ);
       const id = new Uint32Array(stagingId.getMappedRange())[0];
       stagingId.unmap();
+      kv.advance(); // a forward riuscito
       return id;
+    },
+    async prefillChunked(tokens: number[], posStart: number): Promise<number> {
+      const n = tokens.length;
+      if (n < 1) throw new Error("prefill vuoto");
+      kv.assertNext(posStart, n); // posStart === kvLen o throw (+ capacità)
+      const plan = planPrefill(n, posStart);
+      // Error scope come CONTRATTO del prefill (lezione fase 6): una pipeline
+      // invalida fa droppare a Dawn ogni submit IN SILENZIO e i readback restituiscono
+      // dati stale del run precedente — qui il throw è sincrono e attribuibile.
+      device.pushErrorScope("validation");
+      device.pushErrorScope("out-of-memory");
+      // zero readback durante il prefill (l'input è il prompt, noto): embedding di
+      // tutto il prompt dequantizzate CPU-side in un buffer unico, copy per chunk
+      // nell'encoder; una sola sync a fine prefill (la mapAsync dell'argmax finale).
+      const emb = new Float32Array(n * S.dModel);
+      for (let i = 0; i < n; i++)
+        dequantQ4_0Row(bytes, embdOff, S.dModel, tokens[i], emb.subarray(i * S.dModel, (i + 1) * S.dModel));
+      const embBuf = storage(emb.byteLength);
+      device.queue.writeBuffer(embBuf, 0, emb as unknown as BufferSource);
+      const slots = new Uint32Array(plan.length * 64); // stride 256 B (copy safe)
+      plan.forEach((c, ci) => { slots[ci * 64] = c.posBase; slots[ci * 64 + 1] = c.rows; });
+      device.queue.writeBuffer(pcSlots, 0, slots as unknown as BufferSource);
+
+      let enc = device.createCommandEncoder();
+      for (let ci = 0; ci < plan.length; ci++) {
+        const c = plan[ci];
+        enc.copyBufferToBuffer(embBuf, c.start * S.dModel * 4, xM, 0, c.rows * S.dModel * 4);
+        enc.copyBufferToBuffer(pcSlots, ci * 256, C, 0, 16);
+        let pass = enc.beginComputePass();
+        for (const s of preSteps) {
+          if (s.kind !== "compute") { // tapLast: hidden dell'ULTIMO token del chunk
+            pass.end();
+            enc.copyBufferToBuffer(xM, (c.rows - 1) * S.dModel * 4, s.dst, 0, S.dModel * 4);
+            pass = enc.beginComputePass();
+            continue;
+          }
+          pass.setPipeline(s.pipe);
+          pass.setBindGroup(0, s.bind);
+          pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
+        }
+        pass.end();
+        if (c.submitAfter && ci < plan.length - 1) {
+          device.queue.submit([enc.finish()]);
+          enc = device.createCommandEncoder();
+        }
+      }
+      // lm_head + argmax SOLO sull'ultima posizione dell'ultimo chunk: si copia
+      // l'ultima riga di xM nell'x del decode e si riusa la coda del piano fuso.
+      const last = plan[plan.length - 1];
+      enc.copyBufferToBuffer(xM, (last.rows - 1) * S.dModel * 4, x, 0, S.dModel * 4);
+      let pass = enc.beginComputePass();
+      for (const s of tailSteps) {
+        if (s.kind !== "compute") continue; // la coda non contiene copy
+        pass.setPipeline(s.pipe);
+        pass.setBindGroup(0, s.bind);
+        pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
+      }
+      pass.end();
+      enc.copyBufferToBuffer(amaxOut, 0, stagingId, 0, 4);
+      device.queue.submit([enc.finish()]);
+      const errOom = await device.popErrorScope();
+      const errVal = await device.popErrorScope();
+      if (errOom || errVal) throw new Error(`prefill error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
+      await stagingId.mapAsync(GPUMapMode.READ);
+      const id = new Uint32Array(stagingId.getMappedRange())[0];
+      stagingId.unmap();
+      embBuf.destroy();
+      kv.advance(n); // il piano prefill avanza il pointer dell'intero chunk-set
+      return id;
+    },
+    async readKv(): Promise<Float32Array> {
+      const n = kv.len;
+      if (n < 1) throw new Error("readKv: cache vuota");
+      const rowBytes = n * KV_DIM * 4;
+      const staging = device.createBuffer({
+        size: S.nLayer * 2 * rowBytes,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+      const enc = device.createCommandEncoder();
+      layers.forEach((L, l) => {
+        enc.copyBufferToBuffer(L.kCache, 0, staging, (l * 2) * rowBytes, rowBytes);
+        enc.copyBufferToBuffer(L.vCache, 0, staging, (l * 2 + 1) * rowBytes, rowBytes);
+      });
+      device.queue.submit([enc.finish()]);
+      await staging.mapAsync(GPUMapMode.READ);
+      const out = new Float32Array(staging.getMappedRange().slice(0));
+      staging.destroy();
+      return out;
+    },
+    writeKv(payload: Float32Array, tokenCount: number): void {
+      if (!Number.isInteger(tokenCount) || tokenCount < 1 || tokenCount > CTX_MAX) {
+        throw new Error(`writeKv: tokenCount non valido (${tokenCount})`);
+      }
+      const rowElems = tokenCount * KV_DIM;
+      if (payload.length !== S.nLayer * 2 * rowElems) {
+        throw new Error(`writeKv: payload ${payload.length} !== atteso ${S.nLayer * 2 * rowElems}`);
+      }
+      layers.forEach((L, l) => {
+        device.queue.writeBuffer(L.kCache, 0, payload.subarray((l * 2) * rowElems, (l * 2 + 1) * rowElems) as unknown as BufferSource);
+        device.queue.writeBuffer(L.vCache, 0, payload.subarray((l * 2 + 1) * rowElems, (l * 2 + 2) * rowElems) as unknown as BufferSource);
+      });
+      kv.reset();
+      kv.advance(tokenCount); // il pointer riparte dal checkpoint restaurato
     },
     setTelemetry(on: boolean): void {
       telemetryOn = on;
@@ -344,19 +544,18 @@ export async function createEngine(
     async getTelemetry() {
       const batches = await Promise.all(pendingTsq);
       pendingTsq.length = 0;
+      // v>0 scarta i pass sotto il quanto di Chrome (~100us) e gli eventuali reset
+      // del counter GPU (delta negativi, documentati) — non più gli "zeri" del
+      // known-issue fase A, risolto (vedi armTsq).
       const gpuMs = batches.flat().filter((v) => v > 0);
-      // Known-issue (2026-07-29): su Chrome branded Linux/NVIDIA i timestamp del pass
-      // tornano azzerati in questa integrazione (anche col pattern del microbench,
-      // che invece funziona standalone). Livello 2 resta feature-detected e lazy;
-      // diagnosi rimandata — si dichiara null invece di riportare zeri.
       const mean = gpuMs.length ? gpuMs.reduce((a, b) => a + b, 0) / gpuMs.length : null;
       return {
         forwards: tForwards,
         encodeCpuMsPerToken: tForwards ? tEncodeCpuMs / tForwards : 0,
         gpuMsPerToken: mean,
         timestampNote: querySet
-          ? (gpuMs.length ? "quantizzazione Chrome ~100us, media su batch da 64" : "timestamp azzerati (known-issue)")
-          : "livello 2 spento di default (known-issue 2026-07-29: valori azzerati + corruzione compute quando attivo su Chrome/Linux/NVIDIA — opt-in telemetryGpu, diagnosi fase B)",
+          ? "quantizzazione Chrome ~100us, media su batch (ring)"
+          : "livello 2 opt-in (telemetryGpu) — spento: zero-overhead by design",
       };
     },
     async readTap(layer: number): Promise<Float32Array> {
