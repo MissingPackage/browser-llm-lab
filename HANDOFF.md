@@ -7,10 +7,12 @@
 ctx bench verso il floor GPU — leve: (1) attention decode split-context (il
 kernel a 14 wg vale ~4 ms/token a ctx 570), (2) loop multi-step K (~1.5 ms di
 sync), gate provvisorio decode ≥240 tok/s da fissare in spec. Fase 1 DONE
-(attribuzione: quota fuori-GPU reale 20%, non 73% — verifier PASS). **Prossimo:
-fase 2 = spec v2 + microbench attn-split isolato** (soglie col Pareto su
-attrib+microbench), poi ruling spec. Fase 3 (kernel nel decode) ha TIMEBOX 4 it.
-con clausola split B2/B3 pre-negoziata via docket. Riancorarsi da:
+(attribuzione: quota fuori-GPU reale 20%, non 73% — verifier PASS). Fase 2 DONE
+(it.2: kernel split 4.53× @ ctx576 in isolamento, parità identica al fuso, spec
+v2 scritta). **PI-gated ADESSO: RULING SPEC** (docket B2 item 3, decisioni a-g —
+in particolare: soglia decode 230 vs 240, token_embd su GPU ~68 MB, archiviazione
+dispatch ≤100). Fasi 3-6 blocked fino al ruling; fase 3 (kernel nel decode) ha
+TIMEBOX 4 it. con clausola split B2/B3 pre-negoziata via docket. Riancorarsi da:
 `.harness/goals/engine-fase-b2/{GOAL,PHASES,docket,journal}.md`,
 results/engine/decode-attrib-4090-*2026-07-30*.json, tsq-diag §Conseguenze
 (CORRETTA). Branch: engine/fase-b2. Altri PI-gated (non bloccanti): igiene goal

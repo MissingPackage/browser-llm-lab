@@ -21,6 +21,12 @@
        profiler ≤160;
    (g) conformance a K=1 (teacher-forcing), K>1 coperto dal gate token-identity.
    Le fasi 3-6 restano blocked fino al ruling.
+   CAVEAT dal verifier (it.2, dichiarati per onestà del ruling): (i) il timing del
+   microbench assume la serializzazione dei dispatch nello stesso pass via hazard
+   RW — su Dawn oggi regge (e il fuso riproduce l'attribuzione: 144 µs × 24 ≈ 3.5
+   ms vs ~4.0 attribuiti), ma è comportamento implementativo; (ii) la proiezione
+   249 tok/s è additiva, non una misura del piano integrato — il margine dell'8%
+   sulla soglia 230 esiste per questo (spec §Rischi 1).
 
 2. ~~**RULING RICHIESTO — re-scope del contratto**~~ RISOLTO (2026-07-30, ruling PI
    in chat: "Opzione A, assolutamente. Non abbiamo fretta. L'obiettivo è quello di

@@ -23,3 +23,13 @@ multi-step K; gate provv. ≥240 tok/s da fissare in spec; guard gpuBusy rimosso
 fase 2 = spec + microbench attn-split isolato (ready), fase 3 kernel (timebox 4
 it., clausola split pre-negoziata), 4 multi-step, 5 telemetria, 6 chiusura.
 Loop riparte: iterazione 2 = fase 2.
+
+2026-07-30 — it.2 (fase 2 DONE, ruling spec pendente). Kernel attention split
+scritti e misurati in ISOLAMENTO: ~32 µs/layer piatto da ctx 64 a 1024 vs
+29→219 µs del fuso (4.53× @ ctx576, 7.18× @ ctx1024), parità identica al fuso
+vs CPU f64. Proiezione: gpuBusy 6.46→3.76 ms/tok ⇒ 185 tok/s @ K=1, 249 @ K=8.
+Spec v2 scritta con soglie Pareto (proposta ≥230, alternativa ambiziosa ≥240 —
+scelta al PI) e archiviazione motivata del dispatch ≤100. Verifier: sostanza
+PASS (matematica split verificata a mano, diff additivo, 156/156), FAIL
+iniziale su digest/HANDOFF stale → corretto in questo commit. STOP by design:
+fasi 3-6 gated dal ruling spec (docket item 3, decisioni a-g).
