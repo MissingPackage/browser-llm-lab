@@ -1,6 +1,12 @@
 # Docket — engine-fase-b1 (decisioni PI pendenti)
 
-3. **RULING RICHIESTO — spec B1** (2026-07-29, fase 1): approvazione di
+3. ~~**RULING RICHIESTO — spec B1**~~ RISOLTO (2026-07-30, ruling PI in chat:
+   "d'accordo su tutto"): decisioni (a)-(g) ratificate in blocco, con l'aggiunta PI
+   "i rimandi vanno documentati dove le fasi successive li ritrovino" → creato
+   registro `docs/engine/ideas-ledger.md` §I (rimandi espliciti di fase, con trigger
+   di riattivazione). Fasi 3-6 sbloccate (3 ready, 4-6 a cascata). Testo originale:
+
+   **RULING RICHIESTO — spec B1** (2026-07-29, fase 1): approvazione di
    `docs/superpowers/specs/2026-07-29-engine-fase-b1-design.md`. Decisioni proposte
    da ratificare: (a) chiave prefix-cache su token-id (non testo: niente tokenizer,
    la chiave testuale ds4 esiste per la ritokenizzazione BPE); (b) lookup v1 = match

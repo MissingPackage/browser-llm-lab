@@ -1,6 +1,7 @@
 # Engine fase B1 — memoria I (KV e persistenza): Design
 
-**Data**: 2026-07-29 · **Stato**: bozza — ruling PI richiesto (docket goal item 3)
+**Data**: 2026-07-29 · **Stato**: **approvato** (ruling PI 2026-07-30, docket goal item 3 —
+decisioni a-g in blocco; rimandi registrati in `docs/engine/ideas-ledger.md` §I)
 **Direction**: `docs/engine/direction.md` §7/§8.1/§8.3 · **Contratto**: `.harness/goals/engine-fase-b1/GOAL.md`
 **Riferimenti**: `docs/engine/study/ds4.md` §2 (KV checkpoint), `docs/deep-dive/kv-cache-layout.md`,
 sim `results/engine/prefill-sim-4090-*.json`, diag `docs/engine/tsq-diag-2026-07-29.md`

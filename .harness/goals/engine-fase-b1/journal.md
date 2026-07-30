@@ -45,3 +45,10 @@ nella spec B1 prima del codice.
 costo zero dal verifier per la fase 3+: aggiungere il campo `telemetryGpu` allo schema
 del report di conformance, così il gate "liv.2 non perturba" diventa auto-evidente
 dal JSON.
+
+2026-07-30 — Ruling PI: spec B1 APPROVATA (docket 3, decisioni a-g in blocco).
+Richiesta PI aggiuntiva recepita: i rimandi deliberati vanno documentati dove le fasi
+successive li ritrovino → creato registro ideas-ledger.md §I ("Rimandi espliciti di
+fase": 8 righe con fase di ripresa + trigger di riattivazione — longest-prefix,
+chiave testuale/tokenizer, logits nel checkpoint, scoring eviction, re-inquadramento
+B2, fusioni annotate, parametro M per spec-dec, telemetria liv.3). Fase 3 ready.
