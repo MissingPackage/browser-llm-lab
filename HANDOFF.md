@@ -13,9 +13,12 @@ split INTEGRATO (decode 248.3 a K=1, conformance identica a B1). Fase 4 DONE
 (it.4): decodeBatch K≤8 con feedback token on-GPU (embedGatherQ4, token_embd
 ~68 MB su GPU), UNA mapAsync/batch, EOS via crop — token-identity PASS (K=8/5/1
 identici su 256 vs oracolo), conformance invariata, informale K=8 ~3.46 ms/tok
-(~289 tok/s). **Prossimo: fase 5** = telemetria liv.2 + profiler nel nuovo loop
-(gpuMs reale non-null, submit/token ~1/K, dispatch ≤160), poi fase 6
-(bench+chiusura, gate decode ≥230 + non-regressione). Nessun PI-gate pendente.
+(~289 tok/s). Fase 5 DONE (it.5): liv.2 sul multi-step con gpuMs 2.862 reale e
+identità invariata; profiler v2 exit 0 (0/0.125/148); bench su decodeBatch k=8.
+**Prossimo: fase 6 (ULTIMA)** = bench canonico (headline k=8, baseline k=1
+same-day, gpuBusy liv.2 da §Metodologia, gate ≥230 + prefill ≤810 + overhead
+≤2%), re-run kv-rollback + prefix-cache, checklist DONE WHEN 7/7, chiusura +
+merge su main (ruling permanente) dopo verifier PASS. Nessun PI-gate pendente.
 Riancorarsi da:
 `.harness/goals/engine-fase-b2/{GOAL,PHASES,docket,journal}.md`,
 results/engine/decode-attrib-4090-*2026-07-30*.json, tsq-diag §Conseguenze

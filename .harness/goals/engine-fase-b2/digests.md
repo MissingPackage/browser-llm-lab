@@ -48,3 +48,11 @@ batch, EOS via crop (trimAtEos puro). Token-identity PASS: K=8, K=5 e K=1
 degenere IDENTICI su 256 token vs oracolo per-token; conformance invariata
 (98.05/100.00); 166/166 unit. Informale: 3.97→3.46 ms/token con K=8 (~289
 tok/s). Next: fase 5 (telemetria liv.2 + profiler nel nuovo loop).
+
+2026-07-30 — it.5 (fase 5 DONE). Liv.2 sul loop multi-step: gpuMs 2.862 REALE
+con identità K=8/5/1 invariata (tsq non perturba); conformance tsq PASS;
+engine-prof v2 K-aware exit 0 (0 bindGroup, submit/forward 0.125 = 1/8 esatto,
+148 dispatch/forward ≤160); bench portato su decodeBatch k=8 default; ledger §I:
+dispatch ≤100 archiviato-desktop con trigger mobile. Next: fase 6 = bench
+canonico (k=8 + baseline k=1 + gpuBusy da metodologia spec), non-regressione
+rollback/prefix-cache, checklist 7/7, chiusura + merge.
