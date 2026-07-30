@@ -1,10 +1,11 @@
 # Docket — engine-fase-c1 (decisioni PI pendenti)
 
-1. **PLAN-CHECK** (2026-07-30, it.0): il PI approva PHASES.md prima
-   dell'iterazione 1. Il contratto GOAL.md è già approvato in chat ("Per me
-   tutto ok. Scarica pure GLM 4.7 quando ti serve. Andiamo avanti"); questo
-   gate copre la DECOMPOSIZIONE (6 fasi sequenziali, fase 1 = risorse+recon
-   prima della spec, timebox fase 4 con fallback ROUTE_TRACE-only). Nota
-   aperta per il ruling: quale GGUF q4 preciso (unsloth vs bartowski, variante
-   q4_0 vs Q4_K_M) — proposta in fase 1 con motivazione, se il PI non indica
-   una preferenza qui.
+1. ~~**PLAN-CHECK**~~ RISOLTO (2026-07-30, ruling PI in chat: "Parti pure. Per
+   il GGUF usa quello che userà il nostro motore, ovviamente"). Decomposizione
+   approvata senza modifiche; criterio GGUF fissato = layout-compatibilità coi
+   kernel del motore ⇒ variante **Q4_0** (i kernel fase A dequant-fusi leggono
+   q4_0; stesso criterio di qwen2.5-0.5b-instruct-q4_0.gguf dell'oracolo
+   attuale). Se Q4_0 puro non esiste per GLM-4.7-Flash nei repo GGUF candidati,
+   la scelta del fallback più vicino torna QUI come nuova entry, non si decide
+   unilateralmente. Fasi 1 sbloccata; 3-6 restano gated dal ruling di spec
+   (fase 2).
