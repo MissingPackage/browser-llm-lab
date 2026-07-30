@@ -1,20 +1,22 @@
-# HANDOFF — browser-llm-lab   (updated 2026-07-30, session 13)
+# HANDOFF — browser-llm-lab   (updated 2026-07-30, session 14 — goal engine-fase-c1 aperto, it.0)
 
 ## 1. Next decidable
 
-**GOAL `engine-fase-b2` CHIUSO** (2026-07-30, checklist DONE WHEN 7/7 nel journal,
-verifier gate finale PASS + merge su main da ruling permanente). Risultato: decode
-al ctx bench **122.4 → 287.5 tok/s (2.35×)**, wall 8.17 → 3.48 ms/token, parità e
-persistenza intatte. Il residuo è **PI-gated**: (a) prossimo goal engine — il
-candidato da direction §7 è la **fase C** (memoria II: MoE e paging, metodo LOOKA
-sull'oracolo prima del meccanismo) oppure un rimando §I maturato; (b) headline
-benchmark pubblico (docket 16 — contributo SEPARATO dall'engine, ruling
-2026-07-30: repo/paper/sito propri); (c) igiene goal stale (fase-1b-matrice,
-fase-2-deep-dive) da /weekly-maintenance. Riancorarsi da:
-`.harness/goals/engine-fase-b2/{GOAL,PHASES,docket,journal,digests}.md`
-(chiusura), `docs/engine/direction.md` §7 (fase C), ideas-ledger §I (rimandi con
-trigger: longest-prefix→C, logits-nel-checkpoint→C/D, parametro M→D, dispatch
-≤100→mobile).
+**GOAL `engine-fase-c1` APERTO** (2026-07-30, contratto approvato dal PI in chat,
+setup it.0 fatto): misure sull'oracolo desktop (llama.cpp strumentato,
+contatori-only) che dimensionano il paging esperti su GLM-4.7-Flash — recall
+lookahead LOOKA, skew/heat/working-set, curve hit-rate vs budget da simulazione
+trace-driven. Split della fase C approvato: C1 = oracolo (questo goal), C2 =
+MoE+MLA nel motore, C3 = paging+instant-on; hero-demo M4 PI-gated.
+**Next: PLAN-CHECK (docket item 1)** — il PI approva PHASES.md (6 fasi
+sequenziali), poi iterazione 1 = fase 1 (download GGUF ~17 GB autorizzato, build
+llama.cpp dedicata, smoke run, recon punti di tap). Riancorarsi da:
+`.harness/goals/engine-fase-c1/{GOAL,PHASES,docket,journal,digests}.md`,
+`docs/engine/direction.md` §3+§7, `docs/engine/study/colibri.md` §1-2.
+Restano PI-gated fuori goal: headline benchmark pubblico (docket 16) e igiene
+goal stale (fase-1b-matrice, fase-2-deep-dive) da /weekly-maintenance.
+Chiusura B2 (decode 122.4 → 287.5 tok/s, 2.35×): vedi §2 e
+`.harness/goals/engine-fase-b2/`.
 
 ## 2. State delta (sessione 13, 2026-07-30 — goal B2 completo, iterazioni 0-6)
 
@@ -98,7 +100,7 @@ trigger: longest-prefix→C, logits-nel-checkpoint→C/D, parametro M→D, dispa
     Il benchmark è un CONTRIBUTO SEPARATO dall'engine (ruling PI 2026-07-30:
     repo/paper/sito propri, confronto imparziale che include il nostro engine;
     split repo rimandato alla pubblicazione) — ci si torna su iniziativa PI.
-19. **Prossimo goal engine da scegliere** (quando il PI vuole): candidato
-    naturale fase C (direction §7: metodo LOOKA sull'oracolo → slab/tier/paging
-    in browser, hero-demo M4); alternative: rimandi §I maturi. Goal-brief da
-    fare al momento.
+19. ~~**Prossimo goal engine da scegliere**~~ RISOLTO (2026-07-30, ruling PI in
+    chat: contratto engine-fase-c1 approvato, "Per me tutto ok. Scarica pure
+    GLM 4.7 quando ti serve"). Fase C splittata C1/C2/C3; goal C1 aperto →
+    `.harness/goals/engine-fase-c1/`. Pendente lì: plan-check (item 1).
