@@ -65,3 +65,16 @@ scaledAccum sul down per-expert, ref f64 indipendente in cpuref. ktest 28/28
 su 4090 (moe-ffn-block completo con bind group a offset per-slot), suite
 208/208, tsc pulito. Verifier PASS. Next (it.7): slice 2 — residenza minima
 (OPFS → staging → cache VRAM LRU per classe + telemetria).
+
+## it.7 (2026-07-31, fase 5 slice 2)
+Residenza minima: expertstore.ts (SHA-256 incrementale FIPS 180-4 — subtle
+non streama su 17 GB; ExpertOpfsStore con import streaming hash-verificato e
+read range SyncAccessHandle; GgufExpertIndex, expert = fetta contigua) +
+residency.ts (ExpertCache: slot (classe,buffer,offset), riparto budget
+∝ parco 256/2688, LRU pura per classe, pinned intra-token, telemetria gated).
+ktest 29/29 su 4090 (roundtrip OPFS→pack→upload→readback byte-esatto,
+contatori esatti), suite 219/219, tsc pulito. Verifier PASS (SHA su vettori
+NIST indipendenti). WATCH fase 6: ~10 ms/miss con pack CPU dominante ⇒
+proiezione ~66 ms/token di stallo a hit 96.4% su budget 74.5 — margine <10
+ms sul gate decode; leva candidata: repack pagato all'import. Next (it.8):
+slice 3 — forward multi-layer + conformance routing vs traccia C1.

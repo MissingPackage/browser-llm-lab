@@ -3,27 +3,33 @@
 ## 1. Next decidable
 
 **Fase 5 del goal `engine-fase-c2` (MoE + residenza minima, timebox 4 it.,
-usata 1), slice 2 — residenza minima**: GGUF in OPFS (copia al primo load,
-SHA verificato), miss expert → read SyncAccessHandle → packExpertSlab →
-writeBuffer allo slot LRU-vittima; cache VRAM per size-class (buffer ≤
-maxStorageBufferBindingSize, slot indirizzati (classe, buffer, offset),
-~2.5k slot attesi, LRU pura) + telemetria hit/miss/byte/stallo (spec §5);
-poi slice 3 = forward multi-layer + conformance routing set-match ≥99% vs
-traccia C1 (spec §7 — l'ordine è escluso per spec, i pesi di mixing vanno
-confrontati per (posizione, layer): watch item it.6). **SLICE 1 CHIUSA a
-it.6** (verifier PASS): semantica build_moe_ffn verificata riga-per-riga
-(bias solo selezione, clamp 6.1035e-5, ×1.8, pesatura post-down, shexp su
-stesso input); `moe.ts` (routerSelect CPU + slab due size-class
-5.308.416/5.505.024 B, offset 256-aligned, packExpertSlab), gemvF32 router,
-scaledAccum sul down per-expert, ref f64 indipendente `glmMoeFfnRefF64`;
-ktest 28/28 su 4090 (moe-ffn-block con bind group a offset per-slot =
-meccanismo della residenza già validato), suite 208/208, tsc pulito. Nota
-design registrata (journal it.6): selezione CPU ⇒ un sync GPU→CPU per layer
-MoE nel decode; costo da misurare in fase 6. Watch item fase 6 invariati
-(gate layer-level da stringere, q5_K absTol, mscale=1).
+usate 2), slice 3 — forward multi-layer + conformance routing**: assemblare
+il forward GLM sui layer MoE (pattern `glmforward.ts` + `moe.ts` +
+`residency.ts`: per layer MoE, submit fino a ffn_norm+router → readback 64
+logit → routerSelect → ensure×4 con pinned → encode 4 catene expert
+(slotBindRanges) + shexp + residuo) e la conformance routing vs traccia C1:
+replay dei prompt della traccia nel motore, set-match top-4 ≥99% per
+(posizione decode, layer) — sotto soglia si ferma lì e si debugga il router
+(spec §7; l'ordine è escluso per spec, i pesi di mixing vanno comunque
+confrontati: watch it.6). Serve l'import one-shot del GGUF 17.2 GB in OPFS
+(ExpertOpfsStore.importFromUrl, costo hash ~min, va in telemetria).
+**SLICE 2 CHIUSA a it.7** (verifier PASS): `expertstore.ts` (Sha256Stream
+FIPS 180-4 validata su vettori NIST; ExpertOpfsStore import streaming
+hash-verificato + read range SyncAccessHandle; GgufExpertIndex) +
+`residency.ts` (ExpertCache: slot (classe,buffer,offset), riparto budget ∝
+parco 256/2688, LRU pura per classe, `pinned` intra-token, telemetria
+gated); ktest 29/29 (roundtrip byte-esatto), suite 219/219, tsc pulito.
+**WATCH ITEM CRITICO fase 6** (confermato dal verifier): ~10 ms/miss con
+pack CPU dominante (5,9 ms) ⇒ proiezione ~66 ms/token di stallo a hit 96.4%
+su budget 74,5 ms (floor 13.43 tok/s) — margine <10 ms sul gate decode;
+leva candidata: repack pagato all'IMPORT (riordino [qs|scales] in scrittura
+OPFS, azzera il termine dominante senza toccare i kernel); decisione alla
+misura E2E. Altri watch fase 6 invariati (gate layer-level, q5_K absTol,
+mscale=1, sync GPU→CPU per layer).
 Riancorarsi da: `.harness/goals/engine-fase-c2/{GOAL,PHASES,docket,journal}.md`,
-spec §5-§7, `src/engine/{moe,glmforward}.ts` (pattern da estendere), traccia
-`results/engine/moe-oracle/trace-2026-07-31.jsonl.gz`, sim residenza C1.
+spec §5-§7, `src/engine/{glmforward,moe,residency,expertstore}.ts`, traccia
+`results/engine/moe-oracle/trace-2026-07-31.jsonl.gz` (formato in
+tools/oracle-moe/trace.cpp).
 
 ## 2. State delta (questa sessione, 15)
 

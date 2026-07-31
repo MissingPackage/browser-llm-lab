@@ -326,3 +326,19 @@ docket): repack più veloce (blocchi 36 B = 9 word), kernel GEMV che legge
 il layout GGUF grezzo (i K-quant già indicizzano byte nelle word), o
 riordino [qs|scales] in scrittura OPFS (repack pagato all'import, una
 volta). Pending verifier.
+
+Verifier it.7: **PASS** (loop-verifier — ri-run fresco: tsc pulito, suite
+219/219, ktest 29/29 con contatori identici; Sha256Stream validata
+INDIPENDENTEMENTE su vettori NIST ("" / "abc" / 448-bit al limite del
+padding) + 9 taglie in chunk irregolari vs node:crypto; semantica
+LRU/pinned/riparto riscontrata nel codice; aritmetica expert-range
+ricalcolata; scope solo nel grant, nessun push pre-verifica; nota: `pinned`
+è invariante di correttezza intra-token, NON il pin di C3). Osservazioni
+recepite: (1) watch item CONFERMATO e leggermente peggiorato dal run fresco
+(10,35 ms/miss, pack 5,85 dominante ⇒ ~66-68 ms/token di stallo proiettato
+su budget 74,5): margine <10 ms/token sul gate decode di fase 6; la leva
+indicata dal verifier col miglior rapporto rischio/beneficio è "repack
+pagato all'import" (riordino [qs|scales] in scrittura OPFS: azzera il
+termine dominante senza toccare i kernel) — la decisione matura alla misura
+E2E di fase 6; (2) minore: bytesRead/bytesUploaded incrementano anche a
+timing:false (due addizioni, zero-overhead materialmente rispettato).
