@@ -123,8 +123,9 @@ PASS con margine ~2×. Sanity nel tool: colonne per layer per batch PASS su
 tutti i batch, 46 layer MoE osservati esatti, slot tutti scritti, expert id
 ∈[0,64), top-4. Verifica indipendente post-run: 31.275 righe jsonl (=tot+
 header), ultima riga parsata e valida (184 id). Artefatti:
-`results/engine/moe-oracle/trace-2026-07-30.jsonl.gz` (5.6 MB, input della
-fase 5) + `trace-2026-07-30-summary.json` (envelope+sanity). Nota naming: la
+`results/engine/moe-oracle/trace-2026-07-31.jsonl.gz` (input della fase 5;
+SOSTITUISCE la 2026-07-30 di questa iterazione — routing bit-identico, superset
+con le predizioni) + `trace-2026-07-31-summary.json` (envelope+sanity). Nota naming: la
 data nel filename è UTC (run partita 23:xx UTC del 30) — coerente con
 l'envelope, non un errore.
 
@@ -180,9 +181,9 @@ layer denso dà R@8 0.558 — il salto denso→MoE è più difficile, coerente c
 profilo dei layer bassi.
 
 **Artefatti** (rigenerati nella stessa run canonica, exit 0, ~24 min):
-`results/engine/moe-oracle/trace-2026-07-30-recall.json` (aggregati + 46 righe
+`results/engine/moe-oracle/trace-2026-07-31-recall.json` (aggregati + 46 righe
 per-layer + baseline + extra), `-summary.json` (ora con `autotest: PASS`),
-`trace-2026-07-30.jsonl.gz` (identica per costruzione: 31.274 posizioni,
+`trace-2026-07-31.jsonl.gz` (identica per costruzione: 31.274 posizioni,
 26.154p + 5.120d, zero EOS anticipati).
 
 **Done-when fase 4**: report JSON con recall aggregato e per-layer per K∈{4,6,8} ✓,
@@ -208,3 +209,99 @@ non-tautologicità dell'autotest confermata; tool RICOMPILATO dal sorgente in
 /tmp ed eseguito su 2 prompt (autotest 1.000000 PASS, stesso regime di recall);
 exit-code 3 provato sul campo; checkout oracolo pulito; nessun gate sul recall
 lookahead (decisione (f) rispettata); drift none). FASE 4 DONE.
+
+## it.5 — fase 5: residenza + simulatore (2026-07-31)
+
+Traccia rigenerata (run canonica, exit 0, numeri LOOKA IDENTICI — determinismo
+verificato: digest del routing bit-identico alla run precedente) ora con le
+predizioni top-8 per layer dumpate SULLE SOLE righe di decode (`"pr"`), che sono
+l'input del replay di prefetch preteso dalla spec. La traccia 2026-07-30 è stata
+SOSTITUITA da `trace-2026-07-31.jsonl.gz` (7.4 MB): stesso routing, superset di
+informazione; i riferimenti di it.3/it.4 vanno letti sul nuovo file.
+
+Simulatore in TypeScript (`tools/oracle-moe/sim/{policies,simulate,run-sim}.ts`,
+logica pura riusabile in C3) + **15 unit vitest verdi** (`tests/oracle-moe-sim.test.ts`):
+LRU, LFRU tier.h (heat<<8|recency, decay, isteresi), pin, guard anti-eviction,
+invariante "budget pieno ⇒ hit-rate satura", determinismo, statistiche.
+
+**RISULTATO 1 — la residenza non è skewed come nei riferimenti.** Expert toccati:
+**2944/2944 (100%)** già sul solo decode. Skew decode: top-4 per layer coprono
+**21.8%** delle selezioni, top-8 34.0%, top-16 52.4%, top-32 77.5% (uniforme
+darebbe 6.25/12.5/25/50: siamo 3.5× più concentrati dell'uniforme, ma lontanissimi
+da un 80/20). Working-set decode: **1.663 expert unici in 32 token**, 2.421 in 128,
+2.815 in 512. Il working set è quasi l'intero parco.
+
+**RISULTATO 2 — curve hit-rate vs budget (decode, config canonica di spec:
+pin 50% del budget, K=8)**, valutate sulla seconda metà della traccia col pin
+appreso sulla prima (split anti-leakage):
+
+| budget (slot / GB) | LRU | LFRU | LFRU+pin | +prefetch |
+|---|---|---|---|---|
+| 184 / 1.0 | 24.9% | 18.0% | 17.2% | 17.7% |
+| 368 / 2.0 | 42.7% | 33.0% | 29.3% | 29.2% |
+| 736 / 3.9 | 61.4% | 59.6% | 51.0% | 51.8% |
+| 1472 / 7.8 | 84.7% | 85.6% | 80.5% | 83.1% |
+| 2208 / 11.7 | 96.4% | 95.2% | 95.2% | 98.2% |
+| 2944 / 15.6 | 100% | 100% | 100% | 100% |
+
+Con i parametri di spec **LRU batte le policy sofisticate** quasi ovunque: con
+skew debole, dedicare metà cache a un pin statico è costo puro.
+
+**RISULTATO 3 — le sensibilità ribaltano la conclusione (e il colpevole era il
+parametro, non la policy)**. Riducendo la quota di pin e adattando K:
+
+| budget | LRU | LFRU+pin(12.5%)+prefetch, K migliore |
+|---|---|---|
+| 736 | 61.4% | **67.5%** (K=2) |
+| 1472 | 84.7% | **90.8%** (K=4) |
+| 2208 | 96.4% | **98.9%** (K=8) |
+
+Il pin monotonicamente peggiora al crescere della quota a budget stretti
+(736: 58.3 → 55.9 → 51.0% per 12.5/25/50%); il K ottimo del prefetch **cresce col
+budget** (a 736 K=8 fa thrashing: 58.9% vs 67.5% con K=2). Sensibilità al decay
+dell'heat registrata anch'essa nel JSON (l'ottimo si sposta con la capienza:
+512 a budget stretti, 4096 a 1472).
+
+**Verdetto "modello ~2× la memoria" (ledger §A)**: a 1472 slot (cache = 50% del
+parco routed, cioè modello 2× la cache) l'hit-rate di decode è **90.8%** nella
+configurazione migliore, 84.7% con LRU nudo. Regge, ma non è gratis: ~9% di miss
+× 5.3 MB/expert è il traffico che la banda OPFS deve sostenere — il costo va
+chiuso in C3 col modello di banda (results/opfs-bench: warm ~gratis, cold
+disco-bound), non qui.
+
+**Caveat metodologico dichiarato**: l'hit-rate NON misura il beneficio di latenza
+del prefetch (un layer di anticipo), solo l'occupazione della cache. Il prefetch
+qui appare utile solo dove non spreca slot; il suo valore vero (nascondere la
+read OPFS) richiede un modello di costo temporale — fase C3.
+
+Artefatti: `results/engine/moe-oracle/residency-sim-2026-07-31.json` (residenza,
+skew per-layer, working-set, 24 curve + 12 sensibilità decay + 18 knob).
+**Done-when fase 5**: JSON statistiche ✓, simulatore committato con test verdi ✓
+(npm test), curve per 4 policy × 6 budget ✓, punto di lavoro evidenziato ✓ (aggiunto DOPO
+il primo verdetto: vedi completamento sotto), verdetto 2× esplicito ✓.
+Verifier: **FAIL** al primo giro (loop-verifier, 2026-07-31) — done-when "punto
+di lavoro del device evidenziato" ASSENTE dagli artefatti ma spuntato nel
+journal: violazione sostanziale, corretta sotto. Tutto il resto PASS con
+riproduzione indipendente (working-set e skew ricalcolati in Python identici;
+LRU riscritto da zero → decodeHitRate identici a 4 decimali; sostituzione della
+traccia verificata riga per riga su tutte le 31.274, routing identico, `pr` su
+5120/5120 righe decode; npm test 181/181; src/engine intatto; oracolo pulito).
+
+**Completamento it.5 (dopo verifier FAIL n.1 — done-when "punto di lavoro"
+mancante, spuntato per errore nel primo giro).** Il punto di lavoro ora è nel
+report, calcolato da numeri MISURATI (non stimati): VRAM da `nvidia-smi`
+(**RTX 4090 Laptop, 16 GiB** — non la desktop 24 GB: dato nuovo per il progetto),
+byte non-expert e per-expert dai tensori del GGUF
+(`tools/oracle-moe/gguf-residency.py`: routed 15.68 GB, non-expert **1.53 GB**,
+5.33 MB/expert). Con slack browser 10% e KV MLA a ctx 4k (0.22 GB):
+**2.573 slot disponibili = 87.4% del parco routed, modello/cache = 1.14×** ⇒ sul
+device dev il paging è quasi inoperante (hit-rate 96.4% LRU / 98.9% best config).
+Conseguenza per il progetto: il regime di paging vero NON è la 4090 di sviluppo —
+è mobile/M4-condiviso o contesti lunghi che mangiano la VRAM. Da riportare in
+fase 6 (direction §5 dice "paging su 4090-16GB": vero, ma il fattore è 1.14×,
+non un paging aggressivo).
+
+Correzioni applicate dopo il FAIL: nota esplicita nel report sul working-set
+calcolato attraverso i confini dei prompt (numero conservativo); rimozione dello
+stato morto `speculative` in Lfru (non influenzava alcuna eviction — sarebbe
+sembrato un meccanismo attivo in C3); rimosso `llama-bench-*.err` vuoto dal repo.

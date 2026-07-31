@@ -56,3 +56,20 @@ molto più margine di quanto assunto in direction §4.3. Coda bassa localizzata
 nei layer 4-9 (R@4 <0.70), max il=41 0.846. Il verifier ha ricalcolato la
 baseline dalla traccia in modo indipendente (identica a <1e-5). Next: fase 5
 (residenza + simulatore trace-driven).
+
+2026-07-31 — it.5 (fase 5 DONE; verifier FAIL al primo giro, corretto). Traccia
+rigenerata col dump delle predizioni (routing bit-identico, verificato riga per
+riga) e simulatore TS + 15 unit verdi (suite 181/181). DUE FINDING che toccano
+le assunzioni di progetto: (1) la residenza NON è skewed come in ds4/colibri —
+top-4 expert per layer coprono il 21.8% delle selezioni, working-set 1.663
+expert unici in 32 token, copertura 2944/2944 ⇒ il learned pinning ha poco su
+cui aggrapparsi, e con i parametri di spec (pin 50%) LRU batte le policy
+sofisticate; (2) le sensibilità ribaltano: con pin 12.5% e K adattivo
+(2/4/8 al crescere del budget) LFRU+pin+prefetch batte LRU ovunque
+(736: 67.5 vs 61.4; 1472: 90.8 vs 84.7; 2208: 98.9 vs 96.4). Verdetto "modello
+2× la memoria": 90.8% di hit-rate decode a cache = 50% del parco. Punto di
+lavoro: il box dev è una 4090 LAPTOP da 16 GiB ⇒ 2.573 slot = 87% del parco,
+modello/cache 1.14× — sul device di sviluppo il paging è quasi inoperante, il
+regime vero è mobile/M4-condiviso. Caveat dichiarato: l'hit-rate non misura il
+guadagno di LATENZA del prefetch (serve il modello di banda, C3). Next: fase 6
+(sintesi, proposta go/no-go PILOT, chiusura).

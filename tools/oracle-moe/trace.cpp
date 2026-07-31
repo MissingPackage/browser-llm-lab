@@ -31,6 +31,10 @@ struct PosRec {
     int32_t tok;
     char phase; // 'p' prefill, 'd' decode
     std::vector<std::array<int32_t,4>> topk; // indicizzato per slot moe (il - dense_lead)
+    // predizioni top-8 per layer target, SOLO sulle posizioni di decode: sono
+    // l'input del replay di prefetch in fase 5 (spec: replay delle predizioni
+    // vere, mai un recall sintetico). Vuoto sul prefill (traccia 2x piu' magra).
+    std::vector<std::array<uint8_t,8>> pred;
 };
 
 // pesi router + contatori LOOKA (indici per il assoluto)
@@ -164,6 +168,11 @@ static bool cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
         }
         if (cb->lk) {
             auto & P = cb->lk->pl[il];
+            if (cb->phase == 'd') { // dump predizioni per il replay di fase 5
+                auto & pr = (*cb->recs)[pos].pred;
+                if (pr.empty()) pr.assign((size_t) cb->n_moe, std::array<uint8_t,8>{});
+                pr[slot] = cb->pred_next[il][j];
+            }
             // autotest: predizione dello stesso layer (da ffn_norm-il, gia' osservato)
             P.selfHit += overlap4(truth, cb->pred_self[il][j].data(), 4);
             P.selfTot += 4;
@@ -399,7 +408,16 @@ int main(int argc, char ** argv) {
                 jl << q[0] << "," << q[1] << "," << q[2] << "," << q[3];
                 jl << (s + 1 < n_moe ? "," : "");
             }
-            jl << "]}\n";
+            jl << "]";
+            if (!recs[i].pred.empty()) {
+                jl << ",\"pr\":[";
+                for (int s = 0; s < n_moe; ++s) {
+                    const auto & q = recs[i].pred[s];
+                    for (int e = 0; e < 8; ++e) jl << (int) q[e] << ((e < 7 || s + 1 < n_moe) ? "," : "");
+                }
+                jl << "]";
+            }
+            jl << "}\n";
         }
         tot_prefill += n_prefill;
         tot_decode  += n_dec;

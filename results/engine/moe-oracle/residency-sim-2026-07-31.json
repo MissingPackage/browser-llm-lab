@@ -1,0 +1,997 @@
+{
+  "kind": "moe-residency-and-sim",
+  "schemaVersion": 1,
+  "workingPoint": {
+    "device": "RTX 4090 Laptop",
+    "vramGiB": 15.99,
+    "nonExpertGB": 1.53,
+    "kvAt4kGB": 0.22,
+    "browserSlack": 0.9,
+    "expertMB": 5.33,
+    "slotsAvailable": 2573,
+    "fractionOfRoutedPark": 0.874,
+    "modelOverCacheRatio": 1.14,
+    "nearestCurvePoint": {
+      "budget": 2208,
+      "policy": "lru",
+      "decodeHitRate": 0.9643
+    },
+    "bestKnobAtOrBelow": {
+      "budget": 2208,
+      "policy": "lfru+pin+prefetch",
+      "pinFraction": 0.125,
+      "prefetchK": 8,
+      "decodeHitRate": 0.9894
+    },
+    "note": "annotazione, non gate (spec §Policy simulate). VRAM da nvidia-smi, byte da GGUF; slack browser 10% dichiarato, KV a ctx 4k."
+  },
+  "source": {
+    "trace": "results/engine/moe-oracle/trace-2026-07-31.jsonl.gz",
+    "ggufSha256": "d0bbdfcde6e323ebf90a8b9e95da57100e972be1ec6f0bfa0fad0feaa426557e",
+    "llamaCppCommit": "5f55650a78f92aff4d48d671423e888fac0469ff",
+    "corpusHash": "2882e4ab47ec69ed81d0eea4144d485b0d9b440dce4f8927d3ed76418a55b021",
+    "arch": "deepseek2"
+  },
+  "shape": {
+    "nMoe": 46,
+    "nExpert": 64,
+    "totalExperts": 2944,
+    "expertBytesQ4": 5308416,
+    "rows": 31274,
+    "decodeRows": 5120
+  },
+  "residency": {
+    "expertsTouchedAll": 2944,
+    "expertsTouchedDecode": 2944,
+    "coverageAll": 1,
+    "coverageDecode": 1,
+    "skewNs": [
+      4,
+      8,
+      16,
+      32,
+      64
+    ],
+    "skewAggregateAll": [
+      0.2551,
+      0.3811,
+      0.552,
+      0.7845,
+      1
+    ],
+    "skewAggregateDecode": [
+      0.2183,
+      0.3401,
+      0.5243,
+      0.7745,
+      1
+    ],
+    "skewPerLayerDecode": [
+      {
+        "layer": 0,
+        "cumulative": [
+          0.109,
+          0.2081,
+          0.3769,
+          0.6412,
+          1
+        ]
+      },
+      {
+        "layer": 1,
+        "cumulative": [
+          0.1047,
+          0.1964,
+          0.3479,
+          0.6028,
+          1
+        ]
+      },
+      {
+        "layer": 2,
+        "cumulative": [
+          0.1097,
+          0.2038,
+          0.3657,
+          0.629,
+          1
+        ]
+      },
+      {
+        "layer": 3,
+        "cumulative": [
+          0.2192,
+          0.3291,
+          0.49,
+          0.7341,
+          1
+        ]
+      },
+      {
+        "layer": 4,
+        "cumulative": [
+          0.2871,
+          0.418,
+          0.5804,
+          0.8028,
+          1
+        ]
+      },
+      {
+        "layer": 5,
+        "cumulative": [
+          0.262,
+          0.4128,
+          0.5697,
+          0.7908,
+          1
+        ]
+      },
+      {
+        "layer": 6,
+        "cumulative": [
+          0.3018,
+          0.4498,
+          0.6219,
+          0.8209,
+          1
+        ]
+      },
+      {
+        "layer": 7,
+        "cumulative": [
+          0.2494,
+          0.3991,
+          0.5743,
+          0.7958,
+          1
+        ]
+      },
+      {
+        "layer": 8,
+        "cumulative": [
+          0.2457,
+          0.3752,
+          0.5689,
+          0.8138,
+          1
+        ]
+      },
+      {
+        "layer": 9,
+        "cumulative": [
+          0.2179,
+          0.3214,
+          0.4962,
+          0.7411,
+          1
+        ]
+      },
+      {
+        "layer": 10,
+        "cumulative": [
+          0.2229,
+          0.3264,
+          0.4822,
+          0.7392,
+          1
+        ]
+      },
+      {
+        "layer": 11,
+        "cumulative": [
+          0.1695,
+          0.261,
+          0.4168,
+          0.6695,
+          1
+        ]
+      },
+      {
+        "layer": 12,
+        "cumulative": [
+          0.1781,
+          0.2786,
+          0.4581,
+          0.7248,
+          1
+        ]
+      },
+      {
+        "layer": 13,
+        "cumulative": [
+          0.1463,
+          0.2494,
+          0.4229,
+          0.6875,
+          1
+        ]
+      },
+      {
+        "layer": 14,
+        "cumulative": [
+          0.1496,
+          0.2632,
+          0.4505,
+          0.751,
+          1
+        ]
+      },
+      {
+        "layer": 15,
+        "cumulative": [
+          0.1914,
+          0.3167,
+          0.5265,
+          0.7969,
+          1
+        ]
+      },
+      {
+        "layer": 16,
+        "cumulative": [
+          0.2283,
+          0.3504,
+          0.543,
+          0.7919,
+          1
+        ]
+      },
+      {
+        "layer": 17,
+        "cumulative": [
+          0.175,
+          0.2964,
+          0.5034,
+          0.776,
+          1
+        ]
+      },
+      {
+        "layer": 18,
+        "cumulative": [
+          0.2083,
+          0.3479,
+          0.5399,
+          0.7926,
+          1
+        ]
+      },
+      {
+        "layer": 19,
+        "cumulative": [
+          0.2095,
+          0.3263,
+          0.5268,
+          0.8131,
+          1
+        ]
+      },
+      {
+        "layer": 20,
+        "cumulative": [
+          0.2023,
+          0.3554,
+          0.5909,
+          0.8373,
+          1
+        ]
+      },
+      {
+        "layer": 21,
+        "cumulative": [
+          0.226,
+          0.3551,
+          0.5419,
+          0.8071,
+          1
+        ]
+      },
+      {
+        "layer": 22,
+        "cumulative": [
+          0.1889,
+          0.313,
+          0.5063,
+          0.7694,
+          1
+        ]
+      },
+      {
+        "layer": 23,
+        "cumulative": [
+          0.1908,
+          0.3088,
+          0.5099,
+          0.7727,
+          1
+        ]
+      },
+      {
+        "layer": 24,
+        "cumulative": [
+          0.1657,
+          0.298,
+          0.4979,
+          0.7532,
+          1
+        ]
+      },
+      {
+        "layer": 25,
+        "cumulative": [
+          0.2319,
+          0.3556,
+          0.5462,
+          0.8041,
+          1
+        ]
+      },
+      {
+        "layer": 26,
+        "cumulative": [
+          0.1707,
+          0.3,
+          0.5002,
+          0.7803,
+          1
+        ]
+      },
+      {
+        "layer": 27,
+        "cumulative": [
+          0.1995,
+          0.3447,
+          0.5314,
+          0.785,
+          1
+        ]
+      },
+      {
+        "layer": 28,
+        "cumulative": [
+          0.2404,
+          0.3727,
+          0.5553,
+          0.8115,
+          1
+        ]
+      },
+      {
+        "layer": 29,
+        "cumulative": [
+          0.2695,
+          0.3989,
+          0.5906,
+          0.8112,
+          1
+        ]
+      },
+      {
+        "layer": 30,
+        "cumulative": [
+          0.21,
+          0.3595,
+          0.5602,
+          0.807,
+          1
+        ]
+      },
+      {
+        "layer": 31,
+        "cumulative": [
+          0.2003,
+          0.3243,
+          0.5163,
+          0.8112,
+          1
+        ]
+      },
+      {
+        "layer": 32,
+        "cumulative": [
+          0.1795,
+          0.3073,
+          0.511,
+          0.7704,
+          1
+        ]
+      },
+      {
+        "layer": 33,
+        "cumulative": [
+          0.1514,
+          0.2806,
+          0.4966,
+          0.7795,
+          1
+        ]
+      },
+      {
+        "layer": 34,
+        "cumulative": [
+          0.2729,
+          0.3966,
+          0.5973,
+          0.8235,
+          1
+        ]
+      },
+      {
+        "layer": 35,
+        "cumulative": [
+          0.273,
+          0.4098,
+          0.595,
+          0.8294,
+          1
+        ]
+      },
+      {
+        "layer": 36,
+        "cumulative": [
+          0.3102,
+          0.4312,
+          0.6049,
+          0.8205,
+          1
+        ]
+      },
+      {
+        "layer": 37,
+        "cumulative": [
+          0.2251,
+          0.3453,
+          0.5315,
+          0.7871,
+          1
+        ]
+      },
+      {
+        "layer": 38,
+        "cumulative": [
+          0.2297,
+          0.3659,
+          0.5705,
+          0.8186,
+          1
+        ]
+      },
+      {
+        "layer": 39,
+        "cumulative": [
+          0.2733,
+          0.3693,
+          0.5473,
+          0.7958,
+          1
+        ]
+      },
+      {
+        "layer": 40,
+        "cumulative": [
+          0.2359,
+          0.3657,
+          0.5786,
+          0.8031,
+          1
+        ]
+      },
+      {
+        "layer": 41,
+        "cumulative": [
+          0.2977,
+          0.3985,
+          0.5555,
+          0.7791,
+          1
+        ]
+      },
+      {
+        "layer": 42,
+        "cumulative": [
+          0.281,
+          0.3995,
+          0.5663,
+          0.7902,
+          1
+        ]
+      },
+      {
+        "layer": 43,
+        "cumulative": [
+          0.2903,
+          0.4068,
+          0.5749,
+          0.7993,
+          1
+        ]
+      },
+      {
+        "layer": 44,
+        "cumulative": [
+          0.2454,
+          0.352,
+          0.5201,
+          0.7674,
+          1
+        ]
+      },
+      {
+        "layer": 45,
+        "cumulative": [
+          0.2937,
+          0.4004,
+          0.5597,
+          0.7961,
+          1
+        ]
+      }
+    ],
+    "workingSetDecode": [
+      {
+        "window": 32,
+        "mean": 1662.8,
+        "p95": 1905,
+        "max": 2036
+      },
+      {
+        "window": 128,
+        "mean": 2420.9,
+        "p95": 2618,
+        "max": 2695
+      },
+      {
+        "window": 512,
+        "mean": 2814.6,
+        "p95": 2896,
+        "max": 2901
+      }
+    ],
+    "workingSetNote": "finestre calcolate su righe di decode CONCATENATE attraverso gli 8 prompt: le finestre a cavallo di un confine mescolano contesti diversi (8 confini su 5120 righe) e gonfiano leggermente il working-set — numero conservativo."
+  },
+  "simulation": {
+    "protocol": "pin appreso sulla prima meta' della traccia, tutte le policy valutate sulla seconda meta' (split temporale anti-leakage); prefetch = replay delle predizioni VERE dumpate dall'oracolo (K=8), guard anti-eviction attivo",
+    "evalRows": 15637,
+    "budgets": [
+      184,
+      368,
+      736,
+      1472,
+      2208,
+      2944
+    ],
+    "curves": [
+      {
+        "policy": "lru",
+        "budget": 184,
+        "budgetGB": 0.98,
+        "hitRate": 0.2491,
+        "decodeHitRate": 0.249,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 0
+      },
+      {
+        "policy": "lfru",
+        "budget": 184,
+        "budgetGB": 0.98,
+        "hitRate": 0.2316,
+        "decodeHitRate": 0.1802,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 2210532
+      },
+      {
+        "policy": "lfru+pin",
+        "budget": 184,
+        "budgetGB": 0.98,
+        "hitRate": 0.2393,
+        "decodeHitRate": 0.1719,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 2188478
+      },
+      {
+        "policy": "lfru+pin+prefetch",
+        "budget": 184,
+        "budgetGB": 0.98,
+        "hitRate": 0.243,
+        "decodeHitRate": 0.177,
+        "prefetched": 1226096,
+        "prefetchRejected": 31,
+        "evictions": 3404071
+      },
+      {
+        "policy": "lru",
+        "budget": 368,
+        "budgetGB": 1.95,
+        "hitRate": 0.4385,
+        "decodeHitRate": 0.4265,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 0
+      },
+      {
+        "policy": "lfru",
+        "budget": 368,
+        "budgetGB": 1.95,
+        "hitRate": 0.3941,
+        "decodeHitRate": 0.3304,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 1742872
+      },
+      {
+        "policy": "lfru+pin",
+        "budget": 368,
+        "budgetGB": 1.95,
+        "hitRate": 0.376,
+        "decodeHitRate": 0.2932,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 1795116
+      },
+      {
+        "policy": "lfru+pin+prefetch",
+        "budget": 368,
+        "budgetGB": 1.95,
+        "hitRate": 0.3761,
+        "decodeHitRate": 0.2916,
+        "prefetched": 1096184,
+        "prefetchRejected": 332,
+        "evictions": 2890817
+      },
+      {
+        "policy": "lru",
+        "budget": 736,
+        "budgetGB": 3.91,
+        "hitRate": 0.6305,
+        "decodeHitRate": 0.6136,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 0
+      },
+      {
+        "policy": "lfru",
+        "budget": 736,
+        "budgetGB": 3.91,
+        "hitRate": 0.6156,
+        "decodeHitRate": 0.5958,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 1105326
+      },
+      {
+        "policy": "lfru+pin",
+        "budget": 736,
+        "budgetGB": 3.91,
+        "hitRate": 0.5728,
+        "decodeHitRate": 0.5103,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 1228793
+      },
+      {
+        "policy": "lfru+pin+prefetch",
+        "budget": 736,
+        "budgetGB": 3.91,
+        "hitRate": 0.5741,
+        "decodeHitRate": 0.5175,
+        "prefetched": 845758,
+        "prefetchRejected": 2797,
+        "evictions": 2067920
+      },
+      {
+        "policy": "lru",
+        "budget": 1472,
+        "budgetGB": 7.81,
+        "hitRate": 0.8508,
+        "decodeHitRate": 0.8473,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 0
+      },
+      {
+        "policy": "lfru",
+        "budget": 1472,
+        "budgetGB": 7.81,
+        "hitRate": 0.8589,
+        "decodeHitRate": 0.8565,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 404604
+      },
+      {
+        "policy": "lfru+pin",
+        "budget": 1472,
+        "budgetGB": 7.81,
+        "hitRate": 0.8282,
+        "decodeHitRate": 0.8054,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 493622
+      },
+      {
+        "policy": "lfru+pin+prefetch",
+        "budget": 1472,
+        "budgetGB": 7.81,
+        "hitRate": 0.8342,
+        "decodeHitRate": 0.8308,
+        "prefetched": 441811,
+        "prefetchRejected": 5004,
+        "evictions": 913042
+      },
+      {
+        "policy": "lru",
+        "budget": 2208,
+        "budgetGB": 11.72,
+        "hitRate": 0.964,
+        "decodeHitRate": 0.9643,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 0
+      },
+      {
+        "policy": "lfru",
+        "budget": 2208,
+        "budgetGB": 11.72,
+        "hitRate": 0.9503,
+        "decodeHitRate": 0.9519,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 140917
+      },
+      {
+        "policy": "lfru+pin",
+        "budget": 2208,
+        "budgetGB": 11.72,
+        "hitRate": 0.9535,
+        "decodeHitRate": 0.952,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 132661
+      },
+      {
+        "policy": "lfru+pin+prefetch",
+        "budget": 2208,
+        "budgetGB": 11.72,
+        "hitRate": 0.9605,
+        "decodeHitRate": 0.9822,
+        "prefetched": 134196,
+        "prefetchRejected": 1702,
+        "evictions": 245006
+      },
+      {
+        "policy": "lru",
+        "budget": 2944,
+        "budgetGB": 15.63,
+        "hitRate": 0.999,
+        "decodeHitRate": 1,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 0
+      },
+      {
+        "policy": "lfru",
+        "budget": 2944,
+        "budgetGB": 15.63,
+        "hitRate": 0.999,
+        "decodeHitRate": 1,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 0
+      },
+      {
+        "policy": "lfru+pin",
+        "budget": 2944,
+        "budgetGB": 15.63,
+        "hitRate": 0.9995,
+        "decodeHitRate": 1,
+        "prefetched": 0,
+        "prefetchRejected": 0,
+        "evictions": 0
+      },
+      {
+        "policy": "lfru+pin+prefetch",
+        "budget": 2944,
+        "budgetGB": 15.63,
+        "hitRate": 0.9995,
+        "decodeHitRate": 1,
+        "prefetched": 35,
+        "prefetchRejected": 0,
+        "evictions": 0
+      }
+    ],
+    "decaySensitivityLfru": [
+      {
+        "budget": 368,
+        "decayEvery": 128,
+        "decodeHitRate": 0.401
+      },
+      {
+        "budget": 368,
+        "decayEvery": 512,
+        "decodeHitRate": 0.4232
+      },
+      {
+        "budget": 368,
+        "decayEvery": 4096,
+        "decodeHitRate": 0.3304
+      },
+      {
+        "budget": 368,
+        "decayEvery": 1073741824,
+        "decodeHitRate": 0.2498
+      },
+      {
+        "budget": 736,
+        "decayEvery": 128,
+        "decodeHitRate": 0.474
+      },
+      {
+        "budget": 736,
+        "decayEvery": 512,
+        "decodeHitRate": 0.6147
+      },
+      {
+        "budget": 736,
+        "decayEvery": 4096,
+        "decodeHitRate": 0.5958
+      },
+      {
+        "budget": 736,
+        "decayEvery": 1073741824,
+        "decodeHitRate": 0.4069
+      },
+      {
+        "budget": 1472,
+        "decayEvery": 128,
+        "decodeHitRate": 0.6165
+      },
+      {
+        "budget": 1472,
+        "decayEvery": 512,
+        "decodeHitRate": 0.7376
+      },
+      {
+        "budget": 1472,
+        "decayEvery": 4096,
+        "decodeHitRate": 0.8565
+      },
+      {
+        "budget": 1472,
+        "decayEvery": 1073741824,
+        "decodeHitRate": 0.6523
+      }
+    ],
+    "knobSensitivity": [
+      {
+        "budget": 736,
+        "policy": "lfru+pin",
+        "pinFraction": 0.125,
+        "decodeHitRate": 0.5827
+      },
+      {
+        "budget": 736,
+        "policy": "lfru+pin",
+        "pinFraction": 0.25,
+        "decodeHitRate": 0.5587
+      },
+      {
+        "budget": 736,
+        "policy": "lfru+pin",
+        "pinFraction": 0.5,
+        "decodeHitRate": 0.5103
+      },
+      {
+        "budget": 736,
+        "policy": "lfru+pin+prefetch",
+        "pinFraction": 0.125,
+        "prefetchK": 2,
+        "decodeHitRate": 0.6747
+      },
+      {
+        "budget": 736,
+        "policy": "lfru+pin+prefetch",
+        "pinFraction": 0.125,
+        "prefetchK": 4,
+        "decodeHitRate": 0.6496
+      },
+      {
+        "budget": 736,
+        "policy": "lfru+pin+prefetch",
+        "pinFraction": 0.125,
+        "prefetchK": 8,
+        "decodeHitRate": 0.5889
+      },
+      {
+        "budget": 1472,
+        "policy": "lfru+pin",
+        "pinFraction": 0.125,
+        "decodeHitRate": 0.8458
+      },
+      {
+        "budget": 1472,
+        "policy": "lfru+pin",
+        "pinFraction": 0.25,
+        "decodeHitRate": 0.8335
+      },
+      {
+        "budget": 1472,
+        "policy": "lfru+pin",
+        "pinFraction": 0.5,
+        "decodeHitRate": 0.8054
+      },
+      {
+        "budget": 1472,
+        "policy": "lfru+pin+prefetch",
+        "pinFraction": 0.125,
+        "prefetchK": 2,
+        "decodeHitRate": 0.8852
+      },
+      {
+        "budget": 1472,
+        "policy": "lfru+pin+prefetch",
+        "pinFraction": 0.125,
+        "prefetchK": 4,
+        "decodeHitRate": 0.9083
+      },
+      {
+        "budget": 1472,
+        "policy": "lfru+pin+prefetch",
+        "pinFraction": 0.125,
+        "prefetchK": 8,
+        "decodeHitRate": 0.8796
+      },
+      {
+        "budget": 2208,
+        "policy": "lfru+pin",
+        "pinFraction": 0.125,
+        "decodeHitRate": 0.9514
+      },
+      {
+        "budget": 2208,
+        "policy": "lfru+pin",
+        "pinFraction": 0.25,
+        "decodeHitRate": 0.9507
+      },
+      {
+        "budget": 2208,
+        "policy": "lfru+pin",
+        "pinFraction": 0.5,
+        "decodeHitRate": 0.952
+      },
+      {
+        "budget": 2208,
+        "policy": "lfru+pin+prefetch",
+        "pinFraction": 0.125,
+        "prefetchK": 2,
+        "decodeHitRate": 0.9644
+      },
+      {
+        "budget": 2208,
+        "policy": "lfru+pin+prefetch",
+        "pinFraction": 0.125,
+        "prefetchK": 4,
+        "decodeHitRate": 0.98
+      },
+      {
+        "budget": 2208,
+        "policy": "lfru+pin+prefetch",
+        "pinFraction": 0.125,
+        "prefetchK": 8,
+        "decodeHitRate": 0.9894
+      }
+    ]
+  },
+  "verdict2x": {
+    "note": "budget 1472 slot = 50% del parco routed (~7.8 GB su 15.6): il caso 'modello ~2x la memoria' del ledger §A",
+    "decodeHitRateByPolicy": {
+      "lru": 0.8473,
+      "lfru": 0.8565,
+      "lfru+pin": 0.8054,
+      "lfru+pin+prefetch": 0.8308
+    }
+  }
+}
