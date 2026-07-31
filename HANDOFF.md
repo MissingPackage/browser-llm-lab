@@ -2,21 +2,22 @@
 
 ## 1. Next decidable
 
-**Fase 4 del goal `engine-fase-c2`, slice 3 (ultima del timebox: restano
-2 it.): assemblaggio del layer GLM in gpuforward + conformance layer-level
-con pesi reali** (gate doppio cpuref-f64/golden, spec §7). Kernel TUTTI
-pronti e verificati: GEMV q4_1/q5_K/q6_K (it.3) + MLA absorbed (it.4: rope
-NORM — non NEOX!, gemvQ8Heads per wk_b/wv_b, mlaAttnDecode su cache 576 con
-kq_scale 1/sqrt(256), V=c_kv normata). ktest 21/21 su 4090, suite node
-21/199 verde, tsc pulito, verifier PASS su codice e semantica (riscontro in
-deepseek2.cpp/llama-model.cpp/ops.cpp). Watch item: gemv-q5_K passa via
-absTol; assunzione mscale=1 (no yarn) da riverificare coi golden.
-Dopo fase 4: fase 5 (MoE+residenza minima, timebox 4 it.), fase 6 (E2E+gate
-non-regressione: decode >=13.43 / prefill >=56.58, Qwen invariato), fase 7.
+**Fase 5 del goal `engine-fase-c2` (MoE + residenza minima, timebox 4 it.),
+slice 1**: router (sigmoid+bias+top-4+norm ×1.8, replica C1 — verifica
+riga-per-riga in build_moe_ffn, llama-graph.cpp 5f55650) + GEMV per-expert
+sugli slab; poi residenza minima (GGUF in OPFS, cache VRAM LRU a due
+size-class 5.308.416/5.505.024 B, ~2.5k slot) + conformance routing ≥99%
+vs traccia C1 (spec §4-§5, §7). **FASE 4 CHIUSA a it.5** (verifier PASS):
+layer 0 GLM assemblato su GPU (`glmforward.ts`, MLA absorbed, 22
+dispatch/token) + conformance layer-level con PESI REALI vs cpuref-f64
+naive: L2rel 2.35e-7 su 16 pos decode (4090); identità algebrica
+naive↔absorbed in suite; ktest 23/23, suite 200/200, tsc pulito. Il gate
+"golden" matura al full-model (fase 6, lettura registrata a journal it.5).
+Watch item fase 6: stringere il gate layer-level (ora 1e-3 vs 2.35e-7
+misurato) + q5_K absTol (it.3) + assunzione mscale=1 da golden.
 Riancorarsi da: `.harness/goals/engine-fase-c2/{GOAL,PHASES,docket,journal}.md`,
-spec §3-§7, `src/engine/kernels/wgsl.ts` (kernel nuovi in coda),
-`src/engine/ktest/ktest.worker.ts` (riferimenti f64), golden in
-`results/engine/golden/glm47flash/`.
+spec §4-§5, `src/engine/glmforward.ts` (pattern da estendere), traccia
+`results/engine/moe-oracle/trace-2026-07-31.jsonl.gz`, sim residenza C1.
 
 ## 2. State delta (questa sessione, 15)
 

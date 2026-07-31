@@ -159,8 +159,10 @@ riverificata empiricamente coi golden alla conformance con pesi reali.
 
 Slice finale della fase 4. Implementato:
 - `cpuref.ts`: `GlmDenseLayerRefF64` — layer denso blk.0 in f64 con MLA
-  in formulazione NAIVE (decompressione K/V per posizione via wk_b/wv_b
-  TRASPOSTI): riferimento deliberatamente diverso dall'absorbed del motore.
+  in formulazione NAIVE: wk_b ad accesso TRASPOSTO (k_nope per posizione),
+  V decompressa PER POSIZIONE via wv_b (l'absorbed la applica all'aggregato):
+  riferimento deliberatamente diverso dal motore. [dicitura corretta
+  post-verifier it.5]
 - `glmforward.ts` (file NUOVO — deviazione owns come it.2, stessi criteri:
   pattern gpuforward, nessun conflitto): `createGlmLayer0` assembla il layer
   su GPU — 22 dispatch/token, MLA absorbed coi kernel di it.3/4 + ffn denso
@@ -192,3 +194,18 @@ PASS; il gate (ii) vs golden si applica by construction al full-model e
 matura in fase 6 (soglie §7: argmax ≥99% cpuref / top-1 ≥97% golden). Il
 cpuref f64 full-model necessario al gate (i) di fase 6 richiede il MoE ref
 (fase 5). Fase 4 chiusa a it.5 (timebox 4 it., usate 3). Pending verifier.
+
+Verifier it.5: **PASS** (loop-verifier — ri-run ktest indipendente 23/23 con
+numeri identici al claim; tsc+suite 200/200 fresh; kq_scale/rope NORM/ordine
+rope→kv_a_norm/layout [512|64]/v_mla riscontrati in deepseek2.cpp:172,279-316
+e llama-model.cpp:2526; dualità naive/absorbed verificata algebricamente
+(qᵀ(Wᵀc)=(Wq)ᵀc); fixture ricalcolata a mano vs shape.ts e golden; 22
+dispatch contati a mano). Osservazioni recepite: (1) dicitura wv_b nel
+journal corretta (sopra); (2) sha fixture = costante-vs-costante, pin
+ancorato a it.1/2 (non ri-hashato il 17 GB); (3) WATCH ITEM fase 6: il gate
+layer-level (L2rel ≤ 1e-3) è ~4 ordini più largo del risultato (2.35e-7) —
+quando le soglie §7 saranno fissate sul full-model, stringerlo a canary di
+non-regressione (si collega al watch-item q5_K di it.3).
+
+**FASE 4 CHIUSA** (it.3-5, timebox 4 it.: usate 3). Next: fase 5 (MoE +
+residenza minima, timebox 4 it.).
