@@ -86,3 +86,28 @@ gen-golden di fase 1), fuori dagli owns della riga PHASES; registrata QUI,
 nessun conflitto di ownership; (2) il goal lavora su main mentre GOAL.md
 §AUTHORITY dice branch engine/fase-c2 con merge a goal chiuso (C1 usò il
 branch) → divergenza di merge-policy, NON la decido io: docket item 3.
+
+## it.3 — fase 4, primo slice: GEMV dequant-fuse dei formati GLM (2026-07-31)
+
+Slice scelto (il più grande verificabile in un'iterazione): i kernel WGSL
+GEMV per i tipi quant nuovi — prerequisito di MLA (proiettori) e MoE (expert
+e shexp). Implementato:
+- `quant.ts`: repackQ4_1 (qs 4 u32/blocco; scales = 1 u32/blocco con d|m,
+  unpack2x16float-ready) e repackKQuant (superblocco GGUF grezzo in u32 LE,
+  stride allineato: Q5_K 44 word esatte, Q6_K 53 con 2 B pad).
+- `kernels/wgsl.ts`: gemvQuantWgsl esteso a kind "q4_1" (contributo blocco
+  = d·Σq·x + m·Σx); gemvQ5KWgsl (scaleMinK4 6-bit replicata in WGSL, qh bit
+  alto, accumulo d·sc·dot − dmin·min·Σx per gruppo da 32); gemvQ6KWgsl
+  (nibble+2bit, scales int8 sign-extended, d f16 in coda al superblocco).
+  Correttezza-prima come da spec §9 rischio 1 (niente tiling).
+- ktest: testGemvC2 (kernel vs dequant CPU di it.2, dati seeded, fixScalesAt
+  per i f16 nei nuovi offset), 5 casi a taglie reali GLM; page.ts espone
+  window.__report; runner nuovo `scripts/ktest-run.mjs` (pattern kernel-diag,
+  Chrome headed, vite :5199 dedicata + kill).
+
+**Evidenza**: run ktest su 4090 (Chrome headed) status "done", 16/16 PASS —
+i 5 nuovi: q4_1 1536x2048 maxRel 5.1e-7, q4_1 10240x256 9.3e-6, q5_K
+2048x1536 2.2e-4, q6_K 1536x2048 1.4e-5, q6_K 2048x1024 1.5e-5 (tolleranza
+2e-4 rel / 1e-3 abs come i gemv esistenti); zero regressioni sugli 11 kernel
+preesistenti; `npm test` 199/199; `tsc --noEmit` pulito. Fase 4 prosegue
+(it.4: cpuref MLA naive + kernel absorbed). Pending verifier.

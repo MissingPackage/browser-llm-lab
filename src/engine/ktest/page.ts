@@ -23,10 +23,12 @@ worker.onmessage = (e: MessageEvent) => {
     $("probe-box").textContent = JSON.stringify({ webgpu: true, adapter: m.desc });
   } else if (m.type === "done") {
     render(m.results ?? []);
+    (window as unknown as { __report?: KResult[] }).__report = m.results ?? [];
     const allPass = (m.results ?? []).every((r) => r.pass);
     $("status").textContent = allPass ? "done" : "ERROR: kernel FAIL";
   } else if (m.type === "error") {
     if (m.results) render(m.results);
+    (window as unknown as { __report?: KResult[] }).__report = m.results ?? [];
     $("status").textContent = `ERROR: ${m.message}`;
   }
 };

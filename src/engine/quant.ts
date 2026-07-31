@@ -215,6 +215,40 @@ function src8(src: Uint8Array, o: number): number {
   return (src[o] << 24) >> 24;
 }
 
+// Repack Q4_1: qs come Q4_0 (4 u32/blocco); "scales" = UN u32 per blocco con
+// d nei 16 bit bassi e m negli alti (in WGSL: unpack2x16float → vec2(d, m)).
+export function repackQ4_1(src: Uint8Array, srcOffset: number, nBlocks: number): RepackedQuant {
+  const qs = new Uint32Array(nBlocks * 4);
+  const scales = new Uint32Array(nBlocks);
+  let o = srcOffset;
+  for (let b = 0; b < nBlocks; b++) {
+    scales[b] = (src[o] | (src[o + 1] << 8) | (src[o + 2] << 16) | (src[o + 3] << 24)) >>> 0;
+    o += 4;
+    for (let w = 0; w < 4; w++) {
+      qs[b * 4 + w] = src[o] | (src[o + 1] << 8) | (src[o + 2] << 16) | (src[o + 3] << 24);
+      o += 4;
+    }
+  }
+  return { qs, scales };
+}
+
+// Repack K-quant: il superblocco resta nel layout GGUF, copiato in u32 LE con
+// stride allineato a 4 byte (Q5_K: 176 B = 44 word esatte; Q6_K: 210 B → 53
+// word, 2 B di pad). Il kernel indicizza byte dentro le word.
+export function repackKQuant(
+  src: Uint8Array, srcOffset: number, nBlocks: number, blockBytes: number,
+): Uint32Array {
+  const wordsPerBlock = Math.ceil(blockBytes / 4);
+  const out = new Uint32Array(nBlocks * wordsPerBlock);
+  for (let b = 0; b < nBlocks; b++) {
+    const o = srcOffset + b * blockBytes;
+    for (let j = 0; j < blockBytes; j++) {
+      out[b * wordsPerBlock + (j >> 2)] |= src[o + j] << ((j & 3) * 8);
+    }
+  }
+  return out;
+}
+
 // Q8_0 (34 byte, 32 pesi): [scala f16 LE (2 B)] [32 int8]. w = int8 * scala.
 // Serve per output.weight del GGUF ufficiale (vedi gguf.ts). Anche questa è esatta
 // in f32.

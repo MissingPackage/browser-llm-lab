@@ -6,11 +6,16 @@
 // ⇒ confronto a tolleranza relativa+assoluta, per kernel. Le parti intere (nibble,
 // int8, indici argmax) devono essere esatte.
 import {
-  gemvQuantWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl, attnDecodeWgsl,
-  siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, ARGMAX_CHUNK,
+  gemvQuantWgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
+  attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
+  ARGMAX_CHUNK,
 } from "../kernels/wgsl";
-import { repackQ4_0, repackQ8_0, dequantQ4_0, dequantQ8_0 } from "../quant";
-import { QWEN25_05B as S } from "../shape";
+import {
+  repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
+  dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ5_K, dequantQ6_K,
+  Q4_1_BLOCK_BYTES, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES,
+} from "../quant";
+import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 
 interface KResult { kernel: string; pass: boolean; maxAbs: number; maxRel: number; note?: string }
 
@@ -138,6 +143,45 @@ async function testGemv(g: Gpu, kind: "q4_0" | "q8_0", K: number, N: number, has
   return compare(`gemv-${kind}-${K}x${N}${hasBias ? "-bias" : ""}`, got, ref, 2e-4, 1e-3);
 }
 
+// come fixScales, ma per gli scale f16 dei formati C2 (offset multipli nel blocco)
+function fixScalesAt(src: Uint8Array, blockBytes: number, hiByteOffsets: number[]): void {
+  for (let o = 0; o + blockBytes <= src.length; o += blockBytes) {
+    for (const off of hiByteOffsets) src[o + off] = 0x2c | (src[o + off] & 0x03);
+  }
+}
+
+// GEMV dei formati GLM (goal C2 fase 4): kernel vs dequant CPU di riferimento
+// (a loro volta validate su byte reali del GGUF contro gguf-py, it.2).
+async function testGemvC2(g: Gpu, kind: "q4_1" | "q5_K" | "q6_K", K: number, N: number): Promise<KResult> {
+  const blockWeights = kind === "q4_1" ? 32 : 256;
+  const blockBytes = kind === "q4_1" ? Q4_1_BLOCK_BYTES : kind === "q5_K" ? Q5_K_BLOCK_BYTES : Q6_K_BLOCK_BYTES;
+  const nBlocks = (K / blockWeights) * N;
+  const src = randBytes(nBlocks * blockBytes, 4321 + K + N);
+  if (kind === "q4_1") fixScalesAt(src, blockBytes, [1, 3]);       // d, m
+  else if (kind === "q5_K") fixScalesAt(src, blockBytes, [1, 3]);  // d, dmin
+  else fixScalesAt(src, blockBytes, [209]);                        // d in coda
+  const w = new Float32Array(nBlocks * blockWeights);
+  (kind === "q4_1" ? dequantQ4_1 : kind === "q5_K" ? dequantQ5_K : dequantQ6_K)(src, 0, nBlocks, w);
+  const x = randF32(K, 77 + K);
+  const ref = new Float32Array(N);
+  for (let r = 0; r < N; r++) {
+    let acc = 0;
+    for (let i = 0; i < K; i++) acc += w[r * K + i] * x[i];
+    ref[r] = acc;
+  }
+  const y = g.empty(N * 4);
+  if (kind === "q4_1") {
+    const { qs, scales } = repackQ4_1(src, 0, nBlocks);
+    await g.run(gemvQuantWgsl({ kind, K, N, hasBias: false }), [g.buf(qs), g.buf(scales), g.buf(x), y], N);
+  } else {
+    const blocks = repackKQuant(src, 0, nBlocks, blockBytes);
+    const code = kind === "q5_K" ? gemvQ5KWgsl({ K, N }) : gemvQ6KWgsl({ K, N });
+    await g.run(code, [g.buf(blocks), g.buf(x), y], N);
+  }
+  const got = new Float32Array(await g.read(y, N * 4));
+  return compare(`gemv-${kind}-${K}x${N}`, got, ref, 2e-4, 1e-3);
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -152,6 +196,13 @@ async function main(): Promise<void> {
     results.push(await testGemv(g, "q4_0", D, S.dFfn, false)); // ffn gate/up
     results.push(await testGemv(g, "q4_0", S.dFfn, D, false)); // ffn down
     results.push(await testGemv(g, "q8_0", D, 2048, false));   // lm_head (N ridotto: stessa matematica)
+
+    // GEMV formati GLM (C2 fase 4), taglie reali del modello-tesi
+    results.push(await testGemvC2(g, "q4_1", G.dFfnExpert, G.dModel));  // expert down blk.1-4
+    results.push(await testGemvC2(g, "q4_1", G.dFfnDense, 256));        // dense down (righe ridotte)
+    results.push(await testGemvC2(g, "q5_K", G.dModel, G.dFfnExpert));  // gate/up shexp
+    results.push(await testGemvC2(g, "q6_K", G.dFfnExpert, G.dModel));  // down shexp
+    results.push(await testGemvC2(g, "q6_K", G.dModel, 1024));          // output head (N ridotto)
 
     { // rmsnorm
       const x = randF32(D, 5), w = randF32(D, 6);

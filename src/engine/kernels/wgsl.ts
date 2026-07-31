@@ -20,12 +20,12 @@ export function gemvGrid(N: number): [number, number] {
 // GEMV dequant-fusa: y[r] = Σ_b scale(b)·Σ_j q_j·x[...] (+ bias). Un workgroup da
 // 64 thread per riga di output; riduzione in shared memory.
 export function gemvQuantWgsl(opts: {
-  kind: "q4_0" | "q8_0"; K: number; N: number; hasBias: boolean;
+  kind: "q4_0" | "q4_1" | "q8_0"; K: number; N: number; hasBias: boolean;
 }): string {
   const { kind, K, N, hasBias } = opts;
   if (K % 32 !== 0) throw new Error("gemv: K non multiplo di 32");
   const blocksPerRow = K / 32;
-  const wordsPerBlock = kind === "q4_0" ? 4 : 8;
+  const wordsPerBlock = kind === "q8_0" ? 8 : 4;
   const biasBinding = hasBias
     ? `@group(0) @binding(4) var<storage, read> bias: array<f32>;` : "";
   const biasAdd = hasBias ? "accFinal = accFinal + bias[r];" : "";
@@ -43,6 +43,21 @@ export function gemvQuantWgsl(opts: {
         }
       }
       let blockDot = dot_lo + dot_hi;`
+    : kind === "q4_1"
+    ? `
+      // q4_1: w = q*d + m ⇒ contributo blocco = d·Σ(q·x) + m·Σx.
+      var dot_q = 0.0; var sum_x = 0.0;
+      for (var w = 0u; w < 4u; w = w + 1u) {
+        let word = qs[gb * 4u + w];
+        for (var by = 0u; by < 4u; by = by + 1u) {
+          let byte = (word >> (by * 8u)) & 0xffu;
+          let j = w * 4u + by;
+          let xlo = x[xBase + j];
+          let xhi = x[xBase + 16u + j];
+          dot_q = dot_q + f32(byte & 0xfu) * xlo + f32(byte >> 4u) * xhi;
+          sum_x = sum_x + xlo + xhi;
+        }
+      }`
     : `
       var bd = 0.0;
       for (var w = 0u; w < 8u; w = w + 1u) {
@@ -53,6 +68,19 @@ export function gemvQuantWgsl(opts: {
         }
       }
       let blockDot = bd;`;
+  // q4_1: "scales" = un u32/blocco con (d, m) → accumulo dedicato
+  const scaleAcc = kind === "q4_1"
+    ? `
+    let dm = unpack2x16float(scales[gb]);
+    let xBase = b * 32u;
+    ${blockDot}
+    acc = acc + dm.x * dot_q + dm.y * sum_x;`
+    : `
+    let sWord = scales[gb >> 1u];
+    let sc = unpack2x16float(sWord)[gb & 1u];
+    let xBase = b * 32u;
+    ${blockDot}
+    acc = acc + sc * blockDot;`;
   return `${TOK_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read> qs: array<u32>;
 @group(0) @binding(1) var<storage, read> scales: array<u32>;
@@ -72,11 +100,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   var acc = 0.0;
   for (var b = t; b < BLOCKS_PER_ROW; b = b + 64u) {
     let gb = r * BLOCKS_PER_ROW + b; // blocco globale nel tensore
-    let sWord = scales[gb >> 1u];
-    let sc = unpack2x16float(sWord)[gb & 1u];
-    let xBase = b * 32u;
-    ${blockDot}
-    acc = acc + sc * blockDot;
+    ${scaleAcc}
   }
   partial[t] = acc;
   workgroupBarrier();
@@ -1325,5 +1349,145 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let nib = select(byte >> 4u, byte & 0xfu, lo);
   let scale = unpack2x16float(scales[gb >> 1u])[gb & 1u];
   x[e] = (f32(nib) - 8.0) * scale;
+}`;
+}
+
+// --- GEMV K-quant (superblocco QK_K=256, goal C2 fase 4) ---
+//
+// Layout repack: repackKQuant (quant.ts) — superblocco GGUF grezzo in u32 LE.
+// "Correttezza prima" (spec C2 §9 rischio 1): un workgroup da 64 thread per
+// riga, un superblocco per thread per giro; niente vec4/tiling finché il floor
+// tok/s non lo chiede. I riferimenti bit-esatti sono dequantQ5_K/dequantQ6_K.
+
+// Q5_K: 44 word/superblocco = [d|dmin][scales 12 B][qh 32 B][qs 128 B].
+// w = d·sc6bit·(nibble + bit_alto·16) − dmin·min6bit.
+export function gemvQ5KWgsl(opts: { K: number; N: number }): string {
+  const { K, N } = opts;
+  if (K % 256 !== 0) throw new Error("gemvQ5K: K non multiplo di 256");
+  const sbPerRow = K / 256;
+  return `
+@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+const SB_PER_ROW = ${sbPerRow}u;
+var<workgroup> partial: array<f32, 64>;
+fn sbyte(base: u32, i: u32) -> u32 {
+  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  if (r >= ${N}u) { return; }
+  let t = lid.x;
+  var acc = 0.0;
+  for (var sb = t; sb < SB_PER_ROW; sb = sb + 64u) {
+    let wb = (r * SB_PER_ROW + sb) * 44u;   // base word del superblocco
+    let dm = unpack2x16float(blocks[wb]);   // (d, dmin)
+    let xBase = sb * 256u;
+    var u1 = 1u; var u2 = 2u;
+    for (var j = 0u; j < 4u; j = j + 1u) {  // 4 gruppi da 64 elementi
+      let is = 2u * j;
+      // get_scale_min_k4(is) e (is+1) — scales a byte offset 4 dentro il superblocco
+      var sc1: u32; var mn1: u32; var sc2: u32; var mn2: u32;
+      if (is < 4u) {
+        sc1 = sbyte(wb, 4u + is) & 63u;
+        mn1 = sbyte(wb, 4u + is + 4u) & 63u;
+        sc2 = sbyte(wb, 4u + is + 1u) & 63u;
+        mn2 = sbyte(wb, 4u + is + 5u) & 63u;
+      } else {
+        sc1 = (sbyte(wb, 4u + is + 4u) & 0xfu) | ((sbyte(wb, 4u + is - 4u) >> 6u) << 4u);
+        mn1 = (sbyte(wb, 4u + is + 4u) >> 4u) | ((sbyte(wb, 4u + is) >> 6u) << 4u);
+        sc2 = (sbyte(wb, 4u + is + 5u) & 0xfu) | ((sbyte(wb, 4u + is - 3u) >> 6u) << 4u);
+        mn2 = (sbyte(wb, 4u + is + 5u) >> 4u) | ((sbyte(wb, 4u + is + 1u) >> 6u) << 4u);
+      }
+      let d1 = dm.x * f32(sc1); let min1 = dm.y * f32(mn1);
+      let d2 = dm.x * f32(sc2); let min2 = dm.y * f32(mn2);
+      var dot1 = 0.0; var sx1 = 0.0; var dot2 = 0.0; var sx2 = 0.0;
+      for (var l = 0u; l < 32u; l = l + 1u) {
+        let ql = sbyte(wb, 48u + j * 32u + l);   // qs a byte offset 48
+        let qh = sbyte(wb, 16u + l);             // qh a byte offset 16
+        let x1 = x[xBase + j * 64u + l];
+        let x2 = x[xBase + j * 64u + 32u + l];
+        var q1 = f32(ql & 0xfu);
+        if ((qh & u1) != 0u) { q1 = q1 + 16.0; }
+        var q2 = f32(ql >> 4u);
+        if ((qh & u2) != 0u) { q2 = q2 + 16.0; }
+        dot1 = dot1 + q1 * x1; sx1 = sx1 + x1;
+        dot2 = dot2 + q2 * x2; sx2 = sx2 + x2;
+      }
+      acc = acc + d1 * dot1 - min1 * sx1 + d2 * dot2 - min2 * sx2;
+      u1 = u1 << 2u; u2 = u2 << 2u;
+    }
+  }
+  partial[t] = acc;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { partial[t] = partial[t] + partial[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (t == 0u) { y[r] = partial[0]; }
+}`;
+}
+
+// Q6_K: 53 word/superblocco (210 B + 2 pad) = [ql 128 B][qh 64 B][scales int8
+// 16 B][d f16]. w = d·sc_int8·(q6 − 32), q6 = nibble | 2 bit alti.
+export function gemvQ6KWgsl(opts: { K: number; N: number }): string {
+  const { K, N } = opts;
+  if (K % 256 !== 0) throw new Error("gemvQ6K: K non multiplo di 256");
+  const sbPerRow = K / 256;
+  return `
+@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+const SB_PER_ROW = ${sbPerRow}u;
+var<workgroup> partial: array<f32, 64>;
+fn sbyte(base: u32, i: u32) -> u32 {
+  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+}
+fn sint8(base: u32, i: u32) -> f32 {
+  return f32((i32(sbyte(base, i)) << 24u) >> 24u);
+}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  if (r >= ${N}u) { return; }
+  let t = lid.x;
+  var acc = 0.0;
+  for (var sb = t; sb < SB_PER_ROW; sb = sb + 64u) {
+    let wb = (r * SB_PER_ROW + sb) * 53u;
+    let d = unpack2x16float(blocks[wb + 52u]).x; // d f16 a byte offset 208
+    let xBase = sb * 256u;
+    for (var n = 0u; n < 2u; n = n + 1u) {       // 2 gruppi da 128
+      let qlO = n * 64u;        // byte offset dentro ql (0 o 64)
+      let qhO = 128u + n * 32u; // byte offset qh
+      let scO = 192u + n * 8u;  // byte offset scales
+      for (var l = 0u; l < 32u; l = l + 1u) {
+        let is = l >> 4u;
+        let qlA = sbyte(wb, qlO + l);
+        let qlB = sbyte(wb, qlO + l + 32u);
+        let qh = sbyte(wb, qhO + l);
+        let q1 = f32((qlA & 0xfu) | (((qh >> 0u) & 3u) << 4u)) - 32.0;
+        let q2 = f32((qlB & 0xfu) | (((qh >> 2u) & 3u) << 4u)) - 32.0;
+        let q3 = f32((qlA >> 4u) | (((qh >> 4u) & 3u) << 4u)) - 32.0;
+        let q4 = f32((qlB >> 4u) | (((qh >> 6u) & 3u) << 4u)) - 32.0;
+        let e = xBase + n * 128u + l;
+        acc = acc + d * (sint8(wb, scO + is) * q1 * x[e]
+                       + sint8(wb, scO + is + 2u) * q2 * x[e + 32u]
+                       + sint8(wb, scO + is + 4u) * q3 * x[e + 64u]
+                       + sint8(wb, scO + is + 6u) * q4 * x[e + 96u]);
+      }
+    }
+  }
+  partial[t] = acc;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { partial[t] = partial[t] + partial[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (t == 0u) { y[r] = partial[0]; }
 }`;
 }
