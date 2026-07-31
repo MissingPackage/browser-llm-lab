@@ -72,9 +72,9 @@ Riancorarsi da: `.harness/goals/engine-fase-c1/{GOAL,PHASES,docket,journal,diges
 
 ## 4. Open threads
 
-- **Merge su main**: fatto a goal chiuso dopo verifier PASS (ruling permanente) —
-  se questa riga è presente e il merge non risulta in `git log main`, il merge è
-  stato interrotto: rifarlo (merge di engine/fase-c1).
+- **Merge su main**: eseguito 2026-07-31 dopo il gate finale PASS (commit di
+  merge `9ac04a6`, ruling permanente). Convenzione per il futuro: questa riga si
+  scrive DOPO il merge, non prima.
 - **Banda OPFS a FREDDO mai caratterizzata**: tutta l'aritmetica del costo-miss
   del paging (docket C1 item 4) è condizionale su questo numero. WP ~mezza
   giornata, PI-gated.
