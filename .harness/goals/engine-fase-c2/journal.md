@@ -342,3 +342,53 @@ pagato all'import" (riordino [qs|scales] in scrittura OPFS: azzera il
 termine dominante senza toccare i kernel) — la decisione matura alla misura
 E2E di fase 6; (2) minore: bytesRead/bytesUploaded incrementano anche a
 timing:false (due addizioni, zero-overhead materialmente rispettato).
+
+## it.8 — fase 5, slice 3a: forward GLM multi-layer sul path di produzione (2026-07-31)
+
+Slice 3 spezzata in due (timebox fase 5: 4 it., questa è la 3ª): it.8 =
+assemblaggio del forward multi-layer VERIFICATO kernel-level; it.9 = replay
+del corpus reale con import OPFS 17 GB + gate routing ≥99% (spec §7).
+
+Implementato:
+- `glmmodel.ts` (NUOVO): `createGlmModel(device, GlmWeightSource, opts)` —
+  l'orchestratore che unisce fase 4 (attention MLA absorbed, pattern
+  glmforward), slice 1 (router/moe.ts) e slice 2 (residency.ts). Per token:
+  per ogni layer MoE, [submit fino a ffn_norm+router GEMV f32 → copy logits]
+  → [sync mapAsync] → routerSelect su CPU → ensure×4 con `pinned` →
+  [encode shexp + 4 catene expert da slotBindRanges + residuo] che prosegue
+  nel submit del layer successivo. Pipeline WGSL condivise tra i layer
+  (shape identiche), bind group fissi per-layer al load, bind group expert
+  CACHED per-slot (stabili: la chiave (buffer, offset) sopravvive
+  all'eviction perché il binding non cambia, cambia il contenuto);
+  `GlmWeightSource` astrae la sorgente byte (OPFS in produzione via
+  ExpertOpfsStore+GgufExpertIndex, mock sintetico nei test); error scope per
+  submit; routing log per (posizione, layer) — l'output che it.9 confronta
+  con la traccia C1. 16 dispatch/layer attn + 6 denso + 23 per layer MoE ⇒
+  proiezione full-model 47 layer: 16×47+6+23×46 = **1.816 dispatch/token**
+  (la stima di spec §6 ~800-1000 era ottimista; è MISURA, non gate — il
+  contratto non eredita il ≤100 di fase B).
+- `cpuref.ts` (refactor senza cambi numerici + estensione): attention MLA
+  naive f64 estratta in `GlmMlaAttnRefF64` (identica su tutti i 47 layer),
+  `GlmDenseLayerRefF64` delega; NUOVO `GlmMoeLayerRefF64` = attention +
+  rms(ffn_norm) + `glmMoeFfnRefF64` + residui, con routing esposto.
+
+**Evidenza**: ktest su 4090 status "done", **30/30 PASS** — nuovo
+`glm-model-2layer`: mini-modello blk.0 denso + blk.1 MoE (classe down
+Q4_1), pesi sintetici, 6 posizioni decode attraverso il path di PRODUZIONE
+con cache stretta (6 slot ⇒ 13 hit / 11 miss / 5 eviction con re-fetch):
+**L2rel 2.36e-7** sull'hidden post-2-layer (stesso ordine del layer-level
+con pesi reali di it.5 ⇒ l'assemblaggio non aggiunge errore), top-4
+set-match 6/6 vs selezione sort-based indipendente, pesi di mixing
+wMaxRel 1.84e-7, 61 dispatch/token esatti come da formula; zero regressioni
+sui 29. `npm test` 219/219 (cpuref refactor trasparente: il test identità
+naive/absorbed passa invariato); `tsc --noEmit` pulito.
+
+Restano per fase 5 (it.9, ultima del timebox): loader OPFS reale
+(GlmWeightSource su ExpertOpfsStore + import one-shot 17.2 GB con SHA
+streaming ~2-3 min), harness replay traccia C1 (formato in
+tools/oracle-moe/trace.cpp) e gate set-match ≥99% su (posizione decode,
+layer) + confronto pesi mixing (watch it.6). Nota dimensionale registrata:
+il replay full-corpus (26k prefill + 1k decode × 46 sync/token) al passo
+decode-only è nell'ordine delle decine di minuti/ore — la scelta del
+sottoinsieme/strategia (prefill chunked prima? subset di spec?) si decide
+in it.9 dentro il perimetro di spec §7. Pending verifier.

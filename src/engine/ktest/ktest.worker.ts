@@ -11,7 +11,10 @@ import {
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
 } from "../kernels/wgsl";
 import { createGlmLayer0 } from "../glmforward";
-import { GlmDenseLayerRefF64, glmMoeFfnRefF64, type GlmMoeExpertWeights } from "../cpuref";
+import {
+  GlmDenseLayerRefF64, GlmMoeLayerRefF64, glmMoeFfnRefF64, type GlmMoeExpertWeights,
+} from "../cpuref";
+import { createGlmModel, type GlmWeightSource } from "../glmmodel";
 import { routerSelect, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../moe";
 import { ExpertOpfsStore } from "../expertstore";
 import { ExpertCache, expertKey, type ExpertRawBytes } from "../residency";
@@ -539,6 +542,166 @@ async function testResidencyOpfs(g: Gpu): Promise<KResult> {
   }
 }
 
+// Forward multi-layer (C2 fase 5 slice 3): mini-modello 2 layer (blk.0 denso +
+// blk.1 MoE, classe down Q4_1) con pesi SINTETICI attraverso il path di
+// PRODUZIONE (createGlmModel: sync router per layer, ensure con pinned, bind
+// group per-slot cached, shexp K-quant, scaledAccum) vs catena di riferimento
+// f64 (GlmDenseLayerRefF64 + GlmMoeLayerRefF64: attention naive + selezione
+// sort-based indipendenti). Confronta hidden post-2-layer, insiemi top-4 e
+// pesi di mixing su 6 posizioni decode con cache expert volutamente stretta
+// (eviction e re-fetch inclusi nel percorso).
+async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
+  const name = "glm-model-2layer";
+  const exBlocks = (G.dModel / 32) * G.dFfnExpert;
+  const b32 = (n: number) => (n / 32);
+  const sizes: Record<string, [number, "f32" | "q4_0" | "q4_1" | "q8_0" | "q5_K" | "q6_K"]> = {
+    "attn_norm.weight": [G.dModel * 4, "f32"],
+    "attn_q_a.weight": [b32(G.dModel * G.qLora) * 18, "q4_0"],
+    "attn_q_a_norm.weight": [G.qLora * 4, "f32"],
+    "attn_q_b.weight": [b32(G.qLora * G.nHead * 256) * 18, "q4_0"],
+    "attn_kv_a_mqa.weight": [b32(G.dModel * G.keyLen) * 34, "q8_0"],
+    "attn_kv_a_norm.weight": [G.kvLora * 4, "f32"],
+    "attn_k_b.weight": [b32(G.qkNope * G.kvLora * G.nHead) * 34, "q8_0"],
+    "attn_v_b.weight": [b32(G.kvLora * G.headLenMla * G.nHead) * 34, "q8_0"],
+    "attn_output.weight": [b32(G.nHead * G.headLenMla * G.dModel) * 18, "q4_0"],
+    "ffn_norm.weight": [G.dModel * 4, "f32"],
+    "ffn_gate.weight": [b32(G.dModel * G.dFfnDense) * 18, "q4_0"],
+    "ffn_up.weight": [b32(G.dModel * G.dFfnDense) * 18, "q4_0"],
+    "ffn_down.weight": [b32(G.dFfnDense * G.dModel) * 20, "q4_1"],
+    "ffn_gate_inp.weight": [G.nExpert * G.dModel * 4, "f32"],
+    "exp_probs_b.bias": [G.nExpert * 4, "f32"],
+    "ffn_gate_shexp.weight": [(G.dModel * G.dFfnExpert / 256) * Q5_K_BLOCK_BYTES, "q5_K"],
+    "ffn_up_shexp.weight": [(G.dModel * G.dFfnExpert / 256) * Q5_K_BLOCK_BYTES, "q5_K"],
+    "ffn_down_shexp.weight": [(G.dFfnExpert * G.dModel / 256) * Q6_K_BLOCK_BYTES, "q6_K"],
+  };
+  const seedOf = (s: string): number => {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return h;
+  };
+  const genBytes = (kind: string, bytes: number, seed: number): Uint8Array => {
+    if (kind === "f32") {
+      const n = bytes / 4;
+      const scale = 0.05; // router/bias/norme: ampiezze sane
+      const f = randF32(n, seed, scale);
+      return new Uint8Array(f.buffer, 0, bytes);
+    }
+    const src = randBytes(bytes, seed);
+    if (kind === "q4_0" || kind === "q8_0") fixScales(src, kind === "q4_0" ? 18 : 34);
+    else if (kind === "q4_1") fixScalesAt(src, Q4_1_BLOCK_BYTES, [1, 3]);
+    else if (kind === "q5_K") fixScalesAt(src, Q5_K_BLOCK_BYTES, [1, 3]);
+    else fixScalesAt(src, Q6_K_BLOCK_BYTES, [209]);
+    return src;
+  };
+  const byName = new Map<string, Uint8Array>();
+  const nonExpert = (full: string): Uint8Array => {
+    let got = byName.get(full);
+    if (!got) {
+      const short = full.replace(/^blk\.\d+\./, "");
+      const spec = sizes[short];
+      if (!spec) throw new Error(`mock source: ${full}?`);
+      // le norme a 1±piccolo (rms stabile), il resto come da spec
+      if (short.endsWith("norm.weight")) {
+        const n = spec[0] / 4;
+        const f = randF32(n, seedOf(full), 0.1);
+        for (let i = 0; i < n; i++) f[i] += 1;
+        got = new Uint8Array(f.buffer, 0, spec[0]);
+      } else {
+        got = genBytes(spec[1], spec[0], seedOf(full));
+      }
+      byName.set(full, got);
+    }
+    return got;
+  };
+  const expertRaw = new Map<number, { gate: Uint8Array; up: Uint8Array; down: Uint8Array }>();
+  const expert = (layer: number, e: number) => {
+    const key = layer * 64 + e;
+    let got = expertRaw.get(key);
+    if (!got) {
+      got = {
+        gate: genBytes("q4_0", exBlocks * 18, 40_000 + key * 3),
+        up: genBytes("q4_0", exBlocks * 18, 40_001 + key * 3),
+        down: genBytes("q4_1", exBlocks * Q4_1_BLOCK_BYTES, 40_002 + key * 3), // blk.1 ⇒ classe Q4_1
+      };
+      expertRaw.set(key, got);
+    }
+    return got;
+  };
+  const srcMock: GlmWeightSource = { nonExpert, expert };
+
+  // ---- riferimento f64 (dequant degli stessi byte) ----
+  const deqBy = (raw: Uint8Array, kind: string): Float32Array => {
+    if (kind === "f32") return new Float32Array(raw.buffer, raw.byteOffset, raw.length / 4);
+    const bb = kind === "q4_0" ? 18 : kind === "q8_0" ? 34 : kind === "q4_1" ? Q4_1_BLOCK_BYTES : kind === "q5_K" ? Q5_K_BLOCK_BYTES : Q6_K_BLOCK_BYTES;
+    const per = kind === "q5_K" || kind === "q6_K" ? 256 : 32;
+    const nB = raw.length / bb;
+    const out = new Float32Array(nB * per);
+    (kind === "q4_0" ? dequantQ4_0 : kind === "q8_0" ? dequantQ8_0 : kind === "q4_1" ? dequantQ4_1 : kind === "q5_K" ? dequantQ5_K : dequantQ6_K)(raw, 0, nB, out);
+    return out;
+  };
+  const dq = (l: number, short: string): Float32Array => deqBy(nonExpert(`blk.${l}.${short}`), sizes[short.replace(/^blk\.\d+\./, "")][1]);
+  const attnW = (l: number) => ({
+    attnNorm: dq(l, "attn_norm.weight"), wQA: dq(l, "attn_q_a.weight"), qANorm: dq(l, "attn_q_a_norm.weight"),
+    wQB: dq(l, "attn_q_b.weight"), wKvA: dq(l, "attn_kv_a_mqa.weight"), kvANorm: dq(l, "attn_kv_a_norm.weight"),
+    wKB: dq(l, "attn_k_b.weight"), wVB: dq(l, "attn_v_b.weight"), wO: dq(l, "attn_output.weight"),
+  });
+  const ref0 = new GlmDenseLayerRefF64({
+    ...attnW(0), ffnNorm: dq(0, "ffn_norm.weight"),
+    wGate: dq(0, "ffn_gate.weight"), wUp: dq(0, "ffn_up.weight"), wDown: dq(0, "ffn_down.weight"),
+  });
+  const ref1 = new GlmMoeLayerRefF64(attnW(1), dq(1, "ffn_norm.weight"), {
+    routerW: dq(1, "ffn_gate_inp.weight"), routerBias: dq(1, "exp_probs_b.bias"),
+    expert: (e: number): GlmMoeExpertWeights => {
+      const r = expert(1, e);
+      return { gate: deqBy(r.gate, "q4_0"), up: deqBy(r.up, "q4_0"), down: deqBy(r.down, "q4_1") };
+    },
+    gateShexp: dq(1, "ffn_gate_shexp.weight"), upShexp: dq(1, "ffn_up_shexp.weight"), downShexp: dq(1, "ffn_down_shexp.weight"),
+  });
+
+  const model = createGlmModel(g.device, srcMock, {
+    nLayer: 2, ctxMax: 16,
+    cache: { budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 6 }, maxBindingBytes: 1 << 30, maxBufferBytes: 1 << 30, timing: true },
+  });
+  const NPOS = 6;
+  let l2e = 0, l2r = 0, maxAbs = 0, maxRel = 0, wMaxRel = 0;
+  const problems: string[] = [];
+  for (let p = 0; p < NPOS; p++) {
+    const xIn = randF32(G.dModel, 60_000 + p, 0.5);
+    const refH = ref1.forward(ref0.forward(xIn));
+    const refR = ref1.lastRouting!;
+    const got = await model.forward(xIn, p);
+    if (got.routing.length !== 1) { problems.push(`pos ${p}: ${got.routing.length} routing`); break; }
+    const gotSet = new Set(Array.from(got.routing[0].experts));
+    if (gotSet.size !== 4 || !Array.from(refR.experts).every((e) => gotSet.has(e))) {
+      problems.push(`pos ${p}: top4 {${Array.from(got.routing[0].experts)}} ≠ ref {${Array.from(refR.experts)}}`);
+      continue;
+    }
+    for (let k = 0; k < 4; k++) {
+      const e = got.routing[0].experts[k];
+      const kRef = Array.from(refR.experts).indexOf(e);
+      const d = Math.abs(got.routing[0].weights[k] - refR.weights[kRef]);
+      wMaxRel = Math.max(wMaxRel, d / Math.max(Math.abs(refR.weights[kRef]), 1e-9));
+    }
+    for (let i = 0; i < G.dModel; i++) {
+      const d = Math.abs(got.hidden[i] - refH[i]);
+      maxAbs = Math.max(maxAbs, d);
+      maxRel = Math.max(maxRel, d / Math.max(Math.abs(refH[i]), 1e-6));
+      l2e += d * d;
+      l2r += refH[i] * refH[i];
+    }
+  }
+  const st = model.cacheStats();
+  model.destroy();
+  const l2 = Math.sqrt(l2e / Math.max(l2r, 1e-30));
+  const pass = problems.length === 0 && l2 <= 1e-3 && wMaxRel <= 1e-3 && st.misses > 0 && model.dispatchesPerToken === 61;
+  return {
+    kernel: name, pass, maxAbs, maxRel,
+    note: `${NPOS} pos, L2rel=${l2.toExponential(2)}, wMaxRel=${wMaxRel.toExponential(2)}, ` +
+      `h${st.hits}/m${st.misses}/ev${st.evictions}, ${model.dispatchesPerToken} dispatch/token` +
+      (problems.length ? `; ${problems.join("; ")}` : ""),
+  };
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -769,6 +932,9 @@ async function main(): Promise<void> {
 
     // residenza minima (fase 5 slice 2): OPFS + cache VRAM su hardware vero
     results.push(await testResidencyOpfs(g));
+
+    // forward multi-layer (fase 5 slice 3): path di produzione vs ref f64
+    results.push(await testGlmModel2Layer(g));
 
     // conformance layer-level con pesi reali (fase 4 slice 3) — il test lungo in coda
     results.push(await testGlmLayer0Real(g));

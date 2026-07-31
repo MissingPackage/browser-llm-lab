@@ -289,21 +289,26 @@ export function glmMoeFfnRefF64(fnIn: ArrayLike<number>, w: GlmMoeFfnWeights): G
   return { out, experts, weights };
 }
 
-export class GlmDenseLayerRefF64 {
-  private w: GlmDenseLayerWeights;
+// Attention MLA naive f64 con cache interna — condivisa tra il layer denso
+// (blk.0) e i layer MoE: l'attention è IDENTICA su tutti i 47 layer. Estratta
+// in it.8 da GlmDenseLayerRefF64 senza cambiarne la numerica.
+export interface GlmMlaWeights {
+  attnNorm: ArrayLike<number>; wQA: ArrayLike<number>; qANorm: ArrayLike<number>;
+  wQB: ArrayLike<number>; wKvA: ArrayLike<number>; kvANorm: ArrayLike<number>;
+  wKB: ArrayLike<number>; wVB: ArrayLike<number>; wO: ArrayLike<number>;
+}
+
+export class GlmMlaAttnRefF64 {
+  private w: GlmMlaWeights;
   private cKv: Float64Array[] = []; // per pos: [512] normata
   private kPe: Float64Array[] = []; // per pos: [64] ruotata
-  constructor(w: GlmDenseLayerWeights) { this.w = w; }
+  constructor(w: GlmMlaWeights) { this.w = w; }
 
-  // Forward di un token alla prossima posizione (decode); ritorna l'hidden
-  // post-layer (2048). L'input non viene mutato.
-  forward(xIn: ArrayLike<number>): Float64Array {
+  // Applica attention + residuo IN PLACE su x; avanza la cache di una posizione.
+  attend(x: Float64Array): void {
     const w = this.w;
     const pos = this.cKv.length;
     const HL = G.qkNope + G.ropeDims; // 256
-    const x = Float64Array.from(xIn as ArrayLike<number>);
-
-    // attention MLA naive
     const hn = rmsnormF64(x, w.attnNorm, G.rmsEps);
     const qa = matvecF64(w.wQA, 0, hn, G.qLora);
     const qan = rmsnormF64(qa, w.qANorm, G.rmsEps);
@@ -352,6 +357,23 @@ export class GlmDenseLayerRefF64 {
     }
     const o = matvecF64(w.wO, 0, attnCat, G.dModel);
     for (let i = 0; i < G.dModel; i++) x[i] += o[i];
+  }
+}
+
+export class GlmDenseLayerRefF64 {
+  private w: GlmDenseLayerWeights;
+  private attn: GlmMlaAttnRefF64;
+  constructor(w: GlmDenseLayerWeights) {
+    this.w = w;
+    this.attn = new GlmMlaAttnRefF64(w);
+  }
+
+  // Forward di un token alla prossima posizione (decode); ritorna l'hidden
+  // post-layer (2048). L'input non viene mutato.
+  forward(xIn: ArrayLike<number>): Float64Array {
+    const w = this.w;
+    const x = Float64Array.from(xIn as ArrayLike<number>);
+    this.attn.attend(x);
 
     // ffn denso (blk.0)
     const fn = rmsnormF64(x, w.ffnNorm, G.rmsEps);
@@ -360,6 +382,32 @@ export class GlmDenseLayerRefF64 {
     for (let i = 0; i < G.dFfnDense; i++) gate[i] = (gate[i] / (1 + Math.exp(-gate[i]))) * up[i];
     const down = matvecF64(w.wDown, 0, gate, G.dModel);
     for (let i = 0; i < G.dModel; i++) x[i] += down[i];
+    return x;
+  }
+}
+
+// Layer MoE completo (blk.1-46): attention MLA + blocco MoE-FFN (router +
+// 4 expert + shexp, glmMoeFfnRefF64) + residui. Il riferimento f64 del
+// forward multi-layer di fase 5 slice 3.
+export class GlmMoeLayerRefF64 {
+  private attn: GlmMlaAttnRefF64;
+  private ffnNorm: ArrayLike<number>;
+  private moe: GlmMoeFfnWeights;
+  lastRouting: GlmMoeFfnRefOut | null = null;
+
+  constructor(attnW: GlmMlaWeights, ffnNorm: ArrayLike<number>, moe: GlmMoeFfnWeights) {
+    this.attn = new GlmMlaAttnRefF64(attnW);
+    this.ffnNorm = ffnNorm;
+    this.moe = moe;
+  }
+
+  forward(xIn: ArrayLike<number>): Float64Array {
+    const x = Float64Array.from(xIn as ArrayLike<number>);
+    this.attn.attend(x);
+    const fn = rmsnormF64(x, this.ffnNorm, G.rmsEps);
+    const r = glmMoeFfnRefF64(fn, this.moe);
+    this.lastRouting = r;
+    for (let i = 0; i < G.dModel; i++) x[i] += r.out[i];
     return x;
   }
 }
