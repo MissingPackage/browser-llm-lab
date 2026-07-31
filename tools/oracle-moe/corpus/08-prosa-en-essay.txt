@@ -1,0 +1,17 @@
+Write a detailed technical essay (several paragraphs) on the following thesis:
+"For LLM inference in the browser, the memory system - not raw kernel speed -
+is the differentiating layer." Use these notes as raw material, structure them
+into an argument, and add counterarguments and your own verdict.
+
+Notes:
+- WebGPU engines exist (WebLLM, wllama); kernel-level parity is achievable.
+- Browser memory is capped well below native: device limits, buffer caps,
+  tab kills; a "browser tax" on residency.
+- MoE models make residency >> touch: 30B params, 3B active per token.
+- OPFS gives GB/s-class storage: warm reads near free, cold reads disk-bound.
+- Expert paging with predictive prefetch could run models ~2x host memory.
+- KV cache checkpoints on disk enable instant session resume (no re-prefill).
+- Speculative decoding hides expert-load latency behind verified drafts.
+- Telemetry must be zero-overhead when off, or measurements lie on mobile.
+- Counterpoint: native apps do all this better; why the browser at all?
+- Counterpoint: predictive prefetch recall is a model property - it may not hold.

@@ -1,0 +1,25 @@
+Solve each problem step by step, showing your reasoning in full before giving
+the final answer.
+
+1. A GPU kernel processes tokens in batches of K. Per batch it pays a fixed cost
+   of 1.6 ms plus 0.9 ms per token. A second design pays 0.3 ms fixed but 1.15 ms
+   per token. For which batch sizes K (integer, 1..64) is the first design
+   strictly faster? Give the smallest such K.
+
+2. A cache holds S slots. Requests follow a Zipf-like popularity where item i has
+   probability proportional to 1/i, over N = 64 items. With S = 16 and an ideal
+   cache that always holds the 16 most popular items, compute the hit rate.
+   (Use H_64 ~ 4.7439 and H_16 ~ 3.3807.)
+
+3. An expert-parallel model routes each token to 4 of 64 experts per layer, over
+   46 layers. Assuming routing were uniform and independent, what is the expected
+   number of DISTINCT experts touched in one layer over a window of 32 tokens?
+   Show the derivation.
+
+4. A file of 17.2 GB is read at 2.1 MB/s. A second mirror serves the same file at
+   9.3 MB/s but only after a 45-minute queue. Which finishes first, and by how
+   many minutes?
+
+5. Prove or refute: for any sequence of cache requests, LRU with 2S slots incurs
+   at most as many misses as OPT (Belady) with S slots. State the classical
+   result you are using.

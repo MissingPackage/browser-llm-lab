@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "oracle-smoke",
+  "date": "2026-07-30",
+  "model": {
+    "file": "GLM-4.7-Flash-Q4_0.gguf",
+    "repo": "unsloth/GLM-4.7-Flash-GGUF",
+    "sha256": "d0bbdfcde6e323ebf90a8b9e95da57100e972be1ec6f0bfa0fad0feaa426557e",
+    "sizeBytes": 17216676192,
+    "ggufArch": "deepseek2",
+    "note": "testa NextN/MTP assente nella conversione"
+  },
+  "hparams": {
+    "blockCount": 47,
+    "leadingDenseBlocks": 1,
+    "moeLayers": 46,
+    "nExpert": 64,
+    "nExpertUsed": 4,
+    "nExpertShared": 1,
+    "gatingFunc": "sigmoid(2)",
+    "expertFfnLen": 1536,
+    "nEmbd": 2048,
+    "qLoraRank": 768,
+    "kvLoraRank": 512,
+    "ropeDims": 64
+  },
+  "oracle": {
+    "llamaCppCommit": "5f55650a78f92aff4d48d671423e888fac0469ff",
+    "build": "CPU-only Release, GGML_CUDA=OFF",
+    "checkout": "~/Projects/llama.cpp-oracle",
+    "host": {
+      "ramGB": 31,
+      "cores": 32
+    }
+  },
+  "run": {
+    "threads": 16,
+    "greedy": true,
+    "smokeExit": 0,
+    "singleTurn": {
+      "promptTps": 7.3,
+      "genTps": 6.8
+    },
+    "llamaBench": {
+      "pp512": {
+        "avgTps": 56.58,
+        "stddev": 3.74
+      },
+      "tg64": {
+        "avgTps": 13.43,
+        "stddev": 0.1
+      },
+      "reps": 2
+    }
+  },
+  "corpusFeasibility": "16k posizioni (~12k prefill + 4k decode) ~ 9 min/run a pp 56.6 / tg 13.4"
+}

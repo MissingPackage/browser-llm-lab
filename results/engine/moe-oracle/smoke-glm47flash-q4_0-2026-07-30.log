@@ -1,0 +1,43 @@
+
+
+Loading model... 
+
+▄▄ ▄▄
+██ ██
+██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
+██ ██ ▄█▀██ ██ ██ ██ ▄█▀██    ██    ██ ██ ██ ██
+██ ██ ▀█▄██ ██ ██ ██ ▀█▄██ ██ ▀████ ████▀ ████▀
+                                    ██    ██
+                                    ▀▀    ▀▀
+
+build      : b1-5f55650
+model      : /home/neuromancer/.cache/blab-models/GLM-4.7-Flash-Q4_0.gguf
+ftype      : Q4_0
+modalities : text
+
+available commands:
+  /exit or Ctrl+C     stop or exit
+  /regen              regenerate the last response
+  /clear              clear the chat history
+  /read <file>        add a text file
+  /glob <pattern>     add text files using globbing pattern
+
+
+
+> Explain in two sentences why the sky is blue.
+
+[Start thinking]
+
+1.  **Analyze the Request:**
+    *   **Topic:** Why the sky is blue.
+    *   **Constraint:** Exactly two sentences.
+
+2.  **Identify the Core Scientific Concept:**
+    *   The sky is blue due to Rayleigh scattering.
+    *   Sunlight contains all
+
+[ Prompt: 7.3 t/s | Generation: 6.8 t/s ]
+
+
+Exiting...
+smoke_exit=0

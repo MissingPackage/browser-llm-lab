@@ -51,7 +51,7 @@ d'intelligenza sono parte del progetto.
 - Config verificata: 47 layer (primo denso), hidden 2048, 64 routed top-4 + 1 shared,
   MLA `kv_lora 512 + rope 64` → **1 152 B f16/layer/token ≈ 54 KB/token** (stessa
   aritmetica KV di colibri su GLM-5.2: il loro codice KV è direttamente rilevante);
-  expert ≈ **5.3 MB q4** (3×1536×2048) — taglia amichevole per read OPFS, ~2 944
+  expert ≈ **5.33 MB q4** misurati dai tensori del GGUF (stima analitica 3×1536×2048 confermata; non-expert totale 1.53 GB — C1) — taglia amichevole per read OPFS, ~2 944
   expert totali ≈ 15-16 GB routed q4. GGUF unsloth/bartowski esistono (llama.cpp
   esegue l'architettura → l'oracolo funziona per questo modello).
 
@@ -114,7 +114,7 @@ una famiglia di modelli per volta, zero astrazione**.
 |---|---|---|---|
 | First-light | Qwen2.5-0.5B q4 | battere 107 tok/s con L1-L3; grafo già noto al dispatch-level (269 disp/token misurati, invarianti di device — estimates §8) | gate di v0 |
 | Dev rungs | Qwen3.5-0.8B / 2B (Apache) | sviluppo quotidiano, CI, evals | v0.5+ |
-| **Tesi** | **GLM-4.7-Flash 30B-A3B** | MoE+MLA: hero-demo M4 (residenza piena, ~17 GB q4 in 48 GB) e paging su 4090-16GB (il sistema di memoria *serve* anche su desktop) | v1 |
+| **Tesi** | **GLM-4.7-Flash 30B-A3B** | MoE+MLA: hero-demo M4 (residenza piena, ~17 GB q4 in 48 GB); sul box dev (4090 Laptop 16 GiB) il paging è marginale — misurato C1: 2.573 slot su 2.944, fattore 1.14× | v1 |
 | v2 | Qwen3.5-35B-A3B / Nemotron (ibridi) | kernel linear-attention fuori dal critical path di v0 | dichiarato |
 
 ## 7. Ordine di costruzione (dal WP studio, §6 della sintesi)
@@ -134,11 +134,19 @@ megakernel parziali). Prefix-cache OPFS (design ds4), forward
 multi-token (prefill chunk + futura verifica spec-dec), rollback KV (`crop` con length
 pointer). Prima misura: banda OPFS in lettura (tool ~20 righe, ancora mancante).
 
-**Fase C — memoria II: MoE e paging.** *Metodo prima del meccanismo*: replicare la
-metodologia LOOKA di colibri (contatori-only) **sull'oracolo desktop** per misurare il
-recall del router lookahead su GLM-4.7-Flash; solo poi slab+tier+AUTOPIN+PILOT-real in
-browser. Gate intermedio: instant-on (router+shared+esperti caldi subito, resto
-on-demand). Hero-demo M4.
+**Fase C — memoria II: MoE e paging.** *Metodo prima del meccanismo*. Splittata in
+C1/C2/C3 (ruling PI 2026-07-30). **C1 CHIUSA (2026-07-31)**: LOOKA replicato
+sull'oracolo, recall **92.0% @K=8** (vs 71.6% di colibri su GLM-5.2), baseline 32.3%;
+simulazione trace-driven: "modello ~2× la memoria" regge (90.8% hit-rate decode a
+cache = 50% del parco, config tarata). Due correzioni alle assunzioni: (a) la
+residenza NON è skewed (top-4/layer = 21.8% delle selezioni) ⇒ il learned pinning
+vale poco e va tenuto ≤12.5% degli slot, il valore sta nel PREFETCH; (b) sul box dev
+(4090 **Laptop**, 16 GiB) il modello sta all'87% in VRAM (fattore 1.14×) ⇒ il regime
+di paging vero è mobile/M4-condiviso o contesti lunghi, non il dev-loop.
+Restano: C2 = esecuzione GLM (MoE+MLA) nel motore; C3 = slab+tier+AUTOPIN+PILOT-real
+con modello di banda (il guadagno di LATENZA del prefetch non è misurato da C1).
+Gate intermedio: instant-on (router+shared+esperti caldi subito, resto on-demand).
+Hero-demo M4.
 
 **Fase D — moltiplicatori.** Spec-dec: prima la MTP nativa del modello (verificata,
 §3), poi eventualmente DSpark-style; verifica = rejection sampling esatto (lossless by
