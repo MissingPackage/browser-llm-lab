@@ -14,10 +14,14 @@
 2. **RULING RICHIESTO — spec C2** (2026-07-31, fase 2): approvazione di
    `docs/superpowers/specs/2026-07-31-engine-fase-c2-design.md`. Decisioni
    proposte da ratificare (dettaglio in spec §10):
-   (a) il GGUF "Q4_0" è a quant MISTA (FINDING dal dump: ffn_down_exps
-       Q4_1, shexp Q5_K/Q6_K, output Q6_K, proiettori MLA Q8_0) ⇒ si
-       implementano i kernel dequant Q4_1/Q5_K/Q6_K; NIENTE repack (la
-       requant romperebbe la conformance con l'oracolo sullo stesso file);
+   (a) il GGUF "Q4_0" è a quant MISTA (FINDING dal dump, CORRETTO dopo il
+       verifier it.1: ffn_down_exps Q4_1 SOLO su blk.1-4 = 256 expert, il
+       resto Q4_0; shexp Q5_K/Q6_K, output Q6_K, proiettori MLA Q8_0,
+       ffn_down denso Q4_1) ⇒ si implementano i kernel dequant
+       Q4_1/Q5_K/Q6_K; NIENTE repack (la requant romperebbe la conformance
+       con l'oracolo sullo stesso file); slab expert a DUE size-class
+       esatte (5.308.416 / 5.505.024 B — media pesata = il 5.325.512 di
+       residency-sim C1);
    (b) MLA in formulazione ABSORBED nel motore (cache 576/token/layer =
        54 KB/token f16, quella di direction §3); la naive solo in cpuref
        f64 — supera l'[ASSUMED naive-first] del contratto (la naive ha una

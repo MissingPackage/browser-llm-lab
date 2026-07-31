@@ -36,3 +36,15 @@ primi 128 decode della traccia C1 (stesso oracolo, tool diverso ⇒ il golden
 e la traccia sono mutuamente coerenti). Checkout oracolo pulito, commit
 5f55650a. Done-when fase 1: run exit 0 ✓, JSON con envelope ✓, floor nel
 docket ✓ (registrato allo scaffold). FASE 1 DONE (pending verifier).
+
+**Verifier it.1: FAIL → correzioni applicate → ri-verifica.** Il verifier
+(PASS su golden, vincoli, floor, envelope, cross-check traccia) ha refutato
+il claim "ffn_down_exps Q4_1 su tutti i 2944 expert": il mio dump teneva
+solo il PRIMO esemplare per suffisso (blk.1). Layout vero (riverificato
+per-layer sul file): Q4_1 solo su blk.1-4 (256 expert, 5.505.024 B), Q4_0
+su blk.5-46 (2.688 expert, 5.308.416 B); media pesata 5.325.512 = ESATTO
+l'expertBytesQ4 di residency-sim C1 (quadratura indipendente). Corretti:
+spec §1 (tabella + nota) e §5 (slab a DUE size-class), docket item 2(a).
+La decisione (a) resta valida (Q4_1 serve comunque: 256 expert + down
+denso). Lezione strumento: mai riassumere un inventario tensori campionando
+il primo elemento per nome — enumerare i tipi per layer.

@@ -2,16 +2,19 @@
 
 ## 1. Next decidable
 
-**PLAN-CHECK del goal `engine-fase-c2`** (docket item 1 del goal): approvare
-`.harness/goals/engine-fase-c2/PHASES.md` (7 fasi, gruppo parallelo
-floor+golden ‖ spec, fasi 3-6 gated dal ruling di spec). Il contratto GOAL.md
-è GIÀ approvato dal PI in chat (2026-07-31) con emendamento: **gate tok/s =
-non-regressione vs oracolo C1 (decode ≥13.4 / prefill ≥56.6, llama.cpp
-CPU-only)** + principio permanente "le metriche misurate non peggiorano mai"
-(salvato in memoria: metrics-non-regression). Approvato il plan-check →
-iterazione 1 = fasi 1+2 in parallelo.
-Riancorarsi da: `.harness/goals/engine-fase-c2/{GOAL,PHASES,docket}.md`,
-`docs/engine/direction.md` §3/§7/§8.3, docket C1 (item 2 e 5 = input di C2).
+**RULING SPEC C2** (docket item 2 del goal `engine-fase-c2`): approvare
+`docs/superpowers/specs/2026-07-31-engine-fase-c2-design.md` — 6 decisioni
+(a)-(f), le non-ovvie: (a) quant MISTA nel GGUF ⇒ kernel Q4_1/Q5_K/Q6_K
+nuovi, niente repack; slab a 2 size-class (5.308.416/5.505.024 B); (b) MLA
+ABSORBED nel motore (cache 576/token/layer, naive solo cpuref — supera
+l'ASSUMED del contratto); (c) OPFS come sorgente dei byte expert (deviazione
+dichiarata: staging RAM 15.6 GB in un tab non regge). Iterazione 1 CHIUSA
+(fasi 1+2): golden GLM committato e cross-validato con la traccia C1 8/8;
+verifier FAIL su un claim quant della spec → corretto (Q4_1 solo blk.1-4) e
+quadrato con residency-sim. Plan-check GIÀ risolto (7 fasi). Col ruling →
+fase 3 (reader deepseek2) ready.
+Riancorarsi da: `.harness/goals/engine-fase-c2/{GOAL,PHASES,docket,journal}.md`,
+la spec, `results/engine/golden/glm47flash/`, docket C1 (item 2 e 5).
 
 ## 2. State delta (questa sessione, 15)
 

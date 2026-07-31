@@ -21,12 +21,18 @@ rope_base 1e6, rms_eps 1e-5, vocab 154880, ctx_train 202752.
 | Classe tensore | Tipo GGML | Note |
 |---|---|---|
 | attn_q_a/q_b, attn_output, ffn_gate/up (denso), ffn_gate_exps/up_exps | **Q4_0** (2) | già supportato |
+| **ffn_down_exps blk.5-46** (2.688 expert) | **Q4_0** (2) | già supportato |
 | attn_kv_a_mqa, attn_k_b, attn_v_b | **Q8_0** (8) | già supportato |
-| **ffn_down_exps** (46×64 expert!), ffn_down (denso) | **Q4_1** (3) | NUOVO |
+| **ffn_down_exps blk.1-4** (256 expert), ffn_down (denso blk.0) | **Q4_1** (3) | NUOVO |
 | ffn_gate_shexp/up_shexp | **Q5_K** (13) | NUOVO |
 | ffn_down_shexp, output.weight | **Q6_K** (14) | NUOVO |
 | token_embd | Q4_0 | embedGather esistente |
 | norms, ffn_gate_inp, exp_probs_b | F32 | — |
+
+(Verificato per-layer sul file, 2026-07-31, post-verifier: il down degli
+expert è Q4_1 SOLO sui primi 4 layer MoE — 256 expert da 5.505.024 B; i
+restanti 2.688 sono interamente Q4_0 — 5.308.416 B. Media pesata 5.325.512 =
+esattamente l'`expertBytesQ4` misurato da residency-sim C1.)
 
 **Decisione (a) — kernel, non repack**: si implementano dequant-GEMV per
 **Q4_1** (blocco 32: scala f16 + min f16 + nibbles) e **Q5_K/Q6_K**
@@ -101,11 +107,13 @@ si applica al path absorbed (score su 576, softmax log-sum-exp invariata).
   listato must-docket) → **questo è uno dei punti del RULING**.
 - **Residente fisso in VRAM**: tutto il non-expert (1.53 GB misurati C1:
   attn, norms, router, shexp, denso, embd, output) + KV + scratch.
-- **Slab expert**: size-class unica da `expertBytes` (asserito dal file,
-  ~5.33 MB medi ma i 3 tensori si allocano ai loro byte esatti); N buffer
-  GPU ≤ maxStorageBufferBindingSize negoziato, slot indirizzato (buffer,
-  offset), bind group per-slot precomputati al load. `slots = floor((VRAM_budget
-  − residente − KV − slack 10%) / expertBytes)` — atteso ~2.5k sul dev box.
+- **Slab expert**: DUE size-class esatte (fatto §1: 5.308.416 B per i 2.688
+  expert down-Q4_0, 5.505.024 B per i 256 down-Q4_1 di blk.1-4); N buffer
+  GPU ≤ maxStorageBufferBindingSize negoziato per classe, slot indirizzato
+  (classe, buffer, offset), bind group per-slot precomputati al load. Slot
+  totali = riparto del budget residuo tra le classi in proporzione al parco
+  (256/2688); atteso ~2.5k complessivi sul dev box. (Alternativa scartata:
+  classe unica paddata a 5.505.024 = ~0.5 GB sprecati ≈ 100 slot.)
 - **Policy**: **LRU pura** (il simulatore C1 dice che a budget 87% LRU fa
   96.4% decode hit — la differenza col tuned è materiale solo nel regime 2×,
   che è C3). Miss ⇒ read OPFS (SyncAccessHandle, worker) → staging (un buffer
