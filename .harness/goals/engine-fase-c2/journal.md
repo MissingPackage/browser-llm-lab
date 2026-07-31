@@ -409,3 +409,49 @@ si valida coi pesi reali (it.9/fase 6); (2) il costo per-sync del router
 non è ancora misurato singolarmente — va nel report E2E di fase 6 col
 watch item residenza; (3) nota harness: pkill nel comando ktest matcha la
 shell wrapper (exit 144 spurio innocuo a run già concluso).
+
+## it.9 — fase 5, slice 3b: replay reale, gate routing NON passato, discriminatore, docket (2026-07-31)
+
+Costruito l'harness di replay completo e portato il motore sui PESI REALI
+end-to-end per la prima volta:
+- `glmsource.ts` (NUOVO): GlmWeightSource di produzione — GGUF in OPFS
+  (import one-shot 17.2 GB via importFromUrl con SHA-256 streaming
+  VERIFICATO sull'intero file; skip su size-match ai run successivi),
+  header parse+validazione hard da OPFS, non-expert per nome, expert per
+  range con buffer riusati.
+- `glmroute/` (worker+page) + `glmroute.html` + `scripts/glm-route-run.mjs`:
+  replay teacher-forced della traccia C1 (31.274 righe, token inclusi) su
+  createGlmModel a 47 layer; set-match per (posizione, layer), contatori
+  per fase/layer, sample, telemetria residenza nel report JSON. Profilo
+  Chrome SU DISCO (~/.cache/blab-glmroute-profile): l'OPFS da 17 GB non può
+  stare nel tmpfs di /tmp (16 GB — catch scoperto in corsa).
+
+**Esito gate (spec §7)**: SOTTO SOGLIA. Prompt 4 completo (1.004 pos):
+prefill 90.80%, decode **85.85%** vs ≥99% (report
+routing-smoke-p4-2026-07-31.json). Replay 3,7 pos/s; hit residenza 95,9% a
+12 GiB slab (2.216+203 slot); import OPFS con SHA pass al primo run.
+
+**Debug del router come da spec ("ci si ferma e si debugga")** — eseguito
+il discriminatore e il router è SCAGIONATO:
+1. Firma dei mismatch: TUTTI swap di un solo expert (4°/5°), ~2% già al
+   layer 1 (dove non c'è alcun expert a monte), degrado liscio con
+   profondità (98%→80%) e con la lunghezza del contesto — drift, non bug.
+2. `tests/analysis-route-cpuref.test.ts` (NUOVO, gated ROUTE_ANALYSIS):
+   full-model **cpuref f64 esatto** (naive, layer-streaming, zero GPU, zero
+   codice condiviso) sulle prime 16 pos del prompt 4: **96.20% = IDENTICO
+   al motore GPU sullo stesso subset, con gli stessi 28/28 mismatch alle
+   stesse (pos, layer)** (routing-cpuref-analysis-2026-07-31.json). Il
+   motore riproduce l'aritmetica esatta; il disaccordo è dell'ORACOLO
+   (attivazioni q8, landmine C1) sui near-tie del top-4. La soglia 99% era
+   tarata sull'autotest C1 (hidden dell'oracolo, recall 0.999) che non
+   copre il replay engine-vs-oracolo.
+
+**Conseguenze**: (i) la taratura del gate è decisione di spec ⇒ RULING
+RICHIESTO a docket item 4 con 3 opzioni (raccomandata: routing informativo,
+gate su logits full-model fase 6 — il doppio gate esistente); (ii) timebox
+fase 5 (4 it.) esaurito ⇒ lo stesso item vale da docket-con-analisi per
+ruling (f); (iii) fase 6 resta bloccata dal ruling. Evidenza di build:
+`npm test` 219/219 + 1 skipped (l'analisi è env-gated), `tsc --noEmit`
+pulito, nessuna regressione (ktest non toccato in questa it.).
+Corroborazione in coda: replay completo prompt 7 in run (i numeri nel
+report smoke-p7 quando esce; stessa metodologia). Pending verifier.

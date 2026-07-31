@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>browser-llm-lab — GLM routing conformance</title>
+  </head>
+  <body>
+    <h1>GLM routing conformance (dev-only, C2 fase 5)</h1>
+    <p>
+      Replay teacher-forced della traccia oracolo C1 sul motore (47 layer, pesi reali
+      da OPFS); set-match top-4 per (posizione, layer). Gate: decode ≥ 99%.
+    </p>
+    <p>Status: <span id="status">running…</span></p>
+    <p><strong id="live"></strong></p>
+    <section id="log" style="font-family: monospace; font-size: 12px"></section>
+    <script type="module" src="/src/engine/glmroute/page.ts"></script>
+  </body>
+</html>

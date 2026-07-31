@@ -63,3 +63,50 @@ Costanti di gate (fase 1 le formalizza nel report):
    Opzioni: (a) ratificare main-diretto per C2 (fix della riga di authority);
    (b) da fase 4 in poi si lavora su branch engine/fase-c2, merge a goal
    chiuso (lettera del contratto). Il verifier segnala; decide il PI.
+
+4. **RULING RICHIESTO — taratura del gate di conformance routing** (2026-07-31,
+   it.9, fase 5 slice 3b; timebox fase 5 esaurito a 4 it. ⇒ questo item vale
+   anche come docket-con-analisi da ruling (f) della spec).
+
+   **Fatto misurato**: il replay teacher-forced della traccia C1 sul motore
+   (47 layer, pesi reali da OPFS, harness `glmroute` nuovo) dà set-match
+   top-4 SOTTO la soglia ≥99% di spec §7: prompt 4 completo (1.004 pos) —
+   prefill 90.80%, **decode 85.85%** (29.440 coppie posizione×layer);
+   report `results/engine/routing-smoke-p4-2026-07-31.json`.
+
+   **Debug eseguito (spec §7: "sotto soglia ci si ferma e si debugga il
+   router")** — il router è SCAGIONATO con l'evidenza più forte disponibile:
+   sul medesimo subset (prompt 4, prime 16 pos, 736 coppie) il full-model
+   **cpuref f64 ESATTO** (naive, zero GPU, zero codice condiviso col motore)
+   concorda con la traccia al **96.20% — IDENTICO al motore GPU, e i 28
+   mismatch sono le stesse identiche coppie (pos, layer) 28/28**
+   (`results/engine/routing-cpuref-analysis-2026-07-31.json`, harness
+   `tests/analysis-route-cpuref.test.ts`). Firma coerente: mismatch a UN
+   solo elemento (swap 4°/5°), ~2% già al layer 1, degrado liscio con
+   profondità e lunghezza contesto. ⇒ Il disaccordo è tra ARITMETICA ESATTA
+   e la numerica dell'oracolo CPU (attivazioni quantizzate q8 — la landmine
+   già nota da C1) sui near-tie del top-4; la soglia 99% era tarata
+   sull'autotest C1 (recall 0.999 usando l'hidden DELL'ORACOLO), che non
+   copre il replay engine-vs-oracolo.
+
+   **Opzioni per il PI**:
+   (a) [RACCOMANDATA] La conformance routing diventa MISURA informativa
+       (report + input C3), il gate di correttezza resta il doppio gate
+       logits full-model di fase 6 (argmax ≥99% vs cpuref-f64 — che il
+       discriminatore mostra essere il confronto giusto — e top-1 ≥97% vs
+       golden, che già assorbe il drift oracolo per costruzione). Per il
+       prefetch C3 conta comunque il routing REALE del motore, non quello
+       dell'oracolo. Costo: emendamento spec §7.
+   (b) Ritarare il gate routing con un oracolo a numerica confrontabile
+       (build llama.cpp con attivazioni f32 pure) e rigenerare la traccia.
+       Costo: build+trace nuovi (~1 run oracolo), rischio che la fuzziness
+       ai near-tie resti (f32 GPU vs f32 CPU ordering).
+   (c) Mantenere il gate com'è ⇒ FAIL formale della fase 5 e stop del goal.
+   In (a) e (b): la fase 5 resta "done salvo gate" — kernel, residenza,
+   forward e harness sono verificati (it.6-9, verifier PASS ciascuna).
+
+   Numeri di contesto per la decisione: hit-rate residenza nel replay p4 =
+   95.9% a 12 GiB di slab (2.216+203 slot, 82% del parco) — coerente col
+   simulatore C1; throughput replay 3,7 pos/s (46 sync/token + miss, da
+   confrontare col path bench fase 6 che non fa readback per-layer... il
+   readback del ROUTING sì, è strutturale).
