@@ -392,3 +392,20 @@ il replay full-corpus (26k prefill + 1k decode × 46 sync/token) al passo
 decode-only è nell'ordine delle decine di minuti/ore — la scelta del
 sottoinsieme/strategia (prefill chunked prima? subset di spec?) si decide
 in it.9 dentro il perimetro di spec §7. Pending verifier.
+
+Verifier it.8: **PASS** (loop-verifier — ri-run fresco tsc/suite 219/ktest
+30-30 con numeri identici; percorso attention confrontato riga-per-riga con
+glmforward di fase 4; semantica MoE (shexp sovrascrive, expert accumulano
+post-down, residuo) riscontrata nel WGSL; necessità del sync per layer
+argomentata dal codice; cache bind group per-slot corretta anche dopo
+eviction — conferma empirica: 5 eviction e L2rel invariato; refactor cpuref
+testualmente identico; riferimento davvero indipendente — cpuref non importa
+mai moe/glmmodel; aritmetica dispatch verificata; scope nel grant, nessun
+push pre-verifica; split 3a/3b giudicato non-drift, motivato dal timebox).
+Osservazioni recepite: (1) ampiezze sintetiche ~6e7 su 2 layer — se il
+mini-modello sintetico crescesse di layer, rischio overflow f32 che
+maschererebbe errori: il pattern NON va esteso in profondità, il full-model
+si valida coi pesi reali (it.9/fase 6); (2) il costo per-sync del router
+non è ancora misurato singolarmente — va nel report E2E di fase 6 col
+watch item residenza; (3) nota harness: pkill nel comando ktest matcha la
+shell wrapper (exit 144 spurio innocuo a run già concluso).

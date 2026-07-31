@@ -3,22 +3,27 @@
 ## 1. Next decidable
 
 **Fase 5 del goal `engine-fase-c2` (MoE + residenza minima, timebox 4 it.,
-usate 2), slice 3 — forward multi-layer + conformance routing**: assemblare
-il forward GLM sui layer MoE (pattern `glmforward.ts` + `moe.ts` +
-`residency.ts`: per layer MoE, submit fino a ffn_norm+router → readback 64
-logit → routerSelect → ensure×4 con pinned → encode 4 catene expert
-(slotBindRanges) + shexp + residuo) e la conformance routing vs traccia C1:
-replay dei prompt della traccia nel motore, set-match top-4 ≥99% per
-(posizione decode, layer) — sotto soglia si ferma lì e si debugga il router
-(spec §7; l'ordine è escluso per spec, i pesi di mixing vanno comunque
-confrontati: watch it.6). Serve l'import one-shot del GGUF 17.2 GB in OPFS
-(ExpertOpfsStore.importFromUrl, costo hash ~min, va in telemetria).
-**SLICE 2 CHIUSA a it.7** (verifier PASS): `expertstore.ts` (Sha256Stream
-FIPS 180-4 validata su vettori NIST; ExpertOpfsStore import streaming
-hash-verificato + read range SyncAccessHandle; GgufExpertIndex) +
-`residency.ts` (ExpertCache: slot (classe,buffer,offset), riparto budget ∝
-parco 256/2688, LRU pura per classe, `pinned` intra-token, telemetria
-gated); ktest 29/29 (roundtrip byte-esatto), suite 219/219, tsc pulito.
+usate 3), slice 3b — replay reale + gate routing (ULTIMA it. del timebox)**:
+(1) `GlmWeightSource` di produzione su ExpertOpfsStore+GgufExpertIndex
+(header parse da OPFS, non-expert per nome, expert per range) + import
+one-shot del GGUF 17.2 GB (importFromUrl, SHA streaming ~2-3 min, numero in
+telemetria; vite serve il file via symlink public/models come per qwen);
+(2) harness replay traccia C1 (formato in tools/oracle-moe/trace.cpp:
+jsonl.gz con top-4 per (posizione, layer)) su createGlmModel a 47 layer;
+(3) GATE: set-match top-4 ≥99% su (posizione decode, layer) + confronto
+pesi mixing (watch it.6) — sotto soglia ci si ferma e si debugga il router.
+Nota dimensionale (journal it.8): full-corpus al passo decode-only =
+decine di min/ore (46 sync/token); strategia/subset da decidere DENTRO
+spec §7. Sforamento timebox ⇒ docket con analisi (ruling (f)).
+**SLICE 3a CHIUSA a it.8** (verifier PASS): `glmmodel.ts` (forward
+multi-layer di produzione: sync router per layer, ensure pinned, bind group
+per-slot cached e stabili all'eviction; proiezione 1.816 dispatch/token
+full-model — misura, non gate) + cpuref refactor (GlmMlaAttnRefF64,
+GlmMoeLayerRefF64); ktest 30/30 (glm-model-2layer L2rel 2.36e-7, routing
+6/6, cache con eviction), suite 219/219, tsc pulito. NON estendere il
+mini-modello sintetico in profondità (ampiezze ~6e7 su 2 layer: rischio
+overflow f32 — osservazione verifier it.8); il full-model si valida coi
+pesi reali.
 **WATCH ITEM CRITICO fase 6** (confermato dal verifier): ~10 ms/miss con
 pack CPU dominante (5,9 ms) ⇒ proiezione ~66 ms/token di stallo a hit 96.4%
 su budget 74,5 ms (floor 13.43 tok/s) — margine <10 ms sul gate decode;

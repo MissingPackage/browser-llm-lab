@@ -78,3 +78,16 @@ NIST indipendenti). WATCH fase 6: ~10 ms/miss con pack CPU dominante ⇒
 proiezione ~66 ms/token di stallo a hit 96.4% su budget 74.5 — margine <10
 ms sul gate decode; leva candidata: repack pagato all'import. Next (it.8):
 slice 3 — forward multi-layer + conformance routing vs traccia C1.
+
+## it.8 (2026-07-31, fase 5 slice 3a)
+Forward GLM multi-layer sul path di produzione: glmmodel.ts (createGlmModel —
+attention MLA fase 4 + router it.6 + residenza it.7; per layer MoE: submit →
+mapAsync 64 logit → routerSelect CPU → ensure×4 pinned → encode shexp+expert
+da slot; pipeline condivise, bind group per-slot cached, sopravvivono
+all'eviction). cpuref: attention estratta (GlmMlaAttnRefF64) + nuovo
+GlmMoeLayerRefF64. ktest 30/30 su 4090: glm-model-2layer (denso+MoE Q4_1,
+cache stretta con 5 eviction) L2rel 2.36e-7, routing 6/6, pesi 1.8e-7, 61
+dispatch esatti; suite 219/219; tsc pulito. Verifier PASS. Proiezione
+full-model: 1.816 dispatch/token (misura, non gate). Next (it.9, ultima del
+timebox fase 5): loader OPFS reale + import 17.2 GB + replay traccia C1 +
+gate routing set-match ≥99%.
