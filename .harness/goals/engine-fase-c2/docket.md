@@ -11,7 +11,13 @@
    spec, gate tok/s hard in fase 6 (decode ≥13.4 / prefill ≥56.6 = oracolo
    CPU C1) + non-regressione Qwen.
 
-2. **RULING RICHIESTO — spec C2** (2026-07-31, fase 2): approvazione di
+2. ~~**RULING RICHIESTO — spec C2**~~ RISOLTO (2026-07-31, ruling PI in chat:
+   "Approvo (a)-(f)", dopo walkthrough delle decisioni rispetto all'obiettivo
+   finale — intelligenza max sopra soglia, Pareto per device). Spec approvata
+   senza modifiche; fasi 3-6 SBLOCCATE (3 ready, 4-6 a cascata). Testo
+   originale:
+
+   **RULING RICHIESTO — spec C2** (2026-07-31, fase 2): approvazione di
    `docs/superpowers/specs/2026-07-31-engine-fase-c2-design.md`. Decisioni
    proposte da ratificare (dettaglio in spec §10):
    (a) il GGUF "Q4_0" è a quant MISTA (FINDING dal dump, CORRETTO dopo il

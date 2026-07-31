@@ -2,7 +2,9 @@
 
 ## 1. Next decidable
 
-**RULING SPEC C2** (docket item 2 del goal `engine-fase-c2`): approvare
+~~RULING SPEC C2~~ RISOLTO (2026-07-31 in chat: "Approvo (a)-(f)") ⇒ **fase 3
+del goal `engine-fase-c2` (reader GGUF deepseek2) in esecuzione**, fasi 4-6 a
+cascata. Contesto del ruling: approvare
 `docs/superpowers/specs/2026-07-31-engine-fase-c2-design.md` — 6 decisioni
 (a)-(f), le non-ovvie: (a) quant MISTA nel GGUF ⇒ kernel Q4_1/Q5_K/Q6_K
 nuovi, niente repack; slab a 2 size-class (5.308.416/5.505.024 B); (b) MLA
