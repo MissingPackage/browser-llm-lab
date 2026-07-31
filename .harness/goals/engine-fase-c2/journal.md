@@ -146,3 +146,11 @@ rope-mla-norm-q, rope-mla-norm-kpe maxRel<5e-4; gemv-q8-heads-absorb-kb e
 Restano per la fase 4 (timebox: 2 it.): assemblaggio layer GLM in
 gpuforward + conformance layer-level con pesi reali (gate doppio). Pending
 verifier.
+
+Verifier it.4: **PASS** (ri-run ktest 21/21; RoPE NORM riscontrato in
+llama-model.cpp:2510-2549 e ggml ops.cpp con rotate_pairs consecutivi;
+kq_scale 1/sqrt(256) in deepseek2.cpp:154/168-172; ordine rope→norm e
+layout concat [512|64] alle righe 279-316; riferimento f64 indipendente;
+layout per-head di gemvQ8Heads coerente col GGUF row-major). Nota:
+l'assunzione "niente yarn ⇒ mscale=1" è da sorgente+metadata, verrà
+riverificata empiricamente coi golden alla conformance con pesi reali.

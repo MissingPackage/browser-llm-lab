@@ -2,16 +2,20 @@
 
 ## 1. Next decidable
 
-**Fase 4 del goal `engine-fase-c2`, slice 2: cpuref MLA naive f64 + kernel
-absorbed** (proiettori q_a/q_b/kv_a, rope su 64 dim, attention sulla cache
-compressa 576, attnsplit) — slice 1 DONE e verificata (it.3, verifier PASS):
-GEMV dequant-fuse q4_1/q5_K/q6_K, ktest 16/16 su 4090, suite 199 verde.
-Watch: q5_K passa via absTol (margine rel sottile, occhio in fase 6). Prima:
-fase 3 DONE (it.2). Branch policy risolta: main-diretto ratificato (docket
-item 3). Spec e ruling (a)-(f) in vigore; timebox fase 4: restano 3 it.
+**Fase 4 del goal `engine-fase-c2`, slice 3 (ultima del timebox: restano
+2 it.): assemblaggio del layer GLM in gpuforward + conformance layer-level
+con pesi reali** (gate doppio cpuref-f64/golden, spec §7). Kernel TUTTI
+pronti e verificati: GEMV q4_1/q5_K/q6_K (it.3) + MLA absorbed (it.4: rope
+NORM — non NEOX!, gemvQ8Heads per wk_b/wv_b, mlaAttnDecode su cache 576 con
+kq_scale 1/sqrt(256), V=c_kv normata). ktest 21/21 su 4090, suite node
+21/199 verde, tsc pulito, verifier PASS su codice e semantica (riscontro in
+deepseek2.cpp/llama-model.cpp/ops.cpp). Watch item: gemv-q5_K passa via
+absTol; assunzione mscale=1 (no yarn) da riverificare coi golden.
+Dopo fase 4: fase 5 (MoE+residenza minima, timebox 4 it.), fase 6 (E2E+gate
+non-regressione: decode >=13.43 / prefill >=56.58, Qwen invariato), fase 7.
 Riancorarsi da: `.harness/goals/engine-fase-c2/{GOAL,PHASES,docket,journal}.md`,
-spec `docs/superpowers/specs/2026-07-31-engine-fase-c2-design.md` §3 (MLA),
-`src/engine/{shape,quant,gguf}.ts` (fase 3), golden in
+spec §3-§7, `src/engine/kernels/wgsl.ts` (kernel nuovi in coda),
+`src/engine/ktest/ktest.worker.ts` (riferimenti f64), golden in
 `results/engine/golden/glm47flash/`.
 
 ## 2. State delta (questa sessione, 15)

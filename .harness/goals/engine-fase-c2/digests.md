@@ -36,3 +36,12 @@ ktest esteso (5 casi a taglie reali) + runner scripts/ktest-run.mjs. Run su
 preesistenti; npm test 199/199; tsc pulito. Verifier PASS con ri-run
 indipendente. Watch: q5_K passa via absTol, margine rel sottile. Next (it.4):
 cpuref MLA naive f64 + kernel absorbed (proiettori, rope, attention 576).
+
+## it.4 (2026-07-31, fase 4 slice 2)
+Kernel MLA absorbed: ropeMlaNorm (RoPE tipo NORM — catch: deepseek2 NON usa
+NEOX), gemvQ8Heads (wk_b/wv_b per-head), mlaAttnDecode (MQA su cache 576,
+kq_scale 1/sqrt(256), V=c_kv normata). Semantica verificata NEL sorgente
+dell'oracolo prima di scrivere WGSL; ktest 21/21 su 4090 (mla-attn-decode
+maxAbs 3.7e-8), 199 test node verdi, tsc pulito. Verifier PASS su codice E
+semantica. Restano per fase 4 (timebox 2 it.): assemblaggio layer GLM in
+gpuforward + conformance layer-level con pesi reali (gate doppio).
