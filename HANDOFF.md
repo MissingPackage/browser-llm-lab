@@ -2,8 +2,34 @@
 
 ## 1. Next decidable
 
+**RULING PI RICHIESTO — docket engine-fase-c2 item 4 (taratura gate
+routing)**: il goal è in STOP BY DESIGN in attesa della decisione. Gate
+routing spec §7 (decode ≥99%) NON passato: misurato 85.85% (p4) / 94.11%
+(p7); il debug prescritto da spec ha SCAGIONATO il router col
+discriminatore più forte disponibile — cpuref f64 esatto dà il 96.20%
+IDENTICO al motore sullo stesso subset con gli STESSI 28/28 mismatch
+(tutti swap singoli 4°/5° expert, ~2% già al layer 1): il disaccordo è la
+numerica q8 dell'oracolo sui near-tie, la soglia era tarata sull'autotest
+C1 (hidden dell'oracolo). Opzioni (a) routing informativo + gate su logits
+full-model fase 6 [RACCOMANDATA], (b) oracolo f32 + traccia nuova, (c)
+FAIL formale — dettagli e numeri nel docket item 4. Timebox fase 5
+esaurito (4 it., ruling f). Fase 5: lavoro tecnico COMPLETO e verificato
+(it.6-9, 4 verifier PASS: kernel MoE, residenza OPFS+LRU, forward 47
+layer, harness replay). A valle del ruling: fase 6 (E2E, conformance
+logits, bench coi gate tok/s).
+
+Stato tecnico all'ultimo run (per la ripresa): import OPFS 17.2 GB fatto
+(profilo ~/.cache/blab-glmroute-profile, SHA verificato; skip su
+size-match); hit residenza 95.9% @12 GiB (2.216+203 slot); replay 3,7
+pos/s; watch item fase 6 invariati (stallo pack ~66 ms/token proiettato,
+46 sync router/token, gate layer-level da stringere, q5_K absTol,
+mscale=1). Harness: `scripts/glm-route-run.mjs` (--cap/--prompts/--out),
+analisi cpuref `ROUTE_ANALYSIS=1 npx vitest run
+tests/analysis-route-cpuref.test.ts`.
+
+<!-- contesto pre-ruling (slice 3b, superato dall'esito qui sopra): -->
 **Fase 5 del goal `engine-fase-c2` (MoE + residenza minima, timebox 4 it.,
-usate 3), slice 3b — replay reale + gate routing (ULTIMA it. del timebox)**:
+usate 4), slice 3b — replay reale + gate routing (ULTIMA it. del timebox)**:
 (1) `GlmWeightSource` di produzione su ExpertOpfsStore+GgufExpertIndex
 (header parse da OPFS, non-expert per nome, expert per range) + import
 one-shot del GGUF 17.2 GB (importFromUrl, SHA streaming ~2-3 min, numero in

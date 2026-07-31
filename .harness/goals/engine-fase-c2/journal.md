@@ -455,3 +455,22 @@ ruling (f); (iii) fase 6 resta bloccata dal ruling. Evidenza di build:
 pulito, nessuna regressione (ktest non toccato in questa it.).
 Corroborazione in coda: replay completo prompt 7 in run (i numeri nel
 report smoke-p7 quando esce; stessa metodologia). Pending verifier.
+
+Verifier it.9: **PASS** (loop-verifier — percentuali RICALCOLATE dai campi
+grezzi dei 3 report; subset coincidente verificato; insiemi dei 28 mismatch
+estratti e confrontati: uguali, e sotto i cap di campionamento ⇒ confronto
+esaustivo; indipendenza del discriminatore verificata sul sorgente — zero
+import da glmmodel/moe/residency, selezione sort-based propria; teacher
+forcing riscontrato; spec §7 INVARIATA nel diff e docket item 4 che
+presenta opzioni SENZA deciderle; 4 ipotesi di bug comune valutate
+esplicitamente ed escluse dalla firma — lettura traccia, embedding, moduli
+condivisi, file diverso). Osservazioni recepite: (1) dicitura "zero codice
+condiviso" corretta in "zero codice di calcolo condiviso" (addendum docket);
+(2) corroborazione p7 arrivata: decode 94.11% — varianza tra prompt coerente
+col meccanismo near-tie; (3) replay full-corpus restante: si esegue solo a
+valle del ruling (se (a): per il report informativo; se (b): con la traccia
+nuova).
+
+**FASE 5: lavoro tecnico COMPLETO (it.6-9, 4 verifier PASS), gate routing
+in attesa di ruling PI (docket item 4). STOP BY DESIGN del loop**: fase 6
+è gated dal ruling; nessun altro passo decidibile senza il PI.

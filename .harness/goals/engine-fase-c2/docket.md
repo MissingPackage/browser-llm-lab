@@ -110,3 +110,13 @@ Costanti di gate (fase 1 le formalizza nel report):
    simulatore C1; throughput replay 3,7 pos/s (46 sync/token + miss, da
    confrontare col path bench fase 6 che non fa readback per-layer... il
    readback del ROUTING sì, è strutturale).
+
+   Addendum post-verifier (stessa data): corroborazione su prompt 7 completo
+   (891 pos): decode 94.11%, prefill 93.05%
+   (`results/engine/routing-smoke-p7-2026-07-31.json`) — la varianza tra
+   prompt (decode 85.8%↔94.1%) è coerente col meccanismo near-tie (la
+   densità dei pareggi dipende dal contenuto) e INCOERENTE con un bug
+   sistematico. Nota di dicitura recepita dal verifier it.9: il
+   discriminatore ha "zero codice DI CALCOLO condiviso" col motore (parsing
+   GGUF/indice/dequant CPU sono condivisi ma scagionati dalla firma — il
+   motore usa dequant WGSL indipendenti, concordi a L2rel 2.35e-7 da it.5).

@@ -91,3 +91,16 @@ dispatch esatti; suite 219/219; tsc pulito. Verifier PASS. Proiezione
 full-model: 1.816 dispatch/token (misura, non gate). Next (it.9, ultima del
 timebox fase 5): loader OPFS reale + import 17.2 GB + replay traccia C1 +
 gate routing set-match ≥99%.
+
+## it.9 (2026-07-31, fase 5 slice 3b — GATE ROUTING → RULING)
+Primo run end-to-end sui pesi reali: glmsource.ts (OPFS 17.2 GB, SHA
+streaming verificato) + harness glmroute (replay teacher-forced traccia C1).
+GATE NON PASSATO: decode 85.85% (p4) / 94.11% (p7) vs ≥99%. Debug come da
+spec: discriminatore cpuref-f64 esatto ⇒ 96.20% sul subset, IDENTICO al
+motore, STESSI 28/28 mismatch (tutti swap singoli 4°/5°, ~2% già a layer 1)
+⇒ router SCAGIONATO, il disaccordo è la numerica q8 dell'oracolo sui
+near-tie; soglia 99% mal tarata (autotest C1 usava l'hidden dell'oracolo).
+RULING RICHIESTO docket item 4 (racc.: routing informativo, gate su logits
+fase 6); timebox fase 5 esaurito (ruling f). Hit residenza 95.9% @12 GiB —
+coerente col sim C1. Verifier PASS (ipotesi alternative valutate ed
+escluse). Loop in STOP BY DESIGN: fase 6 gated dal ruling.
