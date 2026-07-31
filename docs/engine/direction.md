@@ -169,10 +169,13 @@ del codice (convenzione repo). Il benchmark pubblico e la roadmap generale del p
    scioglie solo con timestamp-query nel runtime nostro (telemetria nativa, fase A).
 3. **Banda OPFS** — misurata (fase 2 del goal, 2026-07-29, 4090/NVMe): write 2.2 GB/s,
    read via SyncAccessHandle 7.5-11.7 GB/s **a page-cache calda** ⇒ l'API non è il
-   bottleneck; il regime freddo è disco-bound e va ancora caratterizzato (drop_caches
-   impossibile dal browser). Il dimensionamento del paging (fase C) usa: warm re-read
-   ~gratis, cold-load ≈ banda NVMe del device. Il paging vive comunque di hit-rate
-   (pinning+prefetch), target realistico "modello ~2× la memoria".
+   bottleneck. **Bound freddo misurato lato OS (2026-07-31, fadvise, 990 PRO)**:
+   random expert-size **1.63 GB/s (3.74 ms/expert p50, 8× il warm)**, seq 3.22 GB/s;
+   il freddo browser è ≤ di questi numeri (WP browser di conferma in C3, ruling
+   docket C1 item 4). Conseguenza sul target: "modello ~2× la memoria" vale come
+   **2× la VRAM con spillover RAM-backed** (24% del budget a 30 tok/s); in regime
+   disk-bound il tetto è ~18 tok/s o serve hit ≥94.5% con prefetch a overlap
+   perfetto — il paging vive di hit-rate (prefetch prima leva, ruling item 4).
 4. **Equità benchmark**: Chrome/Linux/NVIDIA non espone shader-f16 (M4/S22 sì) — da
    dichiarare in ogni confronto pubblico.
 5. **S22**: T_fisso misurato ~18 ms/token di solo encode CPU (estimates §8) > budget a

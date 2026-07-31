@@ -44,7 +44,14 @@
    (f) NESSUN gate numerico sul recall (misura, non target): il numero decide
        il go/no-go PILOT in fase 6, decisione PI.
 
-4. **PROPOSTA go/no-go PILOT per C2/C3** (2026-07-31, fase 6 — DECISIONE DEL PI,
+4. ~~**PROPOSTA go/no-go PILOT per C2/C3**~~ RISOLTO (2026-07-31, ruling PI in
+   chat: **"Adotta, ma WP comunque"** — GO prefetch / NO-GO pinning adottato
+   come input di C2/C3; il WP banda fredda **browser** si fa comunque, come
+   parte/precondizione di C3, NON blocca C2. Prossimo goal deciso: **C2**.
+   Propagazione del fatto nuovo eseguita: ledger §A righe paging/OPFS,
+   direction §8.3). Testo originale:
+
+   **PROPOSTA go/no-go PILOT per C2/C3** (2026-07-31, fase 6 — DECISIONE DEL PI,
    qui solo istruita). Raccomandazione: **GO sul prefetch predittivo, NO-GO sul
    learned pinning come leva primaria.** Evidenza:
    - **Recall misurato** (C1 it.4): 92.0% @K=8, 87.7% @6, 77.5% @4 sul decode;
