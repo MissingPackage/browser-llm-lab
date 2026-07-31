@@ -54,6 +54,16 @@ export interface GlmModel {
 export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: GlmModelOpts): GlmModel {
   const nLayer = opts.nLayer ?? G.nLayer;
   const ctxMax = opts.ctxMax;
+  // fail-fast esplicito: mlaAttnDecode tiene scores[ctxMax] + red[64] in
+  // workgroup memory — oltre il limite la pipeline fallirebbe con un errore
+  // criptico di validazione (visto su ctxMax 6688 vs default 16 KB, it.10)
+  const wgNeed = ctxMax * 4 + 64 * 4;
+  if (wgNeed > device.limits.maxComputeWorkgroupStorageSize) {
+    throw new Error(
+      `glmmodel: ctxMax ${ctxMax} richiede ${wgNeed} B di workgroup storage ` +
+      `(limite ${device.limits.maxComputeWorkgroupStorageSize}) — negoziare ` +
+      `maxComputeWorkgroupStorageSize o spezzare l'attention (attnsplit)`);
+  }
 
   // ---- upload helper (come glmforward) ----
   const upload = (data: Uint32Array | Float32Array): GPUBuffer => {

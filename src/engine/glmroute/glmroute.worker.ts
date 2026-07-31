@@ -31,7 +31,12 @@ async function main(cfg: Cfg): Promise<void> {
   const maxBuf = Math.min(lim.maxBufferSize, 2 * (1 << 30));
   const maxBind = Math.min(lim.maxStorageBufferBindingSize, 2 * (1 << 30));
   const device = await adapter.requestDevice({
-    requiredLimits: { maxBufferSize: maxBuf, maxStorageBufferBindingSize: maxBind },
+    requiredLimits: {
+      maxBufferSize: maxBuf, maxStorageBufferBindingSize: maxBind,
+      // mlaAttnDecode: scores[ctxMax] in workgroup memory — il corpus arriva a
+      // 6688 pos (26.7 KB) > default 16 KB; 32 KB negoziati come gpuforward
+      maxComputeWorkgroupStorageSize: Math.min(lim.maxComputeWorkgroupStorageSize, 32768),
+    },
   });
   progress(`adapter ${adapter.info?.vendor ?? "?"} — maxBuffer ${(maxBuf / 2 ** 30).toFixed(1)} GiB`);
 

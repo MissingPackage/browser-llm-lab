@@ -2,21 +2,28 @@
 
 ## 1. Next decidable
 
-**RULING PI RICHIESTO — docket engine-fase-c2 item 4 (taratura gate
-routing)**: il goal è in STOP BY DESIGN in attesa della decisione. Gate
-routing spec §7 (decode ≥99%) NON passato: misurato 85.85% (p4) / 94.11%
-(p7); il debug prescritto da spec ha SCAGIONATO il router col
-discriminatore più forte disponibile — cpuref f64 esatto dà il 96.20%
-IDENTICO al motore sullo stesso subset con gli STESSI 28/28 mismatch
-(tutti swap singoli 4°/5° expert, ~2% già al layer 1): il disaccordo è la
-numerica q8 dell'oracolo sui near-tie, la soglia era tarata sull'autotest
-C1 (hidden dell'oracolo). Opzioni (a) routing informativo + gate su logits
-full-model fase 6 [RACCOMANDATA], (b) oracolo f32 + traccia nuova, (c)
-FAIL formale — dettagli e numeri nel docket item 4. Timebox fase 5
-esaurito (4 it., ruling f). Fase 5: lavoro tecnico COMPLETO e verificato
-(it.6-9, 4 verifier PASS: kernel MoE, residenza OPFS+LRU, forward 47
-layer, harness replay). A valle del ruling: fase 6 (E2E, conformance
-logits, bench coi gate tok/s).
+**Fase 6 del goal `engine-fase-c2` (E2E + conformance logits + bench),
+it.10** — SBLOCCATA dal ruling PI 2026-07-31 (docket item 4 = opzione a:
+routing informativo, gate su logits; contingenza oracolo-f32 on-demand).
+Slice 1 (implementazione+correttezza, NIENTE bench finché il replay
+full-corpus occupa la GPU — run in corso ~2.5h, report informativo
+routing-conformance-glm47flash-2026-07-31.json): estendere glmmodel con
+output head (final `output_norm` F32 + `output.weight` Q6_K [2048→154880],
+kernel gemvQ6K esistente + argmax 2-stage esistente; readback top-32 logit
+per il confronto golden) e cpuref f64 full-model logits (comporre
+GlmDense+GlmMoe refs + head — pattern del discriminatore it.9,
+layer-streaming per la RAM); harness conformance logits sui golden fase 1
+(`results/engine/golden/glm47flash/`, 8 prompt × ≤128 gen, prefill
+teacher-forced dai token del golden): gate doppio spec §7 — (i) argmax
+≥99% vs cpuref-f64, (ii) top-1 ≥97% vs golden; secondarie KL top-32 e
+max|Δ|. Slice 2: bench protocollo B2 coi GATE HARD decode ≥13.43 /
+prefill ≥56.58 tok/s + non-regressione Qwen (conformance A + first-light ≥
+valori 2026-07-30) + report telemetria (hit-rate, stallo, dispatch/token)
+= input C3. Watch item: stallo pack ~66 ms/token proiettato e 46 sync
+router/token vs budget 74,5 ms — se il gate decode fallisce, le leve sono
+a journal it.7 (repack all'import) e la deroga è decisione PI via docket
+(non-regressione permanente). Altri watch: gate layer-level da stringere
+a canary, q5_K absTol, mscale=1 (matura proprio qui coi golden).
 
 Stato tecnico all'ultimo run (per la ripresa): import OPFS 17.2 GB fatto
 (profilo ~/.cache/blab-glmroute-profile, SHA verificato; skip su
