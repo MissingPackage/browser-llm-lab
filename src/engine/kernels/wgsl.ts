@@ -1652,3 +1652,26 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   }
 }`;
 }
+
+// Copy strided per-vettore: nVec segmenti di `len` f32 da src(srcStride, srcOff)
+// a dst(dstStride, dstOff). Serve all'assemblaggio MLA absorbed (C2 fase 4):
+// q576 per head = [q_ckv 512 (da gemvQ8Heads, stride 512) | q_rope 64 (da q
+// 5120, stride 256 offset 192)] — copyBufferToBuffer non ha stride.
+export function stridedCopyWgsl(opts: {
+  nVec: number; len: number; srcStride: number; srcOffset: number;
+  dstStride: number; dstOffset: number;
+}): string {
+  const { nVec, len, srcStride, srcOffset, dstStride, dstOffset } = opts;
+  const total = nVec * len;
+  return `
+@group(0) @binding(0) var<storage, read> src: array<f32>;
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= ${total}u) { return; }
+  let v = i / ${len}u;
+  let j = i % ${len}u;
+  dst[v * ${dstStride}u + ${dstOffset}u + j] = src[v * ${srcStride}u + ${srcOffset}u + j];
+}`;
+}

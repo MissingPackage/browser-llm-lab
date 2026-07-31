@@ -8,8 +8,10 @@
 import {
   gemvQuantWgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
   attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
-  ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl,
+  ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
 } from "../kernels/wgsl";
+import { createGlmLayer0 } from "../glmforward";
+import { GlmDenseLayerRefF64 } from "../cpuref";
 import {
   repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
   dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ5_K, dequantQ6_K,
@@ -196,6 +198,78 @@ function ropeNormRef(v: Float32Array, nVec: number, stride: number, offset: numb
   }
 }
 
+// Conformance layer-level (C2 fase 4 slice 3): layer 0 GLM completo su GPU
+// (MLA absorbed, glmforward) vs cpuref f64 in formulazione NAIVE, sui PESI
+// REALI di blk.0 estratti dal GGUF (fixture gen-glm-layer-fixture.py) e sugli
+// embedding dei primi 16 token del corpus golden p0 — replay decode con cache.
+// Gate: L2rel ≤ 1e-3 e max|Δ| ≤ 5e-2 sull'hidden post-layer (2048 × 16 pos).
+async function testGlmLayer0Real(g: Gpu): Promise<KResult> {
+  const metaRes = await fetch("/models/glm-layer0/meta.json");
+  if (!metaRes.ok) {
+    return {
+      kernel: "glm-layer0-conformance", pass: false, maxAbs: NaN, maxRel: NaN,
+      note: "fixture assente: uv run scripts/gen-glm-layer-fixture.py",
+    };
+  }
+  const meta = await metaRes.json() as {
+    tokens: number[]; embdRowBytes: number;
+    tensors: Record<string, { offset: number; bytes: number; ggmlType: number }>;
+  };
+  const bin = new Uint8Array(await (await fetch("/models/glm-layer0/fixture.bin")).arrayBuffer());
+  const seg = (n: string): Uint8Array => {
+    const t = meta.tensors[n];
+    return bin.subarray(t.offset, t.offset + t.bytes);
+  };
+  const f32 = (n: string): Float32Array => {
+    const t = meta.tensors[n];
+    return new Float32Array(bin.buffer, bin.byteOffset + t.offset, t.bytes / 4);
+  };
+  const deq = (n: string, kind: "q4_0" | "q8_0" | "q4_1"): Float32Array => {
+    const s = seg(n);
+    const bb = kind === "q4_0" ? 18 : kind === "q8_0" ? 34 : Q4_1_BLOCK_BYTES;
+    const nB = s.length / bb;
+    const out = new Float32Array(nB * 32);
+    (kind === "q4_0" ? dequantQ4_0 : kind === "q8_0" ? dequantQ8_0 : dequantQ4_1)(s, 0, nB, out);
+    return out;
+  };
+  const norms = {
+    attnNorm: f32("attnNorm"), qANorm: f32("qANorm"),
+    kvANorm: f32("kvANorm"), ffnNorm: f32("ffnNorm"),
+  };
+  const ref = new GlmDenseLayerRefF64({
+    ...norms,
+    wQA: deq("wQA", "q4_0"), wQB: deq("wQB", "q4_0"), wKvA: deq("wKvA", "q8_0"),
+    wKB: deq("wKB", "q8_0"), wVB: deq("wVB", "q8_0"), wO: deq("wO", "q4_0"),
+    wGate: deq("wGate", "q4_0"), wUp: deq("wUp", "q4_0"), wDown: deq("wDown", "q4_1"),
+  });
+  const layer = createGlmLayer0(g.device, {
+    ...norms,
+    wQA: seg("wQA"), wQB: seg("wQB"), wKvA: seg("wKvA"), wKB: seg("wKB"),
+    wVB: seg("wVB"), wO: seg("wO"), wGate: seg("wGate"), wUp: seg("wUp"), wDown: seg("wDown"),
+  }, 64);
+  const embd = seg("embdRows");
+  let maxAbs = 0, maxRel = 0, l2e = 0, l2r = 0;
+  for (let p = 0; p < meta.tokens.length; p++) {
+    const x = new Float32Array(G.dModel);
+    dequantQ4_0(embd, p * meta.embdRowBytes, G.dModel / 32, x);
+    const refOut = ref.forward(x);
+    const gpuOut = await layer.forward(x, p);
+    for (let i = 0; i < G.dModel; i++) {
+      const d = Math.abs(gpuOut[i] - refOut[i]);
+      maxAbs = Math.max(maxAbs, d);
+      maxRel = Math.max(maxRel, d / Math.max(Math.abs(refOut[i]), 1e-6));
+      l2e += d * d;
+      l2r += refOut[i] * refOut[i];
+    }
+  }
+  layer.destroy();
+  const l2 = Math.sqrt(l2e / l2r);
+  return {
+    kernel: "glm-layer0-conformance", pass: l2 <= 1e-3 && maxAbs <= 5e-2, maxAbs, maxRel,
+    note: `pesi reali blk.0, ${meta.tokens.length} pos decode, L2rel=${l2.toExponential(2)}, ${layer.dispatchesPerToken} dispatch`,
+  };
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -294,6 +368,22 @@ async function main(): Promise<void> {
       await g.run(mlaAttnDecodeWgsl({ nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax, scale }),
         [g.buf(q), g.buf(cache), out, ], G.nHead, g.uniform(nPast, nPast));
       results.push(compare("mla-attn-decode", new Float32Array(await g.read(out, G.nHead * G.kvLora * 4)), ref, 5e-4, 1e-4));
+    }
+
+    { // strided copy (assemblaggio q576 = [q_ckv | q_rope] per head): esatto
+      const src = randF32(G.nHead * HL, 81);
+      const dst = randF32(G.nHead * W576, 82); // pre-riempito: la copy non deve toccare il resto
+      const ref = dst.slice();
+      for (let h = 0; h < G.nHead; h++) {
+        for (let j = 0; j < G.ropeDims; j++) {
+          ref[h * W576 + G.kvLora + j] = src[h * HL + G.qkNope + j];
+        }
+      }
+      const dstBuf = g.buf(dst);
+      await g.run(
+        stridedCopyWgsl({ nVec: G.nHead, len: G.ropeDims, srcStride: HL, srcOffset: G.qkNope, dstStride: W576, dstOffset: G.kvLora }),
+        [g.buf(src), dstBuf], Math.ceil((G.nHead * G.ropeDims) / 64));
+      results.push(compare("strided-copy-qrope", new Float32Array(await g.read(dstBuf, dst.byteLength)), ref, 0, 0));
     }
 
     { // rmsnorm
@@ -400,6 +490,9 @@ async function main(): Promise<void> {
       const got = new Uint32Array(await g.read(out, 4))[0];
       results.push({ kernel: "argmax-2stage", pass: got === refIdx, maxAbs: Math.abs(got - refIdx), maxRel: 0, note: `got=${got} ref=${refIdx}` });
     }
+
+    // conformance layer-level con pesi reali (fase 4 slice 3) — il test lungo in coda
+    results.push(await testGlmLayer0Real(g));
   } catch (e) {
     post({ type: "error", message: e instanceof Error ? e.message : String(e), results });
     return;

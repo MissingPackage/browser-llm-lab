@@ -154,3 +154,41 @@ layout concat [512|64] alle righe 279-316; riferimento f64 indipendente;
 layout per-head di gemvQ8Heads coerente col GGUF row-major). Nota:
 l'assunzione "niente yarn ⇒ mscale=1" è da sorgente+metadata, verrà
 riverificata empiricamente coi golden alla conformance con pesi reali.
+
+## it.5 — fase 4, slice 3: layer GLM assemblato + conformance layer-level con pesi reali (2026-07-31)
+
+Slice finale della fase 4. Implementato:
+- `cpuref.ts`: `GlmDenseLayerRefF64` — layer denso blk.0 in f64 con MLA
+  in formulazione NAIVE (decompressione K/V per posizione via wk_b/wv_b
+  TRASPOSTI): riferimento deliberatamente diverso dall'absorbed del motore.
+- `glmforward.ts` (file NUOVO — deviazione owns come it.2, stessi criteri:
+  pattern gpuforward, nessun conflitto): `createGlmLayer0` assembla il layer
+  su GPU — 22 dispatch/token, MLA absorbed coi kernel di it.3/4 + ffn denso
+  (gate/up Q4_0, down Q4_1), error scope da contratto, cache 576/token.
+- `kernels/wgsl.ts`: `stridedCopyWgsl` (assemblaggio q576 = [q_ckv|q_rope]
+  per head — copyBufferToBuffer non ha stride); ktest esatto (tol 0).
+- `scripts/gen-glm-layer-fixture.py`: fixture 52 MB (byte GREZZI dei 13
+  tensori blk.0 + 16 righe embd dei primi 16 token del corpus golden p0) in
+  public/models/ (gitignored, rigenerabile). Il ktest la fetch-a e su di essa
+  costruisce ENTRAMBI i riferimenti (stessi byte, due formulazioni).
+- `tests/engine-cpuref-glm.test.ts`: identità algebrica naive↔absorbed in
+  f64 su pesi sintetici (implementazione absorbed indipendente nel test,
+  rms/rope/matvec propri): maxAbs < 1e-8 su 2 posizioni. Un errore di
+  trasposizione o d'ordine rope/norm in uno dei due la rompe.
+
+**Evidenza**: ktest su 4090 status "done", **23/23 PASS** — nuovo
+`glm-layer0-conformance`: pesi reali blk.0, 16 posizioni decode replay,
+**L2rel 2.35e-7, max|Δ| 8.8e-8** (gate harness: L2rel ≤ 1e-3, max|Δ| ≤ 5e-2 —
+ampiamente dentro; l'accordo è al rounding f32), maxRel 1.7e-3 solo su
+componenti ≈0; `strided-copy-qrope` esatto; zero regressioni sui 21
+preesistenti. `npm test` 200/200 (nuovo test identità incluso); `tsc
+--noEmit` pulito.
+
+**Lettura del "gate doppio cpuref/golden" a livello layer** (registrata, il
+PI può obiettare): i golden di fase 1 contengono SOLO logits full-model
+(argmax + top-32 per posizione) — non esistono hidden per-layer nell'oracolo.
+Il gate (i) vs cpuref-f64 è quindi l'unico applicabile a livello layer ed è
+PASS; il gate (ii) vs golden si applica by construction al full-model e
+matura in fase 6 (soglie §7: argmax ≥99% cpuref / top-1 ≥97% golden). Il
+cpuref f64 full-model necessario al gate (i) di fase 6 richiede il MoE ref
+(fase 5). Fase 4 chiusa a it.5 (timebox 4 it., usate 3). Pending verifier.
