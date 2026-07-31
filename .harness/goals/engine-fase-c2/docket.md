@@ -1,6 +1,10 @@
 # Docket — engine-fase-c2 (decisioni PI pendenti)
 
-1. **PLAN-CHECK** (iteration 0, 2026-07-31): approvazione di PHASES.md prima
+1. ~~**PLAN-CHECK**~~ RISOLTO (2026-07-31, ruling PI in chat: "Approvo,
+   parti"). Decomposizione approvata senza modifiche; iterazione 1 = fasi
+   1+2 in parallelo. Testo originale:
+
+   **PLAN-CHECK** (iteration 0, 2026-07-31): approvazione di PHASES.md prima
    dell'iterazione 1. Il contratto GOAL.md è già approvato in chat (con
    emendamento non-regressione); qui si approva la decomposizione: 7 fasi,
    gruppo parallelo A (floor+golden ‖ spec), fasi 3-6 gated dal ruling di
