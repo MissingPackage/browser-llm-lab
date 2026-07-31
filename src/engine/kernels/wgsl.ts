@@ -21,14 +21,22 @@ export function gemvGrid(N: number): [number, number] {
 // 64 thread per riga di output; riduzione in shared memory.
 export function gemvQuantWgsl(opts: {
   kind: "q4_0" | "q4_1" | "q8_0"; K: number; N: number; hasBias: boolean;
+  // MoE (C2 fase 5): y[r] += accScale[0]·dot — il down per-expert accumula il
+  // contributo pesato direttamente su moe_out (pesatura DOPO il down, come
+  // ffn_moe_weighted in build_moe_ffn; l'ordine delle somme sui 4 expert
+  // differisce dall'oracolo solo al rounding f32).
+  scaledAccum?: boolean;
 }): string {
-  const { kind, K, N, hasBias } = opts;
+  const { kind, K, N, hasBias, scaledAccum } = opts;
   if (K % 32 !== 0) throw new Error("gemv: K non multiplo di 32");
   const blocksPerRow = K / 32;
   const wordsPerBlock = kind === "q8_0" ? 8 : 4;
   const biasBinding = hasBias
     ? `@group(0) @binding(4) var<storage, read> bias: array<f32>;` : "";
+  const accBinding = scaledAccum
+    ? `@group(0) @binding(${hasBias ? 5 : 4}) var<storage, read> accScale: array<f32>;` : "";
   const biasAdd = hasBias ? "accFinal = accFinal + bias[r];" : "";
+  const writeY = scaledAccum ? "y[r] = y[r] + accScale[0] * accFinal;" : "y[r] = accFinal;";
   // corpo del dot per blocco: q4_0 = 16 byte con due nibble; q8_0 = 32 int8
   const blockDot = kind === "q4_0"
     ? `
@@ -87,6 +95,7 @@ export function gemvQuantWgsl(opts: {
 @group(0) @binding(2) var<storage, read> x: array<f32>;
 @group(0) @binding(3) var<storage, read_write> y: array<f32>;
 ${biasBinding}
+${accBinding}
 const BLOCKS_PER_ROW = ${blocksPerRow}u;
 const WORDS_PER_BLOCK = ${wordsPerBlock}u;
 var<workgroup> partial: array<f32, 64>;
@@ -113,8 +122,36 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   if (t == 0u) {
     var accFinal = partial[0];
     ${biasAdd}
-    y[r] = accFinal;
+    ${writeY}
   }
+}`;
+}
+
+// GEMV f32 puro: il router MoE (ffn_gate_inp) è F32 nel GGUF (spec C2 §1).
+// Stessa griglia/riduzione dei gemv quant; w row-major [N righe × K].
+export function gemvF32Wgsl(opts: { K: number; N: number }): string {
+  const { K, N } = opts;
+  return `
+@group(0) @binding(0) var<storage, read> w: array<f32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+var<workgroup> partial: array<f32, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  if (r >= ${N}u) { return; }
+  let t = lid.x;
+  var acc = 0.0;
+  for (var i = t; i < ${K}u; i = i + 64u) { acc = acc + w[r * ${K}u + i] * x[i]; }
+  partial[t] = acc;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { partial[t] = partial[t] + partial[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (t == 0u) { y[r] = partial[0]; }
 }`;
 }
 

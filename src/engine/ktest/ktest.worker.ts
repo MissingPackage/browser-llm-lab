@@ -6,12 +6,13 @@
 // ⇒ confronto a tolleranza relativa+assoluta, per kernel. Le parti intere (nibble,
 // int8, indici argmax) devono essere esatte.
 import {
-  gemvQuantWgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
+  gemvQuantWgsl, gemvF32Wgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
   attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
 } from "../kernels/wgsl";
 import { createGlmLayer0 } from "../glmforward";
-import { GlmDenseLayerRefF64 } from "../cpuref";
+import { GlmDenseLayerRefF64, glmMoeFfnRefF64, type GlmMoeExpertWeights } from "../cpuref";
+import { routerSelect, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../moe";
 import {
   repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
   dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ5_K, dequantQ6_K,
@@ -87,13 +88,14 @@ class Gpu {
       size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
   }
-  async run(code: string, bindings: GPUBuffer[], workgroups: number, uniform?: GPUBuffer): Promise<void> {
+  // binding con {offset, size}: sotto-range di un buffer di classe slab (MoE C2)
+  async run(code: string, bindings: Array<GPUBuffer | { buffer: GPUBuffer; offset: number; size: number }>, workgroups: number, uniform?: GPUBuffer): Promise<void> {
     const module = this.device.createShaderModule({ code });
     const info = await module.getCompilationInfo();
     const errs = info.messages.filter((m) => m.type === "error");
     if (errs.length) throw new Error(`WGSL: ${errs[0].message} @${errs[0].lineNum}`);
     const pipeline = this.device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
-    const entries: GPUBindGroupEntry[] = bindings.map((b, i) => ({ binding: i, resource: { buffer: b } }));
+    const entries: GPUBindGroupEntry[] = bindings.map((b, i) => ({ binding: i, resource: "buffer" in b ? b : { buffer: b } }));
     if (uniform) entries.push({ binding: bindings.length, resource: { buffer: uniform } });
     const bg = this.device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries });
     const enc = this.device.createCommandEncoder();
@@ -270,6 +272,157 @@ async function testGlmLayer0Real(g: Gpu): Promise<KResult> {
   };
 }
 
+// GEMV f32 (router MoE, C2 fase 5): ffn_gate_inp [64×2048] F32, ref f64.
+async function testGemvF32(g: Gpu): Promise<KResult> {
+  const K = G.dModel, N = G.nExpert;
+  const w = randF32(K * N, 8801);
+  const x = randF32(K, 8802);
+  const ref = new Float32Array(N);
+  for (let r = 0; r < N; r++) {
+    let acc = 0;
+    for (let i = 0; i < K; i++) acc += w[r * K + i] * x[i];
+    ref[r] = acc;
+  }
+  const y = g.empty(N * 4);
+  await g.run(gemvF32Wgsl({ K, N }), [g.buf(w), g.buf(x), y], N);
+  return compare("gemv-f32-router", new Float32Array(await g.read(y, N * 4)), ref, 2e-4, 1e-3);
+}
+
+// GEMV con accumulo pesato (down per-expert, C2 fase 5): y += s·W·x.
+async function testGemvAccum(g: Gpu, kind: "q4_0" | "q4_1"): Promise<KResult> {
+  const K = G.dFfnExpert, N = G.dModel;
+  const blockBytes = kind === "q4_0" ? 18 : Q4_1_BLOCK_BYTES;
+  const nBlocks = (K / 32) * N;
+  const src = randBytes(nBlocks * blockBytes, 8810 + blockBytes);
+  if (kind === "q4_0") fixScales(src, blockBytes);
+  else fixScalesAt(src, blockBytes, [1, 3]);
+  const w = new Float32Array(nBlocks * 32);
+  (kind === "q4_0" ? dequantQ4_0 : dequantQ4_1)(src, 0, nBlocks, w);
+  const x = randF32(K, 8812);
+  const y0 = randF32(N, 8813);
+  const s = 0.6789;
+  const ref = new Float32Array(N);
+  for (let r = 0; r < N; r++) {
+    let acc = 0;
+    for (let i = 0; i < K; i++) acc += w[r * K + i] * x[i];
+    ref[r] = y0[r] + s * acc;
+  }
+  const { qs, scales } = (kind === "q4_0" ? repackQ4_0 : repackQ4_1)(src, 0, nBlocks);
+  const y = g.buf(y0);
+  await g.run(gemvQuantWgsl({ kind, K, N, hasBias: false, scaledAccum: true }),
+    [g.buf(qs), g.buf(scales), g.buf(x), y, g.buf(new Float32Array([s]))], N);
+  return compare(`gemv-${kind}-accum`, new Float32Array(await g.read(y, N * 4)), ref, 2e-4, 1e-3);
+}
+
+// Blocco MoE-FFN completo (C2 fase 5 slice 1), dims reali GLM: router GEMV f32
+// su GPU → selezione top-4 su CPU (routerSelect, replica build_moe_ffn) → shexp
+// Q5_K/Q6_K → 4 catene expert dagli SLAB impacchettati (bind group con offset
+// per-slot, come farà la residenza) con down ad accumulo pesato — contro il
+// riferimento f64 glmMoeFfnRefF64 (router e selezione indipendenti). Due
+// size-class: down Q4_0 (blk.5-46) e Q4_1 (blk.1-4).
+async function testMoeFfnBlock(g: Gpu, downKind: "q4_0" | "q4_1"): Promise<KResult> {
+  const name = `moe-ffn-block-down${downKind}`;
+  const layout = downKind === "q4_0" ? SLAB_DOWN_Q4_0 : SLAB_DOWN_Q4_1;
+  const seed = downKind === "q4_0" ? 9000 : 9100;
+  const exBlocks = (G.dModel / 32) * G.dFfnExpert;
+  const downBlockBytes = downKind === "q4_0" ? 18 : Q4_1_BLOCK_BYTES;
+
+  const fn = randF32(G.dModel, seed + 1, 0.5);
+  const routerW = randF32(G.nExpert * G.dModel, seed + 2, 0.05);
+  const bias = randF32(G.nExpert, seed + 3, 0.5);
+
+  // shexp: Q5_K gate/up [2048→1536], Q6_K down [1536→2048]
+  const sbShexp = (G.dModel / 256) * G.dFfnExpert; // = (dFfnExpert/256)*dModel
+  const gateShexpRaw = randBytes(sbShexp * Q5_K_BLOCK_BYTES, seed + 4);
+  const upShexpRaw = randBytes(sbShexp * Q5_K_BLOCK_BYTES, seed + 5);
+  const downShexpRaw = randBytes(sbShexp * Q6_K_BLOCK_BYTES, seed + 6);
+  fixScalesAt(gateShexpRaw, Q5_K_BLOCK_BYTES, [1, 3]);
+  fixScalesAt(upShexpRaw, Q5_K_BLOCK_BYTES, [1, 3]);
+  fixScalesAt(downShexpRaw, Q6_K_BLOCK_BYTES, [209]);
+
+  // pesi expert sintetici SOLO per i 4 che il riferimento seleziona (lazy)
+  const rawByExpert = new Map<number, { gate: Uint8Array; up: Uint8Array; down: Uint8Array }>();
+  const rawExpert = (e: number) => {
+    let r = rawByExpert.get(e);
+    if (!r) {
+      r = {
+        gate: randBytes(exBlocks * 18, seed + 10 + 7 * e),
+        up: randBytes(exBlocks * 18, seed + 11 + 7 * e),
+        down: randBytes(exBlocks * downBlockBytes, seed + 12 + 7 * e),
+      };
+      fixScales(r.gate, 18);
+      fixScales(r.up, 18);
+      if (downKind === "q4_0") fixScales(r.down, 18);
+      else fixScalesAt(r.down, Q4_1_BLOCK_BYTES, [1, 3]);
+      rawByExpert.set(e, r);
+    }
+    return r;
+  };
+  const deq = (raw: Uint8Array, kind: "q4_0" | "q4_1" | "q5_K" | "q6_K"): Float32Array => {
+    const perBlock = kind === "q4_0" || kind === "q4_1" ? 32 : 256;
+    const bb = kind === "q4_0" ? 18 : kind === "q4_1" ? Q4_1_BLOCK_BYTES : kind === "q5_K" ? Q5_K_BLOCK_BYTES : Q6_K_BLOCK_BYTES;
+    const nB = raw.length / bb;
+    const out = new Float32Array(nB * perBlock);
+    (kind === "q4_0" ? dequantQ4_0 : kind === "q4_1" ? dequantQ4_1 : kind === "q5_K" ? dequantQ5_K : dequantQ6_K)(raw, 0, nB, out);
+    return out;
+  };
+  const ref = glmMoeFfnRefF64(fn, {
+    routerW, routerBias: bias,
+    expert: (e: number): GlmMoeExpertWeights => {
+      const r = rawExpert(e);
+      return { gate: deq(r.gate, "q4_0"), up: deq(r.up, "q4_0"), down: deq(r.down, downKind) };
+    },
+    gateShexp: deq(gateShexpRaw, "q5_K"), upShexp: deq(upShexpRaw, "q5_K"), downShexp: deq(downShexpRaw, "q6_K"),
+  });
+
+  // --- GPU ---
+  const fnBuf = g.buf(fn);
+  const logitsBuf = g.empty(G.nExpert * 4);
+  await g.run(gemvF32Wgsl({ K: G.dModel, N: G.nExpert }), [g.buf(routerW), fnBuf, logitsBuf], G.nExpert);
+  const logits = new Float32Array(await g.read(logitsBuf, G.nExpert * 4));
+  const sel = routerSelect(logits, bias);
+  const refSet = new Set(Array.from(ref.experts));
+  if (sel.experts.length !== 4 || !Array.from(sel.experts).every((e) => refSet.has(e))) {
+    return {
+      kernel: name, pass: false, maxAbs: NaN, maxRel: NaN,
+      note: `selezione GPU {${Array.from(sel.experts)}} ≠ ref {${Array.from(ref.experts)}}`,
+    };
+  }
+
+  const gateB = g.empty(G.dFfnExpert * 4);
+  const upB = g.empty(G.dFfnExpert * 4);
+  const moeOut = g.empty(G.dModel * 4);
+  // shexp scrive moeOut (poi i 4 expert accumulano sopra: cur = moe_out + shexp)
+  await g.run(gemvQ5KWgsl({ K: G.dModel, N: G.dFfnExpert }), [g.buf(repackKQuant(gateShexpRaw, 0, sbShexp, Q5_K_BLOCK_BYTES)), fnBuf, gateB], G.dFfnExpert);
+  await g.run(gemvQ5KWgsl({ K: G.dModel, N: G.dFfnExpert }), [g.buf(repackKQuant(upShexpRaw, 0, sbShexp, Q5_K_BLOCK_BYTES)), fnBuf, upB], G.dFfnExpert);
+  await g.run(siluMulWgsl(G.dFfnExpert), [gateB, upB], Math.ceil(G.dFfnExpert / 64));
+  await g.run(gemvQ6KWgsl({ K: G.dFfnExpert, N: G.dModel }), [g.buf(repackKQuant(downShexpRaw, 0, sbShexp, Q6_K_BLOCK_BYTES)), gateB, moeOut], G.dModel);
+
+  // buffer di classe con 4 slot; ogni expert selezionato in uno slot diverso
+  const slabBuf = g.empty(4 * layout.bytes);
+  for (let k = 0; k < 4; k++) {
+    const r = rawExpert(sel.experts[k]);
+    g.device.queue.writeBuffer(slabBuf, k * layout.bytes, packExpertSlab(r.gate, r.up, r.down, layout) as unknown as BufferSource);
+  }
+  for (let k = 0; k < 4; k++) {
+    const base = k * layout.bytes;
+    const bind = (off: number, size: number) => ({ buffer: slabBuf, offset: base + off, size });
+    await g.run(gemvQuantWgsl({ kind: "q4_0", K: G.dModel, N: G.dFfnExpert, hasBias: false }),
+      [bind(layout.gateQs, layout.qsBytes), bind(layout.gateScales, layout.gateScalesBytes), fnBuf, gateB], G.dFfnExpert);
+    await g.run(gemvQuantWgsl({ kind: "q4_0", K: G.dModel, N: G.dFfnExpert, hasBias: false }),
+      [bind(layout.upQs, layout.qsBytes), bind(layout.upScales, layout.gateScalesBytes), fnBuf, upB], G.dFfnExpert);
+    await g.run(siluMulWgsl(G.dFfnExpert), [gateB, upB], Math.ceil(G.dFfnExpert / 64));
+    await g.run(gemvQuantWgsl({ kind: downKind, K: G.dFfnExpert, N: G.dModel, hasBias: false, scaledAccum: true }),
+      [bind(layout.downQs, layout.qsBytes), bind(layout.downScales, layout.downScalesBytes), gateB, moeOut,
+        g.buf(new Float32Array([sel.weights[k]]))], G.dModel);
+  }
+  const got = new Float32Array(await g.read(moeOut, G.dModel * 4));
+  const refOut = Float32Array.from(ref.out);
+  const res = compare(name, got, refOut, 5e-4, 1e-3);
+  res.note = `experts=[${Array.from(sel.experts)}] Σw=${sel.weights.reduce((a, b) => a + b, 0).toFixed(6)}`;
+  return res;
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -291,6 +444,13 @@ async function main(): Promise<void> {
     results.push(await testGemvC2(g, "q5_K", G.dModel, G.dFfnExpert));  // gate/up shexp
     results.push(await testGemvC2(g, "q6_K", G.dFfnExpert, G.dModel));  // down shexp
     results.push(await testGemvC2(g, "q6_K", G.dModel, 1024));          // output head (N ridotto)
+
+    // --- MoE (C2 fase 5 slice 1): router, accumulo pesato, blocco completo ---
+    results.push(await testGemvF32(g));
+    results.push(await testGemvAccum(g, "q4_0"));
+    results.push(await testGemvAccum(g, "q4_1"));
+    results.push(await testMoeFfnBlock(g, "q4_0"));
+    results.push(await testMoeFfnBlock(g, "q4_1"));
 
     // --- kernel MLA absorbed (C2 fase 4 slice 2), dims reali GLM ---
     const HL = G.qkNope + G.ropeDims; // 256: head len di q

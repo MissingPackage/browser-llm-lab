@@ -209,3 +209,58 @@ non-regressione (si collega al watch-item q5_K di it.3).
 
 **FASE 4 CHIUSA** (it.3-5, timebox 4 it.: usate 3). Next: fase 5 (MoE +
 residenza minima, timebox 4 it.).
+
+## it.6 — fase 5, slice 1: router MoE + GEMV per-expert sugli slab (2026-07-31)
+
+Semantica router verificata riga-per-riga in `build_moe_ffn`
+(llama-graph.cpp, oracolo 5f55650), come richiesto dalla spec §4:
+- probs = **sigmoid**(logits) (gating func=2, r.1864); logits = gate_inp·cur
+  (F32, nessun gate_inp_b nel path deepseek2);
+- bias `exp_probs_b` sommato SOLO per la selezione (r.1883: selection_probs);
+- top-4 = argsort_top_k su selection_probs (r.1926), pareggi → indice minore
+  (argsort stabile, stesso tie-break della replica C1 trace.cpp);
+- pesi di mixing = get_rows su **probs SENZA bias** (r.1940), normalizzati a
+  somma 1 con denominatore clampato a **6.103515625e-5** (min f16 normale,
+  r.1958), poi **×1.8** (w_scale, r.1967);
+- pesatura applicata DOPO il down (r.2122, weight_before_ffn=false);
+- shared expert: build_ffn sullo STESSO input post-ffn_norm, sommato a
+  moe_out (deepseek2.cpp r.403-412); niente swiglu_clamp per deepseek2
+  (caricato solo da deepseek4.cpp); n_expert_groups=1 ⇒ niente gruppi;
+  ffn_gate_up_exps merged ASSENTE nel nostro GGUF (path separate gate/up).
+
+Implementato:
+- `moe.ts` (file NUOVO, owns di fase 5): `routerSelect` (replica CPU della
+  catena sigmoid→bias→top4→norm×1.8 — la selezione DEVE stare su CPU: decide
+  quali slab bindare) + layout slab a due size-class ESATTE
+  (`SLAB_DOWN_Q4_0` 5.308.416 B / `SLAB_DOWN_Q4_1` 5.505.024 B, offset dei 6
+  segmenti [qs|scales]×{gate,up,down} tutti multipli di 256 =
+  minStorageBufferOffsetAlignment) + `packExpertSlab` (repack CPU
+  all'upload: parte del costo di miss che la telemetria misurerà).
+- `kernels/wgsl.ts`: `gemvF32Wgsl` (router: ffn_gate_inp è F32) e opzione
+  `scaledAccum` su `gemvQuantWgsl` (y[r] += accScale[0]·dot: il down
+  per-expert accumula il contributo pesato direttamente su moe_out — 1
+  dispatch risparmiato per expert, l'ordine delle somme differisce
+  dall'oracolo solo al rounding f32).
+- `cpuref.ts`: `glmMoeFfnRefF64` — blocco MoE-FFN f64 con router e selezione
+  INDIPENDENTI (sort-based vs scan-based di moe.ts, pattern naive/absorbed).
+- ktest nuovi (5): `gemv-f32-router`, `gemv-q4_0-accum`, `gemv-q4_1-accum`,
+  `moe-ffn-block-downq4_0`, `moe-ffn-block-downq4_1` — il blocco completo a
+  dims reali GLM: router GEMV su GPU → selezione CPU → shexp Q5_K/Q6_K → 4
+  catene expert dagli slab impacchettati con **bind group a offset per-slot**
+  (lo stesso meccanismo della residenza) → confronto vs ref f64.
+- vitest `engine-moe-router.test.ts` (8): tie-break, bias solo-selezione,
+  Σpesi=1.8, clamp, concordanza con selezione indipendente su 200 input
+  casuali, taglie/allineamento/contenuto slab, validazione hard.
+
+**Evidenza**: ktest su 4090 status "done", **28/28 PASS** (nuovi:
+gemv-f32-router maxRel 1.6e-6; accum q4_0/q4_1 entro 4e-4;
+moe-ffn-block-downq4_0 maxRel 6.0e-5, -downq4_1 maxRel 2.3e-4 — il maxAbs
+alto dei due blocchi è artefatto delle scale K-quant sintetiche, valori
+~1e7); zero regressioni sui 23 preesistenti. `npm test` **208/208** (8
+nuovi); `tsc --noEmit` pulito. Restano per la fase 5 (timebox 4 it.):
+slice 2 = residenza minima (OPFS → staging → cache VRAM LRU per classe,
+telemetria) e slice 3 = forward multi-layer + conformance routing ≥99% vs
+traccia C1. Nota di design registrata: la selezione su CPU implica un punto
+di sincronizzazione GPU→CPU per layer MoE nel decode (readback dei 64
+logits) — il costo va misurato in fase 6, mitigazioni eventuali a docket
+(non sono C2). Pending verifier.

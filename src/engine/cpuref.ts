@@ -222,6 +222,73 @@ function ropeNormF64(v: Float64Array, nVec: number, stride: number, offset: numb
   }
 }
 
+// --- GLM-4.7-Flash (goal C2 fase 5): riferimento f64 del blocco MoE-FFN ---
+//
+// Input = hidden POST ffn_norm; output = moe_out + ffn_shexp (il residuo
+// ffn_inp resta fuori, come in deepseek2.cpp r.387-412). Router e selezione
+// implementati QUI in modo indipendente da moe.ts (selezione sort-based vs
+// scan-based: la concordanza dei due percorsi è parte del gate, pattern
+// naive/absorbed di fase 4). Semantica dall'oracolo (it.6): sigmoid dei
+// logits; bias exp_probs_b SOLO nella selezione; pesi = sigmoid senza bias
+// normalizzati (denominatore clampato a 6.103515625e-5) × 1.8; pesatura DOPO
+// il down; shexp calcolato sullo STESSO input post-norm e sommato a moe_out.
+
+export interface GlmMoeExpertWeights {
+  gate: ArrayLike<number>; // [1536 righe × 2048]
+  up: ArrayLike<number>;   // [1536 righe × 2048]
+  down: ArrayLike<number>; // [2048 righe × 1536]
+}
+
+export interface GlmMoeFfnWeights {
+  routerW: ArrayLike<number>;    // [64 righe × 2048] f32
+  routerBias: ArrayLike<number>; // exp_probs_b [64]
+  expert: (e: number) => GlmMoeExpertWeights; // accesso lazy (i test ne materializzano 4)
+  gateShexp: ArrayLike<number>;  // [1536 righe × 2048]
+  upShexp: ArrayLike<number>;
+  downShexp: ArrayLike<number>;  // [2048 righe × 1536]
+}
+
+export interface GlmMoeFfnRefOut {
+  out: Float64Array;     // [2048] moe_out + shexp
+  experts: Int32Array;   // top-4 selezionati (ordine decrescente di score biased)
+  weights: Float64Array; // pesi di mixing allineati (già ×1.8)
+}
+
+function ffnChainF64(
+  gate: ArrayLike<number>, up: ArrayLike<number>, down: ArrayLike<number>,
+  x: Float64Array, dFfn: number, dModel: number,
+): Float64Array {
+  const g = matvecF64(gate, 0, x, dFfn);
+  const u = matvecF64(up, 0, x, dFfn);
+  for (let i = 0; i < dFfn; i++) g[i] = (g[i] / (1 + Math.exp(-g[i]))) * u[i];
+  return matvecF64(down, 0, g, dModel);
+}
+
+export function glmMoeFfnRefF64(fnIn: ArrayLike<number>, w: GlmMoeFfnWeights): GlmMoeFfnRefOut {
+  const fn = Float64Array.from(fnIn as ArrayLike<number>);
+  const logits = matvecF64(w.routerW, 0, fn, G.nExpert);
+  const probs = new Float64Array(G.nExpert);
+  for (let i = 0; i < G.nExpert; i++) probs[i] = 1 / (1 + Math.exp(-logits[i]));
+  // selezione sort-based: score biased decrescente, pareggi → indice minore
+  const order = Array.from({ length: G.nExpert }, (_, i) => i).sort((a, b) => {
+    const sa = probs[a] + Number(w.routerBias[a]), sb = probs[b] + Number(w.routerBias[b]);
+    return sb !== sa ? sb - sa : a - b;
+  });
+  const experts = Int32Array.from(order.slice(0, G.nExpertUsed));
+  let sum = 0;
+  for (const e of experts) sum += probs[e];
+  const denom = Math.max(sum, 6.103515625e-5);
+  const weights = Float64Array.from(experts, (e) => (probs[e] / denom) * G.weightsScale);
+
+  const out = ffnChainF64(w.gateShexp, w.upShexp, w.downShexp, fn, G.dFfnExpert, G.dModel);
+  for (let k = 0; k < experts.length; k++) {
+    const ex = w.expert(experts[k]);
+    const d = ffnChainF64(ex.gate, ex.up, ex.down, fn, G.dFfnExpert, G.dModel);
+    for (let i = 0; i < G.dModel; i++) out[i] += weights[k] * d[i];
+  }
+  return { out, experts, weights };
+}
+
 export class GlmDenseLayerRefF64 {
   private w: GlmDenseLayerWeights;
   private cKv: Float64Array[] = []; // per pos: [512] normata
