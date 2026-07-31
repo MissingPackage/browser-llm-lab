@@ -19,10 +19,13 @@ export const GGUF_KV_TYPE = {
   FLOAT32: 6, BOOL: 7, STRING: 8, ARRAY: 9, UINT64: 10, INT64: 11, FLOAT64: 12,
 } as const;
 
-// Tipi tensore (enum ggml_type) — solo quelli che il motore fase A accetta.
+// Tipi tensore (enum ggml_type) — solo quelli che i modelli del motore usano.
 // Q8_0 c'è perché il GGUF ufficiale "q4_0" di Qwen2.5 tiene output.weight in Q8_0
 // (verificato sul file, 2026-07-29): il file detta il subset, non il contrario.
-export const GGML_TYPE = { F32: 0, F16: 1, Q4_0: 2, Q8_0: 8 } as const;
+// Q4_1/Q5_K/Q6_K: quant mista del GGUF unsloth di GLM-4.7-Flash (verificato
+// per-layer sul file, 2026-07-31 — spec C2 §1): down_exps blk.1-4 e ffn_down
+// denso Q4_1, shexp Q5_K/Q6_K, output Q6_K.
+export const GGML_TYPE = { F32: 0, F16: 1, Q4_0: 2, Q4_1: 3, Q8_0: 8, Q5_K: 13, Q6_K: 14 } as const;
 export type GgmlTypeId = number;
 
 export interface GgufTensorInfo {
@@ -147,11 +150,23 @@ export function tensorByteSize(t: GgufTensorInfo): number {
       if (t.dims[0] % 32 !== 0) throw new Error(`gguf: ${t.name} Q4_0 con ne[0]=${t.dims[0]} non multiplo di 32`);
       return (elems / 32) * 18; // blocco Q4_0: 2 B scala f16 + 16 B nibbles
     }
+    case GGML_TYPE.Q4_1: {
+      if (t.dims[0] % 32 !== 0) throw new Error(`gguf: ${t.name} Q4_1 con ne[0]=${t.dims[0]} non multiplo di 32`);
+      return (elems / 32) * 20; // blocco Q4_1: 2 B scala f16 + 2 B min f16 + 16 B nibbles
+    }
     case GGML_TYPE.Q8_0: {
       if (t.dims[0] % 32 !== 0) throw new Error(`gguf: ${t.name} Q8_0 con ne[0]=${t.dims[0]} non multiplo di 32`);
       return (elems / 32) * 34; // blocco Q8_0: 2 B scala f16 + 32 B int8
     }
+    case GGML_TYPE.Q5_K: {
+      if (t.dims[0] % 256 !== 0) throw new Error(`gguf: ${t.name} Q5_K con ne[0]=${t.dims[0]} non multiplo di 256`);
+      return (elems / 256) * 176; // superblocco: d f16 + dmin f16 + 12 B scale 6-bit + 32 B qh + 128 B qs
+    }
+    case GGML_TYPE.Q6_K: {
+      if (t.dims[0] % 256 !== 0) throw new Error(`gguf: ${t.name} Q6_K con ne[0]=${t.dims[0]} non multiplo di 256`);
+      return (elems / 256) * 210; // superblocco: 128 B ql + 64 B qh + 16 B scale int8 + d f16
+    }
     default:
-      throw new Error(`gguf: tipo tensore ${t.type} non supportato in fase A (${t.name})`);
+      throw new Error(`gguf: tipo tensore ${t.type} non supportato dal motore (${t.name})`);
   }
 }

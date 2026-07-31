@@ -48,3 +48,31 @@ spec §1 (tabella + nota) e §5 (slab a DUE size-class), docket item 2(a).
 La decisione (a) resta valida (Q4_1 serve comunque: 256 expert + down
 denso). Lezione strumento: mai riassumere un inventario tensori campionando
 il primo elemento per nome — enumerare i tipi per layer.
+
+## it.2 — fase 3: reader GGUF deepseek2 (2026-07-31)
+
+Implementato secondo spec §2 (ruling (a)-(f) risolto a inizio iterazione):
+- `gguf.ts`: GGML_TYPE + {Q4_1:3, Q5_K:13, Q6_K:14}, tensorByteSize esatti
+  (20 B/32; 176 B/256; 210 B/256) con throw su ne[0] non multiplo.
+- `quant.ts`: dequant CPU di riferimento per Q4_1, Q5_K, Q6_K portate
+  riga-per-riga da ggml-quants.c dell'oracolo (5f55650): scaleMinK4 (6-bit
+  packed), qh bit alto Q5_K, d IN CODA nel blocco Q6_K, scales int8.
+- `shape.ts`: Glm47Shape + GLM47_FLASH (metadati completi dal dump),
+  GLM47_FLASH_SHA256 pinnato, validateGlm47Flash (844 tensori attesi,
+  down_exps Q4_1 solo blk.1-4 via GLM47_DOWN_EXPS_Q4_1_LAST, throw su ogni
+  mismatch — postura ds4 invariata).
+- `tests/engine-gguf-glm.test.ts` (18 test): fixture sintetica 844 tensori +
+  7 mutazioni negative (tipo/dims/mancante/conteggio/gating/arch), byte per
+  expert delle due size-class asseriti (5.308.416/5.505.024), dequant vs
+  fixture da byte REALI del GGUF con atteso calcolato da gguf-py 0.17.1
+  (oracolo indipendente, `scripts/gen-quant-fixtures.py`, match f32 a
+  ULP-zero), load headless del file reale (header 64 MiB + validazione +
+  bounds + taglia file 17.216.676.192).
+- FIX in corsa: la mia costante taglia-file usava il model_size di
+  llama-bench (sola sezione dati); corretta al byte-size su disco già
+  annotato dal verifier C1.
+
+**Evidenza**: `npx tsc --noEmit` pulito; `npm test` 21 file / 199 test PASS
+(nessuna regressione sul pregresso; il real-file test ESEGUITO, non
+skippato). Done-when fase 3: suite parsing GLM verde con SHA pinnato ✓,
+tsc pulito ✓, load headless exit 0 ✓ (dentro vitest). Pending verifier.
