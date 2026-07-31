@@ -93,8 +93,9 @@ la memoria" (ledger §A).
 
 ## Sanity-gate
 
-- `la_tot == posizioni_decode × 45` (lookahead definito per L∈[1..45]→L+1;
-  il layer 0 è denso, l'ultimo non ha successore routed) e conteggi traccia
+- `la_tot == (n_moe−1) × posizioni_totali × 4` (lookahead definito su ogni layer
+  MoE che ha un predecessore MoE — prefill incluso, contato in slot; la
+  componente decode vale `45 × posizioni_decode × 4`) e conteggi traccia
   `== posizioni_totali × 46` per il routing vero. I numeri esatti (46/45) sono
   ricavati dai metadati a runtime e asseriti, non hardcoded.
 - Autotest del predittore: applicato a `ffn_norm(L)` per predire lo STESSO

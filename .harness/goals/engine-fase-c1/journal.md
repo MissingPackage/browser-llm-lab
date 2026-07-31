@@ -137,3 +137,74 @@ patch confermato), summary e traccia riverificati indipendentemente (31.275
 righe, campioni validi, corpusHash ricalcolato identico), sanity nel codice
 alle righe giuste, src/engine intatto; blocker segnalato: commit it.3 da fare
 = questo commit; binario trace ignorato via .gitignore). FASE 3 DONE.
+
+## it.4 — fase 4: LOOKA recall (2026-07-31) — 1 iterazione su 3 di timebox
+
+Tool esteso (stesso `trace.cpp`, decisioni (a)/(b) del ruling): tap `ffn_norm-<L>`
+via cb_eval; pesi router letti DIRETTAMENTE dal GGUF con `gguf.h`
+(`blk.L.ffn_gate_inp.weight` [2048×64] f32 + `blk.L.exp_probs_b.bias` [64] f32,
+layer 1..46, ~24 MB) — nessuna API interna di llama.cpp, checkout ancora intatto.
+Predizione = `top-K(sigmoid(W[L+1]·h_L) + b[L+1])`, tie-break su indice minore
+(argsort stabile). Un solo passaggio: al tap di L si predice sia L (autotest) sia
+L+1 (lookahead); al `ffn_moe_topk` di L si confronta.
+
+**AUTOTEST (gate hard dello strumento): self-recall 0.999997** su 5.754.416 slot
+(= 46 layer × 31.274 posizioni × 4, atteso ESATTO), minimo per layer 0.999984
+(il=1). La replica della selezione è fedele; il residuo ~3e-6 è aritmetica f32 su
+pareggi, non un errore di ordine. `laTotPass` true: 5.629.320 = 45 layer-target ×
+31.274 × 4, come da sanity-gate di spec.
+
+**RISULTATO — lookahead di un layer, decode (921.600 slot su 5.120 token)**:
+
+| metrica | valore | riferimento colibri (GLM-5.2) |
+|---|---|---|
+| recall@4 | **0.7746** | — |
+| recall@6 | **0.8769** | — |
+| recall@8 | **0.9197** | 0.716 (K=8 hint-only) |
+| baseline "stessi expert del token t−1" | **0.3228** | 0.413 |
+
+Prefill quasi identico (R@4 0.7696, R@8 0.9189 su 4.707.720 slot): la
+predicibilità NON è un artefatto del regime autoregressivo.
+
+**Lettura**: su GLM-4.7-Flash il routing è **più predicibile** che su GLM-5.2
+(R@8 92.0% vs 71.6%) e la baseline è **più debole** (32.3% vs 41.3%) ⇒ il
+segnale del router batte la persistenza temporale di 2.8×, non di 1.7×. Il
+prefetch predittivo qui ha molto più margine di quanto assunto in direction §4.3.
+Per-layer (45 target): R@4 media 0.7746 ± 0.054, min 0.638 (il=5), max 0.846
+(il=41); R@8 min 0.803, max 0.969. I 6 layer sotto 0.70 R@4 sono TUTTI iniziali
+(4-9) — coda bassa localizzata, non rumore diffuso: un budget di prefetch
+K-adattivo per layer è un'idea DA ANNOTARE nel ledger in fase 6 (lo sweep dei
+doc è lì per contratto; qui non è stata scritta).
+Extra fuori-spec registrato nel JSON: predire il PRIMO layer MoE dallo stato del
+layer denso dà R@8 0.558 — il salto denso→MoE è più difficile, coerente col
+profilo dei layer bassi.
+
+**Artefatti** (rigenerati nella stessa run canonica, exit 0, ~24 min):
+`results/engine/moe-oracle/trace-2026-07-30-recall.json` (aggregati + 46 righe
+per-layer + baseline + extra), `-summary.json` (ora con `autotest: PASS`),
+`trace-2026-07-30.jsonl.gz` (identica per costruzione: 31.274 posizioni,
+26.154p + 5.120d, zero EOS anticipati).
+
+**Done-when fase 4**: report JSON con recall aggregato e per-layer per K∈{4,6,8} ✓,
+baseline token-precedente sulla STESSA traccia ✓, sanity-gate di spec verdi
+(autotest ≥0.999 ✓, la_tot atteso ✓). Timebox: chiusa in 1 iterazione su 3,
+clausola di fallback NON esercitata.
+
+Note di precisione sugli artefatti (dal verifier, da sanare in fase 6):
+- `baselinePrev.decodeTransitions` = 235.152 è il conteggio di (layer × transizione
+  di token), non di transizioni: 46 × (5120 − 8 prompt) = 46 × 8 × 639. Numero
+  giusto, etichetta fuorviante.
+- Spec §Sanity-gate scrive `la_tot == posizioni_decode × 45`; l'implementazione
+  asserisce il superset `(n_moe−1) × posizioni_TOTALI × 4` (prefill incluso), la
+  cui componente decode è esattamente 45 × 5120 × 4. La spec va allineata
+  all'invariante più forte.
+
+Verifier: **PASS** (loop-verifier, 2026-07-31 — aritmetica dei sanity ricalcolata
+da zero (autotest.tot, laTot, decode.tot, extra.tot tutti esatti); baseline
+RIPRODOTTA indipendentemente dalla traccia gz (235.152 transizioni, overlap
+0.322790, 46/46 layer combacianti a <1e-5); fedeltà del predittore verificata
+contro build_moe_ffn upstream + metadati (gating=2 sigmoid, group_count=1) e
+non-tautologicità dell'autotest confermata; tool RICOMPILATO dal sorgente in
+/tmp ed eseguito su 2 prompt (autotest 1.000000 PASS, stesso regime di recall);
+exit-code 3 provato sul campo; checkout oracolo pulito; nessun gate sul recall
+lookahead (decisione (f) rispettata); drift none). FASE 4 DONE.
