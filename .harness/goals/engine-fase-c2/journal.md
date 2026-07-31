@@ -111,3 +111,10 @@ i 5 nuovi: q4_1 1536x2048 maxRel 5.1e-7, q4_1 10240x256 9.3e-6, q5_K
 2e-4 rel / 1e-3 abs come i gemv esistenti); zero regressioni sugli 11 kernel
 preesistenti; `npm test` 199/199; `tsc --noEmit` pulito. Fase 4 prosegue
 (it.4: cpuref MLA naive + kernel absorbed). Pending verifier.
+
+Verifier it.3: **PASS** (ri-run ktest indipendente 16/16 su 4090; matematica
+WGSL confrontata col C dell'oracolo incluso il ramo is>=4 dei 6-bit; catena
+di fiducia gguf-py → dequant CPU → kernel GPU confermata). WATCH ITEM per
+fase 6 (dal verifier): gemv-q5_K passa per tolleranza ASSOLUTA (maxAbs
+7.6e-4 ≤ 1e-3) con maxRel 2.25e-4 appena sopra la relTol 2e-4 — se la
+conformance per-layer stringesse le soglie, è il primo kernel da guardare.

@@ -2,13 +2,13 @@
 
 ## 1. Next decidable
 
-**Fase 4 del goal `engine-fase-c2` (kernel MLA absorbed, timebox 4 it.)** —
-fase 3 (reader GGUF deepseek2) DONE e verificata (it.2, verifier PASS): shape
-GLM 844 tensori con quant mista per-layer, dequant Q4_1/Q5_K/Q6_K validate su
-byte reali vs gguf-py, load headless del 17.2 GB; suite 199 verde, zero
-regressioni. PI-gated pendente: **docket item 3 del goal** (branch policy:
-main-diretto ratificato vs branch engine/fase-c2 da fase 4, lettera del
-contratto). Spec e ruling (a)-(f) in vigore.
+**Fase 4 del goal `engine-fase-c2`, slice 2: cpuref MLA naive f64 + kernel
+absorbed** (proiettori q_a/q_b/kv_a, rope su 64 dim, attention sulla cache
+compressa 576, attnsplit) — slice 1 DONE e verificata (it.3, verifier PASS):
+GEMV dequant-fuse q4_1/q5_K/q6_K, ktest 16/16 su 4090, suite 199 verde.
+Watch: q5_K passa via absTol (margine rel sottile, occhio in fase 6). Prima:
+fase 3 DONE (it.2). Branch policy risolta: main-diretto ratificato (docket
+item 3). Spec e ruling (a)-(f) in vigore; timebox fase 4: restano 3 it.
 Riancorarsi da: `.harness/goals/engine-fase-c2/{GOAL,PHASES,docket,journal}.md`,
 spec `docs/superpowers/specs/2026-07-31-engine-fase-c2-design.md` §3 (MLA),
 `src/engine/{shape,quant,gguf}.ts` (fase 3), golden in

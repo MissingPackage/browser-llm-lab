@@ -27,3 +27,12 @@ portate dall'oracolo e validate su byte REALI del GGUF contro gguf-py
 pulito, zero regressioni. Verifier PASS (porting confrontato riga-per-riga
 col C; fixture riverificata con dequant ex novo). A docket: branch policy
 (item 3, main-diretto vs lettera del contratto). Next: fase 4 (kernel MLA).
+
+## it.3 (2026-07-31, fase 4 slice 1)
+GEMV dequant-fuse dei formati GLM: repack Q4_1/K-quant + 3 kernel WGSL nuovi
+(q4_1 in gemvQuant; gemvQ5K con scaleMinK4 6-bit; gemvQ6K con d in coda) +
+ktest esteso (5 casi a taglie reali) + runner scripts/ktest-run.mjs. Run su
+4090: 16/16 PASS (nuovi: maxRel 5e-7…2e-4), zero regressioni sugli 11 kernel
+preesistenti; npm test 199/199; tsc pulito. Verifier PASS con ri-run
+indipendente. Watch: q5_K passa via absTol, margine rel sottile. Next (it.4):
+cpuref MLA naive f64 + kernel absorbed (proiettori, rope, attention 576).
