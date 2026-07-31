@@ -118,3 +118,31 @@ di fiducia gguf-py → dequant CPU → kernel GPU confermata). WATCH ITEM per
 fase 6 (dal verifier): gemv-q5_K passa per tolleranza ASSOLUTA (maxAbs
 7.6e-4 ≤ 1e-3) con maxRel 2.25e-4 appena sopra la relTol 2e-4 — se la
 conformance per-layer stringesse le soglie, è il primo kernel da guardare.
+
+## it.4 — fase 4, slice 2: kernel MLA absorbed (2026-07-31)
+
+Semantica verificata NEL SORGENTE dell'oracolo prima di scrivere WGSL
+(deepseek2.cpp, llama-model.cpp a 5f55650) — tre fatti che avrebbero rotto
+la conformance se sbagliati:
+1. **RoPE = tipo NORM** (coppie consecutive), NON NEOX: deepseek2 sta nel
+   gruppo "normal RoPE" di llama-model.cpp; applicato alle sole 64 dim rope
+   di q (offset 192 per head) e di kv_cmpr_pe (offset 512), PRIMA della
+   kv_a_norm (che tocca solo le prime 512 componenti);
+2. **kq_scale = 1/sqrt(256)** (n_embd_head_k_mla, la head dim
+   MHA-equivalente) — NON 1/sqrt(576); mscale=1 (niente yarn nel GGUF);
+3. layout Qcur/Kcur = [abs/ckv 512 | rope 64] (rope in coda), V = c_kv
+   NORMATA (512): lo score è un dot unico a 576.
+Kernel nuovi (wgsl.ts): ropeMlaNormWgsl (parametrico nVec/stride/offset —
+serve sia q sia k_pe), gemvQ8HeadsWgsl (GEMV Q8_0 con x per-head: copre
+wk_b [192,512,20] assorbimento e wv_b [512,256,20] uscita),
+mlaAttnDecodeWgsl (MQA su cache 576, softmax stile attnDecode esistente,
+out in spazio c_kv [20×512]). Riferimenti JS f64 inline nel ktest
+(ropeNormRef, per-head matmul, softmax f64).
+
+**Evidenza**: ktest su 4090 status "done", **21/21 PASS** (nuovi:
+rope-mla-norm-q, rope-mla-norm-kpe maxRel<5e-4; gemv-q8-heads-absorb-kb e
+-vout-vb entro 2e-4; mla-attn-decode maxAbs 3.7e-8); zero regressioni sui
+16 preesistenti; `npm test` 21 file/199 PASS; `tsc --noEmit` pulito.
+Restano per la fase 4 (timebox: 2 it.): assemblaggio layer GLM in
+gpuforward + conformance layer-level con pesi reali (gate doppio). Pending
+verifier.

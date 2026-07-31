@@ -8,7 +8,7 @@
 import {
   gemvQuantWgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
   attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
-  ARGMAX_CHUNK,
+  ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl,
 } from "../kernels/wgsl";
 import {
   repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
@@ -182,6 +182,20 @@ async function testGemvC2(g: Gpu, kind: "q4_1" | "q5_K" | "q6_K", K: number, N: 
   return compare(`gemv-${kind}-${K}x${N}`, got, ref, 2e-4, 1e-3);
 }
 
+// riferimento JS del rope NORM (coppie consecutive) sul segmento [offset, offset+dims)
+function ropeNormRef(v: Float32Array, nVec: number, stride: number, offset: number, dims: number, freqBase: number, pos: number): void {
+  for (let h = 0; h < nVec; h++) {
+    for (let i = 0; i < dims / 2; i++) {
+      const theta = pos * freqBase ** (-(2 * i) / dims);
+      const c = Math.cos(theta), s = Math.sin(theta);
+      const b = h * stride + offset + 2 * i;
+      const a0 = v[b], a1 = v[b + 1];
+      v[b] = a0 * c - a1 * s;
+      v[b + 1] = a0 * s + a1 * c;
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -203,6 +217,84 @@ async function main(): Promise<void> {
     results.push(await testGemvC2(g, "q5_K", G.dModel, G.dFfnExpert));  // gate/up shexp
     results.push(await testGemvC2(g, "q6_K", G.dFfnExpert, G.dModel));  // down shexp
     results.push(await testGemvC2(g, "q6_K", G.dModel, 1024));          // output head (N ridotto)
+
+    // --- kernel MLA absorbed (C2 fase 4 slice 2), dims reali GLM ---
+    const HL = G.qkNope + G.ropeDims; // 256: head len di q
+    const W576 = G.kvLora + G.ropeDims;
+
+    { // rope NORM su q (20 head, offset 192) e su kv_cmpr_pe (1 vettore 576, offset 512)
+      const pos = 129;
+      const q = randF32(G.nHead * HL, 61);
+      const refQ = q.slice();
+      ropeNormRef(refQ, G.nHead, HL, G.qkNope, G.ropeDims, G.ropeFreqBase, pos);
+      const qBuf = g.buf(q);
+      await g.run(ropeMlaNormWgsl({ nVec: G.nHead, stride: HL, offset: G.qkNope, ropeDims: G.ropeDims, freqBase: G.ropeFreqBase }),
+        [qBuf], Math.ceil((G.nHead * G.ropeDims / 2) / 64), g.uniform(pos, 0));
+      results.push(compare("rope-mla-norm-q", new Float32Array(await g.read(qBuf, q.byteLength)), refQ, 5e-4, 1e-4));
+
+      const kv = randF32(W576, 62);
+      const refKv = kv.slice();
+      ropeNormRef(refKv, 1, W576, G.kvLora, G.ropeDims, G.ropeFreqBase, pos);
+      const kvBuf = g.buf(kv);
+      await g.run(ropeMlaNormWgsl({ nVec: 1, stride: W576, offset: G.kvLora, ropeDims: G.ropeDims, freqBase: G.ropeFreqBase }),
+        [kvBuf], Math.ceil((G.ropeDims / 2) / 64), g.uniform(pos, 0));
+      results.push(compare("rope-mla-norm-kpe", new Float32Array(await g.read(kvBuf, kv.byteLength)), refKv, 5e-4, 1e-4));
+    }
+
+    { // gemvQ8Heads: assorbimento wk_b [192,512,20] e uscita wv_b [512,256,20]
+      for (const [name, K, rows, xStride, xOffset] of [
+        ["absorb-kb", G.qkNope, G.kvLora, HL, 0],
+        ["vout-vb", G.kvLora, G.headLenMla, G.kvLora, 0],
+      ] as const) {
+        const nBlocks = (K / 32) * rows * G.nHead;
+        const src = randBytes(nBlocks * 34, 555 + K);
+        fixScales(src, 34);
+        const { qs, scales } = repackQ8_0(src, 0, nBlocks);
+        const w = new Float32Array(nBlocks * 32);
+        dequantQ8_0(src, 0, nBlocks, w);
+        const x = randF32(G.nHead * xStride + K, 91 + K);
+        const ref = new Float32Array(rows * G.nHead);
+        for (let r = 0; r < rows * G.nHead; r++) {
+          const head = Math.floor(r / rows);
+          let acc = 0;
+          for (let i = 0; i < K; i++) acc += w[r * K + i] * x[head * xStride + xOffset + i];
+          ref[r] = acc;
+        }
+        const y = g.empty(rows * G.nHead * 4);
+        await g.run(gemvQ8HeadsWgsl({ K, rowsPerHead: rows, nHead: G.nHead, xStride, xOffset }),
+          [g.buf(qs), g.buf(scales), g.buf(x), y], rows * G.nHead);
+        results.push(compare(`gemv-q8-heads-${name}`, new Float32Array(await g.read(y, rows * G.nHead * 4)), ref, 2e-4, 1e-3));
+      }
+    }
+
+    { // attention decode MLA su cache 576 (nPast=40), scale = 1/sqrt(256)
+      const nPast = 40, ctxMax = 512;
+      const scale = 1 / Math.sqrt(G.headLenMla);
+      const q = randF32(G.nHead * W576, 71, 0.5);
+      const cache = randF32(ctxMax * W576, 72, 0.5);
+      const ref = new Float32Array(G.nHead * G.kvLora);
+      for (let h = 0; h < G.nHead; h++) {
+        const sc = new Float64Array(nPast + 1);
+        for (let p = 0; p <= nPast; p++) {
+          let acc = 0;
+          for (let i = 0; i < W576; i++) acc += q[h * W576 + i] * cache[p * W576 + i];
+          sc[p] = acc * scale;
+        }
+        let m = -Infinity;
+        for (const v of sc) m = Math.max(m, v);
+        let sum = 0;
+        for (let p = 0; p <= nPast; p++) { sc[p] = Math.exp(sc[p] - m); sum += sc[p]; }
+        for (let j = 0; j < G.kvLora; j++) {
+          let acc = 0;
+          for (let p = 0; p <= nPast; p++) acc += (sc[p] / sum) * cache[p * W576 + j];
+          ref[h * G.kvLora + j] = acc;
+        }
+      }
+      const out = g.empty(G.nHead * G.kvLora * 4);
+      await g.run(mlaAttnDecodeWgsl({ nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax, scale }),
+        [g.buf(q), g.buf(cache), out, ], G.nHead, g.uniform(nPast, nPast));
+      results.push(compare("mla-attn-decode", new Float32Array(await g.read(out, G.nHead * G.kvLora * 4)), ref, 5e-4, 1e-4));
+    }
 
     { // rmsnorm
       const x = randF32(D, 5), w = randF32(D, 6);

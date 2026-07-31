@@ -1491,3 +1491,164 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   if (t == 0u) { y[r] = partial[0]; }
 }`;
 }
+
+// --- Kernel MLA absorbed (goal C2 fase 4, slice 2; semantica da deepseek2.cpp
+// commit oracolo 5f55650, verificata nel sorgente: rope NORM (coppie consecutive)
+// sulle sole 64 dim rope, kq_scale = 1/sqrt(n_embd_head_k_mla=256) — NON 576 —
+// con mscale=1 (niente yarn nel GGUF GLM), V = c_kv normata (512). ---
+
+// RoPE NORM in-place sul segmento rope di nVec vettori: vettore h a base
+// h*stride, coppia i -> (offset+2i, offset+2i+1), theta = pos·base^(-2i/dims).
+// Usi: q (nVec=20, stride=256, offset=192) e kv_cmpr_pe (nVec=1, stride=576,
+// offset=512 — il rope va applicato PRIMA della kv_a_norm, che tocca solo le
+// prime 512 componenti).
+export function ropeMlaNormWgsl(opts: {
+  nVec: number; stride: number; offset: number; ropeDims: number; freqBase: number;
+}): string {
+  const { nVec, stride, offset, ropeDims, freqBase } = opts;
+  const half = ropeDims / 2;
+  return `${TOK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read_write> v: array<f32>;
+@group(0) @binding(1) var<uniform> P: TokParams;
+const HALF = ${half}u;
+const N_PAIRS = ${nVec * half}u;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= N_PAIRS) { return; }
+  let h = i / HALF;
+  let j = i % HALF;
+  let theta = f32(P.pos) * pow(${freqBase}.0, -f32(2u * j) / ${ropeDims}.0);
+  let c = cos(theta);
+  let s = sin(theta);
+  let base = h * ${stride}u + ${offset}u + 2u * j;
+  let a = v[base];
+  let b = v[base + 1u];
+  v[base] = a * c - b * s;
+  v[base + 1u] = a * s + b * c;
+}`;
+}
+
+// GEMV Q8_0 "per head": il tensore [K, rowsPerHead, nHead] (repack q8_0) moltiplica
+// un x DIVERSO per head (x della head h a base h*xStride + xOffset, lungo K).
+// Usi (dims GLM): wk_b assorbimento (K=192, rows=512, x=q_nope della head) e
+// wv_b uscita (K=512, rows=256, x=attn·c_kv della head).
+export function gemvQ8HeadsWgsl(opts: {
+  K: number; rowsPerHead: number; nHead: number; xStride: number; xOffset: number;
+}): string {
+  const { K, rowsPerHead, nHead, xStride, xOffset } = opts;
+  if (K % 32 !== 0) throw new Error("gemvQ8Heads: K non multiplo di 32");
+  const blocksPerRow = K / 32;
+  const N = rowsPerHead * nHead;
+  return `
+@group(0) @binding(0) var<storage, read> qs: array<u32>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> x: array<f32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+const BLOCKS_PER_ROW = ${blocksPerRow}u;
+var<workgroup> partial: array<f32, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  if (r >= ${N}u) { return; }
+  let head = r / ${rowsPerHead}u;
+  let xBaseHead = head * ${xStride}u + ${xOffset}u;
+  let t = lid.x;
+  var acc = 0.0;
+  for (var b = t; b < BLOCKS_PER_ROW; b = b + 64u) {
+    let gb = r * BLOCKS_PER_ROW + b;
+    let sWord = scales[gb >> 1u];
+    let sc = unpack2x16float(sWord)[gb & 1u];
+    let xBase = xBaseHead + b * 32u;
+    var bd = 0.0;
+    for (var w = 0u; w < 8u; w = w + 1u) {
+      let word = qs[gb * 8u + w];
+      for (var by = 0u; by < 4u; by = by + 1u) {
+        let v = (i32((word >> (by * 8u)) & 0xffu) << 24u) >> 24u;
+        bd = bd + f32(v) * x[xBase + w * 4u + by];
+      }
+    }
+    acc = acc + sc * bd;
+  }
+  partial[t] = acc;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { partial[t] = partial[t] + partial[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (t == 0u) { y[r] = partial[0]; }
+}`;
+}
+
+// Attention decode MLA (MQA sulla cache compressa): q per head = [abs 512|pe 64]
+// (576, layout Qcur di deepseek2), cache per token = [c_kv 512|k_rope 64] (576),
+// score = dot completo a 576; V = prime 512 componenti della stessa riga di
+// cache. out = [nHead, 512] (in spazio c_kv; wv_b si applica dopo, gemvQ8Heads).
+export function mlaAttnDecodeWgsl(opts: {
+  nHead: number; kvLora: number; ropeDims: number; ctxMax: number; scale: number;
+}): string {
+  const { kvLora, ropeDims, ctxMax, scale } = opts; // nHead = griglia del dispatch
+  const width = kvLora + ropeDims;
+  return `${TOK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> q: array<f32>;
+@group(0) @binding(1) var<storage, read> cache: array<f32>;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
+@group(0) @binding(3) var<uniform> P: TokParams;
+const WIDTH = ${width}u;
+const KV_LORA = ${kvLora}u;
+const SCALE = ${scale};
+var<workgroup> scores: array<f32, ${ctxMax}>;
+var<workgroup> red: array<f32, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let h = wid.x;
+  let t = lid.x;
+  let qOff = h * WIDTH;
+  let n = P.nPast + 1u;
+  for (var p = t; p < n; p = p + 64u) {
+    let cOff = p * WIDTH;
+    var acc = 0.0;
+    for (var i = 0u; i < WIDTH; i = i + 1u) { acc = acc + q[qOff + i] * cache[cOff + i]; }
+    scores[p] = acc * SCALE;
+  }
+  workgroupBarrier();
+  var m = -3.0e38;
+  for (var p = t; p < n; p = p + 64u) { m = max(m, scores[p]); }
+  red[t] = m;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { red[t] = max(red[t], red[t + stride]); }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  let mAll = red[0];
+  workgroupBarrier();
+  var s = 0.0;
+  for (var p = t; p < n; p = p + 64u) {
+    let e = exp(scores[p] - mAll);
+    scores[p] = e;
+    s = s + e;
+  }
+  red[t] = s;
+  workgroupBarrier();
+  stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { red[t] = red[t] + red[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  let sAll = red[0];
+  workgroupBarrier();
+  // out[h, j] = Σ_p softmax(p) · c_kv[p, j] — ogni thread un sottoinsieme di j
+  for (var j = t; j < KV_LORA; j = j + 64u) {
+    var acc = 0.0;
+    for (var p = 0u; p < n; p = p + 1u) {
+      acc = acc + scores[p] * cache[p * WIDTH + j];
+    }
+    out[h * KV_LORA + j] = acc / sAll;
+  }
+}`;
+}
