@@ -64,7 +64,17 @@ Costanti di gate (fase 1 le formalizza nel report):
    (b) da fase 4 in poi si lavora su branch engine/fase-c2, merge a goal
    chiuso (lettera del contratto). Il verifier segnala; decide il PI.
 
-4. **RULING RICHIESTO — taratura del gate di conformance routing** (2026-07-31,
+4. ~~**RULING RICHIESTO — taratura del gate di conformance routing**~~
+   RISOLTO (2026-07-31, ruling PI in chat: "ok andiamo con A. Se in fase 6
+   dovessimo avere dei dubbi e per qualche motivo ci servisse di nuovo un
+   oracolo, lo faremmo rigirare"). OPZIONE (a) ADOTTATA: routing = misura
+   informativa; gate di correttezza = doppio gate logits full-model di
+   fase 6. CONTINGENZA registrata: oracolo f32 + traccia nuova rigenerabili
+   on-demand se fase 6 solleva dubbi (ex opzione b). Spec §7 emendata;
+   fase 5 CHIUSA (timebox sanato dallo stesso ruling); fase 6 SBLOCCATA.
+   Testo originale:
+
+   **RULING RICHIESTO — taratura del gate di conformance routing** (2026-07-31,
    it.9, fase 5 slice 3b; timebox fase 5 esaurito a 4 it. ⇒ questo item vale
    anche come docket-con-analisi da ruling (f) della spec).
 

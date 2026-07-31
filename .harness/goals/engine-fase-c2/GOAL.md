@@ -3,6 +3,14 @@ Q4_0) end-to-end su 4090 con conformance verificata contro l'oracolo llama.cpp
 (logits e routing), con una residenza esperti MINIMA (senza prefetch/tier/pin —
 quelli sono C3) e telemetria nativa che riporta i numeri che C3 userà.
 
+<!-- EMENDAMENTO 2 (ruling PI 2026-07-31 in chat, docket item 4 opzione a):
+     il punto "Conformance routing" del DONE WHEN passa da gate a soglia a
+     MISURA INFORMATIVA (report in results/engine/); il gate di correttezza
+     MoE è il doppio gate logits full-model (fase 6). La "soglia di spec"
+     cui il punto rimanda è emendata in spec §7 con analisi e contingenza
+     (oracolo f32 rigenerabile on-demand). Evidenza: it.9 + discriminatore
+     cpuref-f64 (router scagionato). -->
+
 <!-- CONTRATTO v1 — approvato dal PI 2026-07-31 in chat ("Tutto approvato, ma
      per i tok/s dobbiamo assicurarci che rimangano almeno pari a quelli
      registrati in C1. Andando avanti con le implementazioni dobbiamo sempre

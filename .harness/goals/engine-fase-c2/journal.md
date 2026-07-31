@@ -474,3 +474,22 @@ nuova).
 **FASE 5: lavoro tecnico COMPLETO (it.6-9, 4 verifier PASS), gate routing
 in attesa di ruling PI (docket item 4). STOP BY DESIGN del loop**: fase 6
 è gated dal ruling; nessun altro passo decidibile senza il PI.
+
+## Ruling docket item 4 (2026-07-31, PI in chat): OPZIONE (a) ADOTTATA
+
+"ok andiamo con A. Se in fase 6 dovessimo avere dei dubbi e per qualche
+motivo ci servisse di nuovo un oracolo, lo faremmo rigirare."
+
+Applicato: spec §7 emendata (routing = misura informativa con analisi e
+contingenza oracolo-f32 on-demand; gate correttezza MoE = doppio gate
+logits full-model); GOAL.md emendamento 2 (commento in testa, il DONE WHEN
+rimanda alla soglia di spec che ora è l'emendamento); docket item 4
+RISOLTO; PHASES: fase 5 **DONE** (it.6-9, timebox sanato dal ruling),
+fase 6 **READY**. Lanciato il replay FULL-CORPUS (8 prompt, 31.274 pos,
+~2.5h) in background per il report informativo di routing — è anche il
+primo stress-test lungo della residenza (hit-rate a regime su tutto il
+corpus = input C3). Il loop riparte su fase 6: E2E (output head + final
+norm), conformance logits doppio gate, bench coi gate tok/s (decode ≥13.43,
+prefill ≥56.58) + non-regressione Qwen. Nota operativa: niente bench
+finché il replay occupa la GPU (contesa falserebbe i tempi); l'it.10
+parte da implementazione+ktest (correttezza).

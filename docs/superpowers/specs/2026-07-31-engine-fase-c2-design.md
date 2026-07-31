@@ -141,11 +141,23 @@ esplicitamente non ereditato dal contratto). Se il decode GLM regge il floor
   Metrica secondaria registrata (non gate): KL media sui top-32 e max |Δ|
   logit sull'intersezione. Corpus: golden fase 1 (8 prompt C1 × ≤128 gen,
   `results/engine/golden/glm47flash/`).
-- **Routing** (fase 5, PRIMA del full-model): replay dei prompt della
-  traccia C1 nel motore; per (posizione decode, layer) il top-4 del motore
-  vs traccia oracolo: **match ≥99%** degli insiemi (ordine escluso: i pesi
-  di mixing sì, la composizione dell'insieme decide la residenza). Sotto
-  soglia ⇒ si ferma lì e si debugga il router, non si prosegue a fase 6.
+- **Routing** (fase 5) — **EMENDATO, ruling PI 2026-07-31 (docket item 4,
+  opzione a)**: il set-match top-4 vs traccia oracolo è MISURA INFORMATIVA
+  (report JSON in results/engine/, per-fase e per-layer), NON gate. Il gate
+  di correttezza del percorso MoE è il gate doppio full-model qui sopra —
+  in particolare il ramo (i) vs cpuref-f64, che il discriminatore di it.9
+  ha mostrato essere il confronto corretto (esatto-vs-esatto). Motivo
+  dell'emendamento: la soglia ≥99% originale era tarata sull'autotest C1
+  (recall 0.999 usando l'hidden DELL'ORACOLO) e non regge sul replay
+  engine-vs-oracolo — l'oracolo CPU quantizza le attivazioni q8 e ribalta i
+  near-tie 4°/5° (misurato: decode 85.85% p4 / 94.11% p7; cpuref-f64 esatto
+  IDENTICO al motore, stessi 28/28 mismatch — routing-cpuref-analysis).
+  Il router resta verificato bit-fedele a build_moe_ffn (it.6) e fedele
+  all'aritmetica esatta (it.9). CONTINGENZA (ruling): se la fase 6
+  sollevasse dubbi che richiedono di nuovo un oracolo sul routing, si
+  rigenera una build llama.cpp con attivazioni f32 pure e si ri-traccia
+  (era l'opzione b). Testo originale del gate: match ≥99% degli insiemi
+  su (posizione decode, layer), stop sotto soglia.
 - Sanity permanenti: error scope su ogni submit; diag cold-start; niente
   `tail` sui pageerror (landmine).
 
