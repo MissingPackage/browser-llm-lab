@@ -305,3 +305,46 @@ Correzioni applicate dopo il FAIL: nota esplicita nel report sul working-set
 calcolato attraverso i confini dei prompt (numero conservativo); rimozione dello
 stato morto `speculative` in Lfru (non influenzava alcuna eviction — sarebbe
 sembrato un meccanismo attivo in C3); rimosso `llama-bench-*.err` vuoto dal repo.
+
+## it.6 — fase 6: sintesi e chiusura (2026-07-31)
+
+**Checklist DONE WHEN del contratto — 6/6:**
+
+1. **Spec C1 scritta e ruling registrato** ✓ —
+   `docs/superpowers/specs/2026-07-30-engine-fase-c1-design.md` (7 sezioni),
+   ruling PI "ok (a)-(f)" registrato nel docket item 3 (RISOLTO).
+2. **Traccia di routing riproducibile** ✓ —
+   `results/engine/moe-oracle/trace-2026-07-31.jsonl.gz` (31.274 posizioni ×
+   46 layer), envelope con sha256 GGUF `d0bbdf…`, commit oracolo `5f55650a`,
+   16 thread, greedy, corpus hash `2882e4ab…`. Tool `tools/oracle-moe/`
+   committato, ZERO patch a llama.cpp (checkout verificato pulito a ogni
+   iterazione).
+3. **Recall lookahead misurato** ✓ — `trace-2026-07-31-recall.json`: decode
+   R@4 0.7746 / R@6 0.8769 / R@8 0.9197 su 921.600 slot, per-layer (46 righe),
+   baseline token-precedente 0.3228 sulla STESSA traccia; sanity `laTotPass`
+   e autotest 0.999997 (gate 0.999).
+4. **Statistiche di residenza** ✓ — `residency-sim-2026-07-31.json`: usage per
+   (layer,expert), skew cumulativo top-{4,8,16,32,64} aggregato e per-layer,
+   working-set W∈{32,128,512}. Co-attivazione COUPLE: NON inclusa (non era
+   gratis dal tracciato — la spec la condizionava, nessun costo di scope).
+5. **Simulatore trace-driven con test verdi** ✓ — `tools/oracle-moe/sim/`,
+   15 unit vitest (suite intera 181/181), 24 curve (4 policy × 6 budget) +
+   12 sensibilità decay + 18 knob; punto di lavoro del device nel report;
+   verdetto "modello ~2× la memoria" esplicito (regge: 90.8% tarato).
+6. **Decisione PREPARATA, non presa** ✓ — docket item 4 con proposta go/no-go
+   PILOT + aritmetica del costo-miss dal bench OPFS; ledger §A (2 righe
+   riscritte) e §I (2 rimandi nuovi) e direction §3/§5/§7 aggiornati coi
+   numeri misurati.
+
+**Sanate le note ereditate**: costante byte/expert unificata al valore misurato
+(5.325.512 B; il 5.3 MB di direction §3 era analitico), `verdict2x` ora include
+la configurazione tarata (90.8%), `nearestCurvePoint` seleziona LRU
+esplicitamente come baseline invece di dipendere dall'ordine di generazione.
+Resta come nota (non sanabile senza rerun): l'etichetta
+`baselinePrev.decodeTransitions` conta (layer × transizione), non transizioni.
+
+**Cosa lascia questo goal a C2/C3**: la traccia e il tool (rieseguibili su
+qualunque GGUF supportato dall'oracolo), la logica delle policy in TS pronta
+per il worker, tre numeri che cambiano il progetto (recall 92%, skew debole,
+device dev a 1.14×) e una domanda aperta esplicita (banda OPFS a freddo).
+Verifier finale: [da compilare]

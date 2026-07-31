@@ -43,3 +43,28 @@
    (e) timebox fase 4 = 3 iterazioni (fallback ROUTE_TRACE-only da contratto);
    (f) NESSUN gate numerico sul recall (misura, non target): il numero decide
        il go/no-go PILOT in fase 6, decisione PI.
+
+4. **PROPOSTA go/no-go PILOT per C2/C3** (2026-07-31, fase 6 — DECISIONE DEL PI,
+   qui solo istruita). Raccomandazione: **GO sul prefetch predittivo, NO-GO sul
+   learned pinning come leva primaria.** Evidenza:
+   - **Recall misurato** (C1 it.4): 92.0% @K=8, 87.7% @6, 77.5% @4 sul decode;
+     baseline temporale 32.3%. Il segnale del router batte la persistenza di
+     2.8× (colibri su GLM-5.2: 1.7×). Prefill quasi identico ⇒ proprietà del
+     modello, non del regime.
+   - **Costo-miss** (results/opfs-bench, 4090/NVMe): read warm 10.7-11.7 GB/s a
+     blocchi 64 KB-1 MB ⇒ un expert da 5.33 MB costa ~0.46 ms warm; il regime
+     freddo è disco-bound e NON caratterizzato (drop_caches impossibile dal
+     browser — rischio dichiarato in direction §8.3).
+   - **Aritmetica della decisione**: a 30 tok/s il budget è 33 ms/token; 184
+     accessi/token con hit-rate 90.8% ⇒ ~17 miss/token × 0.46 ms = **7.8 ms**
+     warm (24% del budget). Con hit-rate 84.7% (LRU nudo) ⇒ 28 miss = 13 ms
+     (39%). Il delta prefetch vale ~5 ms/token: significativo, ma il numero
+     dipende dalla banda FREDDA, che manca.
+   - **Perché no-go sul pinning**: skew debole misurato (top-4/layer 21.8%,
+     working-set 1.663 in 32 token); a pin 50% LRU vince, a pin 12.5% il pin è
+     ~neutro. Il pin resta utile solo per il non-routed (1.53 GB) = instant-on.
+   Cosa NON è deciso qui e serve a C3: il guadagno di LATENZA del prefetch (C1
+   misura occupazione di cache, non tempo) e la banda OPFS a freddo.
+   Domanda al PI: si adotta questa raccomandazione come input di C2/C3, o si
+   vuole prima un WP sulla banda fredda (misura ~mezza giornata) per rendere
+   l'aritmetica sopra non-condizionale?

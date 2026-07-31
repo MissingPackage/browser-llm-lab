@@ -36,7 +36,8 @@
     "nMoe": 46,
     "nExpert": 64,
     "totalExperts": 2944,
-    "expertBytesQ4": 5308416,
+    "expertBytesQ4": 5325512,
+    "expertBytesNote": "media misurata dai tensori *_exps del GGUF (gguf-residency.py); il 5.3 MB di direction §3 era una stima analitica",
     "rows": 31274,
     "decodeRows": 5120
   },
@@ -605,7 +606,7 @@
       {
         "policy": "lru",
         "budget": 368,
-        "budgetGB": 1.95,
+        "budgetGB": 1.96,
         "hitRate": 0.4385,
         "decodeHitRate": 0.4265,
         "prefetched": 0,
@@ -615,7 +616,7 @@
       {
         "policy": "lfru",
         "budget": 368,
-        "budgetGB": 1.95,
+        "budgetGB": 1.96,
         "hitRate": 0.3941,
         "decodeHitRate": 0.3304,
         "prefetched": 0,
@@ -625,7 +626,7 @@
       {
         "policy": "lfru+pin",
         "budget": 368,
-        "budgetGB": 1.95,
+        "budgetGB": 1.96,
         "hitRate": 0.376,
         "decodeHitRate": 0.2932,
         "prefetched": 0,
@@ -635,7 +636,7 @@
       {
         "policy": "lfru+pin+prefetch",
         "budget": 368,
-        "budgetGB": 1.95,
+        "budgetGB": 1.96,
         "hitRate": 0.3761,
         "decodeHitRate": 0.2916,
         "prefetched": 1096184,
@@ -645,7 +646,7 @@
       {
         "policy": "lru",
         "budget": 736,
-        "budgetGB": 3.91,
+        "budgetGB": 3.92,
         "hitRate": 0.6305,
         "decodeHitRate": 0.6136,
         "prefetched": 0,
@@ -655,7 +656,7 @@
       {
         "policy": "lfru",
         "budget": 736,
-        "budgetGB": 3.91,
+        "budgetGB": 3.92,
         "hitRate": 0.6156,
         "decodeHitRate": 0.5958,
         "prefetched": 0,
@@ -665,7 +666,7 @@
       {
         "policy": "lfru+pin",
         "budget": 736,
-        "budgetGB": 3.91,
+        "budgetGB": 3.92,
         "hitRate": 0.5728,
         "decodeHitRate": 0.5103,
         "prefetched": 0,
@@ -675,7 +676,7 @@
       {
         "policy": "lfru+pin+prefetch",
         "budget": 736,
-        "budgetGB": 3.91,
+        "budgetGB": 3.92,
         "hitRate": 0.5741,
         "decodeHitRate": 0.5175,
         "prefetched": 845758,
@@ -685,7 +686,7 @@
       {
         "policy": "lru",
         "budget": 1472,
-        "budgetGB": 7.81,
+        "budgetGB": 7.84,
         "hitRate": 0.8508,
         "decodeHitRate": 0.8473,
         "prefetched": 0,
@@ -695,7 +696,7 @@
       {
         "policy": "lfru",
         "budget": 1472,
-        "budgetGB": 7.81,
+        "budgetGB": 7.84,
         "hitRate": 0.8589,
         "decodeHitRate": 0.8565,
         "prefetched": 0,
@@ -705,7 +706,7 @@
       {
         "policy": "lfru+pin",
         "budget": 1472,
-        "budgetGB": 7.81,
+        "budgetGB": 7.84,
         "hitRate": 0.8282,
         "decodeHitRate": 0.8054,
         "prefetched": 0,
@@ -715,7 +716,7 @@
       {
         "policy": "lfru+pin+prefetch",
         "budget": 1472,
-        "budgetGB": 7.81,
+        "budgetGB": 7.84,
         "hitRate": 0.8342,
         "decodeHitRate": 0.8308,
         "prefetched": 441811,
@@ -725,7 +726,7 @@
       {
         "policy": "lru",
         "budget": 2208,
-        "budgetGB": 11.72,
+        "budgetGB": 11.76,
         "hitRate": 0.964,
         "decodeHitRate": 0.9643,
         "prefetched": 0,
@@ -735,7 +736,7 @@
       {
         "policy": "lfru",
         "budget": 2208,
-        "budgetGB": 11.72,
+        "budgetGB": 11.76,
         "hitRate": 0.9503,
         "decodeHitRate": 0.9519,
         "prefetched": 0,
@@ -745,7 +746,7 @@
       {
         "policy": "lfru+pin",
         "budget": 2208,
-        "budgetGB": 11.72,
+        "budgetGB": 11.76,
         "hitRate": 0.9535,
         "decodeHitRate": 0.952,
         "prefetched": 0,
@@ -755,7 +756,7 @@
       {
         "policy": "lfru+pin+prefetch",
         "budget": 2208,
-        "budgetGB": 11.72,
+        "budgetGB": 11.76,
         "hitRate": 0.9605,
         "decodeHitRate": 0.9822,
         "prefetched": 134196,
@@ -765,7 +766,7 @@
       {
         "policy": "lru",
         "budget": 2944,
-        "budgetGB": 15.63,
+        "budgetGB": 15.68,
         "hitRate": 0.999,
         "decodeHitRate": 1,
         "prefetched": 0,
@@ -775,7 +776,7 @@
       {
         "policy": "lfru",
         "budget": 2944,
-        "budgetGB": 15.63,
+        "budgetGB": 15.68,
         "hitRate": 0.999,
         "decodeHitRate": 1,
         "prefetched": 0,
@@ -785,7 +786,7 @@
       {
         "policy": "lfru+pin",
         "budget": 2944,
-        "budgetGB": 15.63,
+        "budgetGB": 15.68,
         "hitRate": 0.9995,
         "decodeHitRate": 1,
         "prefetched": 0,
@@ -795,7 +796,7 @@
       {
         "policy": "lfru+pin+prefetch",
         "budget": 2944,
-        "budgetGB": 15.63,
+        "budgetGB": 15.68,
         "hitRate": 0.9995,
         "decodeHitRate": 1,
         "prefetched": 35,
@@ -992,6 +993,14 @@
       "lfru": 0.8565,
       "lfru+pin": 0.8054,
       "lfru+pin+prefetch": 0.8308
-    }
+    },
+    "bestTunedConfig": {
+      "budget": 1472,
+      "policy": "lfru+pin+prefetch",
+      "pinFraction": 0.125,
+      "prefetchK": 4,
+      "decodeHitRate": 0.9083
+    },
+    "verdict": "regge: ~91% di hit-rate di decode con cache = 50% del parco (config tarata); il residuo ~9% x 5.33 MB e' traffico che la banda deve sostenere — il costo va chiuso col modello di banda (results/opfs-bench), non qui"
   }
 }

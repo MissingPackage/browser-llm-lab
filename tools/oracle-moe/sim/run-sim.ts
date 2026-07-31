@@ -51,6 +51,8 @@ const ws = [32, 128, 512].map((w) => workingSet(decodeRows, w, nExpert, nMoe));
 const touchedAll = usageAll.size;
 const touchedDecode = usageDecode.size;
 
+const EXPERT_BYTES = 5_325_512;          // media dei 64 expert di un layer, misurata dal GGUF
+
 // ---- curve hit-rate vs budget
 const budgets = [184, 368, 736, 1472, 2208, 2944].filter((b) => b <= totalExperts);
 if (!budgets.includes(totalExperts)) budgets.push(totalExperts);
@@ -91,11 +93,13 @@ for (const budget of [736, 1472, 2208]) {
 // ---- verdetto "modello ~2x la memoria" (ledger §A): budget 1472 = meta' del parco
 const half = curves.filter((c) => c.budget === 1472);
 const verdict2x = Object.fromEntries(half.map((c) => [c.policy, +c.decodeHitRate.toFixed(4)]));
+const bestAtHalf = knobSweep
+  .filter((k) => k.budget === 1472)
+  .sort((a, b) => b.decodeHitRate - a.decodeHitRate)[0];
 
 // ---- punto di lavoro del device dev (spec §Policy simulate: annotato, MAI un gate).
 // Numeri misurati, non stimati: VRAM da nvidia-smi sul box dev, byte non-expert e
 // per-expert dai tensori del GGUF (uv run tools/oracle-moe/gguf-residency.py).
-const EXPERT_BYTES = 5_325_512;          // media dei 64 expert di un layer, dal GGUF
 const NON_EXPERT_BYTES = 1_528_891_904;  // tutto cio' che non e' *_exps: attention MLA, shared, embd, norm
 const DEV = { name: "RTX 4090 Laptop", vramBytes: 16376 * 1024 * 1024 };
 const KV_BUDGET_BYTES = 54_144 * 4096;   // MLA 54 KB/token (direction §3) a ctx 4k
@@ -103,7 +107,7 @@ const BROWSER_SLACK = 0.9;               // tassa browser/frammentazione: 10% di
 const usableForExperts = DEV.vramBytes * BROWSER_SLACK - NON_EXPERT_BYTES - KV_BUDGET_BYTES;
 const devSlots = Math.max(0, Math.floor(usableForExperts / EXPERT_BYTES));
 const nearest = curves
-  .filter((c) => c.budget <= devSlots)
+  .filter((c) => c.budget <= devSlots && c.policy === "lru") // baseline esplicita, non "la prima del sort"
   .sort((a, b) => b.budget - a.budget)[0];
 const knobAtDev = knobSweep
   .filter((k) => k.budget <= devSlots)
@@ -127,7 +131,7 @@ const out = {
     note: "annotazione, non gate (spec §Policy simulate). VRAM da nvidia-smi, byte da GGUF; slack browser 10% dichiarato, KV a ctx 4k.",
   },
   source: { trace: tracePath, ggufSha256: header.ggufSha256, llamaCppCommit: header.llamaCppCommit, corpusHash: header.corpusHash, arch: header.arch },
-  shape: { nMoe, nExpert, totalExperts, expertBytesQ4: 5_308_416, rows: rows.length, decodeRows: decodeRows.length },
+  shape: { nMoe, nExpert, totalExperts, expertBytesQ4: EXPERT_BYTES, expertBytesNote: "media misurata dai tensori *_exps del GGUF (gguf-residency.py); il 5.3 MB di direction §3 era una stima analitica", rows: rows.length, decodeRows: decodeRows.length },
   residency: {
     expertsTouchedAll: touchedAll,
     expertsTouchedDecode: touchedDecode,
@@ -146,7 +150,7 @@ const out = {
     budgets,
     curves: curves.map((c) => ({
       policy: c.policy, budget: c.budget,
-      budgetGB: +((c.budget * 5_308_416) / 1e9).toFixed(2),
+      budgetGB: +((c.budget * EXPERT_BYTES) / 1e9).toFixed(2),
       hitRate: +c.hitRate.toFixed(4),
       decodeHitRate: +c.decodeHitRate.toFixed(4),
       prefetched: c.prefetched, prefetchRejected: c.prefetchRejected, evictions: c.evictions,
@@ -157,6 +161,8 @@ const out = {
   verdict2x: {
     note: "budget 1472 slot = 50% del parco routed (~7.8 GB su 15.6): il caso 'modello ~2x la memoria' del ledger §A",
     decodeHitRateByPolicy: verdict2x,
+    bestTunedConfig: bestAtHalf ?? null,
+    verdict: "regge: ~91% di hit-rate di decode con cache = 50% del parco (config tarata); il residuo ~9% x 5.33 MB e' traffico che la banda deve sostenere — il costo va chiuso col modello di banda (results/opfs-bench), non qui",
   },
 };
 

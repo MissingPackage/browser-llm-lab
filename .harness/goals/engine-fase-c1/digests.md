@@ -73,3 +73,15 @@ modello/cache 1.14× — sul device di sviluppo il paging è quasi inoperante, i
 regime vero è mobile/M4-condiviso. Caveat dichiarato: l'hit-rate non misura il
 guadagno di LATENZA del prefetch (serve il modello di banda, C3). Next: fase 6
 (sintesi, proposta go/no-go PILOT, chiusura).
+
+2026-07-31 — it.6 (fase 6 DONE, GOAL CHIUSO). Checklist DONE WHEN 6/6.
+Sintesi consegnata: docket item 4 = proposta go/no-go PILOT istruita ma NON
+decisa (GO prefetch — recall 92% e delta ~5 ms/token sul budget da 33 ms a
+30 tok/s; NO-GO learned pinning come leva primaria — skew troppo debole;
+domanda aperta al PI: WP sulla banda OPFS a FREDDO prima o dopo, perché tutta
+l'aritmetica del costo-miss è condizionale su quel numero). Doc allineati ai
+numeri misurati: ledger §A (2 righe riscritte: paging e instant-on), §I
+(2 rimandi nuovi: K adattivo per budget/layer, traccia sostituita),
+direction §3 (5.33 MB/expert e 1.53 GB non-expert misurati), §5 (4090 Laptop),
+§7 (fase C splittata, C1 chiusa con i risultati). HANDOFF riscritto.
+Next PI-gated: docket 4, poi C2 o C3.
