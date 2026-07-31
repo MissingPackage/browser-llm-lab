@@ -61,7 +61,9 @@ bench JSON committato con i due gate tok/s soddisfatti + bench Qwen di
 non-regressione; diff di spec + docket + ledger + direction + HANDOFF.
 
 AUTHORITY GRANTED:
-- may do autonomously: branch engine/fase-c2 e commit/push sul branch;
+- may do autonomously: commit/push su main a fine iterazione VERIFICATA
+  (ruling PI 2026-07-31, docket item 3 — ratifica del main-diretto; supera
+  la riga originale "branch engine/fase-c2");
   MODIFICARE src/engine/** (è l'oggetto del goal: reader deepseek2, kernel
   MLA/MoE, residenza minima, telemetria); tests/**, tools/**; riuso del GGUF
   già in ~/.cache/blab-models e del checkout llama.cpp di C1 per i golden

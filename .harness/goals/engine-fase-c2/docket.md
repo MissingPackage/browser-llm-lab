@@ -50,7 +50,12 @@ Costanti di gate (fase 1 le formalizza nel report):
   decode 13.43 ±0.10 tok/s (n_gen 64), prefill 56.58 ±3.74 tok/s (n_prompt 512),
   llama.cpp 5f55650 CPU-only, i9-14900HX 16 thread.
 
-3. **RULING RICHIESTO — branch policy del goal** (2026-07-31, post-verifier
+3. ~~**RULING RICHIESTO — branch policy del goal**~~ RISOLTO (2026-07-31,
+   ruling PI in chat: "Ratifica main-diretto" = opzione (a)). C2 continua su
+   main con push a fine iterazione verificata; riga di authority del GOAL
+   aggiornata. Testo originale:
+
+   **RULING RICHIESTO — branch policy del goal** (2026-07-31, post-verifier
    it.2): GOAL.md §AUTHORITY dice "branch engine/fase-c2 e commit/push sul
    branch; merge su main a goal CHIUSO" (pattern C1), ma il goal ha lavorato
    finora su main direttamente (da it.0: scaffold, spec, fase 1, fase 3 —
