@@ -19,7 +19,8 @@ export interface Cache {
 export class Lru implements Cache {
   private map = new Map<number, number>(); // key -> clock
   private clock = 0;
-  constructor(private capacity: number) {}
+  private capacity: number;
+  constructor(capacity: number) { this.capacity = capacity; }
   size() { return this.map.size; }
   has(k: number) { return this.map.has(k); }
   access(k: number): boolean {

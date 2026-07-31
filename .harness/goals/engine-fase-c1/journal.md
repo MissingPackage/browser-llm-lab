@@ -348,3 +348,10 @@ qualunque GGUF supportato dall'oracolo), la logica delle policy in TS pronta
 per il worker, tre numeri che cambiano il progetto (recall 92%, skew debole,
 device dev a 1.14×) e una domanda aperta esplicita (banda OPFS a freddo).
 Verifier finale: [da compilare]
+
+**Post-chiusura (stessa iterazione)**: `npx tsc --noEmit` ha catturato una
+violazione del constraint di contratto `erasableSyntaxOnly` in
+`sim/policies.ts` (parameter property nel costruttore di Lru) — corretta,
+typecheck ora pulito. I test non l'avrebbero mai vista: vitest transpila senza
+type-check. Nota per C3: il typecheck va nella checklist di ogni fase che
+scrive TS, non solo `npm test`.
