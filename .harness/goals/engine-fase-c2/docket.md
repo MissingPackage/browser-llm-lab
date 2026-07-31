@@ -49,3 +49,12 @@ Costanti di gate (fase 1 le formalizza nel report):
 - Floor tok/s da `results/engine/moe-oracle/llama-bench-glm47flash-q4_0-2026-07-30.json`:
   decode 13.43 ±0.10 tok/s (n_gen 64), prefill 56.58 ±3.74 tok/s (n_prompt 512),
   llama.cpp 5f55650 CPU-only, i9-14900HX 16 thread.
+
+3. **RULING RICHIESTO — branch policy del goal** (2026-07-31, post-verifier
+   it.2): GOAL.md §AUTHORITY dice "branch engine/fase-c2 e commit/push sul
+   branch; merge su main a goal CHIUSO" (pattern C1), ma il goal ha lavorato
+   finora su main direttamente (da it.0: scaffold, spec, fase 1, fase 3 —
+   tutto già pushato, ruling permanenti push/merge rispettati nello spirito).
+   Opzioni: (a) ratificare main-diretto per C2 (fix della riga di authority);
+   (b) da fase 4 in poi si lavora su branch engine/fase-c2, merge a goal
+   chiuso (lettera del contratto). Il verifier segnala; decide il PI.

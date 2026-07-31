@@ -2,21 +2,17 @@
 
 ## 1. Next decidable
 
-~~RULING SPEC C2~~ RISOLTO (2026-07-31 in chat: "Approvo (a)-(f)") ⇒ **fase 3
-del goal `engine-fase-c2` (reader GGUF deepseek2) in esecuzione**, fasi 4-6 a
-cascata. Contesto del ruling: approvare
-`docs/superpowers/specs/2026-07-31-engine-fase-c2-design.md` — 6 decisioni
-(a)-(f), le non-ovvie: (a) quant MISTA nel GGUF ⇒ kernel Q4_1/Q5_K/Q6_K
-nuovi, niente repack; slab a 2 size-class (5.308.416/5.505.024 B); (b) MLA
-ABSORBED nel motore (cache 576/token/layer, naive solo cpuref — supera
-l'ASSUMED del contratto); (c) OPFS come sorgente dei byte expert (deviazione
-dichiarata: staging RAM 15.6 GB in un tab non regge). Iterazione 1 CHIUSA
-(fasi 1+2): golden GLM committato e cross-validato con la traccia C1 8/8;
-verifier FAIL su un claim quant della spec → corretto (Q4_1 solo blk.1-4) e
-quadrato con residency-sim. Plan-check GIÀ risolto (7 fasi). Col ruling →
-fase 3 (reader deepseek2) ready.
+**Fase 4 del goal `engine-fase-c2` (kernel MLA absorbed, timebox 4 it.)** —
+fase 3 (reader GGUF deepseek2) DONE e verificata (it.2, verifier PASS): shape
+GLM 844 tensori con quant mista per-layer, dequant Q4_1/Q5_K/Q6_K validate su
+byte reali vs gguf-py, load headless del 17.2 GB; suite 199 verde, zero
+regressioni. PI-gated pendente: **docket item 3 del goal** (branch policy:
+main-diretto ratificato vs branch engine/fase-c2 da fase 4, lettera del
+contratto). Spec e ruling (a)-(f) in vigore.
 Riancorarsi da: `.harness/goals/engine-fase-c2/{GOAL,PHASES,docket,journal}.md`,
-la spec, `results/engine/golden/glm47flash/`, docket C1 (item 2 e 5).
+spec `docs/superpowers/specs/2026-07-31-engine-fase-c2-design.md` §3 (MLA),
+`src/engine/{shape,quant,gguf}.ts` (fase 3), golden in
+`results/engine/golden/glm47flash/`.
 
 ## 2. State delta (questa sessione, 15)
 

@@ -76,3 +76,13 @@ Implementato secondo spec §2 (ruling (a)-(f) risolto a inizio iterazione):
 (nessuna regressione sul pregresso; il real-file test ESEGUITO, non
 skippato). Done-when fase 3: suite parsing GLM verde con SHA pinnato ✓,
 tsc pulito ✓, load headless exit 0 ✓ (dentro vitest). Pending verifier.
+
+Verifier it.2: **PASS** (loop-verifier, 2026-07-31 — porting dequant confrontato
+riga-per-riga col C dell'oracolo; fixture riverificata con parser e dequant
+scritti ex novo dal verifier; shape vs file reale con parser indipendente;
+zero regressioni; suite 199 verde). Osservazioni recepite: (1) deviazione
+owns non annotata — `scripts/gen-quant-fixtures.py` sta in scripts/ (pattern
+gen-golden di fase 1), fuori dagli owns della riga PHASES; registrata QUI,
+nessun conflitto di ownership; (2) il goal lavora su main mentre GOAL.md
+§AUTHORITY dice branch engine/fase-c2 con merge a goal chiuso (C1 usò il
+branch) → divergenza di merge-policy, NON la decido io: docket item 3.
