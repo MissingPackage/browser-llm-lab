@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "kind": "cold-read-os-level",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-07-31",
+  "method": "tools/cold-read-bench.py — file 6 GiB di dati urandom (incomprimibili, proxy dei pesi q4) su /home (btrfs compress=zstd:1, Samsung 990 PRO 2TB), eviction via posix_fadvise(DONTNEED) x2, read bufferizzate come farebbe OPFS. NON e' una misura browser: e' il bound lato disco/OS; il freddo browser e' <= di questi numeri.",
+  "validation": "warm re-read 10.1-10.9 GB/s coincide con opfs-bench browser (10.7-11.7 GB/s) => lo stack di misura e' comparabile; il delta cold/warm (3.74 vs 0.46 ms/expert) conferma l'eviction",
+  "results": {
+    "seqCold1MiBGBps": 3.22,
+    "seqWarmGBps": 10.08,
+    "randExpertColdGBps": 1.63,
+    "randExpertColdLatencyMsP50": 3.74,
+    "randExpertColdLatencyMsP95": 4.34,
+    "randExpertWarmGBps": 10.92,
+    "randExpertWarmLatencyMsP50": 0.46,
+    "expertBytes": 5325512,
+    "nRandReads": 192
+  },
+  "caveats": [
+    "fadvise DONTNEED e' best-effort (validato dal delta di latenza)",
+    "layout extent btrfs di un file appena scritto puo' differire dal layout OPFS di Chrome (secondo ordine)",
+    "il GGUF reale potrebbe comprimersi leggermente sotto zstd:1 (banda effettiva un filo piu' alta)"
+  ]
+}

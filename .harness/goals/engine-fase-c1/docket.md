@@ -69,6 +69,34 @@
    vuole prima un WP sulla banda fredda (misura ~mezza giornata) per rendere
    l'aritmetica sopra non-condizionale?
 
+   **ISTRUTTORIA AGGIUNTA (2026-07-31, sessione post-C1)** — la banda fredda è
+   stata bracketata SENZA il WP browser: misura lato OS con fadvise(DONTNEED)
+   (`tools/cold-read-bench.py`, `results/opfs-bench/cold-read-os-4090-linux-2026-07-31.json`).
+   990 PRO a freddo: **1.63 GB/s su read random da 5.33 MB (p50 3.74 ms/expert,
+   8× il warm 0.46 ms)**; seq 3.22 GB/s. Warm re-read 10-11 GB/s = coincide col
+   bench browser ⇒ metodo validato; il freddo browser è ≤ di questi numeri.
+   Aritmetica non più condizionale (184 accessi/token, budget 33 ms @30 tok/s):
+   - **spillover RAM-backed (warm)**: 2× regge — tuned 90.8% ⇒ 7.8 ms (24%),
+     LRU 84.7% ⇒ 12.9 ms (39%). Come già nel punto sopra.
+   - **spillover disk-backed (cold)**: 2× a 30 tok/s NON regge — tuned 16.9
+     miss × 3.74 ms = 63 ms/token (1.9× il budget); floor di banda 90 MB/token
+     ⇒ servirebbero 2.7 GB/s > 1.63 misurati. Rate max bandwidth-bound ~18
+     tok/s; per 30 tok/s servirebbe hit ≥94.5% CON overlap perfetto (= solo il
+     prefetch può darlo, il pinning no).
+   - **working point dev (2208 slot, 87%)**: regge anche a freddo con prefetch
+     (98.9% ⇒ 2 miss ⇒ 7.3 ms, 22%); LRU nudo 96.4% ⇒ 24.7 ms (75%, al limite).
+   Conseguenze per la decisione: (1) il GO-prefetch/NO-GO-pinning è INVARIANTE
+   rispetto alla banda fredda — meno banda ⇒ prefetch più necessario, e il
+   valore del pinning dipende dallo skew (misurato debole), non dalla banda ⇒
+   l'item è decidibile ORA; (2) il WP browser da mezza giornata non serve più
+   per DECIDERE (il bound disco è misurato; il browser può solo peggiorarlo) —
+   resta utile a C3 per raffinare il modello di banda, dove direction §7 già lo
+   colloca; (3) NUOVO FATTO per ledger §A: la headline "modello ~2× la memoria"
+   va condizionata alla struttura dei tier — regge come "2× la VRAM con
+   spillover coperto dalla RAM/page-cache" (dev box 31 GB, M4 48 GB: sì), NON
+   come "2× la memoria host totale" (regime disk-bound: max ~18 tok/s, o hit
+   ≥94.5%). Da propagare a ledger §A e direction §8.3 dopo il ruling.
+
 5. **Nota per C2 (non una decisione)**: la matrice usage grezza 46x64 NON e'
    serializzata (il report ha solo le curve cumulative top-N, come da spec
    approvata) — e' ricalcolabile in secondi dalla traccia committata con
