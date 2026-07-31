@@ -493,3 +493,22 @@ norm), conformance logits doppio gate, bench coi gate tok/s (decode ≥13.43,
 prefill ≥56.58) + non-regressione Qwen. Nota operativa: niente bench
 finché il replay occupa la GPU (contesa falserebbe i tempi); l'it.10
 parte da implementazione+ktest (correttezza).
+
+## Report informativo routing FULL-CORPUS (2026-08-01, post-ruling item 4a)
+
+`results/engine/routing-conformance-glm47flash-2026-07-31.json` (replay
+completo 8 prompt, 31.274 pos, 199 min — il fix maxComputeWorkgroupStorageSize
+32KB era necessario: ctxMax 6688):
+- Set-match top-4 (MISURA, non gate — ruling a): decode **88.51%**
+  (208.460/235.520), prefill 87.05% (1.05M/1.20M); per-layer decode
+  82.0-98.7% — tutto coerente col meccanismo near-tie discriminato in it.9
+  (p4 85.8% e p7 94.1% stanno nel range).
+- **Residenza a regime su tutto il corpus (input C3)**: hit-rate **97.56%**
+  a 12 GiB slab (140.153 miss, 701 GiB riletti da OPFS); costo miss medio
+  10.8 ms di cui **pack 6.1 ms** (858 s totali) vs read 3.1 + upload 1.6 —
+  conferma definitiva del watch item: il repack CPU è il termine da
+  eliminare (leva: repack all'import). Hit-rate sopra il 96.4% del
+  simulatore C1 (budget effettivo ~82% del parco).
+- Nota harness: il campo `gate` del report riflette la soglia pre-ruling
+  (exit done-gate-fail): cosmetico, il ruling governa; da allineare alla
+  prossima passata sull'harness.
