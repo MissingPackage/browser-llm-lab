@@ -68,3 +68,9 @@
    Domanda al PI: si adotta questa raccomandazione come input di C2/C3, o si
    vuole prima un WP sulla banda fredda (misura ~mezza giornata) per rendere
    l'aritmetica sopra non-condizionale?
+
+5. **Nota per C2 (non una decisione)**: la matrice usage grezza 46x64 NON e'
+   serializzata (il report ha solo le curve cumulative top-N, come da spec
+   approvata) — e' ricalcolabile in secondi dalla traccia committata con
+   `usageCounts()` del simulatore. Se C2 la vuole come file, e' una riga di
+   script, non una nuova run.
