@@ -3,12 +3,12 @@
 //
 // Router — replica di build_moe_ffn (llama-graph.cpp, oracolo 5f55650,
 // verifica riga-per-riga it.6):
-//   probs = sigmoid(logits)                        [gating func=2, r.1861-1864]
-//   selezione top-4 su probs + exp_probs_b         [bias solo selezione, r.1878-1882]
-//   pesi di mixing = probs dei selezionati SENZA bias [get_rows su probs, r.1945]
+//   probs = sigmoid(logits)                        [gating func=2, r.1864]
+//   selezione top-4 su probs + exp_probs_b         [bias solo selezione, r.1883]
+//   pesi di mixing = probs dei selezionati SENZA bias [get_rows su probs, r.1940]
 //   normalizzati a somma 1 con denominatore clampato a 6.103515625e-5
-//   (min f16 normale)                              [norm_w, r.1949-1964]
-//   × 1.8 (expert_weights_scale)                   [r.1965-1968]
+//   (min f16 normale)                              [norm_w, r.1958-1960]
+//   × 1.8 (expert_weights_scale)                   [r.1967]
 // Pareggi nella selezione: indice minore (argsort stabile — stesso tie-break
 // della replica C1, tools/oracle-moe/trace.cpp). n_expert_groups=1 nel GGUF ⇒
 // niente logica gruppi. La selezione gira su CPU: i top-4 decidono QUALI slab

@@ -45,3 +45,23 @@ dell'oracolo prima di scrivere WGSL; ktest 21/21 su 4090 (mla-attn-decode
 maxAbs 3.7e-8), 199 test node verdi, tsc pulito. Verifier PASS su codice E
 semantica. Restano per fase 4 (timebox 2 it.): assemblaggio layer GLM in
 gpuforward + conformance layer-level con pesi reali (gate doppio).
+
+## it.5 (2026-07-31, fase 4 slice 3 — CHIUDE LA FASE 4)
+Layer GLM assemblato su GPU (glmforward.ts: MLA absorbed, 22 dispatch/token)
++ conformance layer-level con PESI REALI blk.0 vs cpuref f64 naive: L2rel
+2.35e-7 su 16 pos decode (4090) — accordo al rounding f32. Identità algebrica
+naive↔absorbed in suite (maxAbs<1e-8). ktest 23/23, npm test 200/200, tsc
+pulito. Verifier PASS (dualità verificata algebricamente, 22 dispatch contati
+a mano). Watch fase 6: stringere il gate layer-level (1e-3 vs 2.35e-7
+misurato) a canary di non-regressione. Fase 4 chiusa in 3 it. (timebox 4).
+
+## it.6 (2026-07-31, fase 5 slice 1)
+Router MoE: semantica verificata riga-per-riga in build_moe_ffn (sigmoid;
+bias exp_probs_b SOLO selezione; pesi = sigmoid senza bias, norm con clamp
+6.1035e-5, ×1.8; pesatura dopo il down; shexp sommato a moe_out; tie-break
+indice minore). moe.ts nuovo (routerSelect CPU + slab a due size-class
+5.308.416/5.505.024 B, offset 256-aligned, packExpertSlab), gemvF32 router,
+scaledAccum sul down per-expert, ref f64 indipendente in cpuref. ktest 28/28
+su 4090 (moe-ffn-block completo con bind group a offset per-slot), suite
+208/208, tsc pulito. Verifier PASS. Next (it.7): slice 2 — residenza minima
+(OPFS → staging → cache VRAM LRU per classe + telemetria).

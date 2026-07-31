@@ -2,21 +2,27 @@
 
 ## 1. Next decidable
 
-**Fase 5 del goal `engine-fase-c2` (MoE + residenza minima, timebox 4 it.),
-slice 1**: router (sigmoid+bias+top-4+norm ×1.8, replica C1 — verifica
-riga-per-riga in build_moe_ffn, llama-graph.cpp 5f55650) + GEMV per-expert
-sugli slab; poi residenza minima (GGUF in OPFS, cache VRAM LRU a due
-size-class 5.308.416/5.505.024 B, ~2.5k slot) + conformance routing ≥99%
-vs traccia C1 (spec §4-§5, §7). **FASE 4 CHIUSA a it.5** (verifier PASS):
-layer 0 GLM assemblato su GPU (`glmforward.ts`, MLA absorbed, 22
-dispatch/token) + conformance layer-level con PESI REALI vs cpuref-f64
-naive: L2rel 2.35e-7 su 16 pos decode (4090); identità algebrica
-naive↔absorbed in suite; ktest 23/23, suite 200/200, tsc pulito. Il gate
-"golden" matura al full-model (fase 6, lettura registrata a journal it.5).
-Watch item fase 6: stringere il gate layer-level (ora 1e-3 vs 2.35e-7
-misurato) + q5_K absTol (it.3) + assunzione mscale=1 da golden.
+**Fase 5 del goal `engine-fase-c2` (MoE + residenza minima, timebox 4 it.,
+usata 1), slice 2 — residenza minima**: GGUF in OPFS (copia al primo load,
+SHA verificato), miss expert → read SyncAccessHandle → packExpertSlab →
+writeBuffer allo slot LRU-vittima; cache VRAM per size-class (buffer ≤
+maxStorageBufferBindingSize, slot indirizzati (classe, buffer, offset),
+~2.5k slot attesi, LRU pura) + telemetria hit/miss/byte/stallo (spec §5);
+poi slice 3 = forward multi-layer + conformance routing set-match ≥99% vs
+traccia C1 (spec §7 — l'ordine è escluso per spec, i pesi di mixing vanno
+confrontati per (posizione, layer): watch item it.6). **SLICE 1 CHIUSA a
+it.6** (verifier PASS): semantica build_moe_ffn verificata riga-per-riga
+(bias solo selezione, clamp 6.1035e-5, ×1.8, pesatura post-down, shexp su
+stesso input); `moe.ts` (routerSelect CPU + slab due size-class
+5.308.416/5.505.024 B, offset 256-aligned, packExpertSlab), gemvF32 router,
+scaledAccum sul down per-expert, ref f64 indipendente `glmMoeFfnRefF64`;
+ktest 28/28 su 4090 (moe-ffn-block con bind group a offset per-slot =
+meccanismo della residenza già validato), suite 208/208, tsc pulito. Nota
+design registrata (journal it.6): selezione CPU ⇒ un sync GPU→CPU per layer
+MoE nel decode; costo da misurare in fase 6. Watch item fase 6 invariati
+(gate layer-level da stringere, q5_K absTol, mscale=1).
 Riancorarsi da: `.harness/goals/engine-fase-c2/{GOAL,PHASES,docket,journal}.md`,
-spec §4-§5, `src/engine/glmforward.ts` (pattern da estendere), traccia
+spec §5-§7, `src/engine/{moe,glmforward}.ts` (pattern da estendere), traccia
 `results/engine/moe-oracle/trace-2026-07-31.jsonl.gz`, sim residenza C1.
 
 ## 2. State delta (questa sessione, 15)

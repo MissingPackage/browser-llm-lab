@@ -253,10 +253,11 @@ Implementato:
   casuali, taglie/allineamento/contenuto slab, validazione hard.
 
 **Evidenza**: ktest su 4090 status "done", **28/28 PASS** (nuovi:
-gemv-f32-router maxRel 1.6e-6; accum q4_0/q4_1 entro 4e-4;
-moe-ffn-block-downq4_0 maxRel 6.0e-5, -downq4_1 maxRel 2.3e-4 — il maxAbs
-alto dei due blocchi è artefatto delle scale K-quant sintetiche, valori
-~1e7); zero regressioni sui 23 preesistenti. `npm test` **208/208** (8
+gemv-f32-router maxRel 1.6e-6; accum q4_0 maxRel 3.9e-4; accum q4_1 maxAbs
+5.7e-6 — maxRel 3.7e-3 solo su componenti ≈0, pass via absTol [dicitura
+corretta post-verifier]; moe-ffn-block-downq4_0 maxRel 6.0e-5, -downq4_1
+maxRel 2.3e-4 — il maxAbs alto dei due blocchi è artefatto delle scale
+K-quant sintetiche, valori ~1e7); zero regressioni sui 23 preesistenti. `npm test` **208/208** (8
 nuovi); `tsc --noEmit` pulito. Restano per la fase 5 (timebox 4 it.):
 slice 2 = residenza minima (OPFS → staging → cache VRAM LRU per classe,
 telemetria) e slice 3 = forward multi-layer + conformance routing ≥99% vs
@@ -264,3 +265,18 @@ traccia C1. Nota di design registrata: la selezione su CPU implica un punto
 di sincronizzazione GPU→CPU per layer MoE nel decode (readback dei 64
 logits) — il costo va misurato in fase 6, mitigazioni eventuali a docket
 (non sono C2). Pending verifier.
+
+Verifier it.6: **PASS** (loop-verifier — ri-run indipendente: tsc pulito,
+suite 208/208, ktest 4090 28/28 con numeri coincidenti; tutte le righe
+dell'oracolo riscontrate — r.1864/1883/1926/1940/1958/1967/2121-22,
+deepseek2.cpp r.403-412; routerSelect e glmMoeFfnRefF64 verificati
+semanticamente e davvero indipendenti; aritmetica slab ricalcolata ex novo;
+bind a offset reali nel ktest; zero drift, zero violazioni, nessun push
+pre-verifica). Osservazioni recepite: (1) dicitura tolleranze accum corretta
+(sopra); (2) riferimenti riga nel commento di moe.ts allineati all'oracolo;
+(3) WATCH ITEM slice 3: il check selezione GPU↔ref nel ktest confronta i
+top-4 come INSIEME — per la conformance routing vs traccia C1 la spec §7
+richiede il set-match (l'ordine è escluso per scelta di spec: "la
+composizione dell'insieme decide la residenza"), ma i PESI di mixing vanno
+comunque confrontati per (posizione, layer); (4) digest it.5 e it.6 appesi a
+digests.md (il gap di it.5 era consolidato).
