@@ -13,6 +13,8 @@ import {
 import { createGlmLayer0 } from "../glmforward";
 import { GlmDenseLayerRefF64, glmMoeFfnRefF64, type GlmMoeExpertWeights } from "../cpuref";
 import { routerSelect, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../moe";
+import { ExpertOpfsStore } from "../expertstore";
+import { ExpertCache, expertKey, type ExpertRawBytes } from "../residency";
 import {
   repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
   dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ5_K, dequantQ6_K,
@@ -106,10 +108,10 @@ class Gpu {
     pass.end();
     this.device.queue.submit([enc.finish()]);
   }
-  async read(b: GPUBuffer, bytes: number): Promise<ArrayBuffer> {
+  async read(b: GPUBuffer, bytes: number, srcOffset = 0): Promise<ArrayBuffer> {
     const staging = this.device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const enc = this.device.createCommandEncoder();
-    enc.copyBufferToBuffer(b, 0, staging, 0, bytes);
+    enc.copyBufferToBuffer(b, srcOffset, staging, 0, bytes);
     this.device.queue.submit([enc.finish()]);
     await staging.mapAsync(GPUMapMode.READ);
     const out = staging.getMappedRange().slice(0);
@@ -423,6 +425,120 @@ async function testMoeFfnBlock(g: Gpu, downKind: "q4_0" | "q4_1"): Promise<KResu
   return res;
 }
 
+// Residenza minima (C2 fase 5 slice 2): roundtrip completo su hardware vero —
+// import streaming in OPFS con SHA-256 incrementale verificato vs crypto.subtle,
+// read SyncAccessHandle su miss, packExpertSlab, writeBuffer allo slot, readback
+// GPU byte-ESATTO, LRU con eviction e riuso slot, telemetria. Le classi LRU e
+// l'aritmetica del riparto sono già unit-testate in node (engine-residency);
+// qui si valida il plumbing browser+GPU che node non può coprire.
+async function testResidencyOpfs(g: Gpu): Promise<KResult> {
+  const name = "residency-opfs-roundtrip";
+  const GU = 1_769_472; // gate/up e down q4_0
+  const D41 = 1_966_080;
+  // file sintetico: 5 expert classe q4_0 (layer 5) + 2 classe q4_1 (layer 2)
+  const plan: Array<{ layer: number; expert: number }> = [
+    ...[0, 1, 2, 3, 9].map((expert) => ({ layer: 5, expert })),
+    ...[0, 1].map((expert) => ({ layer: 2, expert })),
+  ];
+  const offsets = new Map<number, { gate: number; up: number; down: number; downBytes: number }>();
+  const parts: Uint8Array[] = [];
+  let at = 0;
+  for (const [i, p] of plan.entries()) {
+    const downBytes = p.layer <= 4 ? D41 : GU;
+    const gate = randBytes(GU, 7000 + i * 3);
+    const up = randBytes(GU, 7001 + i * 3);
+    const down = randBytes(downBytes, 7002 + i * 3);
+    offsets.set(expertKey(p.layer, p.expert), { gate: at, up: at + GU, down: at + 2 * GU, downBytes });
+    parts.push(gate, up, down);
+    at += 2 * GU + downBytes;
+  }
+  const file = new Uint8Array(at);
+  { let o = 0; for (const s of parts) { file.set(s, o); o += s.length; } }
+  const expectedSha = [...new Uint8Array(await crypto.subtle.digest("SHA-256", file as unknown as BufferSource))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  const store = await ExpertOpfsStore.open("ktest-residency.bin");
+  const cleanup = async () => {
+    store.close();
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle("models");
+    await dir.removeEntry("ktest-residency.bin");
+  };
+  try {
+    const url = URL.createObjectURL(new Blob([file as unknown as BlobPart]));
+    const imp = await store.importFromUrl(url, expectedSha); // sha sbagliato ⇒ throw
+    URL.revokeObjectURL(url);
+    if (imp.bytes !== at || store.size() !== at) {
+      return { kernel: name, pass: false, maxAbs: NaN, maxRel: NaN, note: `import ${imp.bytes}/${at} B` };
+    }
+    // hash sbagliato ⇒ throw + truncate (validazione hard)
+    let hardFail = false;
+    const url2 = URL.createObjectURL(new Blob([file as unknown as BlobPart]));
+    try { await store.importFromUrl(url2, "0".repeat(64)); } catch { hardFail = true; }
+    URL.revokeObjectURL(url2);
+    if (!hardFail || store.size() !== 0) {
+      return { kernel: name, pass: false, maxAbs: NaN, maxRel: NaN, note: "mismatch SHA non rifiutato/troncato" };
+    }
+    const url3 = URL.createObjectURL(new Blob([file as unknown as BlobPart]));
+    await store.importFromUrl(url3, expectedSha); // re-import per il resto del test
+    URL.revokeObjectURL(url3);
+
+    const rawOf = (layer: number, expert: number): ExpertRawBytes => {
+      const o = offsets.get(expertKey(layer, expert))!;
+      return {
+        gate: store.read(o.gate, GU), up: store.read(o.up, GU), down: store.read(o.down, o.downBytes),
+      };
+    };
+    const cache = new ExpertCache(g.device, {
+      budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 },
+      maxBindingBytes: 1 << 30, maxBufferBytes: 1 << 30, timing: true,
+    });
+    const mismatches: string[] = [];
+    const checkSlot = async (layer: number, expert: number, slot: { buffer: GPUBuffer; offset: number; layout: { bytes: number } }) => {
+      const o = offsets.get(expertKey(layer, expert))!;
+      const want = packExpertSlab(
+        file.subarray(o.gate, o.gate + GU), file.subarray(o.up, o.up + GU),
+        file.subarray(o.down, o.down + o.downBytes),
+        layer <= 4 ? SLAB_DOWN_Q4_1 : SLAB_DOWN_Q4_0);
+      const got = new Uint8Array(await g.read(slot.buffer, slot.layout.bytes, slot.offset));
+      for (let i = 0; i < want.length; i++) {
+        if (got[i] !== want[i]) { mismatches.push(`L${layer}e${expert}@${i}`); return; }
+      }
+    };
+
+    // 4 miss (riempie q4_0), hit con touch, eviction del LRU, riuso slot
+    const s0 = cache.ensure(5, 0, rawOf);
+    for (const e of [1, 2, 3]) cache.ensure(5, e, rawOf);
+    const h0 = cache.ensure(5, 0, rawOf);              // hit + touch (LRU → e1)
+    const s9 = cache.ensure(5, 9, rawOf);              // evince e1, riusa il suo slot
+    const r1 = cache.ensure(5, 1, rawOf);              // e1 rientra (miss)
+    const q0 = cache.ensure(2, 0, rawOf);              // classe q4_1 separata
+    const q1 = cache.ensure(2, 1, rawOf);
+    await checkSlot(5, 0, s0.slot);
+    await checkSlot(5, 9, s9.slot);
+    await checkSlot(5, 1, r1.slot);
+    await checkSlot(2, 0, q0.slot);
+    await checkSlot(2, 1, q1.slot);
+    const st = cache.stats();
+    cache.destroy();
+    const okStats =
+      h0.hit && !s9.hit && !r1.hit &&
+      st.hits === 1 && st.misses === 8 && st.evictions === 2 &&
+      st.occupied.q4_0 === 4 && st.occupied.q4_1 === 2 &&
+      st.bytesUploaded === 6 * SLAB_DOWN_Q4_0.bytes + 2 * SLAB_DOWN_Q4_1.bytes &&
+      st.readMs > 0 && st.packMs > 0 && st.uploadMs >= 0;
+    return {
+      kernel: name, pass: mismatches.length === 0 && okStats,
+      maxAbs: mismatches.length, maxRel: 0,
+      note: `import ${(at / 1e6).toFixed(1)} MB sha-ok in ${imp.ms.toFixed(0)} ms; ` +
+        `h${st.hits}/m${st.misses}/ev${st.evictions}; read ${st.readMs.toFixed(1)} pack ${st.packMs.toFixed(1)} up ${st.uploadMs.toFixed(1)} ms` +
+        (mismatches.length ? `; MISMATCH ${mismatches.join(",")}` : "") + (okStats ? "" : "; STATS KO"),
+    };
+  } finally {
+    await cleanup();
+  }
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -650,6 +766,9 @@ async function main(): Promise<void> {
       const got = new Uint32Array(await g.read(out, 4))[0];
       results.push({ kernel: "argmax-2stage", pass: got === refIdx, maxAbs: Math.abs(got - refIdx), maxRel: 0, note: `got=${got} ref=${refIdx}` });
     }
+
+    // residenza minima (fase 5 slice 2): OPFS + cache VRAM su hardware vero
+    results.push(await testResidencyOpfs(g));
 
     // conformance layer-level con pesi reali (fase 4 slice 3) — il test lungo in coda
     results.push(await testGlmLayer0Real(g));

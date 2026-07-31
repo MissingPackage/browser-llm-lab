@@ -280,3 +280,49 @@ richiede il set-match (l'ordine è escluso per scelta di spec: "la
 composizione dell'insieme decide la residenza"), ma i PESI di mixing vanno
 comunque confrontati per (posizione, layer); (4) digest it.5 e it.6 appesi a
 digests.md (il gap di it.5 era consolidato).
+
+## it.7 — fase 5, slice 2: residenza minima (OPFS + cache VRAM LRU + telemetria) (2026-07-31)
+
+Implementato secondo spec §5 (il MINIMO che fa girare 17 GB in 16 GiB;
+niente policy/tier/prefetch su OPFS — quelli sono C3; il path di load resta
+random-access, compatibile col prefetch di C3 come da ruling C1 item 4):
+- `expertstore.ts` (NUOVO): `Sha256Stream` (FIPS 180-4 incrementale:
+  crypto.subtle vuole l'intero buffer — impraticabile su 17.2 GB; il costo
+  una-tantum dell'import va in telemetria); `ExpertOpfsStore` (import
+  streaming URL→OPFS con hash in corsa e VALIDAZIONE HARD: mismatch ⇒
+  truncate(0)+throw; read sincrona di range via SyncAccessHandle, solo
+  worker dedicato — stessa posture di kvstore.ts); `GgufExpertIndex`
+  (expert e = fetta CONTIGUA di tensorByteSize/64 del tensore 3D: funzione
+  pura, testata in node sul file reale).
+- `residency.ts` (NUOVO): `ExpertCache` — slot (classe, buffer, offset),
+  buffer ≤ maxStorageBufferBindingSize negoziato, riparto del budget tra le
+  classi in proporzione al parco (256/2688), cap al parco; LRU PURA per
+  classe via Map insertion-order (touch O(1)); `ensure()` con readRaw SOLO
+  su miss → packExpertSlab → writeBuffer allo slot vittima; argomento
+  `pinned` (i top-4 del token corrente non sono mai vittime — invariante
+  che il forward di slice 3 userà); telemetria liv.1 (hit/miss/eviction/
+  byte/read-pack-upload ms) con performance.now GATED da opts.timing
+  (zero-overhead spenta, contratto); `slotBindRanges` = i 6 sotto-range
+  nell'ordine dei binding dei kernel GEMV di it.6.
+
+**Evidenza**: ktest su 4090 status "done", **29/29 PASS** — nuovo
+`residency-opfs-roundtrip`: import 37.6 MB con SHA streaming verificato vs
+crypto.subtle (212 ms), rifiuto+truncate su SHA sbagliato, 8 miss / 1 hit /
+2 eviction con contatori ESATTI, readback GPU byte-esatto degli slab
+(inclusi slot riusati post-eviction e classe q4_1 separata); zero
+regressioni sui 28. `npm test` **219/219** (11 nuovi in
+engine-residency.test.ts: Sha256Stream vs webcrypto sulle taglie limite del
+padding, indice sul GGUF reale con identità aritmetica vs tensorByteSize
+per tutti i 46 layer MoE, LRU/pinned/classi/riparto con device mock);
+`tsc --noEmit` pulito.
+
+**WATCH ITEM fase 6 (load-bearing, numeri dal roundtrip)**: il costo di
+miss misurato è ~9.7 ms (read warm 1.9 + **pack 5.3** + upload 2.5): il
+repack CPU DOMINA. A 4×46=184 ensure/token e hit 96.4% (sim C1) ⇒ ~6-7
+miss/token ⇒ **~60-70 ms/token di solo stallo residenza**, contro un budget
+di 74 ms/token al floor 13.43 tok/s. Rischio concreto sul gate decode di
+fase 6. Leve possibili (decisione a valle della misura E2E, eventualmente
+docket): repack più veloce (blocchi 36 B = 9 word), kernel GEMV che legge
+il layout GGUF grezzo (i K-quant già indicizzano byte nelle word), o
+riordino [qs|scales] in scrittura OPFS (repack pagato all'import, una
+volta). Pending verifier.
