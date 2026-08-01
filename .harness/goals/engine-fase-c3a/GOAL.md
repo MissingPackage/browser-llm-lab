@@ -3,6 +3,21 @@ CPU di C1 (decode >=13.43 tok/s) e possiede un percorso di prefill batched M>1,
 eliminando i tre costi strutturali attribuiti in C2 (pack CPU nel path caldo,
 46 sync router/token, forward sequenziale in prefill) a correttezza invariata.
 
+<!-- EMENDAMENTO 1 (ruling PI 2026-08-01, docket item 4 opzione b): la
+     GRANULARITÀ/FUSIONE DEI DISPATCH entra nel perimetro C3a come QUARTA LEVA.
+     Motivo: la misura di fase 1 dimostra che le tre leve originali non possono
+     raggiungere il gate — con repack e sync al 100% di efficacia si arriva a
+     10.18 tok/s, e `gpuBusy` da solo (78.2 ms/token) eccede il budget del gate
+     (74.46). Il margine c'è: 2.22 GB di pesi/token su 576 GB/s danno un floor
+     memory-bound di 3.85 ms/token, quindi `gpuBusy` è 20× sopra (1816 dispatch
+     a 43 µs l'uno). Il gate 13.43 resta INVARIATO.
+     Conseguenze sul contratto: (1) nuovo DONE WHEN sulla quarta leva con
+     soglia DERIVATA `gpuBusy ≤ 54.5 ms/token`; (2) "fusioni cross-layer /
+     megakernel / granularità dei dispatch" esce dal must-docket ed entra
+     nell'authority; (3) PHASES guadagna la fase 4b e la fase 4 chiude con una
+     ri-misura di clock e `gpuBusy` che dimensiona la 4b.
+     Docket item 2 (clausola di fallback) RIMANDATO dal PI a fine fase 4. -->
+
 <!-- CONTRATTO v1 — approvato dal PI 2026-08-01 in chat, in due passaggi:
      (1) "ok lo split in 2 goal" — la fase C3 di direction §7 e' splittata in
          C3a (struttura: il floor tok/s) e C3b (paging: slab ctx-aware, tier,
@@ -46,6 +61,14 @@ DONE WHEN (all measurable):
   spec e' il pipelining, la spec puo' riformulare la soglia come sync/token
   AMMORTIZZATI, dichiarando la profondita: la riformulazione va in spec col
   ruling, non presa qui.
+- Granularità dei dispatch (QUARTA LEVA, emendamento 1): il bench riporta
+  **`gpuBusy` <= 54.5 ms/token** (baseline it.1: 78.2). La soglia e' DERIVATA
+  dall'aritmetica del gate, non scelta: budget 74.46 − stallo residenza
+  post-repack 12.4 − floor di sync misurato 7.6 = 54.5. Va riportato anche il
+  conteggio dispatch/token (baseline 1816) e il clock SM medio campionato
+  durante la run, perche' una parte della riduzione puo' arrivare dai clock che
+  salgono quando spariscono le bolle, non dal lavoro sui kernel: le due cause
+  vanno distinte nel report, non confuse in un unico numero.
 - GATE decode (chiusura): bench JSON quiescente in results/engine/ con
   decode >= 13.43 tok/s a parita' di protocollo C2 (floor oracolo CPU C1,
   results/engine/moe-oracle/llama-bench-glm47flash-q4_0-2026-07-30.json).
@@ -83,7 +106,10 @@ direction + ledger + HANDOFF.
 AUTHORITY GRANTED:
 - may do autonomously: MODIFICARE src/engine/** (e' l'oggetto del goal: import e
   repack, kernel MoE/MLA, scheduling dei dispatch, percorso prefill batched,
-  telemetria), tests/**, tools/**, scripts/**; commit/push su main a fine
+  telemetria; **e dall'emendamento 1: fusione dei kernel, riduzione del numero
+  di dispatch, megakernel parziali, batching delle catene expert** — la quarta
+  leva e' ora dentro il perimetro), tests/**, tools/**, scripts/**;
+  commit/push su main a fine
   iterazione VERIFICATA (ruling PI 2026-07-31, ratifica del main-diretto);
   merge su main + push a goal CHIUSO e verificato (ruling permanente 2026-07-29);
   rigenerare/invalidare gli artefatti in ~/.cache/blab-models e nel profilo

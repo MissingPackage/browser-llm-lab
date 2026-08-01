@@ -53,6 +53,12 @@
    budget slab di prova 50% e 25% del parco (C3b).
 
 2. **RULING RICHIESTO — clausola di fallback per la fase 4 (sync router)**
+   ⏸ **RIMANDATO dal PI (2026-08-01, opzione c): "decidere dopo la fase 4"** —
+   la clausola si scrive quando si vedrà l'effetto reale della rimozione dei
+   sync sui clock GPU, cioè quando la forbice 10.2-15.6 sarà sciolta da una
+   misura. **Da ripresentare al PI a fine fase 4, prima della fase 6.**
+   Testo originale:
+
    (2026-08-01, iteration 0). Non blocca: le fasi 1-2 girano comunque; serve
    una risposta prima della fase 6.
 
@@ -86,8 +92,22 @@
    decomposizione non ti convince, la modifica passa da qui (item nuovo), non
    dal loop.
 
-4. **RULING RICHIESTO — le tre leve del contratto non raggiungono il gate;
-   scelta del ramo per la spec** (2026-08-01, it.1 fase 1). **BLOCCA la fase 2**
+4. ~~**RULING RICHIESTO — le tre leve del contratto non raggiungono il gate**~~
+   **RISOLTO (2026-08-01, ruling PI: opzione (b) — "ammettere subito la quarta
+   leva")**. La granularità/fusione dei dispatch entra nel perimetro C3a; il
+   gate 13.43 resta invariato. Conseguenze recepite:
+   - **GOAL.md emendamento 1**: quarta leva nel perimetro, nuovo DONE WHEN
+     `gpuBusy ≤ 54.5 ms/token` (soglia DERIVATA, non arbitraria: budget del
+     gate 74.46 − stallo post-repack 12.4 − floor sync misurato 7.6); la voce
+     "fusione dei dispatch" esce dal must-docket.
+   - **PHASES.md**: nuova fase **4b** (guerra ai dispatch), e la fase 4 chiude
+     con una **ri-misura di `gpuBusy` e dei clock** — che è il pezzo utile
+     dell'opzione (a) conservato dentro la (b): dimensiona 4b con un fatto
+     invece che con l'assunzione ottimistica.
+   - Fase 2 (spec) SBLOCCATA.
+   Testo originale:
+
+   (2026-08-01, it.1 fase 1). **BLOCCA la fase 2**
    (la spec deve scegliere il meccanismo dei sync, e la scelta dipende da
    questo). Numeri in `results/engine/bench-glm-4090-b12-attrib-2026-08-01.json`,
    journal it.1.
@@ -143,7 +163,12 @@
    clausola diventa più urgente, perché il ramo pessimistico della forbice è
    ora quantificato e non più ipotetico.
 
-5. **CORREZIONE PHASES (piccola, non un ri-scope)** (2026-08-01, it.1). La riga
+5. ~~**CORREZIONE PHASES**~~ **RISOLTO (2026-08-01, ruling PI: "correggere la
+   riga")**. PHASES fase 1 emendata: done-when "run glmbench che scrive il
+   report (exit 0 o 4)" e attribuzione dentro il report di bench. Testo
+   originale:
+
+   (2026-08-01, it.1). La riga
    della fase 1 chiede "run glmbench **exit 0**": è insoddisfacibile in fase 1,
    perché exit 0 = gate PASS e i gate passano solo in fase 6. L'esito corretto
    della fase 1 è **exit 4** (report scritto + gate FAIL). Chiedo di emendare la
