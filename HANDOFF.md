@@ -2,9 +2,20 @@
 
 ## 1. Next decidable
 
-**RULING su docket C3a item 4 — il loop è fermo lì (stop by design).** La fase 1
-ha misurato quello che serviva e ha smentito un'assunzione del contratto: le tre
-leve elencate **non raggiungono il gate 13.43**.
+**RULING sulla spec C3a — docket item 6 (5 decisioni).** Il loop è fermo lì:
+le fasi 3-6 sono gated dal ruling di spec, come in C1/C2. Documento:
+`docs/superpowers/specs/2026-08-01-engine-fase-c3a-design.md`.
+Sintesi delle decisioni: (1) repack come secondo file OPFS da 15.68 GB accanto
+al GGUF; (2) criterio della leva 2 = **minimizzare i submit, non i readback**
+(la misura dice che i readback valgono 7.6 degli 83 ms/token), con la via
+raccomandata condizionata a un **probe dei limiti WebGPU mai letti** [VERIFY],
+e scarto esplicito del pipelining nel decode; (3) leva 4 = prima spezzare
+`gpuBusy` per categoria, poi fondere, attribuendo separatamente kernel e clock;
+(4) prefill M=16 iniziale con identità sull'argmax; (5) conferma dei gate.
+
+**Contesto: perché è servito l'emendamento 1** (it.1, già risolto — quarta leva
+ammessa nel perimetro dal PI). La fase 1 ha smentito un'assunzione del
+contratto: le tre leve originali **non raggiungono il gate 13.43**.
 - Wall decode 215.0 ms/token = `gpuBusy` **78.2** + stallo residenza **53.8** +
   sync/CPU **83.0** (63.6% fuori GPU). Ma i 46 readback veri costano solo
   **7.6 ms/token** (probe indipendente): il resto è latenza di submit e bolle.
@@ -17,11 +28,12 @@ leve elencate **non raggiungono il gate 13.43**.
 - Cross-check: 2.22 GB pesi/token su 576 GB/s ⇒ floor memory-bound 3.85
   ms/token, `gpuBusy` è **20× sopra** (1816 dispatch a 43 µs l'uno). Quarta leva
   disponibile (granularità dispatch), fuori contratto e ultima per direction §2.
-- Opzioni in docket item 4; raccomandata **(a) spec a due stadi, gate invariato**:
-  la fase 4 attacca i sync e ri-misura subito clock e `gpuBusy` — si scioglie la
-  forbice con un fatto invece che con un'assunzione.
-Aperti anche: **item 2** (clausola di fallback, ora quantificata) e **item 5**
-(correzione di forma della riga PHASES fase 1).
+- Ruling PI: quarta leva **dentro** C3a (GOAL emendamento 1, fase 4b), gate
+  invariato. La fase 4 chiude con una ri-misura obbligatoria di clock e
+  `gpuBusy` che dimensiona la 4b.
+Aperto anche: **item 2** (clausola di fallback) — rimandato dal PI a fine fase 4,
+quando la ri-misura avrà sciolto la forbice. La fase 4 ha in done-when l'obbligo
+di ripresentarlo.
 - **Perimetro C3a (struttura)**: repack all'import, eliminazione/batching dei
   46 sync router, prefill batched M>1. **Gate di chiusura**: decode ≥13.43 /
   prefill ≥56.58 tok/s (floor oracolo CPU C1, ereditato dalla deroga C2).
@@ -75,7 +87,11 @@ termini) e §7 (fase C splittata).
 
 ## 4. Open threads
 
-- **Goal C3a**: fase 1 DONE (it.1), fase 2 bloccata da docket item 4.
+- **Goal C3a**: fasi 1-2 DONE (it.1-2), fasi 3-6 gated dal ruling di spec
+  (docket item 6).
+- **[VERIFY] mai sciolto**: `maxStorageBufferBindingSize` e `maxBufferSize`
+  reali dell'adapter — il codice negozia `min(limite, 2 GiB)` senza leggerli.
+  Il design della leva 2 ci dipende: probe come primo task della fase 4.
 - **Goal C3b**: chartered, parte a C3a chiusa.
 - **TTFT misurato per la prima volta**: 88.06 s a ctx 461 — 22× il budget UX di
   4 s. Il prefill sequenziale (nessun percorso M>1) è la causa diretta.

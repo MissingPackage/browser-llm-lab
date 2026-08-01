@@ -134,3 +134,71 @@ segnalato qui, non aggirato in silenzio.
 Fase 2 (spec) è **bloccata da un ruling**: la scelta del meccanismo dei sync ora
 dipende da quale ramo della forbice si assume, e la sufficienza delle leve del
 contratto è smentita. Docket item 4.
+
+---
+
+## it.2 (2026-08-01) — fase 2: spec C3a
+
+**Ruling PI recepiti prima di partire** (docket item 4b): quarta leva
+(granularità dei dispatch) **dentro** il perimetro C3a, gate 13.43 invariato;
+clausola di fallback rimandata a fine fase 4; riga PHASES della fase 1 corretta.
+GOAL emendamento 1 scritto, PHASES guadagna la fase 4b e la fase 4 chiude con
+una ri-misura obbligatoria di clock e `gpuBusy`.
+
+Nota sul recepimento della (b): ho conservato dentro l'opzione scelta il pezzo
+utile della (a) che il PI non ha preso — la ri-misura subito dopo la fase 4.
+Serve a dimensionare la 4b con un fatto invece che con l'assunzione ottimistica
+sui clock, e non costa un ciclo di implementazione.
+
+**Deliverable**: `docs/superpowers/specs/2026-08-01-engine-fase-c3a-design.md`,
+8 sezioni, copre i 6 punti del DONE WHEN §1. Ruling richiesto a docket item 6.
+
+### Cosa la spec decide, e sui quali numeri
+
+- **Budget per leva** (somma 74.4 ms/token, cioè il gate con margine zero — il
+  margine deve venire dai clock): repack −41.4, sync −75.4, dispatch −23.7,
+  residenza residua 12.4.
+- **Leva 1 (repack)**: secondo file OPFS `*.slabs.bin` da **15.68 GB** (calcolo
+  esatto dalle due size-class), GGUF mantenuto perché conformance e routing lo
+  leggono ⇒ 32.89 GB in OPFS. **Spazio verificato prima di speccarlo**: 1.2 TB
+  liberi. Header con magic + versione di layout + SHA del sorgente,
+  rigenerazione su mismatch, temporaneo + rename.
+- **Leva 2 (sync)**: il criterio di scelta discende dalla misura, non dal
+  contratto. Il contratto diceva "eliminare i 46 readback"; la misura dice che i
+  readback valgono **7.6 degli 83 ms** — il resto è **frammentazione dei
+  submit**. Quindi il criterio è **minimizzare i submit, non i readback**: una
+  soluzione che toglie i readback ma lascia 47 submit non incassa quasi nulla.
+- **Il pipelining è SCARTATO esplicitamente**: era fra le tre vie note del
+  contratto, ma nel decode il token t+1 dipende da t e il layer l+1 da l.
+  Resta valido per il prefill (leva 3) e per il regime speculativo (fase D).
+  Chiuderlo in spec evita che riappaia come opzione fantasma.
+- **Vincolo WebGPU marcato [VERIFY]**: `maxStorageBufferBindingSize` e
+  `maxBufferSize` reali dell'adapter **non sono mai stati letti** (il codice
+  negozia `min(limite, 2 GiB)` senza guardare il limite). WGSL non indicizza fra
+  binding diversi e i bind group non si costruiscono da GPU: quindi la via
+  raccomandata (A) è **condizionata a un probe da ~20 righe**, primo task della
+  fase 4. Sceglierla senza sarebbe tirare a indovinare.
+- **Leva 4 (dispatch)**: prima **spezzare `gpuBusy` per categoria** riusando i
+  timestamp già raccolti (cambia l'aggregazione, non la strumentazione), poi
+  fondere. Con tre ipotesi ordinate per sospetto: dispatch minuscoli
+  serializzati dalle dipendenze RW (`rmsnorm` gira su **1 workgroup**), le 16
+  catene expert per layer che fanno la stessa forma su pesi diversi, la fusione
+  gate/up→silu→down.
+- **Leva 3 (prefill M>1)**: M=16 iniziale `[ASSUMED]`, condizione di identità =
+  argmax identico su tutte le posizioni M=1 vs M>1. **Conto che vale la pena
+  aver fatto**: con M=16 il TTFT scenderebbe verso ~5-6 s, **ancora sopra i
+  4 s** — il prefill ha bisogno anche delle leve 1/2/4, non solo del batching.
+
+### Verifica
+
+La fase 2 produce un documento, non codice: `npm test` e `tsc` non sono
+pertinenti e non sono stati rieseguiti (ultimo stato verde a it.1, commit
+74cb368). Verificato invece che la spec copra i 6 punti del DONE WHEN §1 e che
+ogni numero citato abbia una fonte (report di it.1, CSV dei clock, calcolo delle
+size-class, `df`). Verifier indipendente non lanciato: stessa policy di sessione
+di it.1.
+
+### Prossimo passo
+
+STOP by design: le fasi 3-6 sono gated dal ruling di spec (docket item 6), come
+da convenzione C1/C2.

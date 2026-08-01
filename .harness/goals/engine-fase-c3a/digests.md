@@ -33,3 +33,27 @@
 - **Gate di protocollo scoperto**: verifier indipendente non lanciato (la policy
   di sessione vieta subagent non richiesti). Verifica fatta in proprio e
   meccanica; segnalato, non aggirato.
+
+## it.2 (2026-08-01) — fase 2 DONE, ruling di spec pendente
+
+- **Ruling recepiti**: quarta leva nel perimetro (GOAL emendamento 1), fase 4b
+  in PHASES, clausola di fallback rimandata a fine fase 4, riga fase 1 corretta.
+  Della (a) scartata ho tenuto il pezzo utile: la fase 4 chiude con una
+  **ri-misura obbligatoria di clock e `gpuBusy`**, che dimensiona la 4b con un
+  fatto invece che con l'assunzione ottimistica.
+- **Spec scritta**: `docs/superpowers/specs/2026-08-01-engine-fase-c3a-design.md`,
+  8 sezioni, budget per leva che somma esattamente al gate (74.4 ms/token).
+- **La spec corregge il contratto su un punto di sostanza**: il contratto dice
+  "eliminare i 46 readback", ma la misura dice che i readback valgono 7.6 degli
+  83 ms/token — il resto è **frammentazione dei submit**. Quindi il criterio
+  diventa **minimizzare i submit, non i readback**.
+- **Pipelining scartato esplicitamente** (era una delle tre vie del contratto):
+  nel decode il token t+1 dipende da t e il layer l+1 da l. Resta per il
+  prefill e per la fase D.
+- **[VERIFY] aperto**: `maxStorageBufferBindingSize` e `maxBufferSize` reali non
+  sono mai stati letti (il codice negozia `min(limite, 2 GiB)` senza guardarlo).
+  La via raccomandata per la leva 2 dipende da quel numero ⇒ probe da ~20 righe
+  come primo task della fase 4.
+- **Conto che cambia le aspettative sul prefill**: con M=16 il TTFT scenderebbe
+  verso ~5-6 s, ancora sopra i 4 s. Il batching da solo non basta.
+- **Prossimo**: STOP by design, ruling di spec a docket item 6 (5 decisioni).

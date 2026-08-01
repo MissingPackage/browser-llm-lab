@@ -52,6 +52,39 @@
    come soglia UX in regime thinking; errore del modello di banda +/-15% (C3b);
    budget slab di prova 50% e 25% del parco (C3b).
 
+6. **RULING RICHIESTO — spec C3a** (2026-08-01, it.2 fase 2). **BLOCCA le fasi
+   3-6.** Documento: `docs/superpowers/specs/2026-08-01-engine-fase-c3a-design.md`.
+
+   Cinque decisioni, in §8 della spec:
+   1. **Repack (§2)**: secondo file OPFS `*.slabs.bin` da **15.68 GB** accanto
+      al GGUF (che resta, perché conformance e routing lo leggono) ⇒ 32.89 GB
+      in OPFS. Spazio verificato (1.2 TB liberi). Header con magic + versione
+      di layout + SHA del sorgente, rigenerazione su mismatch, scrittura su
+      temporaneo + rename. One-shot ~28 s di CPU.
+   2. **Criterio della leva 2 (§3)**: la misura dice che i readback valgono
+      solo 7.6 degli 83 ms/token — il resto è **frammentazione dei submit**.
+      Quindi il criterio proposto è **"minimizzare i submit per token, non i
+      readback"**, con raccomandazione (A) *selezione su GPU con parco bindato
+      per size-class*, **condizionata a un probe dei limiti WebGPU reali**
+      (`maxStorageBufferBindingSize`/`maxBufferSize` non sono mai stati letti —
+      marcati [VERIFY], probe da ~20 righe come primo task della fase 4).
+      Si chiede anche di ratificare lo **scarto esplicito del pipelining**
+      (era fra le vie note del contratto, ma nel decode il token t+1 dipende da
+      t e il layer l+1 da l: non è applicabile).
+   3. **Metodo della leva 4 (§4)**: prima **spezzare `gpuBusy` per categoria**
+      (attention / router / shexp / catene expert / head) riusando i timestamp
+      già raccolti, poi fondere. E obbligo di **attribuire separatamente**
+      quanto del guadagno viene dai kernel e quanto dai clock che salgono.
+   4. **Prefill (§5)**: M=16 iniziale [ASSUMED]; condizione di identità =
+      **argmax identico su tutte le posizioni** M=1 vs M>1 (`maxAbsDeltaLogit`
+      resta metrica di scala, mai gate — landmine C2).
+   5. Conferma che **i gate restano 13.43 / 56.58** e che il TTFT ≤4 s resta
+      riportato-non-gateato.
+
+   Nota che emerge dalla spec e vale la pena leggere: con M=16 il TTFT
+   scenderebbe verso ~5-6 s, **ancora sopra i 4 s** — il prefill ha bisogno
+   anche delle leve 1/2/4, non solo del batching.
+
 2. **RULING RICHIESTO — clausola di fallback per la fase 4 (sync router)**
    ⏸ **RIMANDATO dal PI (2026-08-01, opzione c): "decidere dopo la fase 4"** —
    la clausola si scrive quando si vedrà l'effetto reale della rimozione dei
