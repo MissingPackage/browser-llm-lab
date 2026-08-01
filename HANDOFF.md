@@ -2,28 +2,32 @@
 
 ## 1. Next decidable
 
-**Fase 6 del goal `engine-fase-c2` (E2E + conformance logits + bench),
-it.10** — SBLOCCATA dal ruling PI 2026-07-31 (docket item 4 = opzione a:
-routing informativo, gate su logits; contingenza oracolo-f32 on-demand).
-Slice 1 (implementazione+correttezza, NIENTE bench finché il replay
-full-corpus occupa la GPU — run in corso ~2.5h, report informativo
-routing-conformance-glm47flash-2026-07-31.json): estendere glmmodel con
-output head (final `output_norm` F32 + `output.weight` Q6_K [2048→154880],
-kernel gemvQ6K esistente + argmax 2-stage esistente; readback top-32 logit
-per il confronto golden) e cpuref f64 full-model logits (comporre
-GlmDense+GlmMoe refs + head — pattern del discriminatore it.9,
-layer-streaming per la RAM); harness conformance logits sui golden fase 1
-(`results/engine/golden/glm47flash/`, 8 prompt × ≤128 gen, prefill
-teacher-forced dai token del golden): gate doppio spec §7 — (i) argmax
-≥99% vs cpuref-f64, (ii) top-1 ≥97% vs golden; secondarie KL top-32 e
-max|Δ|. Slice 2: bench protocollo B2 coi GATE HARD decode ≥13.43 /
-prefill ≥56.58 tok/s + non-regressione Qwen (conformance A + first-light ≥
-valori 2026-07-30) + report telemetria (hit-rate, stallo, dispatch/token)
-= input C3. Watch item: stallo pack ~66 ms/token proiettato e 46 sync
-router/token vs budget 74,5 ms — se il gate decode fallisce, le leve sono
-a journal it.7 (repack all'import) e la deroga è decisione PI via docket
-(non-regressione permanente). Altri watch: gate layer-level da stringere
-a canary, q5_K absTol, mscale=1 (matura proprio qui coi golden).
+**Fase 6 del goal `engine-fase-c2`, it.11 — slice 2: BENCH coi gate hard**
+(ultimo ostacolo sostanziale del goal). SLICE 1 CHIUSA a it.10 (verifier
+PASS): conformance logits full-model PASS su entrambi i gate — (i) motore
+≡ cpuref-f64 **256/256 = 100%** (p7+p4; copertura campionaria da
+ratificare a chiusura, docket item 5); (ii) top-1 vs golden **1012/1024 =
+98.83%** ≥97 sull'intero corpus. Su entrambi i prompt f64 la divergenza
+dal golden è lo STESSO TOKEN per motore e cpuref (firma q8 definitiva
+anche sui logits). Assunzione mscale=1 CONFERMATA dai golden (watch
+chiuso).
+Slice 2 (it.11): bench protocollo B2 — mediane su run ripetute, finestre
+dichiarate, ctx del corpus golden — coi GATE HARD **decode ≥13.43 /
+prefill ≥56.58 tok/s** + non-regressione Qwen (conformance fase A verde +
+first-light: K=8 ≥287.5−2σ, K=1 ≥238.3−2σ, prefill ≤697.8+2σ, stessa
+metodologia same-day B2) + report telemetria (tok/s, dispatch/token
+[1.816], hit-rate, stallo upload ms/token, occupazione) = input C3;
+chiusura DONE WHEN: report bench JSON committato. Rischi noti e leve:
+stallo residenza (pack 6.1 ms/miss dominante — leva: repack all'IMPORT,
+journal it.7) e 46 sync router/token; budget slab 11 GiB con head (hit
+95.7% vs 97.6% @12) — il bench può usare ctx CORTO (protocollo B2) ⇒ KV
+piccolo ⇒ possibile tornare a ~12 GiB: da decidere nel piano bench, è
+parametro dichiarato nel report, non policy. Se un gate tok/s fallisce:
+misura onesta nel report + docket (deroga = PI, non-regressione
+permanente); niente ottimizzazioni fuori scope C2. Dopo: fase 7
+(chiusura: docket input C3, ledger/direction, HANDOFF, merge — ruling
+permanente). Watch residui: gate layer-level da stringere a canary
+(docket alla chiusura), q5_K absTol.
 
 Stato tecnico all'ultimo run (per la ripresa): import OPFS 17.2 GB fatto
 (profilo ~/.cache/blab-glmroute-profile, SHA verificato; skip su
