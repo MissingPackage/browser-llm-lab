@@ -57,3 +57,34 @@
 - **Conto che cambia le aspettative sul prefill**: con M=16 il TTFT scenderebbe
   verso ~5-6 s, ancora sopra i 4 s. Il batching da solo non basta.
 - **Prossimo**: STOP by design, ruling di spec a docket item 6 (5 decisioni).
+
+## it.3 (2026-08-02) — assunti corretti, meccanismo del readback capito
+
+- **Gate tautologico rimosso**: ktest verificava `dispatchesPerToken === 61`, ma
+  quel valore È la formula — confrontava la formula con se stessa. Ora due
+  asserzioni: piano 61 **e** runtime 63 (= piano + testa). **La formula era
+  anche sbagliata**: non contava la testa, quindi tutto C2 ha riportato 1816
+  dispatch invece di 1818.
+- **Il gate nuovo ha trovato un bug alla prima esecuzione**, nella
+  strumentazione appena scritta (`dispatches` contava sempre, `forwards` no).
+  Corretto. ktest 30/30 PASS.
+- **Probe WebGPU**: il device prende i default di spec su tre limiti che
+  l'adapter offre più alti — 8 storage buffer su 16, 256 invocazioni/workgroup
+  su 1024, 2 GiB di buffer su 4. Ruling PI: negoziarli subito.
+  Bonus: `subgroup-matrix` è ESPOSTA ⇒ direction §8 rischio 1 è stale.
+- **Mia attribuzione sbagliata, corretta**: gli ~75 ms non erano "latenza dei
+  submit" (che vale 0.6 ms/token). `mapAsync` è una **barriera**: ogni layer
+  drena la coda. Confermato aritmeticamente (gpuBusy/wall 36.4% ≈ utilizzo
+  34.6%).
+- **Il pattern che risolve è provato da tre implementazioni** (ORT PR #27998,
+  ggml-webgpu, MLC): binding FISSO, expert = offset aritmetico nello shader.
+  Le API che sembravano promettenti (binding_array, bindless) non coprono i
+  buffer.
+- **L'ostacolo vero**: residenza totale richiede 15.91 GiB contro 15.25
+  usabili ⇒ **deficit 0.67 GiB = 4.6% del parco**. Zero-drain costa qualità:
+  docket item 8, decisione sulla funzione obiettivo.
+- **DVFS dimostrato nel meccanismo**: `gpu_idle` attivo in 34/40 campioni,
+  power cap e thermal 1/40. I clock bassi vengono dall'inattività, non dai
+  limiti. Resta non misurato *di quanto* scenderebbe `gpuBusy` a clock pieni.
+- **Ruling recepiti**: prefetch LOOKA dentro C3a (emendamento 2a) — ribalta la
+  valutazione del docket C2 item 8; limiti negoziati in fase 3 (2b).

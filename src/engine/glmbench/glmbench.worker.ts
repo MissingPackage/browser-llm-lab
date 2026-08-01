@@ -62,6 +62,7 @@ interface TelemDelta {
   forwards: number; encodeCpuMs: number; ensureMs: number; routerWaitMs: number;
   tailWaitMs: number; routerSyncs: number; submits: number;
   gpuBusyMs: number | null; gpuPasses: number; gpuPassOverflow: number;
+  dispatches: number;
 }
 const telemDelta = (a: GlmTelemetry, b: GlmTelemetry): TelemDelta => ({
   forwards: b.forwards - a.forwards,
@@ -74,6 +75,7 @@ const telemDelta = (a: GlmTelemetry, b: GlmTelemetry): TelemDelta => ({
   gpuBusyMs: a.gpuBusyMs === null || b.gpuBusyMs === null ? null : b.gpuBusyMs - a.gpuBusyMs,
   gpuPasses: b.gpuPasses - a.gpuPasses,
   gpuPassOverflow: b.gpuPassOverflow - a.gpuPassOverflow,
+  dispatches: b.dispatches - a.dispatches,
 });
 
 interface RunResult {
@@ -255,10 +257,12 @@ async function main(cfg: Cfg): Promise<void> {
   // aggregati di telemetria sulle repliche (mediane), input C3
   const decRes = reps.map((r) => r.decode.residency);
   const tele = {
-    dispatchesPerToken: model.dispatchesPerToken,
-    syncsPerToken: nMoe + 1, // atteso by design: 46 readback router + 1 logits
-    // (il valore MISURATO sta in attribution2.routerSyncsPerToken/submitsPerToken:
-    //  fino a C3a fase 1 questo campo era una costante dichiarata, non una misura)/hidden
+    // NOMI ESPLICITI sulla provenienza (C3a it.3): i campi `*Planned`/`*Expected`
+    // vengono dal piano statico, quelli `*Measured` da contatori a runtime.
+    // Prima di questa iterazione `dispatchesPerToken` e `syncsPerToken` erano
+    // valori derivati con nomi che li facevano sembrare misure.
+    dispatchesPerTokenPlanned: model.dispatchesPerTokenPlanned,
+    syncsPerTokenExpected: nMoe + 1, // by design: 46 readback router + 1 logits/hidden
     decode: {
       hitRate: median(decRes.map((r) => r.hitRate ?? 0)),
       missesPerToken: median(decRes.map((r) => r.misses / cfg.nGen)),
@@ -360,6 +364,7 @@ async function main(cfg: Cfg): Promise<void> {
       },
       routerSyncsPerToken: median(withT.map((r) => r.telem!.decode.routerSyncs / cfg.nGen)),
       submitsPerToken: median(withT.map((r) => r.telem!.decode.submits / cfg.nGen)),
+      dispatchesPerTokenMeasured: median(withT.map((r) => r.telem!.decode.dispatches / cfg.nGen)),
       gpuPassesPerToken: median(withT.map((r) => r.telem!.decode.gpuPasses / cfg.nGen)),
       gpuPassOverflow: withT.reduce((a, r) => a + r.telem!.decode.gpuPassOverflow, 0),
       projectionByK: [2, 4, 8, 46].map(project),

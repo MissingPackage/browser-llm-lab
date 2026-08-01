@@ -52,8 +52,68 @@
    come soglia UX in regime thinking; errore del modello di banda +/-15% (C3b);
    budget slab di prova 50% e 25% del parco (C3b).
 
+8. **RULING RICHIESTO — residenza totale: pagare 0.67 GiB di qualità per
+   eliminare il drain?** (2026-08-02, it.3). Non blocca le fasi 3-4; serve
+   prima di decidere la forma finale della leva 2.
+
+   **Il fatto.** Il drain della coda (46 `mapAsync` per token, ognuno una
+   barriera che aspetta TUTTO il lavoro accodato) sparisce solo se la selezione
+   dell'expert non richiede mai la CPU — cioè solo se **ogni** expert è
+   residente, perché solo la CPU può leggere da OPFS. Conto esatto su questo
+   device:
+
+   | voce | GiB |
+   |---|---|
+   | parco expert COMPLETO | 14.60 |
+   | pesi non-expert | 1.26 |
+   | KV a ctx 525 | 0.05 |
+   | **richiesto** | **15.91** |
+   | VRAM usabile (16376 MiB − 763 di desktop) | 15.25 |
+   | **deficit** | **0.67** |
+
+   **Mancano 135 expert su 2944 — il 4.6% del parco.** A ctx 4096 il deficit
+   sale a 1.03 GiB.
+
+   **Perché è una decisione tua e non mia**: cade esattamente sulla funzione
+   obiettivo (direction §2, due assi: capienza a parità di spazio, velocità a
+   parità di modello). Qui i due assi si toccano — si spende qualità per
+   comprare velocità. Vie: quant più aggressiva sul 5-10% di expert più freddi
+   (la matrice usage di C1 li identifica; lineage ds4 = quant asimmetrica), KV
+   quantizzato (risolve soprattutto a ctx lunghi), head Q6_K→Q5_K (−40 MB, non
+   basta da sola).
+
+   **Costo di non pagarlo**: il drain resta e la leva 2 si riduce alla sola
+   sovrapposizione CPU/GPU via prefetch (~54 ms/token, comunque il guadagno
+   singolo più grosso identificato finora). Non è un disastro: è metà del
+   valore.
+
+   **Serve una eval di perdita** prima di decidere: quantizzare gli expert
+   freddi cambia la qualità, ed è esattamente il tipo di misura che direction
+   dichiara parte del progetto. Proposta: la fase 4 misura prima la
+   sovrapposizione (che non costa qualità), e la residenza totale diventa un
+   item separato con la sua eval.
+
+7. ~~**RULING RICHIESTO — prefetch e limiti WebGPU**~~ **RISOLTO (2026-08-02,
+   ruling PI)**: (a) prefetch LOOKA **ammesso nel perimetro C3a** ("come la
+   quarta leva: la misura dimostra che senza non si prende il gate");
+   (b) i tre limiti WebGPU non negoziati **si negoziano subito**, in fase 3.
+   Recepito in GOAL emendamento 2 e in spec §3.1 / §3.2-bis.
+
+   Contesto della richiesta: CPU e GPU non si sovrappongono mai (per layer:
+   1.7 ms GPU con CPU ferma, 1.5 di drain, 1.18 di `ensure` con GPU ferma);
+   il prefetch a recall 92% @K=8 sposta ~54 ms/token dietro il lavoro GPU.
+   Il probe ha misurato che il device prende i default di spec su
+   `maxStorageBuffersPerShaderStage` (8 su 16 disponibili),
+   `maxComputeInvocationsPerWorkgroup` (256 su 1024) e `maxBufferSize`
+   (clampato a 2 GiB su 4).
+
 6. **RULING RICHIESTO — spec C3a** (2026-08-01, it.2 fase 2). **BLOCCA le fasi
-   3-6.** Documento: `docs/superpowers/specs/2026-08-01-engine-fase-c3a-design.md`.
+   3-6.** ⚠️ **La §3 è stata riscritta in it.3**: il meccanismo attribuito nella
+   v1 ("latenza dei submit") era SBAGLIATO — il costo API di una submit è ~13 µs,
+   quindi 47 submit valgono 0.6 ms/token, non 75. Il meccanismo vero è che
+   `mapAsync` è una **barriera** che drena la coda: la GPU è idle esattamente
+   quando non è dentro un pass (`gpuBusy`/wall 36.4% ≈ utilizzo campionato
+   34.6%). Le decisioni 2 e 3 di §8 vanno lette sulla versione riscritta. Documento: `docs/superpowers/specs/2026-08-01-engine-fase-c3a-design.md`.
 
    Cinque decisioni, in §8 della spec:
    1. **Repack (§2)**: secondo file OPFS `*.slabs.bin` da **15.68 GB** accanto

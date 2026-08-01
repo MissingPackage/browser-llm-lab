@@ -126,7 +126,7 @@ async function main(cfg: Cfg): Promise<void> {
       secondary: { klMeanTop32: top1Tot ? klSum / top1Tot : null, maxAbsDeltaLogit: maxDl },
       perPrompt, positions,
       residency: { ...st, hitRate: st.hits + st.misses > 0 ? st.hits / (st.hits + st.misses) : null, importMs: source.importMs },
-      dispatchesPerToken: model.dispatchesPerToken,
+      dispatchesPerTokenPlanned: model.dispatchesPerTokenPlanned, // DERIVATO dal piano, non contato (C3a it.3)
       wallMs: performance.now() - t0, replayMs: performance.now() - tReplay0,
     },
   });

@@ -71,6 +71,11 @@ export interface GlmTelemetry {
   gpuBusyMs: number | null; // somma delle durate dei pass (solo telemetryGpu)
   gpuPasses: number;
   gpuPassOverflow: number;  // pass non strumentati per ring pieno (atteso 0)
+  // Dispatch CONTATI a runtime (non la formula del piano). Il contatore gira
+  // sempre, anche a telemetria spenta: un incremento intero ogni ~120 µs di
+  // lavoro GPU e' sotto il rumore, e avere il numero vero in ogni report vale
+  // piu' della purezza. Confronta con `dispatchesPerTokenPlanned`.
+  dispatches: number;
 }
 
 export interface GlmModel {
@@ -78,7 +83,12 @@ export interface GlmModel {
   // bench). readLogits richiede opts.head: aggiunge final norm + lm_head e
   // ritorna i logits interi (154.880 × f32 = 620 KB/readback).
   forward(x: Float32Array, pos: number, readLogits?: boolean): Promise<{ hidden: Float32Array; logits?: Float32Array; routing: GlmRouting[] }>;
-  dispatchesPerToken: number;
+  // ATTENZIONE alla semantica: questo e' il valore DERIVATO dal piano statico
+  // (formula sui conteggi di layer), non un conteggio. Il numero misurato sta
+  // in `telemetry().dispatches`. I due divergono: la formula non contiene la
+  // testa (rms + lm_head = 2 dispatch), che pero' viene eseguita a ogni token
+  // con readLogits. Tenuti entrambi e nominati per quello che sono.
+  dispatchesPerTokenPlanned: number;
   cacheStats(): ReturnType<ExpertCache["stats"]>;
   // Drena i batch di timestamp in volo e ritorna i contatori cumulativi.
   telemetry(): Promise<GlmTelemetry>;
@@ -124,6 +134,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const T = {
     forwards: 0, encodeCpuMs: 0, ensureMs: 0, routerWaitMs: 0, tailWaitMs: 0,
     routerSyncs: 0, submits: 0, gpuBusyMs: 0, gpuPasses: 0, gpuPassOverflow: 0,
+    dispatches: 0,
   };
   const nowT = (): number => (telemOn ? performance.now() : 0);
   const armTsq = (staging: GPUBuffer, passes: number): void => {
@@ -382,13 +393,18 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       pass.setBindGroup(0, s.bind);
       pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
     }
+    T.dispatches += steps.length;
   };
 
-  // dispatch/token: attn 16/layer + denso 6 (solo blk.0) + per layer MoE
-  // 2 preRouter + 4 shexp + 4 catene expert da 4 + 1 add = 23
+  // Valore DERIVATO dal piano: attn 16/layer + denso 6 (solo blk.0) + per layer
+  // MoE 2 preRouter + 4 shexp + 4 catene expert da 4 + 1 add = 23.
+  // NON include la testa (rms + lm_head = 2), che con readLogits gira a ogni
+  // token: e' la ragione per cui questo numero e' sempre stato 2 sotto il vero.
+  // Il conteggio reale e' `telemetry().dispatches` (contatore in runSteps e
+  // nelle catene expert).
   const nMoe = layers.filter((l) => l.moe).length;
   const nDense = layers.filter((l) => l.dense).length;
-  const dispatchesPerToken = 16 * nLayer + 6 * nDense + 23 * nMoe;
+  const dispatchesPerTokenPlanned = 16 * nLayer + 6 * nDense + 23 * nMoe;
 
   const mapLogits = async (): Promise<Float32Array> => {
     await logitsStaging.mapAsync(GPUMapMode.READ);
@@ -398,7 +414,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   };
 
   return {
-    dispatchesPerToken,
+    dispatchesPerTokenPlanned,
     cacheStats: () => cache.stats(),
     async forward(xIn: Float32Array, pos: number, readLogits = false) {
       if (pos >= ctxMax) throw new Error("glmmodel: contesto pieno");
@@ -489,6 +505,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           const [dx, dy] = gemvGrid(G.dModel);
           pass!.dispatchWorkgroups(dx, dy);
         }
+        // le catene expert non passano da runSteps (bind group per-slot scelti
+        // qui): 4 dispatch per expert (gate, up, silu, down)
+        T.dispatches += G.nExpertUsed * 4;
         runSteps(pass!, [m.addMoe]);
       }
       if (readLogits) {
@@ -509,7 +528,11 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       }
       device.queue.submit([enc.finish()]);
       if (tsqStaging) armTsq(tsqStaging, passIdx);
-      if (telemOn) { T.encodeCpuMs += performance.now() - tSeg; T.submits++; T.forwards++; }
+      // `forwards` e `dispatches` sono la stessa coppia: entrambi SEMPRE, anche
+      // a telemetria spenta, altrimenti il rapporto dispatch/token e' spazzatura
+      // (il gate ktest ha beccato esattamente questo alla prima esecuzione).
+      T.forwards++;
+      if (telemOn) { T.encodeCpuMs += performance.now() - tSeg; T.submits++; }
       const tTail = nowT();
 
       const errOom = await device.popErrorScope();
@@ -542,6 +565,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         routerWaitMs: T.routerWaitMs, tailWaitMs: T.tailWaitMs, routerSyncs: T.routerSyncs,
         submits: T.submits, gpuBusyMs: canGpuTs ? T.gpuBusyMs : null,
         gpuPasses: T.gpuPasses, gpuPassOverflow: T.gpuPassOverflow,
+        dispatches: T.dispatches,
       };
     },
     destroy() {

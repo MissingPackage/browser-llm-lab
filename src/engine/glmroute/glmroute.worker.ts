@@ -138,7 +138,7 @@ async function main(cfg: Cfg): Promise<void> {
       slots,
       importMs: source.importMs,
     },
-    dispatchesPerToken: model.dispatchesPerToken,
+    dispatchesPerTokenPlanned: model.dispatchesPerTokenPlanned, // DERIVATO dal piano, non contato (C3a it.3)
     wallMs: performance.now() - t0,
     replayMs: performance.now() - tReplay0,
   };

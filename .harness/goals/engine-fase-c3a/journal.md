@@ -202,3 +202,122 @@ di it.1.
 
 STOP by design: le fasi 3-6 sono gated dal ruling di spec (docket item 6), come
 da convenzione C1/C2.
+
+---
+
+## it.3 (2026-08-02) — assunti-non-misurati sistemati + indagine sul readback
+
+PI autorizza l'uso dei subagent. Tre agenti in parallelo (sweep degli assunti,
+ricerca sul readback, ricognizione della residenza) più il probe dei limiti
+WebGPU eseguito da me.
+
+### A. Valori assunti presentati come misure — CORRETTI
+
+Lo sweep ha trovato il pattern in tre punti, il più grave dei quali era un
+**gate tautologico**: `ktest` verificava `model.dispatchesPerToken === 61`, ma
+quel valore È la formula `16·nLayer + 6·nDense + 23·nMoe` — il test confrontava
+la formula con se stessa e sarebbe passato anche togliendo un pass WGSL.
+
+Correzioni:
+- `glmmodel.ts`: contatore **reale** dei dispatch (`T.dispatches`, incrementato
+  in `runSteps` e nelle catene expert), esposto in `telemetry()`. Il valore
+  derivato resta ma si chiama ora `dispatchesPerTokenPlanned`.
+- **La formula era anche sbagliata**: non conta la testa (rms + lm_head), quindi
+  ha riportato 2 dispatch in meno per tutto C2. Reale con `readLogits`: 1818,
+  non 1816.
+- `ktest`: il gate diventa due asserzioni distinte — il piano vale 61 **e** il
+  runtime emette 63 (= piano + testa). È (b) a renderlo un test.
+- Report di bench/conf/route: nomi che dichiarano la provenienza
+  (`*Planned` / `*Expected` dal piano, `*Measured` dai contatori).
+
+**Il gate nuovo ha trovato un bug alla PRIMA esecuzione** — nella strumentazione
+che avevo appena scritto: `T.dispatches` contava sempre, `T.forwards` solo a
+telemetria accesa, quindi il rapporto era 378 invece di 63. I due contatori ora
+vivono insieme, entrambi incondizionati. ktest **30/30 PASS**, exit 0.
+
+### B. Probe dei limiti WebGPU — [VERIFY] sciolto, tre capacità sul tavolo
+
+`scripts/webgpu-limits.mjs` (nuovo), artefatto
+`results/engine/webgpu-limits-4090laptop-2026-08-02.json`. Un limite
+dell'adapter è una promessa: il device riceve il **default di spec** se non lo
+si chiede in `requiredLimits`. Il motore chiede 3 limiti su tanti, quindi:
+- `maxStorageBuffersPerShaderStage`: **8 su 16** disponibili
+- `maxComputeInvocationsPerWorkgroup`: **256 su 1024** disponibili
+- `maxBufferSize`: clampato a 2 GiB su **4** disponibili
+- `maxStorageBufferBindingSize` 2 GiB−4: **tetto duro NVIDIA**, Dawn lo clampa
+  per un bug driver su `OpArrayLength` — qui il cap del codice era giusto.
+
+Inoltre l'adapter espone **`chromium-experimental-subgroup-matrix`**,
+`subgroups`, `subgroup-size-control` e
+`chromium-experimental-timestamp-query-inside-passes`. Direction §8 rischio 1
+(«subgroup-matrix assente nei browser») è **stale** su questa macchina — con la
+precisazione di perimetro: la vediamo per `--enable-unsafe-webgpu`, quindi vale
+per il ceiling del motore, non per un confronto pubblico.
+
+### C. Il meccanismo del readback: la mia attribuzione era SBAGLIATA
+
+Avevo scritto in spec v1 che gli ~75 ms erano "latenza dei submit". Il costo API
+di una submit è **~13 µs** (Dawn/Vulkan, misura pubblicata): 47 submit valgono
+**0.6 ms/token**, non 75.
+
+Il meccanismo vero: **`mapAsync` è una barriera** — da spec non si completa
+finché tutto il lavoro accodato prima non è finito. Ogni layer è un **drain
+completo della coda**. La nostra stessa misura lo conferma per via aritmetica:
+`gpuBusy`/wall = 36.4% contro utilizzo campionato 34.6%. La GPU è idle
+esattamente quando non è dentro un pass. Il probe a 0.16 ms misurava il
+round-trip a coda **vuota**; sotto carico ogni round-trip include il drain
+(83/46 = 1.8 ms, ~11× il probe).
+
+**Il pattern che risolve esiste ed è provato da tre implementazioni
+indipendenti** (ONNX Runtime PR #27998 mergiata 2026-04-10, llama.cpp
+`ggml-webgpu`, MLC): pesi di tutti gli expert in un tensore packed, **binding
+FISSO**, indici top-k in un buffer GPU, expert = **offset aritmetico** nello
+shader. Nessuno usa `dispatchWorkgroupsIndirect`. Le API che sembravano
+promettenti non arrivano in soccorso: `binding_array` per i buffer è dichiarato
+non implementato in Dawn, il bindless sperimentale copre solo texture/sampler,
+i dynamic offset sono valori CPU.
+
+### D. L'ostacolo che nessun pattern di binding risolve
+
+Le tre implementazioni di riferimento assumono **tutti gli expert residenti**.
+Noi ne abbiamo 2419 su 2944 (82.2%), e solo la CPU legge da OPFS ⇒ finché c'è
+un miss, il readback serve. Conto della residenza totale: servono **15.91 GiB**
+(14.60 di parco + 1.26 di non-expert + 0.05 di KV) contro **15.25** usabili
+⇒ **deficit 0.67 GiB = 135 expert = 4.6% del parco**. A ctx 4096: 1.03 GiB.
+
+È una decisione sulla funzione obiettivo (capienza vs velocità), non di
+implementazione ⇒ docket item 8.
+
+### E. DVFS: ipotesi ora DIMOSTRATA nel meccanismo
+
+L'agente di ricerca ha giustamente marcato come non dimostrata la mia ipotesi
+che le bolle abbassassero i clock. L'ho misurata: `nvidia-smi` con le
+`clocks_event_reasons` durante un bench (49 campioni,
+`results/engine/host-gpu-throttle-c3a-it3-2026-08-02.csv`):
+
+- **`gpu_idle` ATTIVO in 34/40 campioni**
+- `sw_power_cap`, `hw_slowdown`, `sw_thermal_slowdown`: 1/40 ciascuno
+
+I clock bassi (1168-1746 MHz su 3105) sono causati da **inattività**, non da
+limiti termici o di potenza. Il meccanismo è quindi stabilito: il drain causa
+l'idle, l'idle abbassa i clock. **Resta non misurato di quanto `gpuBusy`
+scenderebbe a clock pieni** (i GEMV sono in parte memory-bound e il clock
+memoria è già al massimo) — la forbice 10.2-15.6 tok/s resta, ma la sua premessa
+non è più un'assunzione.
+
+### Ruling PI recepiti in giornata
+
+- **Prefetch LOOKA ammesso nel perimetro C3a** (GOAL emendamento 2a). Ribalta
+  la valutazione del docket C2 item 8, che dava al prefetch valore residuo
+  piccolo guardando solo lo stallo e non la sovrapposizione CPU/GPU.
+- **I tre limiti si negoziano subito**, in fase 3 (emendamento 2b).
+
+Spec §3 riscritta di conseguenza (§3.0 meccanismo, §3.0-bis pattern provato,
+§3.0-ter residenza, §3.1 limiti misurati, §3.2-bis via scelta).
+
+### Verifica
+
+`npx tsc --noEmit` pulito; `npm test` 220 passed + 2 skipped; **ktest 30/30
+PASS exit 0** col gate dispatch ora significativo. Probe eseguito con artefatto
+committato. Verifier indipendente: ora autorizzato dal PI, da usare dalla
+prossima iterazione.

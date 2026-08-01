@@ -3,6 +3,24 @@ CPU di C1 (decode >=13.43 tok/s) e possiede un percorso di prefill batched M>1,
 eliminando i tre costi strutturali attribuiti in C2 (pack CPU nel path caldo,
 46 sync router/token, forward sequenziale in prefill) a correttezza invariata.
 
+<!-- EMENDAMENTO 2 (ruling PI 2026-08-02, docket item 7): entrano nel perimetro
+     C3a due cose prima vietate o non previste.
+     (a) PREFETCH LOOKA (era C3b, must-docket in C3a). Motivo: la misura di it.1
+         piu' l'analisi di it.3 mostrano che CPU e GPU non si sovrappongono MAI
+         (per layer: 1.7 ms di GPU con CPU ferma, 1.5 di drain, 1.18 di ensure
+         con GPU ferma). Predire gli expert del layer l+1 dall'hidden del layer
+         l (recall 92% @K=8 misurato in C1) sposta ~54 ms/token di lavoro CPU
+         dietro il lavoro GPU. Questo RIBALTA la valutazione del docket C2
+         item 8, che dava al prefetch valore residuo piccolo guardando solo lo
+         stallo e non la sovrapposizione.
+         Restano a C3b: slab ctx-aware, tier.h, AUTOPIN, pin learned, modello di
+         banda, instant-on, WP banda fredda browser.
+     (b) NEGOZIAZIONE DEI LIMITI WebGPU. Il probe di it.3 mostra che il device
+         prende i default di spec su tre limiti che l'adapter offre piu' alti:
+         maxStorageBuffersPerShaderStage 8 su 16, maxComputeInvocationsPerWorkgroup
+         256 su 1024, maxBufferSize clampato a 2 GiB su 4 disponibili.
+         Si negoziano in fase 3. -->
+
 <!-- EMENDAMENTO 1 (ruling PI 2026-08-01, docket item 4 opzione b): la
      GRANULARITÀ/FUSIONE DEI DISPATCH entra nel perimetro C3a come QUARTA LEVA.
      Motivo: la misura di fase 1 dimostra che le tre leve originali non possono
@@ -117,10 +135,9 @@ AUTHORITY GRANTED:
   riuso del checkout llama.cpp di C1 per rigenerare golden (nessun download
   nuovo, nessuna spesa); run locali su 4090; aggiornare docs/engine/* quando
   stale (ruling 2026-07-29); docket/HANDOFF refresh.
-- must docket (never do): tier.h, AUTOPIN, pin learned, PILOT-real/prefetch,
-  instant-on, budget slab ctx-aware, WP banda fredda browser (= C3b: se una di
-  queste diventa PRECONDIZIONE di una leva strutturale, si docketa la richiesta
-  di anticipo, non si esegue); cambio modello-tesi, quant diversa da Q4_0,
+- must docket (never do): tier.h, AUTOPIN, pin learned, instant-on, budget slab
+  ctx-aware, WP banda fredda browser (= C3b; il PREFETCH/PILOT-real e' USCITO
+  da questa lista con l'emendamento 2 ed e' ora dentro il perimetro C3a); cambio modello-tesi, quant diversa da Q4_0,
   direction §3; testa MTP/spec-dec (fase D); benchmark pubblico (ruling
   2026-07-30); run M4/S22 e hero-demo (PI-gated per hardware); ogni spesa;
   delete di codice committato >30gg senza check git log --follow; merge con

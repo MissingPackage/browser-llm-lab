@@ -723,15 +723,30 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
     }
   }
   const st = model.cacheStats();
+  // Dispatch: due asserzioni DISTINTE, non una tautologia. Prima di C3a il gate
+  // era `dispatchesPerToken === 61`, cioe' la formula confrontata con se stessa:
+  // passava sempre, e non avrebbe mai visto un pass WGSL aggiunto o tolto.
+  // Ora: (a) il piano vale quello che ci aspettiamo; (b) il runtime EMETTE
+  // davvero quel numero piu' i 2 della testa (rms + lm_head), che il piano non
+  // contiene. E' (b) a rendere il gate un test.
+  const tel = await model.telemetry();
+  const measuredPerToken = tel.dispatches / Math.max(1, tel.forwards);
+  const PLANNED = 61, HEAD = 2;
+  const dispatchOk = model.dispatchesPerTokenPlanned === PLANNED && measuredPerToken === PLANNED + HEAD;
+  if (!dispatchOk) {
+    problems.push(`dispatch: piano ${model.dispatchesPerTokenPlanned} (atteso ${PLANNED}), ` +
+      `misurati ${measuredPerToken}/token (atteso ${PLANNED + HEAD} = piano + testa)`);
+  }
   model.destroy();
   const l2 = Math.sqrt(l2e / Math.max(l2r, 1e-30));
   const pass = problems.length === 0 && l2 <= 1e-3 && wMaxRel <= 1e-3 && st.misses > 0
-    && model.dispatchesPerToken === 61 && argmaxOk === NPOS && logitMaxRel <= 5e-3;
+    && dispatchOk && argmaxOk === NPOS && logitMaxRel <= 5e-3;
   return {
     kernel: name, pass, maxAbs, maxRel,
     note: `${NPOS} pos, L2rel=${l2.toExponential(2)}, wMaxRel=${wMaxRel.toExponential(2)}, ` +
       `argmax ${argmaxOk}/${NPOS}, logitMaxRel=${logitMaxRel.toExponential(2)}, ` +
-      `h${st.hits}/m${st.misses}/ev${st.evictions}, ${model.dispatchesPerToken} dispatch/token` +
+      `h${st.hits}/m${st.misses}/ev${st.evictions}, ${measuredPerToken} dispatch/token misurati ` +
+      `(piano ${model.dispatchesPerTokenPlanned} + testa ${HEAD})` +
       (problems.length ? `; ${problems.join("; ")}` : ""),
   };
 }

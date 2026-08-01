@@ -68,7 +68,7 @@ for (;;) {
       `— prefill ${g.prefillMedian.toFixed(2)} tok/s (gate ${g.prefillGateToksPerSec}: ${g.prefillPass ? "PASS" : "FAIL"})`);
     const d = report.telemetry.decode;
     console.log(
-      `[glmbench] telemetria decode: ${report.telemetry.dispatchesPerToken} dispatch/token, ${report.telemetry.syncsPerToken} sync/token, ` +
+      `[glmbench] telemetria decode: ${report.telemetry.dispatchesPerTokenPlanned} dispatch/token (piano), ${report.telemetry.syncsPerTokenExpected} sync/token (atteso), ` +
       `hit ${(100 * d.hitRate).toFixed(2)}%, stallo ${d.stallMsPerToken.toFixed(1)} ms/token ` +
       `(read ${d.readMsPerToken.toFixed(1)} + pack ${d.packMsPerToken.toFixed(1)} + upload ${d.uploadMsPerToken.toFixed(1)}), ` +
       `residuo ${d.residuoMsPerToken.toFixed(1)} ms/token`);
@@ -88,7 +88,7 @@ for (;;) {
         `[glmbench] attribuzione decode: wall ${a.wallMsPerToken.toFixed(1)} = gpuBusy ${a.gpuBusyMsPerToken?.toFixed(1) ?? "n/d"} ` +
         `+ stallo ${a.stallResidenzaMsPerToken.toFixed(1)} + sync/CPU ${a.syncCpuMsPerToken?.toFixed(1) ?? "n/d"} ms/token ` +
         `(fuori GPU ${a.quotaFuoriGpu === null ? "n/d" : (100 * a.quotaFuoriGpu).toFixed(1) + "%"}; ` +
-        `sync misurati ${a.routerSyncsPerToken.toFixed(1)}/token, submit ${a.submitsPerToken.toFixed(1)}/token)`);
+        `MISURATI: ${a.dispatchesPerTokenMeasured.toFixed(0)} dispatch, ${a.routerSyncsPerToken.toFixed(1)} sync, ${a.submitsPerToken.toFixed(1)} submit per token)`);
       const p = report.syncFloorProbe;
       console.log(
         `[glmbench] floor sync: mapAsync ${p.mapRoundTripMs.median.toFixed(2)} ms × ${a.routerSyncsPerToken.toFixed(0)} = ` +

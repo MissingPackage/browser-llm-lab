@@ -91,29 +91,123 @@ dimensionata. Si segnala solo il consumo disco (+15.68 GB).
 bindare**, e in WebGPU i bind group sono oggetti CPU. Quindi ogni layer MoE
 spezza il token in un submit a sé: 46 readback + 47 submit per token.
 
-**Il numero che cambia la scelta**: il readback in sé costa **7.6 ms/token**
-(probe), cioè **meno del 10%** degli 83 ms. Gli altri ~75 ms sono
-**frammentazione dei submit**: latenza submit→start, bolle in cui la GPU non ha
-lavoro accodato, e il governor che di conseguenza tiene i clock a 1746 MHz.
-**Conseguenza di design**: l'obiettivo non è "leggere più in fretta", è
-**smettere di spezzare il token in 47 submit**. Una soluzione che elimina i
-readback ma lascia 47 submit non incassa quasi nulla.
+### 3.0 Il meccanismo vero (corretto dopo la ricerca di it.3)
 
-### 3.1 Vincolo WebGPU da verificare PRIMA di scegliere
+La prima stesura di questa spec attribuiva gli ~75 ms alla "latenza dei
+submit". **È sbagliato**: il costo API di una submit è ~13 µs (Dawn/Vulkan,
+misura pubblicata), quindi 47 submit valgono **~0.6 ms/token**, non 75.
 
-Le tre vie note dipendono tutte da quanto parco si riesce a bindare in un colpo:
+Il meccanismo dominante è che **`mapAsync` è una barriera**: da spec non si
+completa finché *tutto* il lavoro GPU accodato prima non è finito. Ogni layer è
+quindi un **drain completo della coda**, e la GPU non ha mai lavoro accodato
+mentre la CPU decide. La nostra stessa misura lo conferma per via aritmetica:
+`gpuBusy`/wall = 78.2/215 = **36.4%**, contro un'utilizzazione GPU campionata
+del **34.6%** — coincidono. Non c'è overlap da recuperare: c'è serializzazione
+da eliminare. Il probe a 0.16 ms misura il round-trip a coda **vuota**; sotto
+carico ogni round-trip include il drain (83/46 = 1.8 ms, ~11× il probe).
 
-- `maxStorageBufferBindingSize` — oggi il codice negozia
-  `min(limite adapter, 2 GiB)`; il limite reale dell'adapter **non è mai stato
-  letto** `[VERIFY]`.
-- `maxBufferSize` — idem.
-- WGSL **non** indicizza dinamicamente tra binding diversi (niente binding
-  array in core WebGPU), e i bind group non si costruiscono da GPU.
+**Conseguenza di design**: il bersaglio non è né "leggere più in fretta" né
+"fare meno submit" — è **smettere di drenare la coda 46 volte per token**.
 
-**Primo task della fase 4, prima di ogni implementazione**: un probe da ~20
-righe che stampa i due limiti reali e quanti slab entrano in un binding. Il
-risultato seleziona il design. Costo: minuti. Sceglierlo senza è tirare a
-indovinare.
+### 3.0-bis Il pattern che risolve, già provato da tre implementazioni
+
+Nessuno, in nessun motore, cambia bind group in funzione dell'expert
+selezionato. Il pattern condiviso è: **pesi di TUTTI gli expert in un tensore
+packed** (asse 0 = expert id), **binding FISSO**, indici top-k in un **buffer
+GPU**, e l'expert diventa un **offset aritmetico dentro lo shader**.
+
+- **ONNX Runtime WebGPU**, PR #27998 (mergiata 2026-04-10), decode MoE a 1 token
+  da 17 a 5 dispatch: `let actual_weight_idx = weight_index_indirect[a_global];`
+  poi `let b_base_offset = actual_weight_idx * uniforms.K_of_b * uniforms.N;`
+  Il gate produce gli indici come tensore GPU e il codice **prosegue senza
+  readback**. Guadagni riportati: +21% su Meteor Lake, +14% su RTX 5060 Ti.
+- **llama.cpp `ggml-webgpu`**: `mul_mat_id_vec.wgsl` fa
+  `let expert = ids[...]` → `src0_batch_offset = ... + own_expert * stride_02`.
+  Submit batchate a 64. `dispatchWorkgroupsIndirect` non compare mai.
+- **MLC/TVM**: `moe_matmul.gemv` con `indptr` come tensore GPU (ma WebLLM non
+  spedisce modelli MoE: nessuna prova d'esercizio su WebGPU).
+
+Nota importante: **nessuno usa `dispatchWorkgroupsIndirect`** per questo. Con k
+costante il caso peggiore è il caso esatto, quindi si dispatcha e basta.
+
+**API che NON arriveranno in soccorso** (verificate sulla spec e su Dawn):
+`binding_array` per i buffer è dichiarato non implementato in Dawn
+(`BindGroupLayoutInternal.cpp`: *"bindingArraySize > 1 for a buffer binding is
+not implemented yet"*); il bindless sperimentale
+(`chromium_experimental_resource_table`) copre **solo texture e sampler**; i
+dynamic offset sono valori CPU passati a `setBindGroup` (spec §14.1), quindi
+richiedono comunque di conoscere l'indice su CPU.
+
+### 3.0-ter L'ostacolo che nessun pattern di binding risolve: la residenza
+
+Le tre implementazioni di riferimento assumono **tutti gli expert residenti**.
+Noi no: a slab 12 GiB sono residenti **2419 slot su 2944 = 82.2%**, con 4.47
+miss/token. E **solo la CPU può leggere da OPFS**: finché esiste un miss, il
+readback del router è necessario per sapere cosa caricare.
+
+**Il conto della residenza totale su questo device** (calcolato, non stimato):
+
+| voce | GiB |
+|---|---|
+| parco expert COMPLETO (2688 q4_0 + 256 q4_1) | 14.60 |
+| pesi non-expert (attention 47 layer, shexp 46, denso, head Q6_K) | 1.26 |
+| KV a ctx 525 | 0.05 |
+| **totale richiesto** | **15.91** |
+| VRAM usabile (16376 MiB − 763 di desktop) | 15.25 |
+| **deficit** | **0.67** |
+
+**Mancano 0.67 GiB, cioè 135 expert su 2944 — il 4.6% del parco.** A ctx 4096
+il KV sale a 0.41 GiB e il deficit diventa 1.03 GiB.
+
+Questo trasforma la leva 2 in una **decisione sulla funzione obiettivo**, non in
+un problema di implementazione: il progetto ottimizza "massima intelligenza sotto
+vincolo di rate", con due assi dichiarati (capienza a parità di spazio, velocità
+a parità di modello). Qui i due assi si toccano: **spendere ~0.67 GiB di qualità
+compra l'eliminazione del drain**. Vie possibili, da valutare con una eval di
+perdita:
+- quant più aggressiva sul 5-10% di expert più freddi (la matrice usage di C1 li
+  identifica), lasciando Q4_0 sul resto — quant asimmetrica, lineage ds4;
+- KV quantizzato, che libera il deficit a ctx lunghi;
+- head Q6_K → Q5_K (−40 MB, non basta da solo).
+
+**Se non si paga quel prezzo**, il drain resta e la leva 2 si riduce a
+**sovrapporre il lavoro CPU a quello GPU** tramite prefetch (§3.2 bis).
+
+**RULING RICHIESTO** su questo punto: docket item 8.
+
+### 3.1 Limiti WebGPU — MISURATI (probe eseguito, [VERIFY] sciolto)
+
+`scripts/webgpu-limits.mjs`, artefatto
+`results/engine/webgpu-limits-4090laptop-2026-08-02.json`:
+
+| limite | adapter | device che creiamo | nota |
+|---|---|---|---|
+| `maxStorageBufferBindingSize` | 2 147 483 644 | 2 147 483 644 | **tetto duro NVIDIA**: Dawn lo clampa a 2 GiB−4 per un bug driver su `OpArrayLength` |
+| `maxBufferSize` | 4 294 967 292 | 4 294 967 292 | il codice lo clampa a 2 GiB **senza motivo** |
+| `maxStorageBuffersPerShaderStage` | **16** | **8** | mai richiesto ⇒ default di spec |
+| `maxComputeInvocationsPerWorkgroup` | **1024** | **256** | mai richiesto ⇒ default di spec |
+| `maxComputeWorkgroupStorageSize` | 49 152 | 49 152 | il codice ne chiede 32 768 |
+
+**Tre capacità lasciate sul tavolo** perché non richieste in `requiredLimits`:
+un limite dell'adapter è una promessa, il device riceve il default se non lo si
+chiede. Ruling PI 2026-08-02: si negoziano **subito**, in fase 3.
+
+Conseguenze dirette:
+- un binding storage copre **404 slab** q4_0 ⇒ servono **8 binding** per il parco
+  completo, **6** per il residente attuale (2419 slot);
+- con `maxStorageBuffersPerShaderStage` a 16 (negoziato) i binding ci sono;
+- con `maxBufferSize` a 4 GiB i buffer di classe passano da 7 a **4**;
+- con 1024 invocazioni/workgroup il GEMV può cambiare forma (oggi
+  `workgroup_size(64)` con riduzione in shared memory) — **è materia della
+  leva 4**, ed è la scoperta più promettente del probe;
+- **`chromium-experimental-subgroup-matrix` è ESPOSTA** su questo adapter, con
+  `subgroups` e `subgroup-size-control`: direction §8 rischio 1 («subgroup-matrix
+  assente nei browser») è **stale**. Attenzione al perimetro: la vediamo perché
+  lanciamo Chrome con `--enable-unsafe-webgpu`, quindi vale per esplorare il
+  ceiling del motore, **non** per un confronto pubblico su browser stock.
+- **`chromium-experimental-timestamp-query-inside-passes`** è esposta: darebbe
+  il timing **per dispatch** invece che per pass, che è la granularità che serve
+  alla leva 4.
 
 ### 3.2 Vie, con il criterio di scelta esplicitato
 
@@ -137,11 +231,42 @@ indovinare.
   l'opzione: era elencata fra le vie note nel contratto, ma la dipendenza
   sequenziale la esclude.
 
+### 3.2-bis La via scelta: packed arena + offset in shader + prefetch overlap
+
+Alla luce di §3.0 / §3.0-bis / §3.0-ter, e del ruling PI 2026-08-02 che ammette
+il **prefetch LOOKA nel perimetro C3a**, il design è in due strati.
+
+**Strato 1 — togliere il binding dal percorso decisionale** (pattern ORT/ggml).
+I 6-8 buffer di classe restano, ma diventano **binding fissi** del bind group
+delle catene expert; lo slot dell'expert diventa un **offset aritmetico**
+calcolato nello shader a partire da un id letto da un buffer GPU scritto dal
+router. Serve: negoziare `maxStorageBuffersPerShaderStage` a 16, sostituire
+`layout: "auto"` con un bind group layout esplicito, aggiungere ai kernel GEMV
+un base-offset (oggi `qs`/`scales` assumono offset 0 — `wgsl.ts:93-94, 111`), e
+collassare i 4 buffer `wExp[k]` da 4 byte in uno solo indicizzato.
+
+**Strato 2 — togliere la CPU dal percorso critico** (prefetch). Il drain resta
+finché la residenza non è totale (§3.0-ter), ma oggi CPU e GPU **non si
+sovrappongono mai**: per layer, 1.7 ms di GPU con CPU ferma, 1.5 ms di drain,
+1.18 ms di `ensure` con GPU ferma. Predire gli expert del layer l+1 dall'hidden
+del layer l (LOOKA, **recall 92% @K=8** misurato in C1) permette di far girare
+le letture OPFS e gli upload **durante** il lavoro GPU del layer l: sono
+~54 ms/token di lavoro CPU che scompaiono dietro la GPU.
+
+**Questo ribalta la valutazione del docket C2 item 8**, che classificava il
+prefetch come leva 4 di valore residuo piccolo (≤56 ms/token). Quella stima
+considerava solo lo *stallo* come costo di un miss; non vedeva che il prefetch
+abilita la **sovrapposizione**, che attacca il termine sync — molto più grosso.
+
 **Criterio di scelta** (dichiarato come chiede il DONE WHEN §1): si sceglie la
-via che minimizza i **submit per token** a parità di correttezza del routing,
-perché la misura dice che il costo sta nella frammentazione e non nel readback.
-A parità di submit, si preferisce quella con meno dispatch aggiunti.
-**Raccomandazione: (A)**, condizionata al probe di §3.1.
+via che **minimizza il numero di drain della coda** a parità di correttezza del
+routing; a parità di drain, quella che massimizza la sovrapposizione CPU/GPU.
+Il conteggio dei submit è un proxy, non l'obiettivo.
+
+**Nota di rischio permanente** (osservazione della ricerca): finché esiste un
+readback per layer, l'intera famiglia di ottimizzazioni **record/replay** resta
+preclusa per costruzione — il graph capture di ORT richiede esplicitamente
+nessun kernel su CPU. È un costo composto del drain, non solo di latenza.
 
 **Done-when della fase 4**: ≤ 2 sync/token (o la soglia ammortizzata dichiarata
 col suo parametro), routing conformance non peggiore del riferimento C2, **più
