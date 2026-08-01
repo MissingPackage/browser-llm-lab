@@ -512,3 +512,31 @@ completo 8 prompt, 31.274 pos, 199 min — il fix maxComputeWorkgroupStorageSize
 - Nota harness: il campo `gate` del report riflette la soglia pre-ruling
   (exit done-gate-fail): cosmetico, il ruling governa; da allineare alla
   prossima passata sull'harness.
+
+## it.10 — fase 6, slice 1: output head + conformance logits (2026-08-01, IN CORSO)
+
+Implementato e verificato kernel-level:
+- `glmmodel.ts`: output head (final `output_norm` + lm_head Q6_K, vocab
+  parametrica per i test) con `forward(..., readLogits)` — logits interi
+  (620 KB) solo alle posizioni richieste; guard esplicita head assente.
+- ktest `glm-model-2layer` esteso: head sintetica vocab 2048, argmax 6/6 vs
+  ref f64, logitMaxRel 3.4e-4 — **30/30 PASS** su 4090, zero regressioni.
+- `cpuref.ts`: `GlmMlaAttnAbsorbedRefF64` (l'absorbed f64 per il full-model:
+  la naive è impraticabile a ctx>1k) + identità naive↔absorbed in SUITE
+  (nuovo test, <1e-8 su 3 pos) + export rmsnormF64/matvecF64.
+- Harness `glmconf` (worker/page/html + scripts/glm-conf-run.mjs): replay
+  teacher-forced dei golden con head alle posizioni golden; top-1 vs golden,
+  KL top-32 e max|Δ| logit, dump top-32 del motore per il gate (i).
+- `tests/analysis-conf-cpuref.test.ts` (env-gated): full-model cpuref f64
+  absorbed layer-streaming con SELF-CHECK naive/absorbed per layer (2 pos)
+  e head alle sole posizioni golden — produce l'argmax cpuref per gate (i).
+
+**Primo numero di gate (PARZIALE, prompt 7 completo — 251 prefill + 128
+golden)**: gate (ii) top-1 vs golden **127/128 = 99.22% ≥ 97% PASS**
+(report logits-conformance-p7-2026-08-01.json; KL media top-32 3.3e-3).
+`npm test` verde (221 + 2 analisi skipped), tsc pulito.
+
+IN RUN (background): (1) cpuref f64 p7 per il gate (i) argmax ≥99% vs
+motore; (2) conformance GPU FULL-CORPUS (8 prompt, ~26k prefill + 1.024
+golden, ~3.5h). I gate definitivi e il verifier alla raccolta. Nessun
+bench in questa slice (GPU occupata; slice 2).

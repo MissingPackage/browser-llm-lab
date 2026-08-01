@@ -573,7 +573,11 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
     "ffn_gate_shexp.weight": [(G.dModel * G.dFfnExpert / 256) * Q5_K_BLOCK_BYTES, "q5_K"],
     "ffn_up_shexp.weight": [(G.dModel * G.dFfnExpert / 256) * Q5_K_BLOCK_BYTES, "q5_K"],
     "ffn_down_shexp.weight": [(G.dFfnExpert * G.dModel / 256) * Q6_K_BLOCK_BYTES, "q6_K"],
+    // head sintetica a vocab RIDOTTA (2048) — la matematica gemvQ6K è la stessa
+    "output_norm.weight": [G.dModel * 4, "f32"],
+    "output.weight": [(G.dModel * 2048 / 256) * Q6_K_BLOCK_BYTES, "q6_K"],
   };
+  const VOCAB_T = 2048;
   const seedOf = (s: string): number => {
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
@@ -659,17 +663,34 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
   });
 
   const model = createGlmModel(g.device, srcMock, {
-    nLayer: 2, ctxMax: 16,
+    nLayer: 2, ctxMax: 16, head: true, vocab: VOCAB_T,
     cache: { budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 6 }, maxBindingBytes: 1 << 30, maxBufferBytes: 1 << 30, timing: true },
   });
+  // ref f64 dell'head: rms(output_norm) + matvec Q6_K dequant
+  const outNormF = deqBy(nonExpert("output_norm.weight"), "f32");
+  const outWF = deqBy(nonExpert("output.weight"), "q6_K");
+  const headRefF64 = (h: Float64Array): Float64Array => {
+    let ss = 0;
+    for (let i = 0; i < G.dModel; i++) ss += h[i] * h[i];
+    const sc = 1 / Math.sqrt(ss / G.dModel + G.rmsEps);
+    const out = new Float64Array(VOCAB_T);
+    for (let r = 0; r < VOCAB_T; r++) {
+      let acc = 0;
+      const base = r * G.dModel;
+      for (let i = 0; i < G.dModel; i++) acc += outWF[base + i] * (h[i] * sc * outNormF[i]);
+      out[r] = acc;
+    }
+    return out;
+  };
   const NPOS = 6;
-  let l2e = 0, l2r = 0, maxAbs = 0, maxRel = 0, wMaxRel = 0;
+  let l2e = 0, l2r = 0, maxAbs = 0, maxRel = 0, wMaxRel = 0, logitMaxRel = 0;
+  let argmaxOk = 0;
   const problems: string[] = [];
   for (let p = 0; p < NPOS; p++) {
     const xIn = randF32(G.dModel, 60_000 + p, 0.5);
     const refH = ref1.forward(ref0.forward(xIn));
     const refR = ref1.lastRouting!;
-    const got = await model.forward(xIn, p);
+    const got = await model.forward(xIn, p, true);
     if (got.routing.length !== 1) { problems.push(`pos ${p}: ${got.routing.length} routing`); break; }
     const gotSet = new Set(Array.from(got.routing[0].experts));
     if (gotSet.size !== 4 || !Array.from(refR.experts).every((e) => gotSet.has(e))) {
@@ -689,14 +710,27 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
       l2e += d * d;
       l2r += refH[i] * refH[i];
     }
+    // head: logits vs ref f64 + argmax
+    const refL = headRefF64(refH);
+    let refArg = 0;
+    for (let r = 1; r < VOCAB_T; r++) if (refL[r] > refL[refArg]) refArg = r;
+    let gotArg = 0;
+    const gl = got.logits!;
+    for (let r = 1; r < VOCAB_T; r++) if (gl[r] > gl[gotArg]) gotArg = r;
+    if (gotArg === refArg) argmaxOk++;
+    for (let r = 0; r < VOCAB_T; r++) {
+      logitMaxRel = Math.max(logitMaxRel, Math.abs(gl[r] - refL[r]) / Math.max(Math.abs(refL[r]), 1e-3));
+    }
   }
   const st = model.cacheStats();
   model.destroy();
   const l2 = Math.sqrt(l2e / Math.max(l2r, 1e-30));
-  const pass = problems.length === 0 && l2 <= 1e-3 && wMaxRel <= 1e-3 && st.misses > 0 && model.dispatchesPerToken === 61;
+  const pass = problems.length === 0 && l2 <= 1e-3 && wMaxRel <= 1e-3 && st.misses > 0
+    && model.dispatchesPerToken === 61 && argmaxOk === NPOS && logitMaxRel <= 5e-3;
   return {
     kernel: name, pass, maxAbs, maxRel,
     note: `${NPOS} pos, L2rel=${l2.toExponential(2)}, wMaxRel=${wMaxRel.toExponential(2)}, ` +
+      `argmax ${argmaxOk}/${NPOS}, logitMaxRel=${logitMaxRel.toExponential(2)}, ` +
       `h${st.hits}/m${st.misses}/ev${st.evictions}, ${model.dispatchesPerToken} dispatch/token` +
       (problems.length ? `; ${problems.join("; ")}` : ""),
   };

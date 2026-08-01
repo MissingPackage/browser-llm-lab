@@ -156,3 +156,33 @@ describe("cpuref GLM layer denso — identità naive/absorbed", () => {
     }
   });
 });
+
+// it.10: la variante ABSORBED f64 di cpuref (usata dal full-model di fase 6,
+// dove la naive è impraticabile a ctx lunghi) deve coincidere con la naive al
+// rounding f64 — stessa classe di pesi sintetici del test sopra.
+import { GlmMlaAttnRefF64, GlmMlaAttnAbsorbedRefF64 } from "../src/engine/cpuref";
+
+describe("GlmMlaAttnAbsorbedRefF64 ≡ naive (f64)", () => {
+  it("attend coincide su 3 posizioni con pesi sintetici", () => {
+    const rnd = lcg(20261);
+    const arr = (n: number, s = 0.1) => Float64Array.from({ length: n }, () => (rnd() * 2 - 1) * s);
+    const w = {
+      attnNorm: arr(G.dModel).map((v) => 1 + v), wQA: arr(G.qLora * G.dModel),
+      qANorm: arr(G.qLora).map((v) => 1 + v), wQB: arr(G.nHead * HL * G.qLora),
+      wKvA: arr(G.keyLen * G.dModel), kvANorm: arr(G.kvLora).map((v) => 1 + v),
+      wKB: arr(G.nHead * G.kvLora * G.qkNope), wVB: arr(G.nHead * G.headLenMla * G.kvLora),
+      wO: arr(G.dModel * G.nHead * G.headLenMla),
+    };
+    const naive = new GlmMlaAttnRefF64(w);
+    const absorbed = new GlmMlaAttnAbsorbedRefF64(w);
+    for (let p = 0; p < 3; p++) {
+      const x = arr(G.dModel, 0.5);
+      const a = Float64Array.from(x), b = Float64Array.from(x);
+      naive.attend(a);
+      absorbed.attend(b);
+      let maxAbs = 0;
+      for (let i = 0; i < G.dModel; i++) maxAbs = Math.max(maxAbs, Math.abs(a[i] - b[i]));
+      expect(maxAbs).toBeLessThan(1e-8);
+    }
+  });
+});

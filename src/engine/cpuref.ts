@@ -186,7 +186,7 @@ export interface GlmDenseLayerWeights {
   wDown: Float32Array;    // [2048 righe × 10240]
 }
 
-function rmsnormF64(x: Float64Array, w: ArrayLike<number>, eps: number): Float64Array {
+export function rmsnormF64(x: Float64Array, w: ArrayLike<number>, eps: number): Float64Array {
   let ss = 0;
   for (let i = 0; i < x.length; i++) ss += x[i] * x[i];
   const scale = 1 / Math.sqrt(ss / x.length + eps);
@@ -195,7 +195,7 @@ function rmsnormF64(x: Float64Array, w: ArrayLike<number>, eps: number): Float64
   return out;
 }
 
-function matvecF64(w: ArrayLike<number>, wOff: number, x: Float64Array, rows: number): Float64Array {
+export function matvecF64(w: ArrayLike<number>, wOff: number, x: Float64Array, rows: number): Float64Array {
   const k = x.length;
   const out = new Float64Array(rows);
   for (let r = 0; r < rows; r++) {
@@ -353,6 +353,73 @@ export class GlmMlaAttnRefF64 {
           for (let r = 0; r < G.kvLora; r++) acc += w.wVB[base + r] * ck[r];
           attnCat[h * G.headLenMla + mI] += wp * acc;
         }
+      }
+    }
+    const o = matvecF64(w.wO, 0, attnCat, G.dModel);
+    for (let i = 0; i < G.dModel; i++) x[i] += o[i];
+  }
+}
+
+// Variante ABSORBED f64 dell'attention (stessa interfaccia/semantica di
+// GlmMlaAttnRefF64, formulazione del motore): serve al full-model di fase 6 —
+// la naive costa O(pos·kvLora·qkNope) per head/posizione ed è impraticabile a
+// ctx>1k. L'identità algebrica naive↔absorbed è provata a <1e-8 (it.5, test
+// engine-cpuref-glm) e ri-asserita dal self-check nell'harness di analisi.
+export class GlmMlaAttnAbsorbedRefF64 {
+  private w: GlmMlaWeights;
+  private cKv: Float64Array[] = [];
+  private kPe: Float64Array[] = [];
+  constructor(w: GlmMlaWeights) { this.w = w; }
+
+  attend(x: Float64Array): void {
+    const w = this.w;
+    const pos = this.cKv.length;
+    const HL = G.qkNope + G.ropeDims;
+    const hn = rmsnormF64(x, w.attnNorm, G.rmsEps);
+    const qa = matvecF64(w.wQA, 0, hn, G.qLora);
+    const qan = rmsnormF64(qa, w.qANorm, G.rmsEps);
+    const q = matvecF64(w.wQB, 0, qan, G.nHead * HL);
+    ropeNormF64(q, G.nHead, HL, G.qkNope, G.ropeDims, G.ropeFreqBase, pos);
+    const kv = matvecF64(w.wKvA, 0, hn, G.keyLen);
+    ropeNormF64(kv, 1, G.keyLen, G.kvLora, G.ropeDims, G.ropeFreqBase, pos);
+    const cKv = rmsnormF64(kv.subarray(0, G.kvLora) as Float64Array, w.kvANorm, G.rmsEps);
+    this.cKv.push(cKv);
+    this.kPe.push(Float64Array.from(kv.subarray(G.kvLora, G.keyLen)));
+
+    const scale = 1 / Math.sqrt(G.headLenMla);
+    const attnCat = new Float64Array(G.nHead * G.headLenMla);
+    for (let h = 0; h < G.nHead; h++) {
+      const qOff = h * HL;
+      // assorbimento: q_ckv[r] = Σ_i wKB[h][r,i]·q_nope[i] (accesso DIRETTO alle righe)
+      const qCkv = new Float64Array(G.kvLora);
+      for (let r = 0; r < G.kvLora; r++) {
+        const base = h * G.kvLora * G.qkNope + r * G.qkNope;
+        let acc = 0;
+        for (let i = 0; i < G.qkNope; i++) acc += w.wKB[base + i] * q[qOff + i];
+        qCkv[r] = acc;
+      }
+      const scores = new Float64Array(pos + 1);
+      for (let p = 0; p <= pos; p++) {
+        const ck = this.cKv[p], kp = this.kPe[p];
+        let acc = 0;
+        for (let r = 0; r < G.kvLora; r++) acc += qCkv[r] * ck[r];
+        for (let j = 0; j < G.ropeDims; j++) acc += q[qOff + G.qkNope + j] * kp[j];
+        scores[p] = acc * scale;
+      }
+      let m = -Infinity;
+      for (const s of scores) m = Math.max(m, s);
+      let sum = 0;
+      for (let p = 0; p <= pos; p++) { scores[p] = Math.exp(scores[p] - m); sum += scores[p]; }
+      const agg = new Float64Array(G.kvLora);
+      for (let p = 0; p <= pos; p++) {
+        const wp = scores[p] / sum, ck = this.cKv[p];
+        for (let r = 0; r < G.kvLora; r++) agg[r] += wp * ck[r];
+      }
+      for (let mI = 0; mI < G.headLenMla; mI++) {
+        const base = h * G.headLenMla * G.kvLora + mI * G.kvLora;
+        let acc = 0;
+        for (let r = 0; r < G.kvLora; r++) acc += w.wVB[base + r] * agg[r];
+        attnCat[h * G.headLenMla + mI] = acc;
       }
     }
     const o = matvecF64(w.wO, 0, attnCat, G.dModel);

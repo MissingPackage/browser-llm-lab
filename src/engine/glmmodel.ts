@@ -38,14 +38,20 @@ export interface GlmWeightSource {
 export interface GlmModelOpts {
   nLayer?: number;  // default G.nLayer; i test usano 2 (blk.0 denso + blk.1 MoE)
   ctxMax: number;
+  // Output head (fase 6): final output_norm F32 + output.weight Q6_K. vocab
+  // parametrico SOLO per i ktest (head sintetica ridotta); default G.vocab.
+  head?: boolean;
+  vocab?: number;
   cache: { budgetBytes: number; maxBindingBytes: number; maxBufferBytes: number; slotsOverride?: { q4_0: number; q4_1: number }; timing?: boolean };
 }
 
 export interface GlmRouting { layer: number; experts: Int32Array; weights: Float64Array }
 
 export interface GlmModel {
-  // hidden = stato post-ultimo-layer (readback: harness di conformance, non bench)
-  forward(x: Float32Array, pos: number): Promise<{ hidden: Float32Array; routing: GlmRouting[] }>;
+  // hidden = stato post-ultimo-layer (readback: harness di conformance, non
+  // bench). readLogits richiede opts.head: aggiunge final norm + lm_head e
+  // ritorna i logits interi (154.880 × f32 = 620 KB/readback).
+  forward(x: Float32Array, pos: number, readLogits?: boolean): Promise<{ hidden: Float32Array; logits?: Float32Array; routing: GlmRouting[] }>;
   dispatchesPerToken: number;
   cacheStats(): ReturnType<ExpertCache["stats"]>;
   destroy(): void;
@@ -283,6 +289,25 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
 
   const siluExpBind = bg(pipes.siluExp, [gateE, upE]);
 
+  // ---- output head (fase 6): rms(output_norm) → gemvQ6K [2048→vocab] ----
+  const vocab = opts.vocab ?? G.vocab;
+  let headSteps: Step[] = [];
+  let logitsVocab: GPUBuffer | null = null;
+  let vocabStaging: GPUBuffer | null = null;
+  if (opts.head) {
+    const outNorm = track(upload(f32Of(src.nonExpert("output_norm.weight"))));
+    const outW = track(kquantBuf(src.nonExpert("output.weight"), Q6_K_BLOCK_BYTES));
+    const headPipe = mkPipe(gemvQ6KWgsl({ K: G.dModel, N: vocab }));
+    logitsVocab = storage(vocab * 4);
+    weightBufs.push(logitsVocab);
+    vocabStaging = device.createBuffer({ size: vocab * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    weightBufs.push(vocabStaging);
+    headSteps = [
+      step(pipes.rmsD, [x, outNorm, fnB], 1),
+      step(headPipe, [outW, fnB, logitsVocab], gemvGrid(vocab)),
+    ];
+  }
+
   const runSteps = (pass: GPUComputePassEncoder, steps: Step[]): void => {
     for (const s of steps) {
       pass.setPipeline(s.pipe);
@@ -307,8 +332,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   return {
     dispatchesPerToken,
     cacheStats: () => cache.stats(),
-    async forward(xIn: Float32Array, pos: number) {
+    async forward(xIn: Float32Array, pos: number, readLogits = false) {
       if (pos >= ctxMax) throw new Error("glmmodel: contesto pieno");
+      if (readLogits && !opts.head) throw new Error("glmmodel: head non abilitata");
       device.queue.writeBuffer(x, 0, xIn as unknown as BufferSource);
       device.queue.writeBuffer(P, 0, new Uint32Array([pos, pos, 0, 0]));
       device.pushErrorScope("validation");
@@ -371,8 +397,13 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         }
         runSteps(pass!, [m.addMoe]);
       }
+      if (readLogits) {
+        ensurePass();
+        runSteps(pass!, headSteps);
+      }
       endPass();
       enc.copyBufferToBuffer(x, 0, hiddenStaging, 0, G.dModel * 4);
+      if (readLogits) enc.copyBufferToBuffer(logitsVocab!, 0, vocabStaging!, 0, vocab * 4);
       device.queue.submit([enc.finish()]);
 
       const errOom = await device.popErrorScope();
@@ -381,7 +412,13 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       await hiddenStaging.mapAsync(GPUMapMode.READ);
       const hidden = new Float32Array(hiddenStaging.getMappedRange().slice(0));
       hiddenStaging.unmap();
-      return { hidden, routing };
+      let logits: Float32Array | undefined;
+      if (readLogits) {
+        await vocabStaging!.mapAsync(GPUMapMode.READ);
+        logits = new Float32Array(vocabStaging!.getMappedRange().slice(0));
+        vocabStaging!.unmap();
+      }
+      return { hidden, logits, routing };
     },
     destroy() {
       for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnMla, tmp, fnB, gateD, upD, gateE, upE, moeOut, logitsB, ...wExp, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
