@@ -43,9 +43,35 @@ export interface GlmModelOpts {
   head?: boolean;
   vocab?: number;
   cache: { budgetBytes: number; maxBindingBytes: number; maxBufferBytes: number; slotsOverride?: { q4_0: number; q4_1: number }; timing?: boolean };
+  // Telemetria di attribuzione (goal C3a fase 1). Zero-overhead da spenta
+  // (contratto CONSTRAINTS): senza `telemetry` non si chiama nemmeno
+  // performance.now(). `telemetryGpu` aggiunge timestampWrites a ogni compute
+  // pass (richiede la feature "timestamp-query" negoziata sul device) — è il
+  // livello 2 del pattern Qwen (gpuforward, docs/engine/tsq-diag-2026-07-29).
+  telemetry?: boolean;
+  telemetryGpu?: boolean;
 }
 
 export interface GlmRouting { layer: number; experts: Int32Array; weights: Float64Array }
+
+// Scomposizione del wall per token (contatori CUMULATIVI: il chiamante prende
+// le differenze per finestra, come per cacheStats). Identità di costruzione:
+//   wall = encodeCpuMs + ensureMs + routerWaitMs + tailWaitMs + residuo
+// dove `residuo` (= sync non attribuito) si ottiene per differenza dal wall
+// misurato fuori, e gpuBusyMs è la somma delle durate dei compute pass.
+export interface GlmTelemetry {
+  on: boolean;
+  forwards: number;
+  encodeCpuMs: number;    // tempo JS di encode/bind/writeBuffer, await esclusi
+  ensureMs: number;       // tempo dentro ExpertCache.ensure (residenza)
+  routerWaitMs: number;   // tempo negli await di readback del router (46/token)
+  tailWaitMs: number;     // tempo nell'await finale (hidden + logits)
+  routerSyncs: number;    // readback router EFFETTIVI (non una costante)
+  submits: number;        // submit effettivi
+  gpuBusyMs: number | null; // somma delle durate dei pass (solo telemetryGpu)
+  gpuPasses: number;
+  gpuPassOverflow: number;  // pass non strumentati per ring pieno (atteso 0)
+}
 
 export interface GlmModel {
   // hidden = stato post-ultimo-layer (readback: harness di conformance, non
@@ -54,6 +80,11 @@ export interface GlmModel {
   forward(x: Float32Array, pos: number, readLogits?: boolean): Promise<{ hidden: Float32Array; logits?: Float32Array; routing: GlmRouting[] }>;
   dispatchesPerToken: number;
   cacheStats(): ReturnType<ExpertCache["stats"]>;
+  // Drena i batch di timestamp in volo e ritorna i contatori cumulativi.
+  telemetry(): Promise<GlmTelemetry>;
+  // Accende/spegne la REGISTRAZIONE (la capacità è fissata da opts). Da spenta
+  // il forward non chiama performance.now() né scrive timestamp.
+  setTelemetry(on: boolean, gpu?: boolean): void;
   destroy(): void;
 }
 
@@ -70,6 +101,43 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       `(limite ${device.limits.maxComputeWorkgroupStorageSize}) — negoziare ` +
       `maxComputeWorkgroupStorageSize o spezzare l'attention (attnsplit)`);
   }
+
+  // ---- telemetria di attribuzione (C3a fase 1) ----
+  // Livello 1 (CPU): contatori a costo di una performance.now() per segmento,
+  // accesi solo con opts.telemetry. Livello 2 (GPU): timestampWrites su ogni
+  // compute pass, un resolve per token nel submit finale — la mapAsync parte
+  // SEMPRE dopo il submit (root-cause del known-issue fase A, tsq-diag).
+  // `telemetry`/`telemetryGpu` sono la CAPACITÀ (allocano il query set); la
+  // registrazione si accende/spegne a runtime con setTelemetry, così le
+  // repliche headline girano a overhead nullo sullo stesso modello (una
+  // seconda istanza GLM raddoppierebbe la VRAM: non ci sta a slab 12 GiB —
+  // qui divergiamo dal pattern Qwen "secondo engine dedicato", motivo VRAM).
+  const canGpuTs = opts.telemetryGpu === true && device.features.has("timestamp-query");
+  let telemOn = opts.telemetry === true;
+  let wantGpuTs = telemOn && canGpuTs;
+  const TSQ_PASSES = 512; // ≈3 pass/layer × 47 layer = ~141: margine 3.6×
+  const querySet = canGpuTs ? device.createQuerySet({ type: "timestamp", count: TSQ_PASSES * 2 }) : null;
+  const tsqResolve = canGpuTs
+    ? device.createBuffer({ label: "glm-tsq-resolve", size: TSQ_PASSES * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
+    : null;
+  const pendingTsq: Promise<{ ms: number; passes: number }>[] = [];
+  const T = {
+    forwards: 0, encodeCpuMs: 0, ensureMs: 0, routerWaitMs: 0, tailWaitMs: 0,
+    routerSyncs: 0, submits: 0, gpuBusyMs: 0, gpuPasses: 0, gpuPassOverflow: 0,
+  };
+  const nowT = (): number => (telemOn ? performance.now() : 0);
+  const armTsq = (staging: GPUBuffer, passes: number): void => {
+    pendingTsq.push(
+      (async () => {
+        await staging.mapAsync(GPUMapMode.READ);
+        const ts = new BigUint64Array(staging.getMappedRange().slice(0));
+        staging.destroy();
+        let ms = 0;
+        for (let i = 0; i < passes; i++) ms += Number(ts[i * 2 + 1] - ts[i * 2]) / 1e6;
+        return { ms, passes };
+      })(),
+    );
+  };
 
   // ---- upload helper (come glmforward) ----
   const upload = (data: Uint32Array | Float32Array): GPUBuffer => {
@@ -343,7 +411,23 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       const routing: GlmRouting[] = [];
       let enc = device.createCommandEncoder();
       let pass: GPUComputePassEncoder | null = null;
-      const ensurePass = () => (pass ??= enc.beginComputePass());
+      let passIdx = 0;         // indice nel query set, per token
+      let tSeg = nowT();       // inizio del segmento di encode CPU corrente
+      const ensurePass = () => {
+        if (pass) return pass;
+        if (wantGpuTs) {
+          if (passIdx < TSQ_PASSES) {
+            pass = enc.beginComputePass({
+              timestampWrites: { querySet: querySet!, beginningOfPassWriteIndex: passIdx * 2, endOfPassWriteIndex: passIdx * 2 + 1 },
+            });
+            passIdx++;
+            return pass;
+          }
+          T.gpuPassOverflow++;
+        }
+        pass = enc.beginComputePass();
+        return pass;
+      };
       const endPass = () => { if (pass) { pass.end(); pass = null; } };
 
       for (const [l, L] of layers.entries()) {
@@ -364,13 +448,23 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         enc.copyBufferToBuffer(logitsB, 0, logitsStaging, 0, G.nExpert * 4);
         device.queue.submit([enc.finish()]);
         // ---- sync GPU→CPU: selezione ----
+        if (telemOn) { T.encodeCpuMs += performance.now() - tSeg; T.submits++; T.routerSyncs++; }
+        const tWait = nowT();
         const logits = await mapLogits();
+        if (telemOn) tSeg = performance.now();
+        if (telemOn) T.routerWaitMs += tSeg - tWait;
         const sel = routerSelect(logits, m.bias);
         routing.push({ layer: l, experts: sel.experts, weights: sel.weights });
         const pinned = new Set<number>();
         for (const e of sel.experts) pinned.add(expertKey(l, e));
         const slots: SlotRef[] = [];
+        const tEns = nowT();
         for (const e of sel.experts) slots.push(cache.ensure(l, e, (ll, ee) => src.expert(ll, ee), pinned).slot);
+        if (telemOn) {
+          const tE = performance.now();
+          T.ensureMs += tE - tEns;
+          tSeg += tE - tEns; // ensure NON è encode: scalarlo dal segmento corrente
+        }
         for (let k = 0; k < G.nExpertUsed; k++) {
           device.queue.writeBuffer(wExp[k], 0, new Float32Array([sel.weights[k]]));
         }
@@ -404,7 +498,19 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       endPass();
       enc.copyBufferToBuffer(x, 0, hiddenStaging, 0, G.dModel * 4);
       if (readLogits) enc.copyBufferToBuffer(logitsVocab!, 0, vocabStaging!, 0, vocab * 4);
+      // resolve dei timestamp del token DENTRO il submit finale; la mapAsync
+      // (armTsq) parte dopo — mai prima, altrimenti Dawn droppa il command
+      // buffer (known-issue fase A, root-cause in tsq-diag-2026-07-29).
+      let tsqStaging: GPUBuffer | null = null;
+      if (wantGpuTs && passIdx > 0) {
+        enc.resolveQuerySet(querySet!, 0, passIdx * 2, tsqResolve!, 0);
+        tsqStaging = device.createBuffer({ label: "glm-tsq-staging", size: passIdx * 2 * 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        enc.copyBufferToBuffer(tsqResolve!, 0, tsqStaging, 0, passIdx * 2 * 8);
+      }
       device.queue.submit([enc.finish()]);
+      if (tsqStaging) armTsq(tsqStaging, passIdx);
+      if (telemOn) { T.encodeCpuMs += performance.now() - tSeg; T.submits++; T.forwards++; }
+      const tTail = nowT();
 
       const errOom = await device.popErrorScope();
       const errVal = await device.popErrorScope();
@@ -418,10 +524,30 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         logits = new Float32Array(vocabStaging!.getMappedRange().slice(0));
         vocabStaging!.unmap();
       }
+      if (telemOn) T.tailWaitMs += performance.now() - tTail;
       return { hidden, logits, routing };
+    },
+    setTelemetry(on: boolean, gpu = true) {
+      telemOn = on;
+      wantGpuTs = on && gpu && canGpuTs;
+    },
+    async telemetry(): Promise<GlmTelemetry> {
+      // drena i batch in volo (uno per token): il gpuBusy è la somma delle
+      // durate dei pass, NON include le bolle fra submit — è esattamente la
+      // semantica del gpuBusy Qwen (engine.worker, repliche liv.2 dedicate)
+      const batches = await Promise.all(pendingTsq.splice(0));
+      for (const b of batches) { T.gpuBusyMs += b.ms; T.gpuPasses += b.passes; }
+      return {
+        on: telemOn, forwards: T.forwards, encodeCpuMs: T.encodeCpuMs, ensureMs: T.ensureMs,
+        routerWaitMs: T.routerWaitMs, tailWaitMs: T.tailWaitMs, routerSyncs: T.routerSyncs,
+        submits: T.submits, gpuBusyMs: canGpuTs ? T.gpuBusyMs : null,
+        gpuPasses: T.gpuPasses, gpuPassOverflow: T.gpuPassOverflow,
+      };
     },
     destroy() {
       for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnMla, tmp, fnB, gateD, upD, gateE, upE, moeOut, logitsB, ...wExp, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
+      tsqResolve?.destroy();
+      querySet?.destroy();
       cache.destroy();
     },
   };

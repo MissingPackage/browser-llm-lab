@@ -2,7 +2,10 @@
 // /glmbench.html (profilo su disco, stesso OPFS di routing/conformance) e
 // scrive il report con i gate tok/s. Uso:
 //   node scripts/glm-bench-run.mjs [--prompt 6] [--ngen 64] [--reps 3]
-//     [--budget-gib 11] [--out results/engine/...json] [--timeout-min 120]
+//     [--budget-gib 11] [--attrib 1] [--out results/engine/...json]
+//     [--timeout-min 120]
+// --attrib N: repliche DEDICATE di attribuzione (telemetria liv.1+2 accesa;
+// il loro wall NON entra nei gate). 0 le disattiva.
 // Exit: 0 gate PASS, 4 gate FAIL (report scritto), 2 errore, 3 timeout.
 import { chromium } from "playwright";
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -17,6 +20,7 @@ const prompt = arg("prompt", "6");
 const nGen = arg("ngen", "64");
 const reps = arg("reps", "3");
 const budget = arg("budget-gib", "11");
+const attrib = arg("attrib", "1");
 const out = arg("out", null);
 const timeoutMin = Number(arg("timeout-min", "120"));
 
@@ -29,7 +33,7 @@ const BASE_URL = process.env.BASE_URL ?? "http://localhost:5199";
 if (!existsSync(GOLDEN_PUB)) copyFileSync(GOLDEN, GOLDEN_PUB);
 mkdirSync(PROFILE, { recursive: true });
 
-const qs = new URLSearchParams({ prompt, ngen: nGen, reps, budget });
+const qs = new URLSearchParams({ prompt, ngen: nGen, reps, budget, attrib });
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
@@ -68,6 +72,31 @@ for (;;) {
       `hit ${(100 * d.hitRate).toFixed(2)}%, stallo ${d.stallMsPerToken.toFixed(1)} ms/token ` +
       `(read ${d.readMsPerToken.toFixed(1)} + pack ${d.packMsPerToken.toFixed(1)} + upload ${d.uploadMsPerToken.toFixed(1)}), ` +
       `residuo ${d.residuoMsPerToken.toFixed(1)} ms/token`);
+    // gap dalla funzione obiettivo: NON gate, ma obbligatorio nel report (C3a)
+    const o = report.objective;
+    if (o) {
+      console.log(
+        `[glmbench] obiettivo: decode ${o.gapDecode30.measuredToksPerSec.toFixed(2)} vs 30 tok/s (gap ${o.gapDecode30.factor?.toFixed(2)}x` +
+        `, thinking 60: ${o.gapDecode60.factor?.toFixed(2)}x) — TTFT ${(o.gapTtft4s.measuredMs / 1000).toFixed(2)} s vs 4 s ` +
+        `(gap ${o.gapTtft4s.factor.toFixed(2)}x)`);
+    } else {
+      console.log("[glmbench] ATTENZIONE: report senza sezione objective (checklist C3a: assenza = FAIL)");
+    }
+    const a = report.attribution2;
+    if (a) {
+      console.log(
+        `[glmbench] attribuzione decode: wall ${a.wallMsPerToken.toFixed(1)} = gpuBusy ${a.gpuBusyMsPerToken?.toFixed(1) ?? "n/d"} ` +
+        `+ stallo ${a.stallResidenzaMsPerToken.toFixed(1)} + sync/CPU ${a.syncCpuMsPerToken?.toFixed(1) ?? "n/d"} ms/token ` +
+        `(fuori GPU ${a.quotaFuoriGpu === null ? "n/d" : (100 * a.quotaFuoriGpu).toFixed(1) + "%"}; ` +
+        `sync misurati ${a.routerSyncsPerToken.toFixed(1)}/token, submit ${a.submitsPerToken.toFixed(1)}/token)`);
+      const p = report.syncFloorProbe;
+      console.log(
+        `[glmbench] floor sync: mapAsync ${p.mapRoundTripMs.median.toFixed(2)} ms × ${a.routerSyncsPerToken.toFixed(0)} = ` +
+        `${p.floorMsPerToken.toFixed(1)} ms/token irriducibili senza cambiare meccanismo`);
+      for (const pk of a.projectionByK.filter(Boolean)) {
+        console.log(`[glmbench]   proiezione sync batchato K=${pk.K}: ${pk.msPerToken.toFixed(1)} ms/token = ${pk.toksPerSec.toFixed(2)} tok/s`);
+      }
+    }
     process.exit(status === "done" ? 0 : status === "done-gate-fail" ? 4 : 2);
   }
   await new Promise((r) => setTimeout(r, 5000));

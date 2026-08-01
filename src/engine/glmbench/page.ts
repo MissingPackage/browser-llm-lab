@@ -1,4 +1,5 @@
-// Pagina harness bench GLM (dev-only). Query: ?prompt=6&ngen=64&reps=3&budget=11
+// Pagina harness bench GLM (dev-only).
+// Query: ?prompt=6&ngen=64&reps=3&budget=11&attrib=1
 const $ = (id: string) => document.getElementById(id)!;
 const q = new URLSearchParams(location.search);
 const cfg = {
@@ -6,6 +7,8 @@ const cfg = {
   nGen: q.has("ngen") ? Number(q.get("ngen")) : 64,
   replicates: q.has("reps") ? Number(q.get("reps")) : 3,
   budgetGiB: q.has("budget") ? Number(q.get("budget")) : 11,
+  // repliche dedicate di attribuzione (telemetria liv.1+2): 0 le disabilita
+  attribReplicates: q.has("attrib") ? Number(q.get("attrib")) : 1,
 };
 const worker = new Worker(new URL("./glmbench.worker.ts", import.meta.url), { type: "module" });
 const log = (line: string): void => {

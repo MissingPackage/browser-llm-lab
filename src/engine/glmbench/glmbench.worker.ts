@@ -11,11 +11,18 @@ import { GLM47_FLASH as G, GLM47_FLASH_SHA256 } from "../shape";
 import { dequantQ4_0Row } from "../quant";
 import { createGlmModel } from "../glmmodel";
 import { GlmOpfsSource } from "../glmsource";
+import type { GlmTelemetry } from "../glmmodel";
 import type { ExpertCacheStats } from "../residency";
 
 interface GoldenPrompt { id: string; promptTokens: number[]; generated: number[] }
 interface Golden { modelSha256: string; prompts: GoldenPrompt[] }
-interface Cfg { prompt: number; nGen: number; replicates: number; budgetGiB: number }
+interface Cfg { prompt: number; nGen: number; replicates: number; budgetGiB: number; attribReplicates?: number }
+
+// Funzione obiettivo (direction §2, ruling PI 2026-08-01): NON sono gate — il
+// report li stampa perché il floor CPU non venga scambiato per l'obiettivo.
+const UX_DECODE_TPS = 30;          // soglia normale
+const UX_DECODE_TPS_THINKING = 60; // regime thinking (token di ragionamento = latenza pura)
+const UX_TTFT_MS = 4000;
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
 const progress = (msg: string) => post({ type: "progress", msg });
@@ -47,7 +54,32 @@ interface PhaseResult {
   tokens: number; ms: number; toksPerSec: number; msPerToken: number;
   msPerTokenP50: number; residency: PhaseResidency;
 }
-interface RunResult { prefill: PhaseResult; decode: PhaseResult; decodeTokens: TokenRec[]; generated: number[] }
+// ttftMs: dal PRIMO forward di prefill al momento in cui il primo token
+// generato è disponibile (argmax dei logits dell'ultima posizione di prompt).
+// Modello GIÀ residente: il TTFT a freddo (che include load e popolamento
+// della slab) è metrica di C3b — instant-on.
+interface TelemDelta {
+  forwards: number; encodeCpuMs: number; ensureMs: number; routerWaitMs: number;
+  tailWaitMs: number; routerSyncs: number; submits: number;
+  gpuBusyMs: number | null; gpuPasses: number; gpuPassOverflow: number;
+}
+const telemDelta = (a: GlmTelemetry, b: GlmTelemetry): TelemDelta => ({
+  forwards: b.forwards - a.forwards,
+  encodeCpuMs: b.encodeCpuMs - a.encodeCpuMs,
+  ensureMs: b.ensureMs - a.ensureMs,
+  routerWaitMs: b.routerWaitMs - a.routerWaitMs,
+  tailWaitMs: b.tailWaitMs - a.tailWaitMs,
+  routerSyncs: b.routerSyncs - a.routerSyncs,
+  submits: b.submits - a.submits,
+  gpuBusyMs: a.gpuBusyMs === null || b.gpuBusyMs === null ? null : b.gpuBusyMs - a.gpuBusyMs,
+  gpuPasses: b.gpuPasses - a.gpuPasses,
+  gpuPassOverflow: b.gpuPassOverflow - a.gpuPassOverflow,
+});
+
+interface RunResult {
+  prefill: PhaseResult; decode: PhaseResult; decodeTokens: TokenRec[]; generated: number[];
+  ttftMs: number; telem?: { prefill: TelemDelta; decode: TelemDelta };
+}
 
 const median = (v: number[]): number => {
   const s = [...v].sort((a, b) => a - b);
@@ -67,7 +99,11 @@ async function main(cfg: Cfg): Promise<void> {
   const lim = adapter.limits;
   const maxBuf = Math.min(lim.maxBufferSize, 2 * (1 << 30));
   const maxBind = Math.min(lim.maxStorageBufferBindingSize, 2 * (1 << 30));
+  // timestamp-query: livello 2 dell'attribuzione (gpuBusy). Se l'adapter non la
+  // espone il bench gira lo stesso e il report lo dichiara (gpuBusyMs null).
+  const hasTsq = adapter.features.has("timestamp-query");
   const device = await adapter.requestDevice({
+    requiredFeatures: hasTsq ? ["timestamp-query"] : [],
     requiredLimits: {
       maxBufferSize: maxBuf, maxStorageBufferBindingSize: maxBind,
       maxComputeWorkgroupStorageSize: Math.min(lim.maxComputeWorkgroupStorageSize, 32768),
@@ -96,6 +132,9 @@ async function main(cfg: Cfg): Promise<void> {
   const tBuild0 = performance.now();
   const model = createGlmModel(device, source, {
     ctxMax, head: true,
+    // capacità di telemetria allocata, REGISTRAZIONE spenta: le repliche
+    // headline (quelle dei gate) girano a overhead nullo
+    telemetry: false, telemetryGpu: hasTsq,
     cache: {
       budgetBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
       maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true,
@@ -112,23 +151,26 @@ async function main(cfg: Cfg): Promise<void> {
   // Una replica completa: prefill (posizioni 0..nPrompt-1, logits solo
   // sull'ultima) + decode greedy di nGen token. La KV riparte da pos 0 a ogni
   // replica: l'attention legge 0..pos, le entry oltre pos sono irrilevanti.
-  const runOnce = async (label: string): Promise<RunResult> => {
+  const runOnce = async (label: string, withTelem = false): Promise<RunResult> => {
+    const tel0 = withTelem ? await model.telemetry() : null;
     const rPre0 = model.cacheStats();
     const tPre0 = performance.now();
     let last = 0;
+    let ttftMs = 0;
     const preTok: number[] = [];
     for (let i = 0; i < nPrompt; i++) {
       const tTok = performance.now();
       const wantLogits = i === nPrompt - 1;
       const r = await model.forward(embed(promptTokens[i]), i, wantLogits);
       preTok.push(performance.now() - tTok);
-      if (wantLogits) last = argmax(r.logits!);
+      if (wantLogits) { last = argmax(r.logits!); ttftMs = performance.now() - tPre0; }
       if (i % 32 === 0) {
         post({ type: "tick", msg: `${label}: prefill ${i}/${nPrompt} (${(1000 * (i + 1) / (performance.now() - tPre0)).toFixed(2)} tok/s)` });
       }
     }
     const preMs = performance.now() - tPre0;
     const rPre1 = model.cacheStats();
+    const tel1 = withTelem ? await model.telemetry() : null;
 
     const tDec0 = performance.now();
     const decTok: number[] = [];
@@ -150,6 +192,7 @@ async function main(cfg: Cfg): Promise<void> {
     }
     const decMs = performance.now() - tDec0;
     const rDec1 = model.cacheStats();
+    const tel2 = withTelem ? await model.telemetry() : null;
 
     const phase = (tokens: number, ms: number, per: number[], res: PhaseResidency): PhaseResult => ({
       tokens, ms, toksPerSec: (tokens / ms) * 1000, msPerToken: ms / tokens,
@@ -158,7 +201,8 @@ async function main(cfg: Cfg): Promise<void> {
     const out: RunResult = {
       prefill: phase(nPrompt, preMs, preTok, residencyDelta(rPre0, rPre1)),
       decode: phase(cfg.nGen, decMs, decTok, residencyDelta(rPre1, rDec1)),
-      decodeTokens, generated,
+      decodeTokens, generated, ttftMs,
+      telem: tel0 && tel1 && tel2 ? { prefill: telemDelta(tel0, tel1), decode: telemDelta(tel1, tel2) } : undefined,
     };
     post({
       type: "progress",
@@ -172,6 +216,36 @@ async function main(cfg: Cfg): Promise<void> {
   const reps: RunResult[] = [];
   for (let r = 0; r < cfg.replicates; r++) reps.push(await runOnce(`replica ${r + 1}/${cfg.replicates}`));
 
+  // ---- repliche DEDICATE di attribuzione (C3a fase 1) ----
+  // L'headline resta dalle repliche a telemetria SPENTA (pattern Qwen: mai
+  // confrontare wall di finestre strumentate e non). Qui si accende tutto e si
+  // rimisura: il wall di queste repliche è più alto e NON va nei gate.
+  const attribReps: RunResult[] = [];
+  const nAttrib = cfg.attribReplicates ?? 1;
+  if (nAttrib > 0) {
+    model.setTelemetry(true, true);
+    for (let r = 0; r < nAttrib; r++) attribReps.push(await runOnce(`attribuzione ${r + 1}/${nAttrib}`, true));
+    model.setTelemetry(false);
+  }
+
+  // ---- probe del floor di sync: mapAsync round-trip a GPU ~vuota ----
+  // Cross-check indipendente: 46 readback router/token non possono costare meno
+  // di 46 × questo numero, qualunque sia il resto.
+  progress("probe floor di sync…");
+  const probeSrc = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const probeDst = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const probeSamples: number[] = [];
+  for (let i = 0; i < 64; i++) {
+    const p0 = performance.now();
+    const pe = device.createCommandEncoder();
+    pe.copyBufferToBuffer(probeSrc, 0, probeDst, 0, 16);
+    device.queue.submit([pe.finish()]);
+    await probeDst.mapAsync(GPUMapMode.READ);
+    probeDst.unmap();
+    probeSamples.push(performance.now() - p0);
+  }
+  probeSrc.destroy(); probeDst.destroy();
+
   const decodeTps = stats(reps.map((r) => r.decode.toksPerSec));
   const prefillTps = stats(reps.map((r) => r.prefill.toksPerSec));
   const GATE_DECODE = 13.43, GATE_PREFILL = 56.58;
@@ -182,7 +256,9 @@ async function main(cfg: Cfg): Promise<void> {
   const decRes = reps.map((r) => r.decode.residency);
   const tele = {
     dispatchesPerToken: model.dispatchesPerToken,
-    syncsPerToken: nMoe + 1, // 46 readback router (selezione su CPU) + 1 logits/hidden
+    syncsPerToken: nMoe + 1, // atteso by design: 46 readback router + 1 logits
+    // (il valore MISURATO sta in attribution2.routerSyncsPerToken/submitsPerToken:
+    //  fino a C3a fase 1 questo campo era una costante dichiarata, non una misura)/hidden
     decode: {
       hitRate: median(decRes.map((r) => r.hitRate ?? 0)),
       missesPerToken: median(decRes.map((r) => r.misses / cfg.nGen)),
@@ -221,13 +297,95 @@ async function main(cfg: Cfg): Promise<void> {
     })(),
   };
 
+  // ---- gap dalla funzione obiettivo (riportato, MAI gate) ----
+  const ttft = stats(reps.map((r) => r.ttftMs));
+  const gapTps = (target: number) => ({
+    targetToksPerSec: target, measuredToksPerSec: decodeTps.median,
+    factor: decodeTps.median > 0 ? target / decodeTps.median : null,
+    deficitMsPerToken: 1000 / decodeTps.median - 1000 / target,
+  });
+  const objective = {
+    note: "funzione obiettivo direction §2 (ruling PI 2026-08-01): il floor CPU 13.43/56.58 è gate d'ingresso INTERMEDIO, non obiettivo. Questi numeri non sono gate; la loro assenza dal report è però un FAIL di checklist (GOAL C3a).",
+    gapDecode30: gapTps(UX_DECODE_TPS),
+    gapDecode60: gapTps(UX_DECODE_TPS_THINKING),
+    gapTtft4s: {
+      budgetMs: UX_TTFT_MS, measuredMs: ttft.median,
+      factor: ttft.median / UX_TTFT_MS,
+      definition: "dal primo forward di prefill al primo token generato disponibile, modello GIÀ residente (il TTFT a freddo è metrica C3b/instant-on)",
+      impliedPrefillToksPerSec: (nPrompt / UX_TTFT_MS) * 1000,
+    },
+  };
+
+  // ---- attribuzione: quanto del wall è GPU e quanto è sync/CPU ----
+  // gpuBusy = somma delle durate dei compute pass (NON include le bolle fra
+  // submit). routerWait ⊇ parte di gpuBusy (mentre si aspetta il readback la
+  // GPU sta lavorando): i due NON si sommano — la scomposizione ortogonale è
+  // wall = gpuBusy + stallo residenza + (sync/CPU non-GPU).
+  const attribution2 = (() => {
+    const withT = attribReps.filter((r) => r.telem);
+    if (!withT.length) return null;
+    const per = (f: (t: TelemDelta) => number) => median(withT.map((r) => f(r.telem!.decode) / cfg.nGen));
+    const wall = median(withT.map((r) => r.decode.msPerToken));
+    const stall = median(withT.map((r) => r.decode.residency.stallMs / cfg.nGen));
+    const gpu = withT[0].telem!.decode.gpuBusyMs === null ? null : per((t) => t.gpuBusyMs!);
+    const encode = per((t) => t.encodeCpuMs);
+    const routerWait = per((t) => t.routerWaitMs);
+    const tailWait = per((t) => t.tailWaitMs);
+    const ensure = per((t) => t.ensureMs);
+    const syncCpu = gpu === null ? null : wall - gpu - stall;
+    // proiezione: se i readback router fossero batchati a profondità K, il
+    // termine sync scala come 1/K (stesso modello del decode-attrib Qwen)
+    const project = (K: number) => {
+      if (syncCpu === null) return null;
+      const ms = gpu! + stall + syncCpu / K;
+      return { K, msPerToken: ms, toksPerSec: 1000 / ms };
+    };
+    return {
+      windowNote: "SOLO repliche di attribuzione (telemetria accesa): il wall qui è più alto dell'headline e non va nei gate",
+      replicates: withT.length,
+      wallMsPerToken: wall,
+      gpuBusyMsPerToken: gpu,
+      stallResidenzaMsPerToken: stall,
+      syncCpuMsPerToken: syncCpu,
+      quotaFuoriGpu: gpu === null ? null : (wall - gpu) / wall,
+      misure: { encodeCpuMsPerToken: encode, routerWaitMsPerToken: routerWait, tailWaitMsPerToken: tailWait, ensureMsPerToken: ensure },
+      // check di identità: i quattro segmenti sono DISGIUNTI e coprono il wall.
+      // Se `unattributed` non è ~0 la strumentazione ha un buco o un doppio
+      // conteggio — è il controllo che ha scoperto il double-count di ensure.
+      identity: {
+        sumSegmentiMsPerToken: encode + ensure + routerWait + tailWait,
+        wallMsPerToken: wall,
+        unattributedMsPerToken: wall - (encode + ensure + routerWait + tailWait),
+        note: "encode/ensure/routerWait/tailWait sono disgiunti per costruzione; gpuBusy invece si SOVRAPPONE a routerWait (mentre si aspetta il readback la GPU esegue) e non va sommato",
+      },
+      routerSyncsPerToken: median(withT.map((r) => r.telem!.decode.routerSyncs / cfg.nGen)),
+      submitsPerToken: median(withT.map((r) => r.telem!.decode.submits / cfg.nGen)),
+      gpuPassesPerToken: median(withT.map((r) => r.telem!.decode.gpuPasses / cfg.nGen)),
+      gpuPassOverflow: withT.reduce((a, r) => a + r.telem!.decode.gpuPassOverflow, 0),
+      projectionByK: [2, 4, 8, 46].map(project),
+      caveats: [
+        "Chrome quantizza i timestamp GPU (~100 µs): con ~140 pass/token l'errore per pass si media, ma gpuBusy va letto come stima, non come misura esatta.",
+        "routerWait include il tempo in cui la GPU esegue: NON è tutto overhead recuperabile. Il limite inferiore recuperabile è syncFloorProbe × routerSyncsPerToken.",
+        "syncCpu è un RESIDUO (wall − gpuBusy − stallo): assorbe encode CPU, latenza submit→start, event loop e l'argmax del bench.",
+      ],
+    };
+  })();
+
+  const probe = stats(probeSamples);
+  const syncFloor = {
+    mapRoundTripMs: probe,
+    routerSyncsPerToken: attribution2?.routerSyncsPerToken ?? null,
+    floorMsPerToken: (attribution2?.routerSyncsPerToken ?? 0) * probe.median,
+    note: "floor teorico dei soli readback router a GPU scarica: nessun meccanismo che li mantenga può costare meno",
+  };
+
   model.destroy();
   source.close();
 
   post({
     type: "done",
     report: {
-      kind: "glm-bench", schemaVersion: 1, date: new Date().toISOString(),
+      kind: "glm-bench", schemaVersion: 2, date: new Date().toISOString(),
       ggufSha256: GLM47_FLASH_SHA256,
       config: {
         promptIdx: cfg.prompt, promptId: pr.id, promptTokens: nPrompt, nGen: cfg.nGen,
@@ -245,6 +403,10 @@ async function main(cfg: Cfg): Promise<void> {
         floorSource: "results/engine/moe-oracle/llama-bench-glm47flash-q4_0-2026-07-30.json (llama.cpp 5f55650, CPU i9-14900HX 16 thread, n_prompt 512 / n_gen 64)",
       },
       decodeToksPerSec: decodeTps, prefillToksPerSec: prefillTps,
+      ttftMs: ttft,
+      objective,
+      attribution2, syncFloorProbe: syncFloor,
+      timestampQuery: { available: hasTsq, used: attribution2?.gpuBusyMsPerToken != null },
       telemetry: tele,
       warmup: { prefill: warmup.prefill, decode: warmup.decode },
       reps,

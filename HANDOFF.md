@@ -2,10 +2,26 @@
 
 ## 1. Next decidable
 
-**Goal engine-fase-c3a IN CORSO — fase 1** (strumentazione TTFT + attribuzione
-sync vs dispatch). Iteration 0 fatta: `PHASES.md` 7 fasi, PLAN-CHECK
-pre-autorizzato dal PI. Aperto a docket: **item 2 — clausola di fallback per
-la fase 4** (non blocca le fasi 1-2, serve prima della fase 6).
+**RULING su docket C3a item 4 — il loop è fermo lì (stop by design).** La fase 1
+ha misurato quello che serviva e ha smentito un'assunzione del contratto: le tre
+leve elencate **non raggiungono il gate 13.43**.
+- Wall decode 215.0 ms/token = `gpuBusy` **78.2** + stallo residenza **53.8** +
+  sync/CPU **83.0** (63.6% fuori GPU). Ma i 46 readback veri costano solo
+  **7.6 ms/token** (probe indipendente): il resto è latenza di submit e bolle.
+- Leve 1+2 al 100% ⇒ **10.18 tok/s**; il gate vuole ≤74.46 ms/token e `gpuBusy`
+  da solo ne occupa 78.2.
+- **Però** la GPU è sotto-clockata dalle bolle che la leva 2 rimuove (1746 MHz
+  medi su 3105, utilizzo 34.6%) ⇒ limite ottimistico **15.63 tok/s, PASS**.
+  **Forbice 10.2-15.6 col gate dentro**: la leva 2 ha un payoff di secondo
+  ordine mai dimensionato.
+- Cross-check: 2.22 GB pesi/token su 576 GB/s ⇒ floor memory-bound 3.85
+  ms/token, `gpuBusy` è **20× sopra** (1816 dispatch a 43 µs l'uno). Quarta leva
+  disponibile (granularità dispatch), fuori contratto e ultima per direction §2.
+- Opzioni in docket item 4; raccomandata **(a) spec a due stadi, gate invariato**:
+  la fase 4 attacca i sync e ri-misura subito clock e `gpuBusy` — si scioglie la
+  forbice con un fatto invece che con un'assunzione.
+Aperti anche: **item 2** (clausola di fallback, ora quantificata) e **item 5**
+(correzione di forma della riga PHASES fase 1).
 - **Perimetro C3a (struttura)**: repack all'import, eliminazione/batching dei
   46 sync router, prefill batched M>1. **Gate di chiusura**: decode ≥13.43 /
   prefill ≥56.58 tok/s (floor oracolo CPU C1, ereditato dalla deroga C2).
@@ -59,8 +75,13 @@ termini) e §7 (fase C splittata).
 
 ## 4. Open threads
 
-- **Goal C3a**: contratto approvato, `/goal` non ancora dato.
+- **Goal C3a**: fase 1 DONE (it.1), fase 2 bloccata da docket item 4.
 - **Goal C3b**: chartered, parte a C3a chiusa.
+- **TTFT misurato per la prima volta**: 88.06 s a ctx 461 — 22× il budget UX di
+  4 s. Il prefill sequenziale (nessun percorso M>1) è la causa diretta.
+- **Verifier di protocollo non lanciato** in it.1: la policy di sessione vieta
+  subagent non richiesti dal PI. Se vuoi il gate indipendente a ogni ciclo,
+  serve un'autorizzazione esplicita.
 - **Indagine CPU host**: sessione separata col brief in
   `~/cpu-investigation/`; esito rilevante per l'igiene dei bench futuri
   (la norma operativa: bench a macchina scarica).

@@ -85,3 +85,69 @@
    fase 4 = rischio dichiarato del goal. Se leggendo PHASES.md la
    decomposizione non ti convince, la modifica passa da qui (item nuovo), non
    dal loop.
+
+4. **RULING RICHIESTO — le tre leve del contratto non raggiungono il gate;
+   scelta del ramo per la spec** (2026-08-01, it.1 fase 1). **BLOCCA la fase 2**
+   (la spec deve scegliere il meccanismo dei sync, e la scelta dipende da
+   questo). Numeri in `results/engine/bench-glm-4090-b12-attrib-2026-08-01.json`,
+   journal it.1.
+
+   **Misura.** Wall decode 215.0 ms/token si scompone in: `gpuBusy` **78.2**
+   (36.4%) + stallo residenza **53.8** + sync/CPU **83.0** ⇒ **63.6% fuori
+   dalla GPU**. Il probe indipendente dice che i 46 readback costano solo
+   **7.6 ms/token** di floor irriducibile: meno del 10% degli 83 ms di
+   sync/CPU è readback vero, il resto è latenza di submit e bolle.
+
+   **Conseguenza.** Con le leve 1 e 2 del contratto al 100% di efficacia
+   (repack che azzera il pack CPU −41.4; sync ridotti al floor −75.4):
+   **98.2 ms/token = 10.18 tok/s**, contro un gate 13.43 che vuole ≤74.46
+   ms/token. **`gpuBusy` da solo (78.2) eccede il budget del gate.** Le leve
+   del contratto non bastano per costruzione — non è congettura, è il wall
+   misurato meno i due termini che le leve rimuovono.
+
+   **Osservazione discriminante già acquisita** (per questo ho campionato i
+   clock durante la run): la GPU gira a **1746 MHz medi su 3105 di cap** con
+   utilizzo **34.6%** — è sotto-clockata *dalle bolle che la leva 2 va a
+   togliere*. Se `gpuBusy` scalasse col clock SM (limite ottimistico: i GEMV
+   sono in parte memory-bound e il clock memoria è già al massimo) diventerebbe
+   44.0 ms ⇒ **64.0 ms/token = 15.63 tok/s, gate PASS**.
+   **La forbice vera è 10.2 – 15.6 tok/s, col gate 13.43 dentro.** La leva 2 ha
+   un payoff di secondo ordine (far salire i clock) che nessuno aveva
+   dimensionato e che può valere quanto quello di primo ordine.
+
+   **Terzo dato, indipendente**: 2.22 GB di pesi letti per token contro 576
+   GB/s di banda reale del device ⇒ floor memory-bound **3.85 ms/token**;
+   `gpuBusy` è **20× sopra**. A 1816 dispatch/token siamo a 43 µs per dispatch
+   su GEMV che ne dovrebbero costare ~2. Esiste una **quarta leva**
+   (granularità/fusione dei dispatch) con margine enorme, non elencata nel
+   contratto e messa per ultima da direction §2.
+
+   **Opzioni**:
+   (a) [RACCOMANDATA] **spec a due stadi, gate invariato**: la fase 4 attacca i
+       sync e **ri-misura `gpuBusy` e i clock subito dopo**; il numero decide se
+       serve la quarta leva. Costa un ciclo di misura, non un ciclo di
+       implementazione, e scioglie la forbice con un fatto invece che con
+       un'assunzione. Se dopo la leva 2 il gate resta irraggiungibile, la
+       quarta leva entra in C3a via emendamento (item nuovo), non di soppiatto.
+   (b) **ammettere subito la quarta leva** (fusione/granularità dei dispatch)
+       nel perimetro C3a: massimizza la probabilità di prendere il gate, ma
+       allarga lo scope a kernel engineering — che direction §2 deprioritizza —
+       e allunga il goal di parecchie iterazioni.
+   (c) **abbassare il gate di C3a** a un valore dentro la forbice pessimistica
+       (es. 10 tok/s) e spostare 13.43 a un goal successivo: onesto, ma ripete
+       la dinamica della deroga C2 prima ancora di provarci.
+   (d) **chiudere C3a sulle sole leve 1-3 con misura** e aprire un goal
+       dedicato alla guerra ai dispatch.
+
+   Collegato all'**item 2** (clausola di fallback): se il PI sceglie (a), la
+   clausola diventa più urgente, perché il ramo pessimistico della forbice è
+   ora quantificato e non più ipotetico.
+
+5. **CORREZIONE PHASES (piccola, non un ri-scope)** (2026-08-01, it.1). La riga
+   della fase 1 chiede "run glmbench **exit 0**": è insoddisfacibile in fase 1,
+   perché exit 0 = gate PASS e i gate passano solo in fase 6. L'esito corretto
+   della fase 1 è **exit 4** (report scritto + gate FAIL). Chiedo di emendare la
+   riga in "run glmbench che scrive il report (exit 0 o 4)". Stessa riga: il
+   secondo JSON di attribuzione è stato consegnato **dentro** il report di
+   bench (`attribution2`) invece che come file separato — sostanza consegnata,
+   forma no; proposta: allineare il testo alla forma consegnata.
