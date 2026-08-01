@@ -534,7 +534,7 @@ Implementato e verificato kernel-level:
 **Primo numero di gate (PARZIALE, prompt 7 completo — 251 prefill + 128
 golden)**: gate (ii) top-1 vs golden **127/128 = 99.22% ≥ 97% PASS**
 (report logits-conformance-p7-2026-08-01.json; KL media top-32 3.3e-3).
-`npm test` verde (221 + 2 analisi skipped), tsc pulito.
+`npm test` verde (220 + 2 analisi skipped) [numero corretto post-verifier], tsc pulito.
 
 IN RUN (background): (1) cpuref f64 p7 per il gate (i) argmax ≥99% vs
 motore; (2) conformance GPU FULL-CORPUS (8 prompt, ~26k prefill + 1.024
@@ -552,3 +552,20 @@ logits-cpuref-p7-2026-08-01.json. In run: cpuref p4 (secondo prompt per il
 gate (i)) + full-corpus GPU (gate (ii) su 1.024 posizioni, budget 11 GiB
 dopo l'OOM del primo tentativo a 12 — l'head Q6_K aggiunge ~270 MB, VRAM
 16.4 GB: annotato per il bench di slice 2).
+
+**it.10 CHIUSA — verifier PASS (2026-08-01)**: gate ricalcolati dai file
+grezzi (i: 256/256; ii: 1012/1024 con perPrompt campo-per-campo; coerenza
+golden 1024/1024; teacher-forcing senza off-by-one; KL/maxDl correttamente
+secondarie; identità naive/absorbed in suite). RAFFORZATIVO più forte del
+claim: su p7 (k=75) E p4 (k=34) la divergenza dal golden è lo STESSO TOKEN
+per motore e cpuref-f64. Osservazioni recepite: (1) copertura campionaria
+gate (i) resa visibile al PI → docket item 5 (non assorbita); (2) p3
+96.87% per-prompt annotato (gate aggregato regge); (3) maxDl 58.6 =
+artefatto di scala a KL 2e-7 e argmax corretto — mai promuoverla a gate;
+(4) numeri suite corretti (220+2); (5) push effettuato SOLO ora, post
+verifier (i parziali erano locali). **FASE 6 SLICE 1 CHIUSA: conformance
+logits full-model PASS su entrambi i gate.** Watch per slice 2 (bench): il
+budget slab è sceso a 11 GiB per far posto all'head (~270 MB) — hit 95.7%
+vs 97.6% @12: il margine sul gate decode si assottiglia; valutare al bench
+se ridurre ctxMax del bench (il protocollo B2 usa finestre corte) per
+recuperare KV e tornare a 12 GiB.

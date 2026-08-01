@@ -130,3 +130,17 @@ Costanti di gate (fase 1 le formalizza nel report):
    discriminatore ha "zero codice DI CALCOLO condiviso" col motore (parsing
    GGUF/indice/dequant CPU sono condivisi ma scagionati dalla firma — il
    motore usa dequant WGSL indipendenti, concordi a L2rel 2.35e-7 da it.5).
+
+5. **NOTA PER LA CHIUSURA GOAL — copertura campionaria del gate (i)**
+   (2026-08-01, it.10, segnalazione verifier): il gate (i) argmax vs
+   cpuref-f64 è valutato su 2/8 prompt (p7 + p4 = 256 posizioni golden,
+   risultato 256/256 = 100%) e non sull'intero corpus, per costo CPU del
+   riferimento f64 (54 min p7, ~2.7h p4; gli 8 prompt ≈ 1-2 giorni CPU).
+   Difendibilità del campione: include p4 (il prompt PEGGIORE al routing),
+   su entrambi i prompt la divergenza dal golden è lo STESSO TOKEN per
+   motore e cpuref (firma q8), e il gate poggia su layer-level a pesi reali
+   (it.5) + discriminatore esaustivo it.9. Il PI ratifica o chiede
+   estensione alla chiusura del goal (la contingenza oracolo-f32 resta
+   disponibile). Correlata: p3 è a 96.87% per-prompt sul gate (ii) — il
+   gate di spec è AGGREGATO (98.83% PASS); se si volesse un gate
+   per-prompt, p3 sarebbe l'unico sotto.

@@ -104,3 +104,14 @@ RULING RICHIESTO docket item 4 (racc.: routing informativo, gate su logits
 fase 6); timebox fase 5 esaurito (ruling f). Hit residenza 95.9% @12 GiB —
 coerente col sim C1. Verifier PASS (ipotesi alternative valutate ed
 escluse). Loop in STOP BY DESIGN: fase 6 gated dal ruling.
+
+## it.10 (2026-08-01, fase 6 slice 1 — CONFORMANCE LOGITS PASS)
+Output head (Q6_K vocab 154880) + harness glmconf + cpuref f64 absorbed
+full-model (identità naive↔absorbed in suite + self-check per layer).
+GATE (i) motore≡cpuref-f64: 256/256 = 100% (p7+p4; campione a docket item
+5). GATE (ii) top-1 vs golden: 1012/1024 = 98.83% ≥97 full corpus (per
+prompt 96.9-100%). Su entrambi i prompt f64 la divergenza dal golden è lo
+stesso token per motore e cpuref (firma q8 definitiva). ktest 30/30, suite
+220+2, tsc pulito, verifier PASS. Fix in corsa: budget slab 12→11 GiB
+(head in VRAM). Next (it.11): slice 2 — bench gate hard decode ≥13.43 /
+prefill ≥56.58 tok/s + non-regressione Qwen.
