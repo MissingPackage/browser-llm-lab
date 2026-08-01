@@ -540,3 +540,15 @@ IN RUN (background): (1) cpuref f64 p7 per il gate (i) argmax ≥99% vs
 motore; (2) conformance GPU FULL-CORPUS (8 prompt, ~26k prefill + 1.024
 golden, ~3.5h). I gate definitivi e il verifier alla raccolta. Nessun
 bench in questa slice (GPU occupata; slice 2).
+
+**it.10 — gate (i) PASS su p7 (2026-08-01 ~08:00)**: cpuref f64 absorbed
+full-model completato (54 min CPU, self-check naive/absorbed verde su ogni
+layer): argmax motore ≡ cpuref-f64 su **128/128 = 100%** (soglia ≥99).
+Rafforzativo decisivo: cpuref==golden 127/128 — la STESSA unica posizione
+in cui anche il motore diverge dal golden (99.22%): l'aritmetica esatta e
+il motore concordano tra loro anche nell'unico "errore" vs oracolo — la
+firma q8 di it.9 replicata a livello logits. Report
+logits-cpuref-p7-2026-08-01.json. In run: cpuref p4 (secondo prompt per il
+gate (i)) + full-corpus GPU (gate (ii) su 1.024 posizioni, budget 11 GiB
+dopo l'OOM del primo tentativo a 12 — l'head Q6_K aggiunge ~270 MB, VRAM
+16.4 GB: annotato per il bench di slice 2).
