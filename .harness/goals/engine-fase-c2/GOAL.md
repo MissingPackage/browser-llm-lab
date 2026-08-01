@@ -3,6 +3,16 @@ Q4_0) end-to-end su 4090 con conformance verificata contro l'oracolo llama.cpp
 (logits e routing), con una residenza esperti MINIMA (senza prefetch/tier/pin —
 quelli sono C3) e telemetria nativa che riporta i numeri che C3 userà.
 
+<!-- EMENDAMENTO 3 (ruling PI 2026-08-01 in chat, docket item 6 opzione a):
+     DEROGA sul punto "Decode E2E — GATE di non-regressione": i gate tok/s
+     (decode >=13.4, prefill >=56.6) NON sono soddisfatti (4.64 / 5.22
+     misurati a macchina quiescente, attribuzione quantitativa a docket
+     item 6/8). Il goal chiude come "correttezza + residenza dimostrate,
+     prestazione sotto il floor CPU con attribuzione"; il floor diventa il
+     gate d'ingresso di C3. Coda item 7 (stesso giorno): baseline Qwen
+     permanente = run quiescente 2026-08-01 (K=8 321.9, K=1 244.0, prefill
+     600.2 ms). Campione gate (i) 2/8 ratificato (item 5). -->
+
 <!-- EMENDAMENTO 2 (ruling PI 2026-07-31 in chat, docket item 4 opzione a):
      il punto "Conformance routing" del DONE WHEN passa da gate a soglia a
      MISURA INFORMATIVA (report in results/engine/); il gate di correttezza

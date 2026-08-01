@@ -143,3 +143,13 @@ GLM b12 quiescente: decode 4.64 (era 3.30), prefill 5.22 — gate ancora
 FAIL, struttura 158.9 ms/token dominante, proiezione residenza-perfetta
 6.3-7.0 tok/s < 13.43 ⇒ conclusione it.11 CONFERMATA da pulita. Item 6
 resta l'unico ruling aperto (+ scelta baseline Qwen alla chiusura).
+
+## it.12 (2026-08-01, fase 7 — GOAL CHIUSO)
+Ruling PI: item 6 = deroga (floor 13.43/56.58 → gate d'ingresso C3),
+item 5 = campione 2/8 ratificato, coda item 7 = baseline Qwen quiescente.
+Chiusura eseguita: docket item 8 (INPUT C3: baseline 4.64 scomposto,
+residenza 97.56% vs sim 96.4%, 4 leve ordinate — repack import, sync
+router, prefill M>1, prefetch), GOAL emendamento 3, direction §7 e ledger
+aggiornati, checklist DONE WHEN 7/7 (5 in deroga), HANDOFF. C2 chiude:
+correttezza e residenza DIMOSTRATE, prestazione sotto floor con
+attribuzione. Next: goal C3 (setup da PI).

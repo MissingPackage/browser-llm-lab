@@ -143,10 +143,20 @@ residenza NON è skewed (top-4/layer = 21.8% delle selezioni) ⇒ il learned pin
 vale poco e va tenuto ≤12.5% degli slot, il valore sta nel PREFETCH; (b) sul box dev
 (4090 **Laptop**, 16 GiB) il modello sta all'87% in VRAM (fattore 1.14×) ⇒ il regime
 di paging vero è mobile/M4-condiviso o contesti lunghi, non il dev-loop.
-Restano: C2 = esecuzione GLM (MoE+MLA) nel motore; C3 = slab+tier+AUTOPIN+PILOT-real
-con modello di banda (il guadagno di LATENZA del prefetch non è misurato da C1).
-Gate intermedio: instant-on (router+shared+esperti caldi subito, resto on-demand).
-Hero-demo M4.
+**C2 CHIUSA (2026-08-01)**: GLM-4.7-Flash gira end-to-end nel motore (47 layer,
+MLA absorbed, MoE con residenza minima OPFS→VRAM LRU) con correttezza dimostrata —
+logits argmax ≡ cpuref-f64 100% (campione ratificato), top-1 vs golden 98.83%
+full-corpus; hit residenza 97.56% @12 GiB (sopra il 96.4% del simulatore C1).
+Prestazione SOTTO il floor CPU con deroga PI (docket C2 item 6a): decode 4.64
+tok/s vs floor 13.43, prefill senza percorso batched. Attribuzione misurata
+(docket C2 item 8 = input C3): 215.5 ms/token = 56.1 stallo residenza (pack CPU
+9.5 ms/miss, leva: repack all'import) + 158.9 struttura (1.816 dispatch + **47
+sync router/token** — il collo dominante). Leve C3 in ordine: repack import,
+eliminazione sync router (senza: tetto ~7 tok/s), prefill batched M>1, prefetch
+LOOKA (valore residuo sul dev-box, decisivo su mobile/ctx lunghi).
+Resta: C3 = slab+tier+AUTOPIN+PILOT-real con modello di banda, **gate d'ingresso
+= floor C1 (13.43/56.58)**. Gate intermedio: instant-on (router+shared+esperti
+caldi subito, resto on-demand). Hero-demo M4.
 
 **Fase D — moltiplicatori.** Spec-dec: prima la MTP nativa del modello (verificata,
 §3), poi eventualmente DSpark-style; verifica = rejection sampling esatto (lossless by

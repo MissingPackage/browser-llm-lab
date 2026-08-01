@@ -131,7 +131,11 @@ Costanti di gate (fase 1 le formalizza nel report):
    GGUF/indice/dequant CPU sono condivisi ma scagionati dalla firma — il
    motore usa dequant WGSL indipendenti, concordi a L2rel 2.35e-7 da it.5).
 
-5. **NOTA PER LA CHIUSURA GOAL — copertura campionaria del gate (i)**
+5. ~~**NOTA PER LA CHIUSURA GOAL — copertura campionaria del gate (i)**~~
+   RISOLTO (2026-08-01, ruling PI in chat via question tool: "Ratifico 2/8").
+   Campione ratificato senza estensione. Testo originale:
+
+   **NOTA PER LA CHIUSURA GOAL — copertura campionaria del gate (i)**
    (2026-08-01, it.10, segnalazione verifier): il gate (i) argmax vs
    cpuref-f64 è valutato su 2/8 prompt (p7 + p4 = 256 posizioni golden,
    risultato 256/256 = 100%) e non sull'intero corpus, per costo CPU del
@@ -145,7 +149,16 @@ Costanti di gate (fase 1 le formalizza nel report):
    gate di spec è AGGREGATO (98.83% PASS); se si volesse un gate
    per-prompt, p3 sarebbe l'unico sotto.
 
-6. **RULING RICHIESTO — gate tok/s GLM falliti (fase 6, spec §8)**
+6. ~~**RULING RICHIESTO — gate tok/s GLM falliti (fase 6, spec §8)**~~
+   RISOLTO (2026-08-01, ruling PI in chat via question tool: opzione (a),
+   "Deroga: floor → C3"). **DEROGA CONCESSA sul gate tok/s di fase 6**
+   (non-regressione permanente: la deroga è registrata QUI come richiesto
+   dal contratto): C2 chiude come "correttezza + residenza dimostrate,
+   prestazione sotto il floor CPU con attribuzione quantitativa"; il floor
+   13.43/56.58 diventa il gate d'ingresso di C3 (v. item 8, input C3).
+   GOAL.md emendamento 3. Testo originale:
+
+   **RULING RICHIESTO — gate tok/s GLM falliti (fase 6, spec §8)**
    (2026-08-01, it.11). Il bench di produzione misura, sul prompt p6 (461
    token) con nGen 64, protocollo B2 (3 repliche + warmup, mediana):
    **decode 3.30 tok/s vs gate 13.43** (4.1× sotto) e **prefill 4.41 tok/s
@@ -210,15 +223,16 @@ Costanti di gate (fase 1 le formalizza nel report):
      Report `results/engine/bench-4090-2026-08-01T16-34-04-484Z.json`.
    - L'attribuzione a stato-host è CONFERMATA oltre il necessario: il
      codice a HEAD è più VELOCE del baseline, non più lento.
-   **SCOPERTA COLLATERALE (decisione da prendere alla chiusura goal, non
-   presa qui)**: anche il baseline del 2026-07-30 era misurato su host
-   degradato (il browser `zen` era in run dal ~26/07: 5g10h di CPU
-   accumulata al momento del kill) ⇒ 287.5 sottostima la macchina. Alla
-   chiusura il PI sceglie il riferimento permanente di non-regressione:
-   (i) tenere 287.5 (conservativo, robusto allo stato host tipico) o
-   (ii) adottare 321.9 CON condizioni termiche dichiarate obbligatorie
-   nel protocollo (ogni bench futuro registra clock/temp — la firma
-   carico-sostenuto vs latency-bound di it.11 è il discriminatore).
+   **SCOPERTA COLLATERALE — RISOLTA (2026-08-01, ruling PI in chat:
+   "Teniamo le nuove misure a macchina fresca. non serve una dichiarazione
+   specifica. nessuno fa i benchmark con altri processi aperti.")**: anche
+   il baseline del 2026-07-30 era su host degradato (zen in run dal ~26/07)
+   ⇒ **baseline permanente di non-regressione Qwen = run quiescente
+   2026-08-01** (`bench-4090-2026-08-01T16-34-04-484Z.json`): K=8 321.88
+   ±2.60, K=1 243.97 ±10.27, prefill chunked 600.2 ms. Nessuna clausola
+   formale di condizioni termiche nel protocollo; la norma operativa è
+   quella detta dal PI: i bench si fanno a macchina scarica (la landmine
+   in HANDOFF §5 resta come promemoria diagnostico, non come gate).
    Indagine CPU dell'host: brief consegnato al PI in
    `~/cpu-investigation/brief.md` (fuori repo). Testo originale:
 
@@ -254,3 +268,44 @@ Costanti di gate (fase 1 le formalizza nel report):
    intra-run (σ 2.3 su K=8); non catturano la varianza INTER-giorno dello
    stato termico dell'host. Se (a) o (b), vale la pena registrare in spec
    che il bench di non-regressione dichiari clock/temperatura GPU.
+
+8. **INPUT C3 (chiusura goal, 2026-08-01)** — i numeri che C3 eredita, tutti
+   misurati sul forward di produzione (non simulati). Fonti:
+   `bench-glm-4090-b12-quiesced-2026-08-01.json` (bench quiescente, headline),
+   `routing-conformance-glm47flash-2026-07-31.json` (full-corpus 31k pos),
+   `logits-conformance-glm47flash-2026-08-01.json` (conformance).
+
+   **Gate d'ingresso C3 (ruling item 6a)**: decode ≥13.43, prefill ≥56.58
+   tok/s (floor oracolo CPU C1). Confronto informativo con la funzione
+   obiettivo (~30 tok/s): il decode attuale è 4.64 ⇒ gap 2.9× al floor,
+   6.5× all'obiettivo.
+
+   **Stato attuale (baseline C3)**: decode 4.64 tok/s = 215.5 ms/token:
+   - stallo residenza 56.1 ms/token (4.47 miss/token @ hit 97.57%):
+     per miss ~12.6 ms = read OPFS 1.3 + **pack CPU 9.5** + upload 1.8;
+   - struttura 158.9 ms/token: 1.816 dispatch + **47 sync CPU↔GPU/token**
+     (46 readback router — la selezione CPU decide i bind — + 1 logits);
+     floor osservato a zero miss ~142 ms/token ⇒ tetto ~7 tok/s senza
+     interventi strutturali.
+
+   **Residenza minima osservata vs simulatore C1**: hit full-corpus 97.56%
+   @12 GiB slab (31.274 pos, LRU pura, 2.419 slot ≈ 82% del parco) vs 96.4%
+   del simulatore ⇒ il simulatore era leggermente conservativo; LRU pura è
+   una baseline solida, il margine del prefetch (recall LOOKA 92% @K=8) è
+   tutto da incassare.
+
+   **Leve dimensionate (in ordine di rapporto valore/rischio)**:
+   1. **Repack all'import** (journal it.7): elimina il pack CPU dal path
+      caldo ⇒ −42.5 ms/token al bench (−9.5 ms/miss). Da sola: ~5.8 tok/s.
+   2. **Eliminare/battchare i 46 sync router**: il termine dominante.
+      Opzioni note: selezione top-4 su GPU (indirect dispatch o bind
+      completo del parco residente), oppure pipelining a profondità >1.
+      Senza questo il floor 13.43 resta irraggiungibile (tetto ~7).
+   3. **Prefill batched M>1**: capacità nuova (MoE batched, insiemi di
+      expert diversi per token) — il gate prefill è irraggiungibile per
+      costruzione senza di essa.
+   4. **Prefetch LOOKA** (C1): a hit 97.6% il valore residuo sul dev-box è
+      piccolo (≤56 ms/token recuperabili in toto con 1-3); vale sul regime
+      mobile/ctx-lunghi dove il budget slab scende.
+   **VRAM**: slab 12 GiB + head OK a ctx ≤~1k (KV 54 KB/token); a ctx 6k il
+   KV (361 MB) manda OOM ⇒ budget slab ctx-aware in C3.

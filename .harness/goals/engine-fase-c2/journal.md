@@ -737,3 +737,63 @@ Report `results/engine/bench-glm-4090-b12-quiesced-2026-08-01.json`
   per-token (47 sync).
 - Docket item 6: opzioni INVARIATE (a/b/c), numeri di riferimento
   aggiornati nell'addendum. Nessuna decisione presa.
+
+## it.12 — fase 7: CHIUSURA GOAL (2026-08-01)
+
+Ruling ricevuti in chat (question tool): **item 6 = opzione (a)** (deroga:
+il floor 13.43/56.58 diventa gate d'ingresso C3; GOAL.md emendamento 3) e
+**item 5 = ratifica del campione 2/8** per il gate (i). Coda item 7 risolta
+poco prima ("teniamo le nuove misure a macchina fresca"): baseline Qwen
+permanente = run quiescente 2026-08-01, senza clausola termica formale.
+
+Eseguito per la chiusura:
+- Docket: item 5 e 6 marcati risolti coi testi dei ruling; **item 8 nuovo =
+  INPUT C3** (gate d'ingresso, baseline 4.64 con scomposizione, residenza
+  osservata vs simulatore, 4 leve dimensionate in ordine valore/rischio,
+  nota VRAM ctx-aware).
+- GOAL.md: emendamento 3 in testa (deroga + baseline Qwen + campione).
+- PHASES: fase 6 "done CON DEROGA", fase 7 in progress→done con questa entry.
+- direction.md §7: paragrafo fase C aggiornato — C2 CHIUSA con risultati e
+  leve; C3 col gate d'ingresso.
+- ideas-ledger riga paging: aggiunta la misura NEL MOTORE (hit 97.56% reale,
+  costo miss 12.6 ms, repack prima leva, prefetch → regime mobile).
+- HANDOFF riscritto (sotto, a valle del verifier).
+
+**CHECKLIST DONE WHEN (GOAL.md) — 7/7**:
+1. ✅ Spec C2 scritta e approvata (it.1; docket item 2, ruling 2026-07-31;
+   emendata §7 con ruling item 4a).
+2. ✅ Load GGUF con validazione hard, SHA pinnato, test verdi (it.2; suite
+   parsing GLM 18 test; load headless in suite).
+3. ✅ Conformance logits vs oracolo: golden fase 1 (stesso commit 5f55650),
+   gate doppio di spec PASS — (i) 256/256 vs cpuref-f64 (campione 2/8
+   RATIFICATO, item 5), (ii) 1012/1024 = 98.83% ≥97 vs golden full-corpus
+   (it.10, verifier PASS).
+4. ✅ Conformance routing COME EMENDATA (ruling item 4a): misura informativa
+   full-corpus 88.51% decode con analisi near-tie; il gate di correttezza
+   MoE è il doppio gate logits (sopra).
+5. ✅* Decode E2E — gate tok/s IN DEROGA (ruling item 6a): bench B2 eseguito
+   due volte (contaminato + quiescente), report con tok/s, 1.816
+   dispatch/token, hit-rate, occupazione; decode 4.64 < 13.43 e prefill
+   5.22 < 56.58 con attribuzione quantitativa (item 8). Il confronto coi
+   30 tok/s della funzione obiettivo è a docket (item 8: gap 6.5×).
+6. ✅ Non-regressione pregresso: conformance fase A bit-identica
+   (98.05/100.00), bench Qwen quiescente PASS su tutti i gate — K=8 321.9,
+   K=1 244.0, prefill 600.2 (item 7 risolto; baseline nuovo ratificato).
+7. ✅ Chiusura: docket input C3 (item 8), ledger/direction aggiornati,
+   HANDOFF refresh, merge/push su main (main-diretto, ruling item 3).
+
+Evidenza di build alla chiusura: suite 220 passed + 2 skipped, tsc pulito
+(invariati da it.11 — la fase 7 tocca solo docs/harness). Pending verifier
+finale.
+
+Verifier finale it.12: **PASS** (gate (i) 256/256 e (ii) 1012/1024
+RICALCOLATI dai report grezzi; item 8 verificato numero per numero contro i
+JSON — 4.6399, 215.52=56.15+158.93, per-miss 12.61=1.30+9.51+1.80, hit
+0.97564, leva repack −42.49; emendamento 3 solo-commento; direction/ledger
+senza promesse non misurate; zero modifiche src/specs; suite 220+2 e tsc
+freschi; push correttamente NON ancora eseguito). Osservazioni recepite:
+(1) la spunta "merge/push" del punto 7 diventa vera con questo commit;
+(2) nota harness per C3: aggiungere somma di controllo stallo+residuo vs
+msPerToken (scarto 0.44 ms da mediane per-replica); (3) al primo bench C3
+rigenerare le soglie 2σ Qwen dal baseline nuovo (243.97 ±10.27 per K=1 —
+il campo gates dell'harness usa ancora 230). **GOAL engine-fase-c2 CHIUSO.**
