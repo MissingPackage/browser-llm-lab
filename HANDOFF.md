@@ -2,9 +2,10 @@
 
 ## 1. Next decidable
 
-**Avviare il goal engine-fase-c3a.** Il contratto è scritto e APPROVATO
-(`.harness/goals/engine-fase-c3a/GOAL.md`); manca solo il `/goal` — che
-parte da iteration 0: goal-setup → PHASES.md → PLAN-CHECK a docket.
+**Goal engine-fase-c3a IN CORSO — fase 1** (strumentazione TTFT + attribuzione
+sync vs dispatch). Iteration 0 fatta: `PHASES.md` 7 fasi, PLAN-CHECK
+pre-autorizzato dal PI. Aperto a docket: **item 2 — clausola di fallback per
+la fase 4** (non blocca le fasi 1-2, serve prima della fase 6).
 - **Perimetro C3a (struttura)**: repack all'import, eliminazione/batching dei
   46 sync router, prefill batched M>1. **Gate di chiusura**: decode ≥13.43 /
   prefill ≥56.58 tok/s (floor oracolo CPU C1, ereditato dalla deroga C2).

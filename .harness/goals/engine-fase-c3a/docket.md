@@ -52,5 +52,36 @@
    come soglia UX in regime thinking; errore del modello di banda +/-15% (C3b);
    budget slab di prova 50% e 25% del parco (C3b).
 
-<!-- Prossimo item atteso: PLAN-CHECK (iteration 0) — approvazione di PHASES.md
-     prima dell'iterazione 1, come in C1/C2. -->
+2. **RULING RICHIESTO — clausola di fallback per la fase 4 (sync router)**
+   (2026-08-01, iteration 0). Non blocca: le fasi 1-2 girano comunque; serve
+   una risposta prima della fase 6.
+
+   C1 aveva una clausola pre-negoziata (se il tap hidden sfora il timebox, il
+   goal chiude in modalità ridotta e la via alternativa va a docket). C3a non
+   ne ha. Il rischio è concreto e quantificato: la proiezione C2 dice che a
+   residenza perfetta il decode arriva a **6.3-7.0 tok/s**, quindi tutto il
+   resto del cammino verso 13.43 deve venire dall'eliminazione dei 46 sync,
+   la cui resa non è mai stata misurata isolatamente (i 158.9 ms/token sono
+   sync *più* 1.816 dispatch, senza split noto — è esattamente ciò che la
+   fase 1 va a misurare). Senza clausola, l'esito "sotto il floor" produce una
+   seconda deroga come in C2, cioè una decisione presa sotto pressione a fine
+   goal invece che a mente fredda adesso.
+
+   **Opzioni**:
+   (a) [RACCOMANDATA] **clausola simmetrica a C1**: se dopo le fasi 3-5,
+       ri-misurato a macchina quiescente, il decode resta sotto 13.43, C3a
+       chiude con la misura, l'attribuzione aggiornata e la leva residua
+       identificata a docket — senza scorciatoie sul path e senza auto-deroga;
+       la decisione sul da farsi resta PI.
+   (b) **nessuna clausola**: sotto il floor = FAIL del goal e ri-scope.
+   (c) **clausola condizionata al numero di fase 1**: si decide dopo aver
+       visto lo split sync/dispatch misurato (rimanda la decisione di
+       un'iterazione, con l'informazione in mano).
+
+3. ~~**PLAN-CHECK**~~ PRE-AUTORIZZATO (2026-08-01, PI in chat: "vai con goal
+   setup e poi parti col loop"). PHASES.md è scritto e il loop parte senza
+   attendere approvazione esplicita: 7 fasi, sequenziali (owns sovrapposti sul
+   path caldo), fase 1 ready subito, fasi 3-6 gated dal ruling di spec (fase 2),
+   fase 4 = rischio dichiarato del goal. Se leggendo PHASES.md la
+   decomposizione non ti convince, la modifica passa da qui (item nuovo), non
+   dal loop.
