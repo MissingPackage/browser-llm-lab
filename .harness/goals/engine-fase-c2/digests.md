@@ -133,3 +133,13 @@ soglia, K=1/seq/encodeCpu uguali o migliori, codice Qwen invariato ⇒
 attribuito al throttling dell'host (CPU utente 86%/99 °C, GPU 1425-1620
 MHz su 3105). Suite 220+2, tsc pulito. RULING RICHIESTI: docket item 6
 (gate GLM) e 7 (non-regressione Qwen). Loop in STOP BY DESIGN.
+
+## post-it.11 (2026-08-01 sera — RI-MISURE QUIESCENTI, item 7 RISOLTO)
+PI quiesce l'host (kill zen: 5g10h CPU/6g, rendering loop WebRender) e
+ordina la ri-misura (= ruling item 7a). Qwen: PASS tutti i gate con
+margine — K=8 321.9 (soglia 282.9, baseline 287.5 SUPERATO: anche il
+baseline era su host degradato), prefill 600.2 ms (≤726.3), K=1 244.0.
+GLM b12 quiescente: decode 4.64 (era 3.30), prefill 5.22 — gate ancora
+FAIL, struttura 158.9 ms/token dominante, proiezione residenza-perfetta
+6.3-7.0 tok/s < 13.43 ⇒ conclusione it.11 CONFERMATA da pulita. Item 6
+resta l'unico ruling aperto (+ scelta baseline Qwen alla chiusura).

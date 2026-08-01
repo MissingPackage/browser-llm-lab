@@ -701,3 +701,39 @@ carico-sostenuto sì).
 RICHIESTI a docket (item 6 = gate GLM, item 7 = non-regressione Qwen). Fase 7
 (chiusura) resta bloccata: la deroga è decisione PI (non-regressione
 permanente, ruling 2026-07-31). **STOP BY DESIGN del loop.**
+
+## Post-it.11 — ri-misure a macchina QUIESCENTE (2026-08-01, ruling item 7a)
+
+Il PI ha quiescito l'host (chiusi browser `zen` — 5g10h di CPU accumulata
+in 6 giorni, pipeline WebRender in rendering loop — e VSCode; brief
+d'indagine CPU consegnato fuori repo in ~/cpu-investigation/) e ha ordinato
+la ri-misura ("vai. lanciala ora" = opzione (a) dell'item 7).
+
+**Qwen — non-regressione: PASS su tutti e tre i gate, con margine.**
+Report `results/engine/bench-4090-2026-08-01T16-34-04-484Z.json`, condizioni
+dichiarate GPU 56-66 °C / clock fino a 2250+ MHz, CPU package 67-88 °C:
+- decode K=8 **321.88 ±2.60** vs soglia 282.9 — e SOPRA il baseline 287.46
+  (+12%): anche il baseline del 30/07 era su host degradato (zen in run dal
+  ~26/07). gpuBusy 2.22 ms/token vs 3.06 del baseline (GPU −27%).
+- decode K=1 **243.97 ±10.27** vs 226.5 PASS; prefill chunked **600.2 ms**
+  vs ≤726.3 PASS (−14% dal baseline); seq 1804 ms.
+- Item 7 RISOLTO nel docket; resta al PI (chiusura goal) la scelta del
+  riferimento permanente: 287.5 conservativo vs 321.9 con condizioni
+  termiche dichiarate obbligatorie.
+
+**GLM — ri-bench b12 quiescente: gate ancora FAIL, attribuzione ripulita.**
+Report `results/engine/bench-glm-4090-b12-quiesced-2026-08-01.json`
+(stessi parametri dell'headline it.11: p6, nGen 64, 3 repliche, 12 GiB):
+- decode **4.640 tok/s** (σ 0.059 — era 0.38 sotto contaminazione) vs gate
+  13.43 = FAIL 2.9×; prefill **5.221** vs 56.58 = FAIL (capacità mancante,
+  invariato). Il quadro it.11 era quindi PEGGIORATO dall'host di ~40% sul
+  decode, ma la conclusione strutturale REGGE ed esce più pulita:
+- 215.5 ms/token = stallo 56.1 (pack **42.5** + read 5.8 + upload 8.1;
+  hit 97.57% identico) + struttura **158.9** (1.816 dispatch + 47 sync).
+  Token zero-miss 142.3 ms (n_eff 3), intercetta 159.9, pendenza 12.5
+  ms/miss. **Proiezione a residenza perfetta: 6.3-7.0 tok/s — ancora
+  sotto il floor 13.43.** Le leve C3 ricalibrate: repack all'import vale
+  ora −42.5 ms/token (non −71.6); il termine dominante resta la struttura
+  per-token (47 sync).
+- Docket item 6: opzioni INVARIATE (a/b/c), numeri di riferimento
+  aggiornati nell'addendum. Nessuna decisione presa.

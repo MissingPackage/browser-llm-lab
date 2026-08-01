@@ -183,7 +183,46 @@ Costanti di gate (fase 1 le formalizza nel report):
    In (a): serve anche il pronunciamento sulla riformulazione del gate per C3
    (il floor CPU resta il target del programma, non del goal C2).
 
-7. **RULING RICHIESTO — non-regressione Qwen: K=8 e prefill sotto soglia,
+   **ADDENDUM ri-misura quiescente (2026-08-01 sera, post-ruling item 7a)**:
+   i numeri sopra erano contaminati dallo stato host (v. item 7). Ri-bench
+   b12 a macchina quiescente, stessi parametri
+   (`results/engine/bench-glm-4090-b12-quiesced-2026-08-01.json`):
+   **decode 4.640 tok/s** (σ 0.059) vs 13.43 = FAIL 2.9×; **prefill 5.221**
+   vs 56.58 = FAIL (capacità mancante, invariato). Attribuzione ripulita:
+   215.5 ms/token = stallo 56.1 (pack 42.5 + read 5.8 + upload 8.1, hit
+   97.57%) + struttura 158.9 (1.816 dispatch + 47 sync). Proiezione a
+   residenza perfetta: **6.3-7.0 tok/s, ancora sotto il floor** ⇒ la
+   conclusione strutturale regge anche da pulita. Leve C3 ricalibrate:
+   repack all'import −42.5 ms/token; dominante resta la struttura per-token.
+   Le opzioni (a)/(b)/(c) restano invariate; QUESTI sono i numeri su cui
+   decidere (non i 3.30/4.41 contaminati).
+
+7. ~~**RULING RICHIESTO — non-regressione Qwen**~~ RISOLTO (2026-08-01,
+   ruling PI in chat: "vai. lanciala ora" = opzione (a), dopo che il PI
+   stesso ha quiescito l'host chiudendo browser e VSCode). **Ri-misura a
+   macchina quiescente: PASS su TUTTI e tre i gate, con margine**:
+   - decode K=8 **321.88 ±2.60** vs soglia 282.9 (e SOPRA il baseline
+     287.46 del +12%); K=1 **243.97** vs 226.5; prefill chunked
+     **600.2 ms** vs ≤726.3 (meglio del baseline 697.8 del 14%);
+     gpuBusy 2.22 ms/token vs 3.06 del baseline.
+   - Condizioni dichiarate (nota metodologica recepita): GPU 56-66 °C,
+     clock fino a 2250+ MHz (campionati a 5 s); CPU package 67-88 °C.
+     Report `results/engine/bench-4090-2026-08-01T16-34-04-484Z.json`.
+   - L'attribuzione a stato-host è CONFERMATA oltre il necessario: il
+     codice a HEAD è più VELOCE del baseline, non più lento.
+   **SCOPERTA COLLATERALE (decisione da prendere alla chiusura goal, non
+   presa qui)**: anche il baseline del 2026-07-30 era misurato su host
+   degradato (il browser `zen` era in run dal ~26/07: 5g10h di CPU
+   accumulata al momento del kill) ⇒ 287.5 sottostima la macchina. Alla
+   chiusura il PI sceglie il riferimento permanente di non-regressione:
+   (i) tenere 287.5 (conservativo, robusto allo stato host tipico) o
+   (ii) adottare 321.9 CON condizioni termiche dichiarate obbligatorie
+   nel protocollo (ogni bench futuro registra clock/temp — la firma
+   carico-sostenuto vs latency-bound di it.11 è il discriminatore).
+   Indagine CPU dell'host: brief consegnato al PI in
+   `~/cpu-investigation/brief.md` (fuori repo). Testo originale:
+
+   **RULING RICHIESTO — non-regressione Qwen: K=8 e prefill sotto soglia,
    attribuiti all'host** (2026-08-01, it.11). Misura same-day, 2 run
    indipendenti: decode K=8 **263.5** vs soglia 282.9 (287.46−2σ) e prefill
    chunked **747.9 ms** vs soglia 726.3 (697.8+2σ) ⇒ FAIL della lettera del

@@ -2,33 +2,31 @@
 
 ## 1. Next decidable
 
-**RULING PI su docket engine-fase-c2 item 6 e 7 — il loop è in STOP BY
-DESIGN, nessun passo tecnico decidibile senza di te.**
-Il bench di fase 6 (it.11) ha misurato e i gate hard NON passano:
-- **GLM: decode 3.30 tok/s vs gate 13.43, prefill 4.41 vs 56.58** (config
-  migliore slab 12 GiB; a 11 GiB 2.96/3.87). Attribuzione misurata: dei
-  302.7 ms/token, 112.4 sono stallo residenza (pack 71.6 dominante) e
-  190.3 sono struttura (1.816 dispatch + **47 sync CPU↔GPU/token**); i
-  token a zero miss costano 136.3 ms ⇒ **anche con residenza perfetta si
-  starebbe a 5.3-7.3 tok/s**. Il gate prefill non è un divario omogeneo ma
-  una CAPACITÀ MANCANTE: il floor è il pp512 *batched* di llama.cpp, il
-  motore fa 461 forward sequenziali (nessun percorso M>1). Le leve esistono
-  e sono dimensionate, ma stanno **fuori dallo scope C2** (sono C3):
-  serve la tua decisione (item 6: deroga con misura onesta / estensione
-  scope / FAIL formale).
-- **Qwen: K=8 263.5 vs soglia 282.9 e prefill 747.9 ms vs 726.3 sotto
-  soglia**, MA conformance identica (98.05/100.00), K=1 e seq prefill
-  MIGLIORI del baseline, codice del percorso Qwen byte-identico al commit
-  di baseline. Firma da throttling dell'host (browser utente `zen` all'86%
-  di CPU da 6 giorni, package 99 °C, GPU 1425-1620 MHz sotto carico su
-  3105 max), non da regressione di codice (item 7: accettare l'attribuzione
-  con o senza ri-misura a macchina quiescita / trattarla da regressione).
+**RULING PI su docket engine-fase-c2 item 6 (unico aperto) — il loop è in
+STOP BY DESIGN.** L'item 7 (Qwen) è RISOLTO: host quiescito dal PI, ri-misura
+PASS su tutti e tre i gate con margine (K=8 **321.9** vs soglia 282.9 — sopra
+anche il baseline 287.5, che era ANCH'ESSO su host degradato; prefill 600.2 ms
+vs ≤726.3; K=1 244.0 vs 226.5; gpuBusy 2.22 vs 3.06 ms/token).
+Resta l'**item 6 — gate GLM falliti anche a macchina quiescente** (numeri
+puliti nel ri-bench b12-quiesced, che SOSTITUISCONO i 3.30/4.41 contaminati):
+- **decode 4.64 tok/s vs gate 13.43** (FAIL 2.9×); attribuzione pulita:
+  215.5 ms/token = stallo residenza 56.1 (pack 42.5) + struttura **158.9**
+  (1.816 dispatch + **47 sync CPU↔GPU/token**). Proiezione a residenza
+  perfetta: **6.3-7.0 tok/s, ancora sotto il floor** ⇒ fallimento
+  strutturale del piano per-token, non della residenza.
+- **prefill 5.22 vs 56.58**: CAPACITÀ MANCANTE, non divario — il floor è il
+  pp512 *batched* di llama.cpp, il motore fa forward sequenziali (nessun
+  percorso M>1).
+Le leve sono dimensionate ma fuori scope C2 (sono C3): item 6 = deroga con
+misura onesta [raccomandata] / estensione scope / FAIL formale. Alla
+chiusura goal il PI sceglie anche il baseline Qwen permanente (287.5
+conservativo vs 321.9 con condizioni termiche dichiarate — coda item 7).
 Dopo il ruling resta solo la fase 7 (chiusura: input C3 a docket,
 ledger/direction, merge).
 Riancorarsi da: `.harness/goals/engine-fase-c2/{PHASES,docket,journal}.md`
-(journal it.11 = misure e debug per esteso), report
-`results/engine/bench-glm-4090-b1{1,2}-2026-08-01.json`,
-`results/engine/bench-4090-2026-08-01T13-51-55-018Z.json` (Qwen).
+(journal it.11 + "Post-it.11" = misure e debug per esteso), report
+`results/engine/bench-glm-4090-b12-quiesced-2026-08-01.json` (GLM pulito),
+`results/engine/bench-4090-2026-08-01T16-34-04-484Z.json` (Qwen pulito).
 
 ## 2. State delta (sessione 17)
 
@@ -41,6 +39,11 @@ Riancorarsi da: `.harness/goals/engine-fase-c2/{PHASES,docket,journal}.md`
   (non esiste path batch M>1).
 - Non-regressione Qwen ri-misurata same-day (2 run + conformance) con
   debug completo dell'attribuzione (v. §1 e journal it.11).
+- **Post-it.11**: PI quiesce l'host (kill zen+VSCode; brief indagine CPU in
+  `~/cpu-investigation/brief.md`, fuori repo) e ordina la ri-misura =
+  ruling item 7(a). Qwen PASS tutti i gate; ri-bench GLM b12 quiescente:
+  4.64/5.22, gate ancora FAIL con attribuzione ripulita. Item 7 RISOLTO,
+  item 6 aggiornato coi numeri puliti.
 - Stato test: suite 220 passed + 2 skipped, `tsc --noEmit` pulito.
 
 ## 3. State delta (sessione 16)
@@ -65,12 +68,13 @@ Riancorarsi da: `.harness/goals/engine-fase-c2/{PHASES,docket,journal}.md`
 
 ## 4. Open threads
 
-- Goal C2: fase 6 MISURATA ma gate non passati → fase 7 (chiusura) BLOCCATA
-  dai ruling item 6/7. Nessun timebox attivo.
+- Goal C2: fase 6 MISURATA (anche da quiescente) ma gate GLM non passati →
+  fase 7 (chiusura) BLOCCATA dal ruling item 6. Nessun timebox attivo.
 - Alla CHIUSURA goal il PI ratifica: campione gate (i) 2/8 prompt (docket
-  item 5) + le derive del bench (item 6/7).
-- Ri-misura Qwen a macchina quiescita: richiede la chiusura del browser
-  utente `zen` (azione umana) — schedulata dal PI se opta per item 7 (a).
+  item 5) + baseline Qwen permanente (coda item 7).
+- Indagine CPU host in corso in sessione separata (brief
+  `~/cpu-investigation/brief.md`): l'esito può cambiare le condizioni
+  termiche "tipiche" della macchina — rilevante per la scelta del baseline.
 - Goal harness stale mai chiusi: `fase-1b-matrice` (11 docket),
   `fase-2-deep-dive` (5) — igiene da /weekly-maintenance.
 - Duplicato results/opfs-bench-*.json in due posizioni (segnalato, non toccato).
@@ -105,13 +109,14 @@ Riancorarsi da: `.harness/goals/engine-fase-c2/{PHASES,docket,journal}.md`
 
 ## 6. Docket (user decisions pending)
 
-- **engine-fase-c2 item 6: gate tok/s GLM falliti** (decode 3.30/13.43,
-  prefill 4.41/56.58) con attribuzione — deroga / estensione scope / FAIL.
-- **engine-fase-c2 item 7: non-regressione Qwen K=8+prefill sotto soglia**,
-  attribuita all'host — accettare / ri-misurare a macchina quiescita /
-  trattare da regressione.
+- **engine-fase-c2 item 6: gate tok/s GLM falliti anche da quiescente**
+  (decode 4.64/13.43, prefill 5.22/56.58 = capacità mancante) con
+  attribuzione pulita — deroga / estensione scope / FAIL.
 - engine-fase-c2 item 5: ratifica del campione gate (i) (2/8 prompt,
   256/256) — alla chiusura del goal.
+- Coda item 7 (risolto): scelta del baseline Qwen permanente alla chiusura
+  — 287.5 (conservativo, host tipico) vs 321.9 (quiescente, condizioni
+  termiche dichiarate obbligatorie nel protocollo).
 - (Ratificati in sessione: item 4 = opzione (a), routing informativo.)
 - fase-1b-matrice (11 item) e fase-2-deep-dive (5 item): stale, da triage
   weekly-maintenance.
