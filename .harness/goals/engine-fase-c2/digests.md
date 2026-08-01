@@ -115,3 +115,21 @@ stesso token per motore e cpuref (firma q8 definitiva). ktest 30/30, suite
 220+2, tsc pulito, verifier PASS. Fix in corsa: budget slab 12→11 GiB
 (head in VRAM). Next (it.11): slice 2 — bench gate hard decode ≥13.43 /
 prefill ≥56.58 tok/s + non-regressione Qwen.
+
+## it.11 (2026-08-01, fase 6 slice 2 — BENCH: ENTRAMBI I GATE FALLITI)
+Harness glmbench nuovo (protocollo B2 sul forward di produzione, decode
+greedy reale, telemetria per-token). Prompt p6 (461 tok), nGen 64, ctxMax
+525. GATE FALLITI: decode 3.30 tok/s vs 13.43 (4.1×), prefill 4.41 vs
+56.58 — quest'ultimo NON è un divario omogeneo ma una CAPACITÀ MANCANTE
+(il floor è il pp512 batched di llama.cpp; il motore fa 461 forward
+sequenziali, non ha percorso M>1). Parametri decisi nel bench: slab 12 GiB
+(nessun OOM a ctx corto, domina 11 su tutto), prefill decode-only.
+Attribuzione: 302.7 ms/token = stallo residenza 112.4 (pack 71.6 dominante)
++ struttura 190.3 (1.816 dispatch + 47 sync/token); i token a zero miss
+costano ~136 ms ⇒ proiezione: con residenza perfetta si starebbe a 5.3-7.3
+tok/s, comunque sotto il floor ⇒ il fallimento NON è della residenza.
+Qwen: conformance PASS bit-identica; bench K=8 263.5 e prefill 747.9 sotto
+soglia, K=1/seq/encodeCpu uguali o migliori, codice Qwen invariato ⇒
+attribuito al throttling dell'host (CPU utente 86%/99 °C, GPU 1425-1620
+MHz su 3105). Suite 220+2, tsc pulito. RULING RICHIESTI: docket item 6
+(gate GLM) e 7 (non-regressione Qwen). Loop in STOP BY DESIGN.

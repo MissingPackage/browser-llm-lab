@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>browser-llm-lab — GLM bench</title>
+  </head>
+  <body>
+    <h1>GLM bench (dev-only, C2 fase 6 slice 2)</h1>
+    <p>
+      Protocollo B2 (warmup scartato + repliche, mediana) sul forward GLM di
+      produzione: prefill sulle posizioni del prompt golden, decode greedy.
+      Gate hard: decode ≥ 13.43 tok/s, prefill ≥ 56.58 tok/s (floor oracolo CPU C1).
+    </p>
+    <p>Status: <span id="status">running…</span></p>
+    <p><strong id="live"></strong></p>
+    <section id="log" style="font-family: monospace; font-size: 12px"></section>
+    <script type="module" src="/src/engine/glmbench/page.ts"></script>
+  </body>
+</html>

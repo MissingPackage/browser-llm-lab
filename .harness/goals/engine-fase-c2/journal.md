@@ -580,3 +580,124 @@ sessione (VRAM head/12GiB, tmpfs, workgroup storage 32KB, pipe che
 mascherano exit code, mini-modello non estendibile) sono in HANDOFF §4.
 Ledger/direction: invariati di proposito — la propagazione dei risultati
 C2 è compito della fase 7 (chiusura goal), non di metà fase 6.
+
+## it.11 — fase 6, slice 2: BENCH coi gate hard — ENTRAMBI I GATE FALLITI (2026-08-01)
+
+Harness nuovo `glmbench` (worker+page+html+`scripts/glm-bench-run.mjs`, pattern
+glmconf): protocollo B2 sul forward GLM di PRODUZIONE — warmup scartato + 3
+repliche, mediana come headline, finestre e ctx dichiarati. Decode reale
+(greedy sui logit del motore, nessun teacher forcing), prefill sulle posizioni
+del prompt. Prompt p6 del corpus golden (461 token ≈ n_prompt 512
+dell'oracolo), nGen 64 (= n_gen 64 dell'oracolo), ctxMax 525.
+
+**GATE (spec §8): FALLITI ENTRAMBI, non marginalmente.**
+
+| config | decode tok/s (mediana) | gate 13.43 | prefill tok/s | gate 56.58 |
+|---|---|---|---|---|
+| slab 11 GiB | **2.958** (2.98/2.96/2.84, σ 0.075) | FAIL 4.5× | **3.873** (σ 0.14) | FAIL 14.6× |
+| slab 12 GiB | **3.303** (3.30/2.99/3.75, σ 0.38) | FAIL 4.1× | **4.413** (σ 0.08) | FAIL 12.8× |
+
+Report: `results/engine/bench-glm-4090-b11-2026-08-01.json`,
+`bench-glm-4090-b12-2026-08-01.json`.
+
+**Parametri dichiarati decisi nel bench** (erano scelte aperte in HANDOFF):
+- **slab 12 GiB**: a ctx corto il KV è 28 MB (525×54 KB) ⇒ NESSUN OOM con head
+  (l'OOM di it.10 era a ctxMax 6688 = 361 MB di KV). 12 GiB domina 11 su tutto
+  (hit 97.57% vs 95.82%, stallo 112.4 vs 140.6 ms/token) ⇒ config headline.
+- **prefill decode-only**: il motore GLM NON ha un percorso batch M>1 (forward
+  prende UNA riga; il piano è per-token). Il prefill chunked richiederebbe un
+  MoE batched (insiemi di expert diversi per token) — costruzione nuova, fuori
+  scope C2. Il gate prefill è quindi irraggiungibile per costruzione, non per
+  taratura: va nel docket come tale.
+
+**Attribuzione del costo (input C3, misurata senza strumentare il motore** —
+il bench campiona i contatori di residenza PER TOKEN, così i token a zero miss
+danno il costo puro e la pendenza dà il costo marginale della residenza):
+
+A 12 GiB, decode = **302.7 ms/token** =
+- **stallo residenza 112.4 ms** (pack **71.6** + read 20.1 + upload 20.8) su
+  4.47 miss/token (hit 97.57%, 2.419 slot tutti occupati, evizione a ogni miss);
+- **residuo 190.3 ms** = 1.816 dispatch + **47 sync CPU↔GPU per token**
+  (46 readback del router + 1 logits) + encode CPU.
+
+Corroborazione diretta: i token a ZERO miss costano **136.3 ms** (mediana;
+9 record = **3 posizioni distinte × 3 repliche deterministiche, n_eff = 3** —
+precisazione del verifier, il decode greedy ripete le stesse posizioni; il
+run a 11 GiB dà 135.8 ms su 3 token indipendenti, che è la corroborazione
+vera). Retta ai minimi quadrati su tutti i 192 record: intercetta 167.2 ms,
+pendenza 29.9 ms/miss; costo mediano per miss 20.4 ms. ⇒ **PROIEZIONE (non
+misura): anche con residenza PERFETTA (hit 100%, stallo 0) il decode
+resterebbe a 5.3-7.3 tok/s — sotto il floor di 13.43 anche all'estremo più
+favorevole (1.8×).**
+Il fallimento del gate NON è un artefatto della residenza: è strutturale del
+piano per-token (47 sync + 1.816 dispatch). La leva "repack all'import"
+(pack 71.6 ms = 64% dello stallo) da sola porterebbe a ~4.3 tok/s.
+
+**Non-regressione Qwen (gate del contratto): conformance PASS, bench PARZIALE.**
+- Conformance fase A: **PASS identica al baseline** — 98.05% vs golden,
+  100.00% (512/512) vs cpuref-f64, 147 dispatch/token
+  (`results/engine/conformance-4090-2026-08-01T13-41-12-721Z.json`).
+- Bench first-light (2 run indipendenti, stessa giornata: run1
+  `results/engine/bench-4090-2026-08-01T13-51-55-018Z.json`, run2
+  `...T14-13-23-215Z.json`):
+  | metrica | baseline 30/07 | oggi run1 | oggi run2 | soglia | esito |
+  |---|---|---|---|---|---|
+  | decode K=8 | 287.46 (σ 2.28) | 263.58 | 263.44 | ≥282.9 | **FAIL** |
+  | decode K=1 | 238.35 (σ 5.93) | 241.00 | 246.26 | ≥226.5 | PASS |
+  | prefill chunked | 697.8 ms | 749.4 | 746.3 | ≤726.3 | **FAIL** |
+  | seq prefill (per-token) | 1892 ms | 1852 | 1870 | — | migliore |
+  | encode CPU/token | 0.0234 ms | 0.0219 | 0.0216 | — | migliore |
+
+**Debug della regressione Qwen (ipotesi + evidenza, PRIMA di qualunque fix):**
+1. *Codice*: ESCLUSO. `engine.worker.ts`, `gpuforward.ts`, `decodebatch.ts`,
+   `prefillplan.ts`, `attnsplit.ts` sono **byte-identici** al commit del
+   baseline (b2e7278). I file condivisi toccati da C2 sono `kernels/wgsl.ts`
+   (l'unico che genera codice GPU per Qwen) più `gguf.ts`, `quant.ts`,
+   `shape.ts`, `cpuref.ts`. Aggiunta pura (0 rimozioni) sono solo `quant.ts`
+   (+150) e `shape.ts` (+162); `gguf.ts` (+18/−3), `cpuref.ts` (+320/−1) e
+   `wgsl.ts` (+394/−9) hanno edit in-place. **Nessuna rimozione tocca la
+   semantica del ramo Qwen**, verificato riga per riga: in gguf.ts sono un
+   commento, la riga dell'enum `GGML_TYPE` (riscritta con gli STESSI valori
+   F32/F16/Q4_0/Q8_0 più i nuovi tipi) e un messaggio d'errore; in cpuref.ts
+   una riga di import; le 9 di wgsl.ts stanno tutte dentro `gemvQuantWgsl`,
+   il cui output per Qwen è verificato identico (sotto). [dicitura corretta
+   dal verifier: "tutti in aggiunta pura" era falso al conteggio — la tesi
+   regge sulla semantica, e va scritta così.] Il WGSL **generato per le 6 config Qwen di
+   `gpuforward.ts:271-276` è testualmente identico** al baseline modulo righe
+   vuote (check temporaneo col wgsl.ts del baseline importato in parallelo,
+   6/6 uguali dopo normalizzazione; file di check rimosso — enumerazione
+   corretta a 6 dal verifier, che ha rifatto il check in modo indipendente).
+   Dispatch/token 147 invariato, conformance bit-identica (JSON identico al
+   baseline campo per campo, timing a parte).
+2. *Host*: MISURATO degradato. Un browser dell'utente (`zen`) gira all'**86%
+   di CPU da 6 giorni**, package CPU a **99 °C**; la GPU non scende sotto
+   **76 °C** e sotto carico sta a **1425-1620 MHz** (max SM 3105) con ~80 W.
+3. *Firma coerente col throttling, non col codice*: falliscono ESATTAMENTE i
+   due path a **carico sostenuto** (K=8 decodeBatch, prefill chunked M=8),
+   mentre i path **latency-bound** (K=1, seq prefill, encode CPU) sono uguali
+   o MIGLIORI del baseline. Un cambio di codice condiviso colpirebbe anche
+   K=1 (stessi kernel); il clock che cala sotto carico sostenuto no.
+   Il microbench attention isolato (burst brevi) è nel rumore (-13%/+33%
+   caso per caso), coerente: i burst brevi non innescano il throttling.
+Conclusione: la regressione K=8/prefill è **attribuita allo stato dell'host**,
+non al goal C2. Non risolvibile senza quiescere la macchina (chiudere il
+browser dell'utente = azione umana) ⇒ docket, non deroga autonoma.
+
+**Evidenza di build**: `npx vitest run` **220 passed + 2 skipped** (invariato),
+`tsc --noEmit` pulito. Niente ottimizzazioni: il contratto vieta l'intervento
+fuori scope C2 sul gate fallito. Nessun file di `src/engine/` modificato: il
+diff è solo l'harness nuovo.
+
+**Altri artefatti prodotti in questa it.** (provenienza, così non restano
+orfani nel commit): `results/engine/bench-glm-smoke-2026-08-01.json` = run di
+validazione dell'harness (p7, nGen 4, 1 replica — NON una misura di gate);
+`results/engine/attn-bench-4090-2026-08-01T14-24-51-767Z.json` = microbench
+attention isolato usato come discriminatore hardware nel debug Qwen (esito:
+nel rumore, −13%/+33% caso per caso vs 30/07 ⇒ non discrimina, la firma
+carico-sostenuto sì).
+
+**Conseguenze**: fase 6 slice 2 COMPLETA come misura, ma il done-when di fase 6
+("bench JSON con entrambi i gate tok/s PASS") NON è soddisfatto ⇒ due RULING
+RICHIESTI a docket (item 6 = gate GLM, item 7 = non-regressione Qwen). Fase 7
+(chiusura) resta bloccata: la deroga è decisione PI (non-regressione
+permanente, ruling 2026-07-31). **STOP BY DESIGN del loop.**

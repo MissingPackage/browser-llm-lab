@@ -1,0 +1,160 @@
+{
+ "kind": "glm-bench",
+ "schemaVersion": 1,
+ "date": "2026-08-01T13:11:00.222Z",
+ "ggufSha256": "d0bbdfcde6e323ebf90a8b9e95da57100e972be1ec6f0bfa0fad0feaa426557e",
+ "config": {
+  "promptIdx": 7,
+  "promptId": "p7",
+  "promptTokens": 251,
+  "nGen": 4,
+  "replicates": 1,
+  "budgetGiB": 11,
+  "ctxMax": 255,
+  "prefillPath": "decode-only (nessun percorso batch M>1 nel motore GLM)",
+  "decodePath": "single-step greedy (argmax dai logits del motore)",
+  "rateWindow": "intera fase (prefill: nPrompt posizioni; decode: nGen token)",
+  "protocol": "B2: warmup scartato + N repliche, mediana come headline"
+ },
+ "gates": {
+  "decodeGateToksPerSec": 13.43,
+  "decodeMedian": 2.83849999469222,
+  "decodePass": false,
+  "prefillGateToksPerSec": 56.58,
+  "prefillMedian": 4.391468828223025,
+  "prefillPass": false,
+  "floorSource": "results/engine/moe-oracle/llama-bench-glm47flash-q4_0-2026-07-30.json (llama.cpp 5f55650, CPU i9-14900HX 16 thread, n_prompt 512 / n_gen 64)"
+ },
+ "decodeToksPerSec": {
+  "median": 2.83849999469222,
+  "mean": 2.83849999469222,
+  "stdev": 0,
+  "reps": [
+   2.83849999469222
+  ]
+ },
+ "prefillToksPerSec": {
+  "median": 4.391468828223025,
+  "mean": 4.391468828223025,
+  "stdev": 0,
+  "reps": [
+   4.391468828223025
+  ]
+ },
+ "telemetry": {
+  "dispatchesPerToken": 1816,
+  "syncsPerToken": 47,
+  "decode": {
+   "hitRate": 0.9320652173913043,
+   "missesPerToken": 12.5,
+   "stallMsPerToken": 161.41000002622604,
+   "readMsPerToken": 37.04124999046326,
+   "packMsPerToken": 98.23375001549721,
+   "uploadMsPerToken": 26.13500002026558,
+   "msPerToken": 352.29874999821186,
+   "residuoMsPerToken": 190.88874997198582,
+   "evictionsPerToken": 12.5
+  },
+  "occupancy": {
+   "occupied": {
+    "q4_0": 2031,
+    "q4_1": 186
+   },
+   "slots": {
+    "q4_0": 2031,
+    "q4_1": 186
+   }
+  }
+ },
+ "warmup": {
+  "prefill": {
+   "tokens": 251,
+   "ms": 90518.35500001907,
+   "toksPerSec": 2.7729182661344995,
+   "msPerToken": 360.6308964144186,
+   "msPerTokenP50": 222.16000002622604,
+   "residency": {
+    "hits": 42939,
+    "misses": 3245,
+    "evictions": 1028,
+    "hitRate": 0.9297375714533171,
+    "readMs": 9549.665000855923,
+    "packMs": 21526.344999969006,
+    "uploadMs": 5836.339998722076,
+    "stallMs": 36912.349999547005,
+    "bytesRead": 17345740800,
+    "bytesUploaded": 17345740800
+   }
+  },
+  "decode": {
+   "tokens": 4,
+   "ms": 1300.8149999976158,
+   "toksPerSec": 3.074995291419096,
+   "msPerToken": 325.20374999940395,
+   "msPerTokenP50": 326.6800000369549,
+   "residency": {
+    "hits": 686,
+    "misses": 50,
+    "evictions": 50,
+    "hitRate": 0.9320652173913043,
+    "readMs": 135.01999986171722,
+    "packMs": 332.6950000524521,
+    "uploadMs": 93.18999969959259,
+    "stallMs": 560.9049996137619,
+    "bytesRead": 267386880,
+    "bytesUploaded": 267386880
+   }
+  }
+ },
+ "reps": [
+  {
+   "prefill": {
+    "tokens": 251,
+    "ms": 57156.27500003576,
+    "toksPerSec": 4.391468828223025,
+    "msPerToken": 227.71424302803092,
+    "msPerTokenP50": 206.3949999809265,
+    "residency": {
+     "hits": 44586,
+     "misses": 1598,
+     "evictions": 1598,
+     "hitRate": 0.9653992724753161,
+     "readMs": 4404.539998412132,
+     "packMs": 11517.674999594688,
+     "uploadMs": 3102.0000002384186,
+     "stallMs": 19024.21499824524,
+     "bytesRead": 8579186688,
+     "bytesUploaded": 8579186688
+    }
+   },
+   "decode": {
+    "tokens": 4,
+    "ms": 1409.1949999928474,
+    "toksPerSec": 2.83849999469222,
+    "msPerToken": 352.29874999821186,
+    "msPerTokenP50": 356.64999997615814,
+    "residency": {
+     "hits": 686,
+     "misses": 50,
+     "evictions": 50,
+     "hitRate": 0.9320652173913043,
+     "readMs": 148.16499996185303,
+     "packMs": 392.93500006198883,
+     "uploadMs": 104.54000008106232,
+     "stallMs": 645.6400001049042,
+     "bytesRead": 267386880,
+     "bytesUploaded": 267386880
+    }
+   },
+   "generated": [
+    334,
+    84105,
+    10864,
+    66475
+   ]
+  }
+ ],
+ "buildMs": 3853.1349999904633,
+ "wallMs": 154995.81999999285,
+ "importMs": 0
+}
