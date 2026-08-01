@@ -1,26 +1,28 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-01, session 17 — goal engine-fase-c2 CHIUSO)
+# HANDOFF — browser-llm-lab   (updated 2026-08-01, session 18 — contratti C3a/C3b approvati)
 
 ## 1. Next decidable
 
-**Goal C3 — setup del contratto (decisione PI, non del loop).** C2 è CHIUSO
-(deroga item 6a: correttezza + residenza dimostrate, prestazione sotto il
-floor con attribuzione). C3 ha già tutto per partire:
-- **Gate d'ingresso**: decode ≥13.43 / prefill ≥56.58 tok/s (floor oracolo
-  CPU C1 — la deroga lo ha spostato da C2 a C3; il confronto con la funzione
-  obiettivo ~30 tok/s resta la stella polare, gap 6.5×).
-- **Baseline misurata**: decode 4.64 tok/s = 215.5 ms/token, scomposti in
-  docket C2 item 8 (56.1 stallo residenza + 158.9 struttura).
-- **Leve dimensionate, in ordine valore/rischio** (docket C2 item 8):
-  (1) repack all'import (−42.5 ms/token), (2) eliminazione/batching dei 46
-  sync router (il collo: senza, tetto ~7 tok/s), (3) prefill batched M>1
-  (capacità nuova — il gate prefill è irraggiungibile senza), (4) prefetch
-  LOOKA (residuo sul dev-box; decisivo su mobile/ctx lunghi).
-- Perimetro C3 da contratto C1/direction: slab+tier+AUTOPIN+PILOT-real,
-  modello di banda, instant-on come gate intermedio, WP banda fredda browser.
-Quando vuoi: `/goal-brief` per il contratto C3.
-Riancorarsi da: docket C2 item 8 (input C3 completo), direction.md §7
-(fase C aggiornata), `.harness/goals/engine-fase-c2/{GOAL,journal}.md`
-(emendamento 3, checklist chiusura it.12).
+**Avviare il goal engine-fase-c3a.** Il contratto è scritto e APPROVATO
+(`.harness/goals/engine-fase-c3a/GOAL.md`); manca solo il `/goal` — che
+parte da iteration 0: goal-setup → PHASES.md → PLAN-CHECK a docket.
+- **Perimetro C3a (struttura)**: repack all'import, eliminazione/batching dei
+  46 sync router, prefill batched M>1. **Gate di chiusura**: decode ≥13.43 /
+  prefill ≥56.58 tok/s (floor oracolo CPU C1, ereditato dalla deroga C2).
+- **Doppio livello sui numeri** (ruling PI 2026-08-01, docket C3a item 1): il
+  floor è gate d'ingresso, NON obiettivo. Ogni bench riporta anche il gap
+  dalla soglia UX — **decode 30 tok/s (60 in thinking) e TTFT ≤4 s**. Oggi:
+  4.64 tok/s (gap 6.5×) e 88 s di TTFT. L'assenza di quei numeri dal report
+  è un FAIL di checklist.
+- **Baseline misurata**: 215.5 ms/token = 56.1 stallo residenza + 158.9
+  struttura (docket C2 item 8). Soglie confermate dal PI: sync/token ≤2,
+  pack <1.0 ms/token nel path caldo.
+- **C3b (paging) è CHARTERED e non avviato**: slab ctx-aware, tier.h,
+  AUTOPIN, PILOT-real, modello di banda, WP banda fredda browser, instant-on
+  come TTFT a freddo. Parte a C3a chiusa, dopo aver fissato i numeri di
+  non-regressione che C3a lascia (docket C3b item 1).
+Riancorarsi da: `.harness/goals/engine-fase-c3a/{GOAL,docket}.md`, docket C2
+item 8 (input C3 completo), direction.md §2 (funzione obiettivo a due
+termini) e §7 (fase C splittata).
 
 ## 2. State delta (sessione 17 — chiusura C2)
 
@@ -56,7 +58,8 @@ Riancorarsi da: docket C2 item 8 (input C3 completo), direction.md §7
 
 ## 4. Open threads
 
-- **Goal C3**: aspetta il contratto (PI). Tutti gli input in docket C2 item 8.
+- **Goal C3a**: contratto approvato, `/goal` non ancora dato.
+- **Goal C3b**: chartered, parte a C3a chiusa.
 - **Indagine CPU host**: sessione separata col brief in
   `~/cpu-investigation/`; esito rilevante per l'igiene dei bench futuri
   (la norma operativa: bench a macchina scarica).
@@ -94,6 +97,9 @@ Riancorarsi da: docket C2 item 8 (input C3 completo), direction.md §7
 
 - **Nessun item C2 aperto** (1-8 tutti risolti o informativi; item 8 =
   input C3, non richiede decisione).
-- Prossima decisione PI: contratto goal C3 (quando vuoi).
+- **C3a item 1 RISOLTO** (2026-08-01): split C3→C3a/C3b + formulazione del
+  gate prefill (velocità misurata sull'UX, TTFT 4 s) + soglie confermate.
+  Prossimo item atteso: PLAN-CHECK a iteration 0 di C3a.
+- C3b: nessuna decisione pendente finché C3a non chiude.
 - fase-1b-matrice (11 item) e fase-2-deep-dive (5 item): stale, da triage
   weekly-maintenance.

@@ -18,7 +18,12 @@ decoding — con **telemetria ed eval integrate by design**.
 
 Massima **intelligenza** sotto vincolo di rate "sufficiente" (~30 tok/s morbidi, più
 alto per reasoning) e memoria ≤ host. Non max tok/s: la velocità oltre soglia si spende
-in capienza (modello più grande) o qualità. Due budget misurabili:
+in capienza (modello più grande) o qualità. **Precisazione PI 2026-08-01** (ruling sul
+gate prefill di C3, docket engine-fase-c3a item 1): il vincolo di rate è a due termini,
+entrambi user-facing — **decode ≥30 tok/s** (≈60 in regime thinking: i token di
+ragionamento sono latenza pura prima della risposta visibile) e **TTFT ≤4 s**. I floor
+derivati dall'oracolo CPU sono gate d'ingresso intermedi, mai obiettivi. Due budget
+misurabili:
 
 ```
 touch/token ≤ BW_eff × (1/rate − T_fisso)        (velocità)
@@ -154,9 +159,17 @@ tok/s vs floor 13.43, prefill senza percorso batched. Attribuzione misurata
 sync router/token** — il collo dominante). Leve C3 in ordine: repack import,
 eliminazione sync router (senza: tetto ~7 tok/s), prefill batched M>1, prefetch
 LOOKA (valore residuo sul dev-box, decisivo su mobile/ctx lunghi).
-Resta: C3 = slab+tier+AUTOPIN+PILOT-real con modello di banda, **gate d'ingresso
-= floor C1 (13.43/56.58)**. Gate intermedio: instant-on (router+shared+esperti
-caldi subito, resto on-demand). Hero-demo M4.
+**C3 SPLITTATA in C3a/C3b (ruling PI 2026-08-01**, docket engine-fase-c3a item 1):
+l'attribuzione C2 separa 158.9 ms/token di *struttura* da 56.1 di *residenza* — due
+assi con due condizioni di chiusura, un goal unico ne perdeva una.
+- **C3a — struttura (il floor)**: repack all'import, eliminazione/batching dei 46
+  sync router, prefill batched M>1. **Gate di chiusura = floor C1 (13.43/56.58)**;
+  ogni bench riporta anche il gap dalla soglia UX (30 tok/s, TTFT 4 s), che è
+  l'obiettivo vero — il floor prefill 56.58 su 461 token vale 8.15 s di TTFT.
+- **C3b — paging (la residenza)**: budget slab ctx-aware, tier.h, AUTOPIN,
+  PILOT-real, modello di banda, WP banda fredda browser, e instant-on come TTFT
+  a freddo. Chartered, parte a C3a chiusa.
+Hero-demo M4 resta PI-gated per hardware.
 
 **Fase D — moltiplicatori.** Spec-dec: prima la MTP nativa del modello (verificata,
 §3), poi eventualmente DSpark-style; verifica = rejection sampling esatto (lossless by

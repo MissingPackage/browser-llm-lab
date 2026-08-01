@@ -1,0 +1,137 @@
+GOAL: engine-fase-c3a — Il motore esegue GLM-4.7-Flash sopra il floor dell'oracolo
+CPU di C1 (decode >=13.43 tok/s) e possiede un percorso di prefill batched M>1,
+eliminando i tre costi strutturali attribuiti in C2 (pack CPU nel path caldo,
+46 sync router/token, forward sequenziale in prefill) a correttezza invariata.
+
+<!-- CONTRATTO v1 — approvato dal PI 2026-08-01 in chat, in due passaggi:
+     (1) "ok lo split in 2 goal" — la fase C3 di direction §7 e' splittata in
+         C3a (struttura: il floor tok/s) e C3b (paging: slab ctx-aware, tier,
+         AUTOPIN, PILOT-real, modello di banda, instant-on, WP banda fredda
+         browser). Motivo: l'attribuzione C2 (docket item 8) separa i 158.9
+         ms/token di struttura dai 56.1 di residenza — due assi con due
+         condizioni di chiusura diverse; un goal unico perdeva la completion
+         condition. direction §7 emendata di conseguenza.
+     (2) RULING sul gate prefill (domanda lasciata aperta da docket C2 item 6):
+         NON e' un requisito di sola capacita'. "alla fine abbiamo deciso di
+         puntare alla massima intelligenza possibile con una velocita' minima
+         accettabile. 30+ tk/s come soglia normale e di piu' se thinking. per
+         garantire l'esperienza utente ottimale". Conseguenza sul contratto:
+         il floor C1 resta il gate di CHIUSURA (e' misurabile oggi), ma ogni
+         report deve stampare la distanza dalla soglia UX — che e' l'obiettivo
+         vero. TTFT budget fissato dal PI a <=4 s ("a 2 rischiamo di essere
+         troppo stringenti e non chiudere mai. alla fine 4 secondi e'
+         accettabile sul mio hardware che non e' top").
+     Soglie [ASSUMED] del draft confermate dal PI senza correzioni: sync/token
+     <=2, pack <1.0 ms/token, 60 tok/s in regime thinking, errore del modello
+     di banda +/-15% (C3b), budget slab di prova 50%/25% del parco (C3b).
+     Nomi c3a/c3b confermati.
+     Goal start tag: goal-engine-fase-c3a-start. -->
+
+DONE WHEN (all measurable):
+- Spec C3a scritta (docs/superpowers/specs/<data>-engine-fase-c3a-design.md) e
+  ruling PI di approvazione registrato nel docket. La spec fissa: formato dei pesi
+  repacked all'import (layout, versioning dell'artefatto OPFS, invalidazione su
+  SHA/versione mismatch); meccanismo scelto per i sync router, con il criterio di
+  scelta esplicitato tra le opzioni note (top-4 su GPU con indirect dispatch, bind
+  completo del parco residente, pipelining a profondita >1); percorso prefill M>1
+  per MoE (insiemi di expert diversi per token) con la sua condizione di identita;
+  protocollo di bench IDENTICO a C2 (prompt p6 461 token, nGen 64, 3 repliche +
+  warmup, mediana, slab 12 GiB, macchina quiescente) — nessun confronto fuori
+  parita; definizione operativa del TTFT misurato (da quale evento a quale).
+- Repack all'import: l'import produce l'artefatto repacked (test verdi su
+  produzione dell'artefatto + invalidazione) e il report di bench riporta pack CPU
+  < 1.0 ms/token nel path caldo, contro i 42.5 ms/token della baseline C2.
+- Sync router: il report di bench riporta <= 2 sync CPU<->GPU per token di decode
+  (baseline C2: 47 = 46 readback router + 1 logits). Se il meccanismo scelto in
+  spec e' il pipelining, la spec puo' riformulare la soglia come sync/token
+  AMMORTIZZATI, dichiarando la profondita: la riformulazione va in spec col
+  ruling, non presa qui.
+- GATE decode (chiusura): bench JSON quiescente in results/engine/ con
+  decode >= 13.43 tok/s a parita' di protocollo C2 (floor oracolo CPU C1,
+  results/engine/moe-oracle/llama-bench-glm47flash-q4_0-2026-07-30.json).
+- Prefill: (i) esiste il percorso batched M>1, provato da un test di identita'
+  logits M=1 vs M>1 sullo stesso prompt entro la tolleranza fissata in spec; e
+  (ii) GATE prefill >= 56.58 tok/s sullo stesso prompt p6.
+- Distanza dalla funzione obiettivo, RIPORTATA e non gateata (ruling PI
+  2026-08-01): ogni report di bench committato include, calcolati e stampati,
+  (a) decode tok/s vs soglia UX 30 (e vs 60 in regime thinking) col fattore di
+  gap residuo; (b) TTFT misurato vs budget <= 4 s a ctx ~500 (su p6, 461 token,
+  4 s equivalgono a ~115 tok/s di prefill, ~2x il floor CPU) col fattore di gap.
+  Il goal chiude sui gate del floor; questi numeri NON sono gate, ma la loro
+  ASSENZA dal report e' un FAIL della checklist di chiusura.
+- Correttezza invariata (nessun gate nuovo, solo non-regressione dei valori C2):
+  argmax == cpuref-f64 100% sul campione ratificato 2/8 (256/256 posizioni);
+  top-1 vs golden >= 98.83% full-corpus; routing conformance rigenerato e non
+  peggiore di results/engine/routing-conformance-glm47flash-2026-07-31.json.
+- Non-regressione del pregresso: conformance fase A verde; bench Qwen2.5-0.5B a
+  macchina quiescente >= baseline permanente 2026-08-01
+  (results/engine/bench-4090-2026-08-01T16-34-04-484Z.json: decode K=8 321.88,
+  K=1 243.97, prefill chunked <= 600.2 ms); suite npm test verde (>= 220 passed)
+  e npx tsc --noEmit pulito.
+- Chiusura: docket aggiornato con gli input per C3b (costo residuo della residenza
+  dopo il repack, hit-rate osservato, nuovo profilo ms/token scomposto),
+  direction §7 e docs/engine/ideas-ledger.md §A aggiornati dove resi stale,
+  HANDOFF refresh.
+
+EVIDENCE OF DONE: npm test verde + npx tsc --noEmit pulito; run glmbench con
+exit 0 e JSON committato in results/engine/ (decode, prefill, TTFT, sync/token,
+pack ms/token, hit-rate, dispatch/token, gap vs 30 tok/s e vs 4 s); run glmconf
+con exit 0 e JSON di conformance logits + routing; bench Qwen JSON di
+non-regressione; test di identita' M=1/M>1 nella suite; diff di spec + docket +
+direction + ledger + HANDOFF.
+
+AUTHORITY GRANTED:
+- may do autonomously: MODIFICARE src/engine/** (e' l'oggetto del goal: import e
+  repack, kernel MoE/MLA, scheduling dei dispatch, percorso prefill batched,
+  telemetria), tests/**, tools/**, scripts/**; commit/push su main a fine
+  iterazione VERIFICATA (ruling PI 2026-07-31, ratifica del main-diretto);
+  merge su main + push a goal CHIUSO e verificato (ruling permanente 2026-07-29);
+  rigenerare/invalidare gli artefatti in ~/.cache/blab-models e nel profilo
+  Chrome ~/.cache/blab-glmroute-profile (inclusa la re-import da 17.2 GB);
+  riuso del checkout llama.cpp di C1 per rigenerare golden (nessun download
+  nuovo, nessuna spesa); run locali su 4090; aggiornare docs/engine/* quando
+  stale (ruling 2026-07-29); docket/HANDOFF refresh.
+- must docket (never do): tier.h, AUTOPIN, pin learned, PILOT-real/prefetch,
+  instant-on, budget slab ctx-aware, WP banda fredda browser (= C3b: se una di
+  queste diventa PRECONDIZIONE di una leva strutturale, si docketa la richiesta
+  di anticipo, non si esegue); cambio modello-tesi, quant diversa da Q4_0,
+  direction §3; testa MTP/spec-dec (fase D); benchmark pubblico (ruling
+  2026-07-30); run M4/S22 e hero-demo (PI-gated per hardware); ogni spesa;
+  delete di codice committato >30gg senza check git log --follow; merge con
+  QUALSIASI metrica misurata in regressione — la deroga e' decisione PI via
+  docket; riformulazione o abbassamento dei gate 13.43/56.58 e del budget TTFT
+  (decisione PI, come lo e' stata la deroga C2).
+
+CONSTRAINTS: spec-first prima del codice; NON-REGRESSIONE PERMANENTE (ruling PI
+2026-07-31): nessuna metrica gia' committata in results/ peggiora, salvo deroga
+PI a docket; bench SOLO a macchina quiescente (norma PI 2026-08-01) con
+dichiarazione dello stato host nel report; confronti solo a parita' di
+corpus/contesto/protocollo (lezione B2); llama.cpp SOLO oracolo, mai linkato al
+motore; f32-first sul dev-loop Chrome/Linux, percorso f16 dietro feature-detect;
+tap hidden-states preservati nel forward (direction §4.4 — retrofit vietato per
+design, e sono l'input di PILOT-real in C3b); telemetria zero-overhead se spenta;
+determinismo nei report (SHA-256 del GGUF, greedy, commit oracolo); mai gate
+diretti engine-vs-oracolo su selezioni near-tie (l'oracolo CPU quantizza le
+attivazioni q8 — il confronto giusto e' vs cpuref-f64); maxAbsDeltaLogit e'
+metrica di scala, mai gate; zero attribution AI nei commit.
+FUNZIONE OBIETTIVO (direction §1, ribadita dal ruling PI 2026-08-01): "massima
+intelligenza sotto vincolo di rate sufficiente" — la soglia UX e' ~30 tok/s di
+decode (piu' alta, ~60, in regime thinking: i token di ragionamento sono latenza
+pura prima della risposta visibile) e un TTFT <= 4 s. Il floor CPU 13.43/56.58 e'
+un gate d'ingresso INTERMEDIO: mai da presentare, riportare o trattare come
+obiettivo raggiunto.
+
+WORKING PROTOCOL: follow skills loop-iteration + done; verifier gate per cycle;
+digest every cycle; stop-by-design when the remaining work is docket-gated.
+
+CONTEXT ANCHORS: HANDOFF.md §1/§5; .harness/goals/engine-fase-c2/docket.md item 8
+(INPUT C3: baseline 215.5 ms/token scomposti, leve dimensionate) e item 6
+(attribuzione + precisazione sul gate prefill); .harness/goals/engine-fase-c2/
+GOAL.md (emendamento 3) e journal.md it.7 (misura del pack) / it.11 (harness
+glmbench); docs/engine/direction.md §1 (funzione obiettivo), §3 (config GLM
+verificata) e §7 (fase C splittata);
+docs/superpowers/specs/2026-07-30-engine-fase-c1-design.md (replica esatta del
+router); src/engine/{gguf,gpuforward,shape,quant}.ts;
+results/engine/moe-oracle/llama-bench-glm47flash-q4_0-2026-07-30.json (il floor);
+results/engine/bench-glm-4090-b12-quiesced-2026-08-01.json (la baseline);
+.harness/goals/engine-fase-c3b/GOAL.md (il perimetro che questo goal NON tocca).
