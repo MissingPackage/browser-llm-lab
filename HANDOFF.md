@@ -1,131 +1,87 @@
-# HANDOFF — browser-llm-lab   (updated 2026-07-31, session 15 — goal engine-fase-c2 APERTO)
+# HANDOFF — browser-llm-lab   (updated 2026-08-01, session 16 — goal engine-fase-c2 in fase 6)
 
 ## 1. Next decidable
 
-**Fase 6 del goal `engine-fase-c2`, it.11 — slice 2: BENCH coi gate hard**
-(ultimo ostacolo sostanziale del goal). SLICE 1 CHIUSA a it.10 (verifier
-PASS): conformance logits full-model PASS su entrambi i gate — (i) motore
-≡ cpuref-f64 **256/256 = 100%** (p7+p4; copertura campionaria da
-ratificare a chiusura, docket item 5); (ii) top-1 vs golden **1012/1024 =
-98.83%** ≥97 sull'intero corpus. Su entrambi i prompt f64 la divergenza
-dal golden è lo STESSO TOKEN per motore e cpuref (firma q8 definitiva
-anche sui logits). Assunzione mscale=1 CONFERMATA dai golden (watch
-chiuso).
-Slice 2 (it.11): bench protocollo B2 — mediane su run ripetute, finestre
-dichiarate, ctx del corpus golden — coi GATE HARD **decode ≥13.43 /
-prefill ≥56.58 tok/s** + non-regressione Qwen (conformance fase A verde +
-first-light: K=8 ≥287.5−2σ, K=1 ≥238.3−2σ, prefill ≤697.8+2σ, stessa
-metodologia same-day B2) + report telemetria (tok/s, dispatch/token
-[1.816], hit-rate, stallo upload ms/token, occupazione) = input C3;
-chiusura DONE WHEN: report bench JSON committato. Rischi noti e leve:
-stallo residenza (pack 6.1 ms/miss dominante — leva: repack all'IMPORT,
-journal it.7) e 46 sync router/token; budget slab 11 GiB con head (hit
-95.7% vs 97.6% @12) — il bench può usare ctx CORTO (protocollo B2) ⇒ KV
-piccolo ⇒ possibile tornare a ~12 GiB: da decidere nel piano bench, è
-parametro dichiarato nel report, non policy. Se un gate tok/s fallisce:
-misura onesta nel report + docket (deroga = PI, non-regressione
-permanente); niente ottimizzazioni fuori scope C2. Dopo: fase 7
-(chiusura: docket input C3, ledger/direction, HANDOFF, merge — ruling
-permanente). Watch residui: gate layer-level da stringere a canary
-(docket alla chiusura), q5_K absTol.
-
-Stato tecnico all'ultimo run (per la ripresa): import OPFS 17.2 GB fatto
-(profilo ~/.cache/blab-glmroute-profile, SHA verificato; skip su
-size-match); hit residenza 95.9% @12 GiB (2.216+203 slot); replay 3,7
-pos/s; watch item fase 6 invariati (stallo pack ~66 ms/token proiettato,
-46 sync router/token, gate layer-level da stringere, q5_K absTol,
-mscale=1). Harness: `scripts/glm-route-run.mjs` (--cap/--prompts/--out),
-analisi cpuref `ROUTE_ANALYSIS=1 npx vitest run
-tests/analysis-route-cpuref.test.ts`.
-
-<!-- contesto pre-ruling (slice 3b, superato dall'esito qui sopra): -->
-**Fase 5 del goal `engine-fase-c2` (MoE + residenza minima, timebox 4 it.,
-usate 4), slice 3b — replay reale + gate routing (ULTIMA it. del timebox)**:
-(1) `GlmWeightSource` di produzione su ExpertOpfsStore+GgufExpertIndex
-(header parse da OPFS, non-expert per nome, expert per range) + import
-one-shot del GGUF 17.2 GB (importFromUrl, SHA streaming ~2-3 min, numero in
-telemetria; vite serve il file via symlink public/models come per qwen);
-(2) harness replay traccia C1 (formato in tools/oracle-moe/trace.cpp:
-jsonl.gz con top-4 per (posizione, layer)) su createGlmModel a 47 layer;
-(3) GATE: set-match top-4 ≥99% su (posizione decode, layer) + confronto
-pesi mixing (watch it.6) — sotto soglia ci si ferma e si debugga il router.
-Nota dimensionale (journal it.8): full-corpus al passo decode-only =
-decine di min/ore (46 sync/token); strategia/subset da decidere DENTRO
-spec §7. Sforamento timebox ⇒ docket con analisi (ruling (f)).
-**SLICE 3a CHIUSA a it.8** (verifier PASS): `glmmodel.ts` (forward
-multi-layer di produzione: sync router per layer, ensure pinned, bind group
-per-slot cached e stabili all'eviction; proiezione 1.816 dispatch/token
-full-model — misura, non gate) + cpuref refactor (GlmMlaAttnRefF64,
-GlmMoeLayerRefF64); ktest 30/30 (glm-model-2layer L2rel 2.36e-7, routing
-6/6, cache con eviction), suite 219/219, tsc pulito. NON estendere il
-mini-modello sintetico in profondità (ampiezze ~6e7 su 2 layer: rischio
-overflow f32 — osservazione verifier it.8); il full-model si valida coi
-pesi reali.
-**WATCH ITEM CRITICO fase 6** (confermato dal verifier): ~10 ms/miss con
-pack CPU dominante (5,9 ms) ⇒ proiezione ~66 ms/token di stallo a hit 96.4%
-su budget 74,5 ms (floor 13.43 tok/s) — margine <10 ms sul gate decode;
-leva candidata: repack pagato all'IMPORT (riordino [qs|scales] in scrittura
-OPFS, azzera il termine dominante senza toccare i kernel); decisione alla
-misura E2E. Altri watch fase 6 invariati (gate layer-level, q5_K absTol,
-mscale=1, sync GPU→CPU per layer).
+**it.11 del goal `engine-fase-c2` — fase 6 slice 2: BENCH coi gate hard**
+(ultimo ostacolo sostanziale; dopo resta solo la fase 7 di chiusura).
+Protocollo B2 (mediane su run ripetute, finestre e ctx dichiarati) sul
+forward GLM di produzione (`glmmodel.ts` + `glmsource.ts`, OPFS già
+importato): **GATE decode ≥13.43 tok/s e prefill ≥56.58 tok/s** (floor =
+oracolo CPU C1, `results/engine/moe-oracle/llama-bench-*.json`) +
+**non-regressione Qwen** (conformance fase A verde; first-light K=8
+≥287.5−2σ, K=1 ≥238.3−2σ, prefill ≤697.8+2σ, metodologia same-day B2) +
+report telemetria (tok/s, 1.816 dispatch/token, hit-rate, stallo
+ms/token, occupazione) = input C3. Scelte da fare NEL bench (parametri
+dichiarati nel report, non policy): budget slab 11 vs 12 GiB (a ctx corto
+il KV si riduce ⇒ si può tornare a ~12; con head a 12 GiB la VRAM sforava
+— OOM osservato); prefill decode-only vs chunked. Rischi quantificati:
+stallo residenza (pack 6.1 ms/miss DOMINANTE su read 3.1 + upload 1.6;
+leva pronta: repack all'IMPORT, journal it.7) e 46 sync router/token
+(strutturali: la selezione CPU decide i bind). Gate fallito ⇒ misura
+onesta nel report + docket (deroga = decisione PI, non-regressione
+permanente); niente ottimizzazioni fuori scope C2.
 Riancorarsi da: `.harness/goals/engine-fase-c2/{GOAL,PHASES,docket,journal}.md`,
-spec §5-§7, `src/engine/{glmforward,moe,residency,expertstore}.ts`, traccia
-`results/engine/moe-oracle/trace-2026-07-31.jsonl.gz` (formato in
-tools/oracle-moe/trace.cpp).
+spec §6-§8, `src/engine/{glmmodel,glmsource,residency,moe}.ts`, harness
+`scripts/glm-{route,conf}-run.mjs` (pattern runner), bench Qwen esistente
+(`engine.worker.ts` + protocollo B2 in docs/superpowers/specs C1/B2).
 
-## 2. State delta (questa sessione, 15)
+## 2. State delta (questa sessione, 16)
 
-- **Docket C1 item 4 RISOLTO** (ruling PI: "Adotta, ma WP comunque"): GO
-  prefetch / NO-GO pinning adottato come input C2/C3; il WP banda fredda
-  BROWSER si fa comunque ma in C3, non blocca C2.
-- **Banda NVMe a freddo bracketata lato OS** senza il WP browser
-  (`tools/cold-read-bench.py`, fadvise DONTNEED, 990 PRO): random
-  expert-size **1.63 GB/s (3.74 ms/expert p50, 8× il warm 0.46)**, seq 3.22;
-  warm re-read 10-11 GB/s = coincide col bench browser (metodo validato).
-  JSON: `results/opfs-bench/cold-read-os-4090-linux-2026-07-31.json`.
-- **Headline "modello ~2× la memoria" CONDIZIONATA ai tier** (propagata a
-  ledger §A e direction §8.3): regge come "2× la VRAM con spillover
-  RAM-backed" (24% del budget); in regime disk-bound il tetto è ~18 tok/s o
-  serve hit ≥94.5% con overlap perfetto ⇒ prefetch unica leva.
-- **Goal engine-fase-c2 aperto**: contratto approvato con emendamento,
-  PHASES.md scritto (7 fasi), plan-check a docket.
-- Ruling permanente nuovo in memoria: **non-regressione delle metriche a ogni
-  merge** (metrics-non-regression.md).
-- Commit: `b6a3ec5` (istruttoria item 4), `cbf2523` (ruling + propagazione),
-  più lo scaffold C2 (questo commit).
+- **Fase 5 CHIUSA** (it.6-9, 4 verifier PASS): kernel MoE (router replica
+  build_moe_ffn riga-per-riga), residenza minima (OPFS 17.2 GB SHA-streaming
+  + ExpertCache LRU due size-class), forward 47 layer di produzione
+  (`glmmodel.ts`), harness replay. Gate routing sotto soglia (85.8-94.1%) →
+  discriminatore cpuref-f64 = motore al 100% (stessi mismatch) → **ruling
+  PI item 4 = opzione (a)**: routing informativo, spec §7 emendata.
+- Report informativo routing full-corpus: decode 88.51%; **hit residenza
+  97.56% @12 GiB** su 31k posizioni (input C3).
+- **Fase 6 slice 1 CHIUSA** (it.10, verifier PASS): output head +
+  conformance logits full-model — **gate (i) motore≡cpuref-f64 256/256,
+  gate (ii) top-1 vs golden 1012/1024 = 98.83%**; su p7 E p4 la divergenza
+  dal golden è lo stesso token per motore e cpuref (firma q8). mscale=1
+  confermato. Nuovi: `glmsource.ts`, `glmconf/*`, `glmroute/*`,
+  `GlmMlaAttnAbsorbedRefF64` (+identità in suite), analisi env-gated
+  `tests/analysis-{route,conf}-cpuref.test.ts`.
+- Stato test: ktest 30/30 (4090), suite 220+2 skipped, tsc pulito. Tutto
+  pushato su origin/main fino a `940d954`.
 
 ## 3. Open threads
 
-- Goal C2: iterazione 1 pronta dopo il plan-check (fasi 1+2).
-- **WP banda fredda browser** → precondizione di C3 (ruling item 4), non di C2.
-- Goal harness stale mai chiusi: `fase-1b-matrice` (11 docket), `fase-2-deep-dive`
-  (5) — igiene da /weekly-maintenance.
-- Duplicato da igiene: `results/opfs-bench-*.json` esiste sia in `results/`
-  root sia in `results/opfs-bench/` (segnalato, non toccato).
-- Rimandi §I ledger invariati; GLM-5 uscito → ledger §H a v2 (invariato).
+- Goal C2: fase 6 slice 2 (bench) → fase 7 (chiusura: input C3 a docket,
+  ledger/direction, merge — ruling permanente). Timebox: nessuno attivo
+  sulle slice di fase 6.
+- Alla CHIUSURA goal il PI ratifica: campione gate (i) 2/8 prompt (docket
+  item 5) + eventuali derive bench.
+- Goal harness stale mai chiusi: `fase-1b-matrice` (11 docket),
+  `fase-2-deep-dive` (5) — igiene da /weekly-maintenance.
+- Duplicato results/opfs-bench-*.json in due posizioni (segnalato, non toccato).
 
 ## 4. Landmines
 
-(invariate dalla sessione 14 — valgono tutte per C2, in particolare:)
-- Pipeline WebGPU invalida = submit droppati in silenzio con readback stale
-  plausibili ⇒ error scope come contratto; diag a cold-start.
-- Oracolo CPU quantizza le attivazioni (q8): noise floor 98.05% ⇒ gate doppio
-  (cpuref-f64 ≥99% E golden ≥97%).
-- Coi tap attivi il tsq copre solo il primo segmento del pass ⇒ gpuBusy senza tap.
-- MAI confrontare gpuBusy/wall a contesti diversi; mai mapAsync su buffer di
-  submit non emesso; var WGSL nei loop da azzerare esplicitamente.
-- llama-cli scriptato SEMPRE `-st --simple-io`; Vite porta dedicata 5199 + kill.
-- Device senza requiredLimits ⇒ 128 MiB binding garbage; f32-first su Chrome/Linux.
-- `erasableSyntaxOnly`; contratto `pos === kvLen` hard.
-- NUOVA (sessione 15): il bench freddo lato OS usa dati urandom perché /home è
-  btrfs `compress=zstd:1` — mai bench di banda con dati comprimibili lì.
+- Oracolo CPU quantizza le attivazioni q8: MAI gate diretti engine-vs-oracolo
+  su selezioni near-tie (routing 99% è morto così, it.9); il confronto giusto
+  è vs cpuref-f64; golden ≥97% assorbe il drift. maxAbsDeltaLogit è metrica
+  di SCALA (58 con KL 2e-7 osservato): mai promuoverla a gate.
+- VRAM 16.4 GB: slab 12 GiB + head (~270 MB) + KV ctx 6k = OOM (bind group
+  "invalid due to previous error" a cascata) — visto e riprodotto; budget 11
+  GiB con head, o ctx corto.
+- `/tmp` è tmpfs 16 GB: il profilo Chrome con OPFS 17 GB sta in
+  `~/.cache/blab-glmroute-profile` (E2E_PROFILE); l'import si salta su
+  size-match.
+- mlaAttnDecode tiene scores[ctxMax] in workgroup memory: ctx>4k richiede
+  maxComputeWorkgroupStorageSize 32 KB negoziato (fail-fast in createGlmModel).
+- Runner in background: NIENTE pipe su tail/grep (bufferizza e maschera gli
+  exit code — successo due volte in questa sessione); output diretto su file.
+- Il mini-modello sintetico (ktest 2-layer) NON si estende in profondità:
+  ampiezze ~6e7 già a 2 layer, rischio overflow f32.
+- Storiche sempre valide: error scope su ogni submit; vite porta 5199
+  dedicata; f32-first Chrome/Linux; `pos === kvLen` hard; var WGSL nei loop
+  da azzerare; mai mapAsync su buffer di submit non emesso.
 
-## 5. Docket (decisioni PI pendenti)
+## 5. Docket (user decisions pending)
 
-1. **PLAN-CHECK C2** (docket del goal, item 1) — vedi §1.
-4-5. Ereditati: promozione skill `bottleneck-brainstorm`; #10 qualityScore
-     (goal evals futuro); #8 sorveglianza wllama (v3.1 WebGPU, rilevante per
-     il benchmark pubblico).
-16. Headline del benchmark pubblico (ledger §E) — contributo separato
-    (ruling 2026-07-30), su iniziativa PI.
-20. ~~go/no-go PILOT~~ RISOLTO 2026-07-31 ("Adotta, ma WP comunque") — vedi §2.
+- engine-fase-c2 item 5: ratifica del campione gate (i) (2/8 prompt,
+  256/256) — alla chiusura del goal.
+- (Ratificati in sessione: item 4 = opzione (a), routing informativo.)
+- fase-1b-matrice (11 item) e fase-2-deep-dive (5 item): stale, da triage
+  weekly-maintenance.

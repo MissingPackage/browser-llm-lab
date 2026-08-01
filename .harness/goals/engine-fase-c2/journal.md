@@ -569,3 +569,14 @@ budget slab è sceso a 11 GiB per far posto all'head (~270 MB) — hit 95.7%
 vs 97.6% @12: il margine sul gate decode si assottiglia; valutare al bench
 se ridurre ctxMax del bench (il protocollo B2 usa finestre corte) per
 recuperare KV e tornare a 12 GiB.
+
+## Chiusura sessione 16 (2026-08-01)
+
+HANDOFF.md riscritto da zero (re-entry per la prossima sessione: it.11 =
+fase 6 slice 2, bench coi gate hard). PHASES riga 6 aggiornata (slice 1
+done). Stato consegnato: fasi 1-5 done, fase 6 slice 1 done (conformance
+logits PASS entrambi i gate), tutto pushato. Le landmine nuove della
+sessione (VRAM head/12GiB, tmpfs, workgroup storage 32KB, pipe che
+mascherano exit code, mini-modello non estendibile) sono in HANDOFF §4.
+Ledger/direction: invariati di proposito — la propagazione dei risultati
+C2 è compito della fase 7 (chiusura goal), non di metà fase 6.
