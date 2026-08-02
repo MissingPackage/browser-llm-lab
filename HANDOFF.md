@@ -2,13 +2,25 @@
 
 ## 1. Next decidable
 
-**Fase 3 in corso — repack all'import.** Spec approvata (docket item 6), fasi
-3-6 sbloccate. Della fase 3 è FATTA la **negoziazione dei limiti WebGPU**
-(`src/engine/gpulimits.ts`, applicato ai 4 worker GLM); **manca il repack**:
-secondo file OPFS `*.slabs.bin` da 15.68 GB con header (magic + versione di
-layout + SHA del sorgente), invalidazione su mismatch, scrittura su temporaneo
-+ rename, e `ExpertCache.ensure` che salta `packExpertSlab` quando lo slab
-arriva già impacchettato. Obiettivo: pack CPU da 41.4 a <1.0 ms/token.
+**FASE 3 CHIUSA (it.4-7).** Limiti WebGPU derivati dai consumatori
+(`src/engine/gpulimits.ts`: `min(adapter, requisito)`, mai costanti né massimo
+dell'adapter) + repack all'import (`src/engine/slabfile.ts`, file OPFS da
+15,68 GB con header e invalidazione).
+- **pack CPU 42,5 → 0,0 ms/token**, decode **4,640 → 4,912** (+5,9%), stallo
+  residenza 56,1 → 34,5.
+- **Il budget di spec era sbagliato**: la leva vale −21,6 ms/token, non −41,4.
+  Le letture expert passano da "prevalentemente in page cache" (4,08 GB/s) a
+  "quasi tutte fuori" (1,29 GB/s) perché ora ci sono **due** file da 33 GB
+  contro 14 GB di page cache. Il repack **scambia CPU con I/O**; i 18,4
+  ms/token di read residui sono materia della leva 2 (li nasconde il prefetch).
+- Conformance full-corpus NON eseguita (~5 h): sostituita da verifica
+  byte-identica in VRAM e su disco. Docket item 11.
+
+**Prossima fase: 4 — i sync del router.** Primo task da spec §3: il probe è già
+fatto (limiti misurati), quindi si parte dal design "binding fisso + expert come
+offset aritmetico" (prior art ORT/ggml/MLC) più la sovrapposizione CPU/GPU via
+prefetch. Da fare come preludio: allineare `gpuforward.ts:101-107` alla
+derivazione dei limiti (docket item 10, non serve ri-bench).
 
 **Decisione PI aperta e non bloccante: docket item 8** — pagare ~0.67 GiB di
 qualità (5% del parco expert, quant asimmetrica sui più freddi) per ottenere la

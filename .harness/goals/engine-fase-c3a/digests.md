@@ -88,3 +88,31 @@
   limiti. Resta non misurato *di quanto* scenderebbe `gpuBusy` a clock pieni.
 - **Ruling recepiti**: prefetch LOOKA dentro C3a (emendamento 2a) — ribalta la
   valutazione del docket C2 item 8; limiti negoziati in fase 3 (2b).
+
+## it.4-7 (2026-08-02) — FASE 3 CHIUSA: limiti derivati + repack all'import
+
+- **Limiti derivati dai consumatori** (ruling PI "capire caso per caso"): non
+  più costanti inventate né massimo dell'adapter, ma `min(adapter, requisito)`
+  con il consumatore scritto accanto. Requisiti reali: 256 invocazioni (non
+  1024), 7 storage buffer (non 16), 250,5 MiB di binding (la testa Q6_K, che
+  sfonda il default di spec), `max(30 848, 4·ctxMax+256)` di workgroup storage.
+  Un test **scansiona il WGSL vero** e fa cadere la derivazione se un kernel la
+  supera: è ciò che tiene insieme limite e consumatore.
+- **Due cose che nessuno aveva scritto**: il vecchio cap 32768 limitava il
+  contesto a **8128 token**; e il consumatore massimo di workgroup storage del
+  path Qwen non è quello citato nel commento (30 848 B, non 19,7 KB — margine
+  reale 1 920 B).
+- **Repack all'import**: pack CPU **42,5 → 0,0 ms/token**, decode 4,640 →
+  **4,912** (+5,9%), stallo 56,1 → 34,5.
+- **Ma il budget di spec era sbagliato**: la leva vale −21,6 ms/token, non
+  −41,4. Read+upload crescono di 20,7 perché le letture expert passano da
+  "prevalentemente in page cache" (4,08 GB/s) a "quasi tutte fuori" (1,29 GB/s):
+  due file da 33 GB contro 14 GB di cache. **Il repack scambia CPU con I/O.**
+  Tre ipotesi testate, due smentite (cache fredda transitoria; frammentazione —
+  lo slab ha 2 extent contro i 263 del GGUF).
+- **Conseguenza**: i 18,4 ms/token di lettura sono ora materia della leva 2 —
+  è tempo in cui la GPU è ferma, quindi lo nasconde il prefetch.
+- **Conformance full-corpus NON eseguita** (~5 h): sostituita da due verifiche
+  byte-identiche (VRAM e file su disco, 7 campioni). Resta da fare in fase 6.
+- Verifica: `tsc` pulito, **252 test verdi** (da 220 a inizio goal), ktest
+  30/30, due bench a macchina quiescente.

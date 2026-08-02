@@ -80,8 +80,56 @@ file OPFS in layout slab. `ensure` diventa `read → writeBuffer`, senza CPU.
 caldo, test verdi su produzione dell'artefatto e su invalidazione, correttezza
 invariata (argmax ≡ cpuref-f64 256/256).
 
-**Decisione chiesta al ruling**: nessuna — è la leva meno rischiosa e la più
-dimensionata. Si segnala solo il consumo disco (+15.68 GB).
+### 2.1 ESITO MISURATO (it.7) — il budget della leva va corretto
+
+Implementata e misurata a macchina quiescente, due run
+(`bench-glm-4090-b12-repack-2026-08-02.json` e `…-warm-…`):
+
+| ms/token | pre-repack | post-repack |
+|---|---|---|
+| pack CPU | 42.5 | **0.0** ✅ |
+| read OPFS | 5.8 | **18.4** |
+| upload | 8.1 | 16.2 |
+| **stallo residenza** | **56.1** | **34.5** |
+| decode tok/s | 4.640 | **4.912** (+5.9%) |
+
+**Il budget di §1 era sbagliato: la leva 1 non vale −41.4 ms/token ma −21.6.**
+Il pack sparisce davvero, ma read+upload crescono di 20.7 e si mangiano metà
+del beneficio.
+
+**Causa, misurata e non congetturata** (tre ipotesi, due smentite):
+- cache fredda al primo giro: SMENTITA (2ª run 18.4 vs 19.2);
+- file frammentato: SMENTITA e nel verso opposto — `filefrag` dà **2 extent**
+  per lo slab contro **263** per il GGUF;
+- throughput del file: SMENTITA — misurato fuori dal motore, entrambi i file
+  danno ~1.9-2.7 GB/s a freddo e ~10 GB/s a caldo.
+
+Il throughput EFFETTIVO per miss dice il resto: **4.08 GB/s prima** (fra il
+freddo e il caldo del GGUF ⇒ letture prevalentemente in page cache), **1.29
+GB/s dopo** (sotto persino il freddo ⇒ quasi tutte fuori cache). Prima gli
+expert si leggevano dallo stesso file che il motore tocca comunque a ogni build
+(i tensori non-expert), quindi il GGUF restava caldo; ora ci sono **due** file —
+33 GB contro 31 GB di RAM e 14 di page cache — e nessuno resta caldo.
+
+**Il repack non elimina lavoro: scambia 41.4 ms di CPU con 12.6 ms di I/O.**
+
+**Conseguenza sul piano delle leve**: i 18.4 ms/token di lettura sono tempo in
+cui la GPU è ferma, quindi sono materia della **leva 2** (sovrapposizione via
+prefetch, ammessa in perimetro dall'emendamento 2a). Repack da solo: −21.6.
+Repack + sovrapposizione: fino ai −34.5 dello stallo intero. Il budget
+complessivo di §1 regge solo se la leva 2 assorbe anche l'I/O migrato.
+
+**Correttezza**: la conformance full-corpus costa ~5 h (run C2: 4.9 h) e NON è
+stata eseguita. La catena di verifica usata al suo posto: (a) test unitario che
+carica gli stessi expert per entrambi i percorsi e confronta **byte per byte**
+ciò che finisce in VRAM; (b) test che confronta gli slab **sul disco** con
+`packExpertSlab` sui byte grezzi del GGUF (7 campioni, entrambe le size-class,
+estremi e centro) — byte-identici. Se i byte in VRAM sono identici, il calcolo
+lo è. La conformance resta da eseguire prima della chiusura del goal (fase 6),
+dove serve comunque per il gate.
+
+**Decisione chiesta al ruling**: nessuna sul design — si segnalano il consumo
+disco (+15.68 GB) e la correzione del budget.
 
 ---
 

@@ -52,7 +52,38 @@
    come soglia UX in regime thinking; errore del modello di banda +/-15% (C3b);
    budget slab di prova 50% e 25% del parco (C3b).
 
-10. **RULING RICHIESTO — allineamento del path Qwen e ri-baseline del gate**
+11. **RULING RICHIESTO — conformance full-corpus della fase 3** (2026-08-02,
+    it.7). Non blocca: si può fare in fase 6, dove serve comunque.
+
+    Il done-when della fase 3 chiede «correttezza invariata (argmax ≡ cpuref-f64
+    256/256 sul campione ratificato)». **Non l'ho eseguita**: il run C2 sul
+    corpus intero ha richiesto **4,9 ore** e l'harness non ha un'opzione per il
+    solo campione ratificato (`--prompts` seleziona i prompt, ma il campione
+    2/8 di C2 non è documentato con gli indici).
+
+    Al suo posto ho verificato la catena completa in modo più stretto e in
+    secondi: (a) test unitario che carica gli stessi expert per **entrambi** i
+    percorsi (raw+pack e slab) e confronta **byte per byte** ciò che finisce in
+    VRAM; (b) test che confronta gli slab **sul disco** con `packExpertSlab`
+    sui byte grezzi del GGUF — 7 campioni su entrambe le size-class, estremi e
+    centro, tutti identici. Se i byte in VRAM sono identici, il calcolo lo è.
+
+    **Opzioni**: (a) [RACCOMANDATA] accettare la sostituzione e lasciare la
+    conformance alla fase 6, dove è un gate di chiusura; (b) eseguirla ora
+    (~5 h di macchina); (c) aggiungere all'harness l'opzione per il campione
+    ratificato — utile a prescindere, perché un gate che costa 5 ore non si
+    esegue a ogni fase, e infatti non è stato eseguito.
+
+10. ~~**RULING RICHIESTO — allineamento del path Qwen e ri-baseline del gate**~~
+    **SUPERATO dal ruling sui limiti derivati (2026-08-02, it.6).** Con
+    `min(adapter, requisito)` non si alza più nulla oltre il necessario: il
+    path Qwen chiede già oggi 256 MiB di binding e 32 KiB di workgroup storage,
+    valori compatibili coi requisiti calcolati (250,5 MiB e 30 848 B). Resta
+    **una cosa da fare, non una da decidere**: allineare `gpuforward.ts:101-107`
+    alla stessa derivazione, così ktest smette di essere più permissivo del
+    motore che valida. Senza ri-bench, perché i valori non cambiano.
+    Testo originale:
+
     (2026-08-02, it.5, da review avversaria). **Non blocca la fase 3**, ma va
     deciso prima di far girare il gate della fase 6.
 
