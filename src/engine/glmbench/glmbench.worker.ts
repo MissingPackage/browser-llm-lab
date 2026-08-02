@@ -64,6 +64,8 @@ interface TelemDelta {
   tailWaitMs: number; routerSyncs: number; submits: number;
   gpuBusyMs: number | null; gpuPasses: number; gpuPassOverflow: number;
   dispatches: number;
+  gpuByCatMs: Record<string, number> | null;
+  gpuByCatPasses: Record<string, number> | null;
 }
 const telemDelta = (a: GlmTelemetry, b: GlmTelemetry): TelemDelta => ({
   forwards: b.forwards - a.forwards,
@@ -77,6 +79,12 @@ const telemDelta = (a: GlmTelemetry, b: GlmTelemetry): TelemDelta => ({
   gpuPasses: b.gpuPasses - a.gpuPasses,
   gpuPassOverflow: b.gpuPassOverflow - a.gpuPassOverflow,
   dispatches: b.dispatches - a.dispatches,
+  gpuByCatPasses: b.gpuByCatPasses === null ? null : Object.fromEntries(
+    Object.entries(b.gpuByCatPasses).map(([k, v]) => [k, v - (a.gpuByCatPasses?.[k] ?? 0)]),
+  ),
+  gpuByCatMs: b.gpuByCatMs === null ? null : Object.fromEntries(
+    Object.entries(b.gpuByCatMs).map(([k, v]) => [k, v - (a.gpuByCatMs?.[k] ?? 0)]),
+  ),
 });
 
 interface RunResult {
@@ -231,6 +239,19 @@ async function main(cfg: Cfg): Promise<void> {
     model.setTelemetry(false);
   }
 
+  // ---- replica DEDICATA all'attribuzione per CATEGORIA (C3a fase 4b) ----
+  // Separata dalle precedenti perche' spezza i compute pass ai confini di
+  // categoria: il suo gpuBusy totale contiene i confini in piu' e non e'
+  // confrontabile alla lettera con l'headline. Le QUOTE lo sono, e il
+  // confronto fra i due totali dichiara quanto costano i confini.
+  let catRep: RunResult | null = null;
+  if (nAttrib > 0) {
+    progress("attribuzione per categoria…");
+    model.setTelemetry(true, true, true);
+    catRep = await runOnce("attribuzione categorie", true);
+    model.setTelemetry(false);
+  }
+
   // ---- probe del floor di sync: mapAsync round-trip a GPU ~vuota ----
   // Cross-check indipendente: 46 readback router/token non possono costare meno
   // di 46 × questo numero, qualunque sia il resto.
@@ -377,6 +398,33 @@ async function main(cfg: Cfg): Promise<void> {
     };
   })();
 
+  // Attribuzione di gpuBusy per categoria di kernel: quale famiglia possiede il
+  // tempo GPU. E' il primo task che spec §4 prescrive alla fase 4b, e la
+  // domanda a cui risponde e' "dove conviene portare le fusioni".
+  const attributionByCategory = (() => {
+    const t = catRep?.telem?.decode;
+    if (!t?.gpuByCatMs) return null;
+    const perTok = Object.fromEntries(
+      Object.entries(t.gpuByCatMs).map(([k, v]) => [k, v / cfg.nGen]),
+    );
+    const tot = Object.values(perTok).reduce((a, b) => a + b, 0);
+    const quota = Object.fromEntries(Object.entries(perTok).map(([k, v]) => [k, v / tot]));
+    return {
+      note: "replica dedicata: i compute pass sono spezzati ai confini di categoria, "
+        + "quindi il TOTALE contiene confini che l'headline non ha. Confrontare le quote, non i totali.",
+      wallMsPerToken: catRep!.decode.msPerToken,
+      gpuBusyMsPerToken: tot,
+      gpuBusyMsPerTokenSenzaSplit: attribution2?.gpuBusyMsPerToken ?? null,
+      costoDeiConfiniMsPerToken: attribution2?.gpuBusyMsPerToken == null ? null : tot - attribution2.gpuBusyMsPerToken,
+      msPerToken: perTok,
+      quota,
+      passesPerToken: Object.fromEntries(
+        Object.entries(catRep!.telem!.decode.gpuByCatPasses ?? {}).map(([k, v]) => [k, v / cfg.nGen]),
+      ),
+    };
+  })();
+
+
   const probe = stats(probeSamples);
   const syncFloor = {
     mapRoundTripMs: probe,
@@ -411,7 +459,7 @@ async function main(cfg: Cfg): Promise<void> {
       decodeToksPerSec: decodeTps, prefillToksPerSec: prefillTps,
       ttftMs: ttft,
       objective,
-      attribution2, syncFloorProbe: syncFloor,
+      attribution2, attributionByCategory, syncFloorProbe: syncFloor,
       timestampQuery: { available: hasTsq, used: attribution2?.gpuBusyMsPerToken != null },
       // I limiti CONCESSI, non quelli sperati: una prestazione misurata su
       // limiti diversi non e' confrontabile (lezione B2).

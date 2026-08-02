@@ -79,6 +79,15 @@ export interface GlmTelemetry {
   gpuBusyMs: number | null; // somma delle durate dei pass (solo telemetryGpu)
   gpuPasses: number;
   gpuPassOverflow: number;  // pass non strumentati per ring pieno (atteso 0)
+  // Attribuzione di gpuBusyMs per CATEGORIA di kernel (spec §4, primo task
+  // della fase 4b). Non nulla solo con setTelemetry(on, gpu, byCat=true), che
+  // spezza i compute pass ai confini di categoria: fuori da quella modalita' i
+  // pass ne contengono piu' d'una e la somma per categoria non esiste. La
+  // modalita' aggiunge confini di pass, quindi il suo gpuBusy TOTALE non e'
+  // confrontabile alla lettera con quello del bench headline — si confrontano
+  // le QUOTE, e il totale serve a dichiarare quanto costano i confini.
+  gpuByCatMs: Record<string, number> | null;
+  gpuByCatPasses: Record<string, number> | null;
   // Dispatch CONTATI a runtime (non la formula del piano). Il contatore gira
   // sempre, anche a telemetria spenta: un incremento intero ogni ~120 µs di
   // lavoro GPU e' sotto il rumore, e avere il numero vero in ogni report vale
@@ -102,7 +111,10 @@ export interface GlmModel {
   telemetry(): Promise<GlmTelemetry>;
   // Accende/spegne la REGISTRAZIONE (la capacità è fissata da opts). Da spenta
   // il forward non chiama performance.now() né scrive timestamp.
-  setTelemetry(on: boolean, gpu?: boolean): void;
+  // byCat: spezza i compute pass ai confini di categoria per attribuire
+  // gpuBusy a attn/router/shexp/experts/addMoe/head. Costa confini in più:
+  // si usa in repliche dedicate, mai nelle finestre che alimentano i gate.
+  setTelemetry(on: boolean, gpu?: boolean, byCat?: boolean): void;
   destroy(): void;
 }
 
@@ -133,27 +145,43 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const canGpuTs = opts.telemetryGpu === true && device.features.has("timestamp-query");
   let telemOn = opts.telemetry === true;
   let wantGpuTs = telemOn && canGpuTs;
+  let wantByCat = false; // attribuzione per categoria: spezza i pass, off di default
   const TSQ_PASSES = 512; // ≈3 pass/layer × 47 layer = ~141: margine 3.6×
   const querySet = canGpuTs ? device.createQuerySet({ type: "timestamp", count: TSQ_PASSES * 2 }) : null;
   const tsqResolve = canGpuTs
     ? device.createBuffer({ label: "glm-tsq-resolve", size: TSQ_PASSES * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
     : null;
-  const pendingTsq: Promise<{ ms: number; passes: number }>[] = [];
+  const pendingTsq: Promise<{ ms: number; passes: number; byCat: Map<string, number>; byCatN: Map<string, number> }>[] = [];
   const T = {
     forwards: 0, encodeCpuMs: 0, ensureMs: 0, routerWaitMs: 0, tailWaitMs: 0,
     routerSyncs: 0, submits: 0, gpuBusyMs: 0, gpuPasses: 0, gpuPassOverflow: 0,
     dispatches: 0,
   };
+  const catMs = new Map<string, number>();
+  const catPasses = new Map<string, number>();
   const nowT = (): number => (telemOn ? performance.now() : 0);
-  const armTsq = (staging: GPUBuffer, passes: number): void => {
+  const armTsq = (staging: GPUBuffer, passes: number, cats?: string[]): void => {
+    // `cats` è una COPIA dell'etichetta per indice di pass del token: la
+    // mapAsync si risolve molto dopo, quando l'array vivo è già di un altro
+    // token.
     pendingTsq.push(
       (async () => {
         await staging.mapAsync(GPUMapMode.READ);
         const ts = new BigUint64Array(staging.getMappedRange().slice(0));
         staging.destroy();
         let ms = 0;
-        for (let i = 0; i < passes; i++) ms += Number(ts[i * 2 + 1] - ts[i * 2]) / 1e6;
-        return { ms, passes };
+        const byCat = new Map<string, number>();
+        const byCatN = new Map<string, number>();
+        for (let i = 0; i < passes; i++) {
+          const d = Number(ts[i * 2 + 1] - ts[i * 2]) / 1e6;
+          ms += d;
+          const c = cats?.[i];
+          if (c !== undefined) {
+            byCat.set(c, (byCat.get(c) ?? 0) + d);
+            byCatN.set(c, (byCatN.get(c) ?? 0) + 1); // pass, non batch
+          }
+        }
+        return { ms, passes, byCat, byCatN };
       })(),
     );
   };
@@ -446,13 +474,21 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       let pass: GPUComputePassEncoder | null = null;
       let passIdx = 0;         // indice nel query set, per token
       let tSeg = nowT();       // inizio del segmento di encode CPU corrente
-      const ensurePass = () => {
+      const passCats: string[] = []; // etichetta per indice di pass (solo byCat)
+      let curCat = "";
+      // `cat` è l'etichetta della categoria di kernel che sta per essere
+      // encodata. Fuori da wantByCat è inerte: i pass restano esattamente
+      // quelli di prima, così il bench headline non cambia forma.
+      const ensurePass = (cat: string) => {
+        if (pass && wantByCat && cat !== curCat) endPass();
         if (pass) return pass;
+        curCat = cat;
         if (wantGpuTs) {
           if (passIdx < TSQ_PASSES) {
             pass = enc.beginComputePass({
               timestampWrites: { querySet: querySet!, beginningOfPassWriteIndex: passIdx * 2, endOfPassWriteIndex: passIdx * 2 + 1 },
             });
+            passCats[passIdx] = cat;
             passIdx++;
             return pass;
           }
@@ -465,17 +501,19 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
 
       for (const [l, L] of layers.entries()) {
         // attention (con la copy k_pe dopo rmsKvA: indice 8 = kvApp)
-        ensurePass();
+        ensurePass("attn");
         runSteps(pass!, L.attn.slice(0, 8));
         endPass();
         enc.copyBufferToBuffer(kvB, L.kpeCopy.srcOff, row576, L.kpeCopy.dstOff, L.kpeCopy.bytes);
-        ensurePass();
+        ensurePass("attn");
         runSteps(pass!, L.attn.slice(8));
         if (L.dense) {
+          ensurePass("dense");
           runSteps(pass!, L.dense);
           continue;
         }
         const m = L.moe!;
+        ensurePass("router");
         runSteps(pass!, m.preRouter);
         endPass();
         enc.copyBufferToBuffer(logitsB, 0, logitsStaging, 0, G.nExpert * 4);
@@ -503,8 +541,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         }
         // ---- encode MoE: shexp scrive moeOut, gli expert accumulano ----
         enc = device.createCommandEncoder();
-        ensurePass();
+        ensurePass("shexp");
         runSteps(pass!, m.shexp);
+        ensurePass("experts");
         for (let k = 0; k < G.nExpertUsed; k++) {
           const bgs = slotBgs(slots[k]);
           pass!.setPipeline(pipes.pairSiluExp);
@@ -521,10 +560,11 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         // qui): 2 dispatch per expert (gate+up+silu fusi, down) — erano 4 prima
         // della famiglia fusa portata da Qwen (fase 4b)
         T.dispatches += G.nExpertUsed * 2;
+        ensurePass("addMoe");
         runSteps(pass!, [m.addMoe]);
       }
       if (readLogits) {
-        ensurePass();
+        ensurePass("head");
         runSteps(pass!, headSteps);
       }
       endPass();
@@ -540,7 +580,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         enc.copyBufferToBuffer(tsqResolve!, 0, tsqStaging, 0, passIdx * 2 * 8);
       }
       device.queue.submit([enc.finish()]);
-      if (tsqStaging) armTsq(tsqStaging, passIdx);
+      if (tsqStaging) armTsq(tsqStaging, passIdx, wantByCat ? passCats.slice(0, passIdx) : undefined);
       // `forwards` e `dispatches` sono la stessa coppia: entrambi SEMPRE, anche
       // a telemetria spenta, altrimenti il rapporto dispatch/token e' spazzatura
       // (il gate ktest ha beccato esattamente questo alla prima esecuzione).
@@ -563,22 +603,29 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       if (telemOn) T.tailWaitMs += performance.now() - tTail;
       return { hidden, logits, routing };
     },
-    setTelemetry(on: boolean, gpu = true) {
+    setTelemetry(on: boolean, gpu = true, byCat = false) {
       telemOn = on;
       wantGpuTs = on && gpu && canGpuTs;
+      wantByCat = wantGpuTs && byCat;
     },
     async telemetry(): Promise<GlmTelemetry> {
       // drena i batch in volo (uno per token): il gpuBusy è la somma delle
       // durate dei pass, NON include le bolle fra submit — è esattamente la
       // semantica del gpuBusy Qwen (engine.worker, repliche liv.2 dedicate)
       const batches = await Promise.all(pendingTsq.splice(0));
-      for (const b of batches) { T.gpuBusyMs += b.ms; T.gpuPasses += b.passes; }
+      for (const b of batches) {
+        T.gpuBusyMs += b.ms; T.gpuPasses += b.passes;
+        for (const [c, v] of b.byCat) catMs.set(c, (catMs.get(c) ?? 0) + v);
+        for (const [c, n] of b.byCatN) catPasses.set(c, (catPasses.get(c) ?? 0) + n);
+      }
       return {
         on: telemOn, forwards: T.forwards, encodeCpuMs: T.encodeCpuMs, ensureMs: T.ensureMs,
         routerWaitMs: T.routerWaitMs, tailWaitMs: T.tailWaitMs, routerSyncs: T.routerSyncs,
         submits: T.submits, gpuBusyMs: canGpuTs ? T.gpuBusyMs : null,
         gpuPasses: T.gpuPasses, gpuPassOverflow: T.gpuPassOverflow,
         dispatches: T.dispatches,
+        gpuByCatMs: catMs.size ? Object.fromEntries(catMs) : null,
+        gpuByCatPasses: catPasses.size ? Object.fromEntries(catPasses) : null,
       };
     },
     destroy() {

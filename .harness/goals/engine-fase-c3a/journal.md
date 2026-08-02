@@ -809,3 +809,66 @@ tok/s**, sotto il gate 13.43.
 fatto misurato che riguarda l'ordine delle fasi appena cambiato dal ruling: la
 4b conviene *dopo* la 4, o almeno insieme. Da riportare al PI, non da decidere
 qui.
+
+---
+
+## it.11 (2026-08-02) — attribuzione per categoria: era l'attention
+
+**Ruling PI**: "andiamo prima con le attribuzioni per categoria". Costruito il
+tagging dei compute pass per categoria (`setTelemetry(on, gpu, byCat)`): in
+quella modalità i pass si spezzano ai confini di categoria e `gpuBusyMs` si
+scompone. Fuori da lì il path è identico a prima — il bench headline non cambia
+forma. Replica dedicata, separata da `attribution2`.
+
+### Il risultato
+
+`results/engine/bench-glm-4090-b12-bycat-2026-08-02.json`:
+
+| categoria | ms/token | quota |
+|---|---|---|
+| **attn (MLA)** | **51.21** | **74.5%** |
+| shexp | 7.16 | 10.4% |
+| head | 4.64 | 6.7% |
+| **experts** | **3.95** | **5.8%** |
+| router | 0.98 | 1.4% |
+| dense | 0.50 | 0.7% |
+| addMoe | 0.25 | 0.4% |
+
+Costo dei confini di pass: **−2.54 ms** (il totale con lo split è più BASSO di
+quello senza, 68.7 vs 71.24: differenza fra repliche, non un artefatto
+sistematico — i confini non stanno gonfiando la misura).
+
+### Cosa dice, e cosa smonta
+
+**La catena expert che ho portato in it.10 vale il 5.8% del tempo GPU.** Anche
+azzerandola si guadagnano 3.95 ms su 69. Il +1.1% di decode misurato in it.10
+non era una delusione: era esattamente quello che questa tabella prevede.
+
+**Il modello "byte letti ⇒ tempo" è sbagliato di suo.** La catena expert è il
+41% dei byte e il 5.8% del tempo; l'attention è ~2.6% dei byte di pesi e il
+74.5% del tempo. Ogni pianificazione fatta sulla banda in questo goal — inclusa
+la mia di it.8 — era su una proxy che non regge.
+
+### Perché l'attention costa così
+
+Letto `mlaAttnDecodeWgsl`: la griglia è **nHead = 20 workgroup da 64 thread**,
+cioè **1280 thread** su una GPU che ne vuole ordini di grandezza di più. Ogni
+workgroup riscorre da solo **tutta** la cache KV (due volte: scores e output),
+con un loop seriale di 576 iterazioni per posizione. Non è banda e non è
+FLOP — è **parallelismo assente**: 20 workgroup non riempiono nemmeno gli SM.
+
+E la cache c_kv in MLA è **condivisa fra le head** (è il senso di MLA), quindi
+le 20 riletture sono anche ridondanti per costruzione.
+
+Il pattern che risolve esiste già nel repo, sul path Qwen: `attnSplitPart` +
+`attnSplitReduce` (flash-decoding: si spezza il range KV, ogni pezzo ha il suo
+workgroup, poi si riduce con max/somma correnti). È il prossimo porting, ed è
+quello che vale.
+
+### Verifica
+
+`tsc` pulito, `npm test` 252 + 2 skipped. **Nota onesta sul report committato**:
+la colonna `passesPerToken` vale 1.0 per ogni categoria — contavo un pass per
+batch invece che per pass. Il bug è nel contatore, non nei ms (che sono sommati
+per pass e sono corretti); corretto in questo commit, il valore giusto comparirà
+col prossimo bench.
