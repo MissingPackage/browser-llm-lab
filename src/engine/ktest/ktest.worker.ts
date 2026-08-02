@@ -9,7 +9,7 @@ import {
   gemvQuantWgsl, gemvF32Wgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
   attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
-  routerTopKWgsl,
+  routerTopKWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl, gemvGrid,
 } from "../kernels/wgsl";
 import { createGlmLayer0 } from "../glmforward";
 import {
@@ -738,7 +738,12 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
   // contiene. E' (b) a rendere il gate un test.
   const tel = await model.telemetry();
   const measuredPerToken = tel.dispatches / Math.max(1, tel.forwards);
-  const PLANNED = 61, HEAD = 2;
+  // Mini-modello: 2 layer (1 denso blk.0 + 1 MoE). Scritto come somma dei
+  // termini, non come numero: quando una fase cambia la catena, qui si vede
+  // QUALE termine e' cambiato. Fase 4b: la catena expert e' passata da 4
+  // dispatch (gate, up, silu, down) a 2 (gate+up+silu fusi, down) ⇒ il termine
+  // MoE scende da 23 a 15 e il totale da 61 a 53.
+  const PLANNED = 16 * 2 + 6 * 1 + (2 + 4 + G.nExpertUsed * 2 + 1) * 1, HEAD = 2;
   const dispatchOk = model.dispatchesPerTokenPlanned === PLANNED && measuredPerToken === PLANNED + HEAD;
   if (!dispatchOk) {
     problems.push(`dispatch: piano ${model.dispatchesPerTokenPlanned} (atteso ${PLANNED}), ` +
@@ -756,6 +761,58 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
       `(piano ${model.dispatchesPerTokenPlanned} + testa ${HEAD})` +
       (problems.length ? `; ${problems.join("; ")}` : ""),
   };
+}
+
+// Famiglia fusa portata su GLM (C3a fase 4b). Stessi riferimenti f64 dei
+// gemelli generici che sostituiscono: se il risultato coincide entro le
+// tolleranze gia' in uso per i gemv, la struttura nuova non ha cambiato la
+// matematica — ha cambiato solo come legge la memoria.
+async function testPairGemvSiluFast(g: Gpu): Promise<KResult> {
+  const K = G.dModel, N = G.dFfnExpert;
+  const nBlocks = (K / 32) * N;
+  const gSrc = randBytes(nBlocks * 18, 5501); fixScales(gSrc, 18);
+  const uSrc = randBytes(nBlocks * 18, 5502); fixScales(uSrc, 18);
+  const gw = new Float32Array(nBlocks * 32), uw = new Float32Array(nBlocks * 32);
+  dequantQ4_0(gSrc, 0, nBlocks, gw);
+  dequantQ4_0(uSrc, 0, nBlocks, uw);
+  const x = randF32(K, 5503);
+  const ref = new Float32Array(N);
+  for (let r = 0; r < N; r++) {
+    let ag = 0, au = 0;
+    for (let i = 0; i < K; i++) { ag += gw[r * K + i] * x[i]; au += uw[r * K + i] * x[i]; }
+    ref[r] = (ag / (1 + Math.exp(-ag))) * au;
+  }
+  const gp = repackQ4_0(gSrc, 0, nBlocks), up = repackQ4_0(uSrc, 0, nBlocks);
+  const out = g.empty(N * 4);
+  await g.run(pairGemvSiluFastWgsl({ K, N }),
+    [g.buf(gp.qs), g.buf(gp.scales), g.buf(up.qs), g.buf(up.scales), g.buf(x), out],
+    gemvGrid(N / 4)[0]);
+  return compare("pair-gemv-silu-fast-exp", new Float32Array(await g.read(out, N * 4)), ref, 2e-4, 1e-3);
+}
+
+async function testGemvAccumFast(g: Gpu, kind: "q4_0" | "q4_1"): Promise<KResult> {
+  const K = G.dFfnExpert, N = G.dModel;
+  const blockBytes = kind === "q4_0" ? 18 : Q4_1_BLOCK_BYTES;
+  const nBlocks = (K / 32) * N;
+  const src = randBytes(nBlocks * blockBytes, 6610 + blockBytes);
+  if (kind === "q4_0") fixScales(src, blockBytes);
+  else fixScalesAt(src, blockBytes, [1, 3]);
+  const w = new Float32Array(nBlocks * 32);
+  (kind === "q4_0" ? dequantQ4_0 : dequantQ4_1)(src, 0, nBlocks, w);
+  const x = randF32(K, 6612);
+  const y0 = randF32(N, 6613);
+  const s = 0.6789;
+  const ref = new Float32Array(N);
+  for (let r = 0; r < N; r++) {
+    let acc = 0;
+    for (let i = 0; i < K; i++) acc += w[r * K + i] * x[i];
+    ref[r] = y0[r] + s * acc;
+  }
+  const { qs, scales } = (kind === "q4_0" ? repackQ4_0 : repackQ4_1)(src, 0, nBlocks);
+  const y = g.buf(y0);
+  await g.run(gemvAccumFastWgsl({ kind, K, N }),
+    [g.buf(qs), g.buf(scales), g.buf(x), y, g.buf(new Float32Array([s]))], gemvGrid(N / 4)[0]);
+  return compare(`gemv-${kind}-accum-fast`, new Float32Array(await g.read(y, N * 4)), ref, 2e-4, 1e-3);
 }
 
 // Router top-k su GPU vs `routerSelect` (CPU, f64) — C3a fase 4 strato 1.
@@ -923,6 +980,11 @@ async function main(): Promise<void> {
     // --- router top-4 su GPU (C3a fase 4 strato 1): fedelta' f32 vs CPU f64 ---
     results.push(await testRouterTopK(g, 64));
     results.push(await testRouterNearTie(g, [1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8], 8));
+
+    // --- famiglia fusa portata su GLM (C3a fase 4b) ---
+    results.push(await testPairGemvSiluFast(g));
+    results.push(await testGemvAccumFast(g, "q4_0"));
+    results.push(await testGemvAccumFast(g, "q4_1"));
 
     // --- kernel MLA absorbed (C2 fase 4 slice 2), dims reali GLM ---
     const HL = G.qkNope + G.ropeDims; // 256: head len di q

@@ -135,3 +135,25 @@
   il readback serve anche a sapere cosa caricare). Prossimo: bind group layout
   esplicito, base-offset nei GEMV expert, `wExp[k]` collassati, tabella slot
   su GPU.
+
+## it.10 (2026-08-02) — fase 4b: famiglia fusa sulla catena expert
+
+- **Ruling PI** (docket item 12): la 4b esce da `blocked-by-4` e parte subito.
+- **La causa del 5.3× non è la fusione, è la struttura del gemv**: load `vec4`
+  invece di 4 scalari, `x` in shared invece che riletta per riga, `dot()`
+  invece di estrazione byte a byte, 4 righe per workgroup invece di 1.
+- **Portati e cablati**: `pairGemvSiluFastWgsl` (gate+up+silu, senza rms perché
+  nel MoE la norm è a monte del router) e `gemvAccumFastWgsl` (down q4_0/q4_1).
+  Catena expert **4 → 2 dispatch**; dispatch/token **1818 → 1450**.
+- **Correttezza**: ktest **35/35**, incluse le due prove end-to-end contro f64
+  (L2rel 2.4e-7, argmax 6/6). Path Qwen non toccato.
+- **Il numero, e la smentita**: `gpuBusy` 75.86 → **69.11** (−8.9%), decode
+  4.912 → **4.967** (+1.1%). Il modello di it.8 prevedeva `gpuBusy` → ~14.
+  La catena expert è il 41% dei byte e ha reso l'8.9% del tempo GPU: o pesa
+  poco su `gpuBusy`, o i kernel nuovi non sono 5× — **indistinguibile senza
+  l'attribuzione per categoria**, che è il primo task che spec §4 prescrive
+  alla 4b e che ho saltato credendolo assolto da it.8.
+- **Il fatto strutturale**: −6.75 ms di GPU → −4.27 di wall → +1.1% di decode,
+  perché sync/CPU SALE a 99.7 (50% del wall). Le proiezioni del report danno
+  **9.77 tok/s anche batchando tutti e 46 i sync**. Finché il drain c'è, la 4b
+  non si converte in tok/s. Ordine delle fasi: da riportare al PI.

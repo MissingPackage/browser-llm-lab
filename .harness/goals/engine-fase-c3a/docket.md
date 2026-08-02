@@ -1,5 +1,28 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+12. ~~**RULING — la fase 4b parte subito, portando la famiglia fusa di Qwen**~~
+    **RISOLTO in apertura (2026-08-02, PI: "porta su glm tutte le ottimizzazioni
+    che ci hanno dato tante soddisfazioni su qwen")** — registrato qui perche'
+    **modifica l'ordine di PHASES**: la 4b era `blocked-by-4`, dimensionata dalla
+    ri-misura dei clock che chiude la fase 4. Ora parte prima.
+
+    **Perche' il ruling e' ben fondato** (state-2026-08-02 §2, non opinione): a
+    parita' di device il path GLM rende 29.3 GB/s utili contro 155.6 del path
+    Qwen — 5.1% del picco contro 27.0%. Le 18 fusioni WGSL esistenti sono tutte
+    solo-Qwen. La 4b non inventa ottimizzazioni: ne porta di gia' validate, che
+    e' il profilo di rischio piu' basso del goal.
+
+    **Cosa NON cambia**: il gate 13.43, i gate di correttezza, e l'obbligo della
+    fase 4 di ripresentare l'item 2. La ri-misura dei clock che la fase 4 doveva
+    fare per dimensionare la 4b resta dovuta — cambia solo che ora servira' a
+    spiegare quanto del guadagno viene dai kernel e quanto dai clock, che e'
+    esattamente l'attribuzione richiesta dal done-when della 4b.
+
+    **Conseguenza registrata**: la riga 4b di PHASES passa da `blocked-by-4` a
+    `in corso`, e il suo primo task di spec ("prima si misura DOVE, poi si
+    fonde") e' stato assolto dall'analisi di it.8, che ha misurato il DOVE a
+    livello di path invece che di categoria di pass.
+
 1. ~~**RULING — split della fase C3 e formulazione del gate prefill**~~ RISOLTO
    (2026-08-01, ruling PI in chat, sessione 18 — /goal-brief). Due decisioni
    prese insieme al contratto, registrate qui perche' modificano il perimetro

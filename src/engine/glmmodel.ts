@@ -23,7 +23,7 @@ import { ExpertCache, expertKey, slotBindRanges, type ExpertRawBytes, type Exper
 import {
   addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ5KWgsl, gemvQ6KWgsl, gemvQ8HeadsWgsl,
   gemvQuantWgsl, kvAppendWgsl, mlaAttnDecodeWgsl, ropeMlaNormWgsl, rmsnormWgsl,
-  siluMulWgsl, stridedCopyWgsl,
+  siluMulWgsl, stridedCopyWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl,
 } from "./kernels/wgsl";
 
 const HL = G.qkNope + G.ropeDims; // 256
@@ -207,9 +207,12 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     gemvShexpGU: mkPipe(gemvQ5KWgsl({ K: G.dModel, N: G.dFfnExpert })),
     gemvShexpDown: mkPipe(gemvQ6KWgsl({ K: G.dFfnExpert, N: G.dModel })),
     siluExp: mkPipe(siluMulWgsl(G.dFfnExpert)),
-    gemvExpGU: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: G.dModel, N: G.dFfnExpert, hasBias: false })),
-    gemvExpDown40: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: G.dFfnExpert, N: G.dModel, hasBias: false, scaledAccum: true })),
-    gemvExpDown41: mkPipe(gemvQuantWgsl({ kind: "q4_1", K: G.dFfnExpert, N: G.dModel, hasBias: false, scaledAccum: true })),
+    // catena expert: famiglia fusa portata da Qwen (C3a fase 4b). gate+up+silu
+    // in un dispatch solo; down con la stessa struttura vec4/shared-x/4-righe.
+    // I gemelli generici restano nel repo — li usano ancora denso e ktest.
+    pairSiluExp: mkPipe(pairGemvSiluFastWgsl({ K: G.dModel, N: G.dFfnExpert })),
+    gemvExpDown40: mkPipe(gemvAccumFastWgsl({ kind: "q4_0", K: G.dFfnExpert, N: G.dModel })),
+    gemvExpDown41: mkPipe(gemvAccumFastWgsl({ kind: "q4_1", K: G.dFfnExpert, N: G.dModel })),
     add: mkPipe(addInPlaceWgsl(G.dModel)),
   };
 
@@ -360,7 +363,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const expertReader: ExpertReader = src.hasSlabs && src.expertSlab
     ? { raw: (ll, ee) => src.expert(ll, ee), slab: (ll, ee) => src.expertSlab!(ll, ee) }
     : (ll: number, ee: number) => src.expert(ll, ee);
-  interface SlotBgs { gate: GPUBindGroup; up: GPUBindGroup; down: GPUBindGroup[] } // down: uno per wExp[k]
+  interface SlotBgs { gu: GPUBindGroup; down: GPUBindGroup[] } // down: uno per wExp[k]
   const slotBgCache = new Map<GPUBuffer, Map<number, SlotBgs>>();
   const slotBgs = (slot: SlotRef): SlotBgs => {
     let byOff = slotBgCache.get(slot.buffer);
@@ -370,8 +373,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       const r = slotBindRanges(slot);
       const downPipe = slot.cls === "q4_1" ? pipes.gemvExpDown41 : pipes.gemvExpDown40;
       got = {
-        gate: bg(pipes.gemvExpGU, [r.gateQs, r.gateScales, fnB, gateE]),
-        up: bg(pipes.gemvExpGU, [r.upQs, r.upScales, fnB, upE]),
+        gu: bg(pipes.pairSiluExp, [r.gateQs, r.gateScales, r.upQs, r.upScales, fnB, gateE]),
         down: wExp.map((wb) => bg(downPipe, [r.downQs, r.downScales, gateE, moeOut, wb])),
       };
       byOff.set(slot.offset, got);
@@ -379,7 +381,8 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     return got;
   };
 
-  const siluExpBind = bg(pipes.siluExp, [gateE, upE]);
+  // (il bind group silu per-expert e' sparito con la fusione gate+up+silu:
+  // `pipes.siluExp` resta perche' lo shexp Q5_K/Q6_K non e' ancora portato)
 
   // ---- output head (fase 6): rms(output_norm) → gemvQ6K [2048→vocab] ----
   const vocab = opts.vocab ?? G.vocab;
@@ -410,14 +413,15 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   };
 
   // Valore DERIVATO dal piano: attn 16/layer + denso 6 (solo blk.0) + per layer
-  // MoE 2 preRouter + 4 shexp + 4 catene expert da 4 + 1 add = 23.
+  // MoE 2 preRouter + 4 shexp + 4 catene expert da 2 (fase 4b: gate+up+silu
+  // fusi) + 1 add = 15.
   // NON include la testa (rms + lm_head = 2), che con readLogits gira a ogni
   // token: e' la ragione per cui questo numero e' sempre stato 2 sotto il vero.
   // Il conteggio reale e' `telemetry().dispatches` (contatore in runSteps e
   // nelle catene expert).
   const nMoe = layers.filter((l) => l.moe).length;
   const nDense = layers.filter((l) => l.dense).length;
-  const dispatchesPerTokenPlanned = 16 * nLayer + 6 * nDense + 23 * nMoe;
+  const dispatchesPerTokenPlanned = 16 * nLayer + 6 * nDense + 15 * nMoe;
 
   const mapLogits = async (): Promise<Float32Array> => {
     await logitsStaging.mapAsync(GPUMapMode.READ);
@@ -503,24 +507,20 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         runSteps(pass!, m.shexp);
         for (let k = 0; k < G.nExpertUsed; k++) {
           const bgs = slotBgs(slots[k]);
-          pass!.setPipeline(pipes.gemvExpGU);
-          pass!.setBindGroup(0, bgs.gate);
-          const [gx, gy] = gemvGrid(G.dFfnExpert);
+          pass!.setPipeline(pipes.pairSiluExp);
+          pass!.setBindGroup(0, bgs.gu);
+          const [gx, gy] = gemvGrid(G.dFfnExpert / 4); // 4 righe per workgroup
           pass!.dispatchWorkgroups(gx, gy);
-          pass!.setBindGroup(0, bgs.up);
-          pass!.dispatchWorkgroups(gx, gy);
-          pass!.setPipeline(pipes.siluExp);
-          pass!.setBindGroup(0, siluExpBind);
-          pass!.dispatchWorkgroups(Math.ceil(G.dFfnExpert / 64));
           const downPipe = slots[k].cls === "q4_1" ? pipes.gemvExpDown41 : pipes.gemvExpDown40;
           pass!.setPipeline(downPipe);
           pass!.setBindGroup(0, bgs.down[k]);
-          const [dx, dy] = gemvGrid(G.dModel);
+          const [dx, dy] = gemvGrid(G.dModel / 4);
           pass!.dispatchWorkgroups(dx, dy);
         }
         // le catene expert non passano da runSteps (bind group per-slot scelti
-        // qui): 4 dispatch per expert (gate, up, silu, down)
-        T.dispatches += G.nExpertUsed * 4;
+        // qui): 2 dispatch per expert (gate+up+silu fusi, down) — erano 4 prima
+        // della famiglia fusa portata da Qwen (fase 4b)
+        T.dispatches += G.nExpertUsed * 2;
         runSteps(pass!, [m.addMoe]);
       }
       if (readLogits) {

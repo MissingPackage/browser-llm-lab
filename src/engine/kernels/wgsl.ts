@@ -1713,6 +1713,175 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }`;
 }
 
+// ===================== FAMIGLIA FUSA PORTATA SU GLM (C3a fase 4b) ============
+// Ruling PI 2026-08-02: "porta su glm tutte le ottimizzazioni che ci hanno dato
+// tante soddisfazioni su qwen". La misura che lo motiva (state-2026-08-02 §2):
+// a parita' di device il path GLM usa 29.3 GB/s utili contro i 155.6 del path
+// Qwen — 5.1% del picco contro 27.0%.
+//
+// La causa NON e' la fusione in se': e' la STRUTTURA del gemv. Il generico
+// `gemvQuantWgsl` che GLM usa ovunque fa 4 load scalari per blocco, rilegge x
+// dalla memoria globale per ogni riga, estrae i nibble byte per byte e assegna
+// UNA riga per workgroup. La famiglia fast fa una load `vec4<u32>` per blocco
+// (16 B), normalizza x UNA volta in shared come `vec4<f32>`, usa `dot()` e
+// tiene QUATTRO righe per workgroup. Questi kernel portano quella struttura sul
+// blocco expert, che da solo vale ~902 MB dei 2220 MB letti per token.
+//
+// Differenza dai gemelli Qwen: niente rms fusa. Nel MoE la ffn_norm e' gia'
+// stata applicata a monte del router (`preRouter`) e l'input e' condiviso dai
+// 4 expert — rifarla qui la ricalcolerebbe 4 volte per layer.
+
+// gate+up+silu del blocco expert in UN dispatch (sostituisce 3 gemvQuant+siluMul).
+// x e' gia' normalizzato: si carica in shared cosi' com'e'.
+export function pairGemvSiluFastWgsl(opts: { K: number; N: number }): string {
+  const { K, N } = opts;
+  const blocksPerRow = K / 32;
+  if (N % 4 !== 0) throw new Error("pairGemvSiluFast: N non multiplo di 4");
+  if (K % 32 !== 0) throw new Error("pairGemvSiluFast: K non multiplo di 32");
+  return `
+@group(0) @binding(0) var<storage, read> gQs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> gScales: array<u32>;
+@group(0) @binding(2) var<storage, read> uQs4: array<vec4<u32>>;
+@group(0) @binding(3) var<storage, read> uScales: array<u32>;
+@group(0) @binding(4) var<storage, read> x: array<f32>;
+@group(0) @binding(5) var<storage, read_write> out: array<f32>;
+const K = ${K}u;
+const BLOCKS_PER_ROW = ${blocksPerRow}u;
+var<workgroup> redG: array<f32, 64>;
+var<workgroup> redU: array<f32, 64>;
+var<workgroup> xn4: array<vec4<f32>, ${K / 4}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  for (var i = t; i < K / 4u; i = i + 64u) {
+    xn4[i] = vec4(x[i * 4u], x[i * 4u + 1u], x[i * 4u + 2u], x[i * 4u + 3u]);
+  }
+  workgroupBarrier();
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  var accG = 0.0;
+  var accU = 0.0;
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let x4 = b * 8u;
+      {
+        let w4 = gQs4[gb];
+        var lo = 0.0; var hi = 0.0;
+        for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+          let word = w4[wi];
+          let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu)) - 8.0;
+          let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu)) - 8.0;
+          lo = lo + dot(nibLo, xn4[x4 + wi]);
+          hi = hi + dot(nibHi, xn4[x4 + 4u + wi]);
+        }
+        accG = accG + unpack2x16float(gScales[gb >> 1u])[gb & 1u] * (lo + hi);
+      }
+      {
+        let w4 = uQs4[gb];
+        var lo = 0.0; var hi = 0.0;
+        for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+          let word = w4[wi];
+          let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu)) - 8.0;
+          let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu)) - 8.0;
+          lo = lo + dot(nibLo, xn4[x4 + wi]);
+          hi = hi + dot(nibHi, xn4[x4 + 4u + wi]);
+        }
+        accU = accU + unpack2x16float(uScales[gb >> 1u])[gb & 1u] * (lo + hi);
+      }
+    }
+  }
+  redG[t] = accG;
+  redU[t] = accU;
+  workgroupBarrier();
+  var stride = 8u;
+  while (stride > 0u) {
+    if (lane < stride) { redG[t] = redG[t] + redG[t + stride]; redU[t] = redU[t] + redU[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (lane == 0u && r < ${N}u) {
+    let g = redG[sub * 16u];
+    out[r] = (g / (1.0 + exp(-g))) * redU[sub * 16u];
+  }
+}`;
+}
+
+// down del blocco expert: y[r] += accScale[0]·dot, struttura fast. Stesso ordine
+// di binding del generico con scaledAccum, cosi' i bind group non cambiano forma.
+export function gemvAccumFastWgsl(opts: { kind: "q4_0" | "q4_1"; K: number; N: number }): string {
+  const { kind, K, N } = opts;
+  const blocksPerRow = K / 32;
+  if (N % 4 !== 0) throw new Error("gemvAccumFast: N non multiplo di 4");
+  if (K % 32 !== 0) throw new Error("gemvAccumFast: K non multiplo di 32");
+  // q4_0: w = (q-8)·d. q4_1: w = q·d + m ⇒ servono Σ(q·x) e Σx separati.
+  const body = kind === "q4_0"
+    ? `
+      let w4 = qs4[gb];
+      var lo = 0.0; var hi = 0.0;
+      for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+        let word = w4[wi];
+        let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu)) - 8.0;
+        let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu)) - 8.0;
+        lo = lo + dot(nibLo, xn4[x4 + wi]);
+        hi = hi + dot(nibHi, xn4[x4 + 4u + wi]);
+      }
+      acc = acc + unpack2x16float(scales[gb >> 1u])[gb & 1u] * (lo + hi);`
+    : `
+      let w4 = qs4[gb];
+      var dq = 0.0; var sx = 0.0;
+      for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+        let word = w4[wi];
+        let nibLo = vec4(f32(word & 0xfu), f32((word >> 8u) & 0xfu), f32((word >> 16u) & 0xfu), f32((word >> 24u) & 0xfu));
+        let nibHi = vec4(f32((word >> 4u) & 0xfu), f32((word >> 12u) & 0xfu), f32((word >> 20u) & 0xfu), f32((word >> 28u) & 0xfu));
+        let xl = xn4[x4 + wi];
+        let xh = xn4[x4 + 4u + wi];
+        dq = dq + dot(nibLo, xl) + dot(nibHi, xh);
+        sx = sx + dot(vec4(1.0, 1.0, 1.0, 1.0), xl) + dot(vec4(1.0, 1.0, 1.0, 1.0), xh);
+      }
+      let dm = unpack2x16float(scales[gb]);
+      acc = acc + dm.x * dq + dm.y * sx;`;
+  return `
+@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> x: array<f32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<storage, read> accScale: array<f32>;
+const K = ${K}u;
+const BLOCKS_PER_ROW = ${blocksPerRow}u;
+var<workgroup> red: array<f32, 64>;
+var<workgroup> xn4: array<vec4<f32>, ${K / 4}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  for (var i = t; i < K / 4u; i = i + 64u) {
+    xn4[i] = vec4(x[i * 4u], x[i * 4u + 1u], x[i * 4u + 2u], x[i * 4u + 3u]);
+  }
+  workgroupBarrier();
+  let sub = t >> 4u;
+  let lane = t & 15u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
+  var acc = 0.0;
+  if (r < ${N}u) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
+      let gb = r * BLOCKS_PER_ROW + b;
+      let x4 = b * 8u;
+      ${body}
+    }
+  }
+  red[t] = acc;
+  workgroupBarrier();
+  var stride = 8u;
+  while (stride > 0u) {
+    if (lane < stride) { red[t] = red[t] + red[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (lane == 0u && r < ${N}u) { y[r] = y[r] + accScale[0] * red[sub * 16u]; }
+}`;
+}
+
 // Router top-k su GPU (C3a fase 4, strato 1 di spec §3.2-bis): replica esatta di
 // `routerSelect` (moe.ts), che a sua volta replica build_moe_ffn. Scrive gli id
 // selezionati e i pesi di mixing in DUE buffer GPU, così la selezione smette di

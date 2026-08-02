@@ -732,3 +732,80 @@ cosa *caricare*. Il pezzo successivo è lo strato 1 completo — bind group layo
 esplicito al posto di `layout: "auto"`, base-offset nei GEMV expert
 (`wgsl.ts` gate/up/down assumono offset 0), collasso dei 4 buffer `wExp[k]` in
 uno indicizzato, e tabella slot→(buffer, offset) su GPU mantenuta dalla cache.
+
+---
+
+## it.10 (2026-08-02) — fase 4b: famiglia fusa portata sulla catena expert
+
+**Ruling PI**: "porta su glm tutte le ottimizzazioni che ci hanno dato tante
+soddisfazioni su qwen" ⇒ la 4b esce da `blocked-by-4` (docket item 12).
+
+### La causa del 5.3×: non è la fusione, è la struttura del gemv
+
+Letti fianco a fianco `gemvQuantWgsl` (che GLM usa ovunque) e la famiglia fast
+di Qwen, la differenza non è "un dispatch invece di tre":
+
+| | generico (GLM) | fast (Qwen) |
+|---|---|---|
+| load pesi | `qs[gb*4+w]` scalare, 4 load/blocco | `array<vec4<u32>>`, 1 load da 16 B |
+| input `x` | da storage globale, ri-letto per riga | shared `vec4<f32>`, una volta per wg |
+| MAC | estrazione byte a byte | `dot(vec4, vec4)` |
+| righe/wg | 1 | 4 |
+
+**Costruito**: `pairGemvSiluFastWgsl` (gate+up+silu in un dispatch, **senza rms**
+— nel MoE la ffn_norm è già applicata a monte del router e rifarla la
+ricalcolerebbe 4 volte per layer) e `gemvAccumFastWgsl` (down q4_0/q4_1, stessa
+struttura, stesso ordine di binding del generico con `scaledAccum`). Cablati
+nella catena expert: **4 dispatch per expert → 2**.
+
+### Correttezza
+
+ktest **35/35 exit 0** (da 32/32): tre casi nuovi contro riferimento f64, più i
+due gate end-to-end — `glm-model-2layer` L2rel **2.36e-7**, argmax 6/6,
+logitMaxRel 3.83e-4; `glm-layer0-conformance` sui pesi **reali** di blk.0
+L2rel 2.35e-7. `tsc` pulito, `npm test` 252 + 2 skipped.
+
+**Il gate sui dispatch è caduto, ed è stato utile**: l'atteso era ancora 61
+(catena a 4). Riscritto come somma dei termini invece che come numero, così la
+prossima volta si legge QUALE termine è cambiato.
+
+`gpuforward.ts` non è stato toccato ⇒ path Qwen intatto, nessun ri-bench dovuto.
+
+### Il risultato: corretto, ma il modello che lo prevedeva è smentito
+
+`results/engine/bench-glm-4090-b12-fused-2026-08-02.json`, macchina quiescente:
+
+| ms/token | pre-fusione | post-fusione | Δ |
+|---|---|---|---|
+| dispatch/token | 1818 | **1450** | −368 (= 46×8, esatto) |
+| `gpuBusy` | 75.86 | **69.11** | **−6.75 (−8.9%)** |
+| stallo residenza | 34.14 | 31.09 | −3.05 |
+| sync/CPU | 94.18 | **99.71** | **+5.54** |
+| wall | 204.18 | 199.91 | −4.27 |
+| decode tok/s | 4.912 | **4.967** | **+1.1%** |
+
+Il modello di it.8 (`state-2026-08-02` §2) diceva: da 5.1% a 27% del picco di
+banda ⇒ `gpuBusy` da 75.9 a ~14. La catena expert vale ~902 MB dei 2220 MB
+letti per token, cioè **41% dei byte**, e portarla ha reso **8.9%** del tempo
+GPU. Le due letture possibili — la catena expert pesa su `gpuBusy` molto meno
+di quanto pesi sui byte, oppure i kernel nuovi non sono 5× più veloci — **non
+sono distinguibili con i dati che ho**.
+
+**Errore di metodo da registrare**: spec §4 mette come PRIMO task della 4b
+«spezzare `gpuBusy` per categoria (attention, router, shexp, catene expert,
+head), poi fondere». L'ho considerato assolto dall'analisi di it.8, che però
+misura la banda a livello di **path**, non di categoria. Non è la stessa cosa,
+e questo bench è il prezzo di averle confuse.
+
+### Il risultato più importante non è il mio, è strutturale
+
+**−6.75 ms/token di GPU sono diventati −4.27 di wall e +1.1% di decode.** Con
+46 drain per token la GPU che finisce prima aspetta solo di più: sync/CPU è
+SALITO a 99.7 ms/token, il 50% del wall. Le proiezioni nel report lo dicono
+senza ambiguità — **anche batchando tutti e 46 i sync (K=46) si arriva a 9.77
+tok/s**, sotto il gate 13.43.
+
+⇒ **Finché il drain c'è, i guadagni della 4b non si convertono in tok/s.** È un
+fatto misurato che riguarda l'ordine delle fasi appena cambiato dal ruling: la
+4b conviene *dopo* la 4, o almeno insieme. Da riportare al PI, non da decidere
+qui.
