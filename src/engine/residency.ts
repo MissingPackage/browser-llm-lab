@@ -34,6 +34,19 @@ export const expertKey = (layer: number, expert: number): number => layer * G.nE
 
 export interface ExpertRawBytes { gate: Uint8Array; up: Uint8Array; down: Uint8Array }
 
+/**
+ * Come la cache ottiene i byte di un expert. La forma a funzione e' quella
+ * storica (byte GGUF grezzi, da impacchettare); la forma a oggetto permette
+ * alla sorgente di offrire lo slab GIA' impacchettato (`slab`), tenendo `raw`
+ * come fallback quando il file slab non c'e'.
+ */
+export type ExpertReader =
+  | ((layer: number, expert: number) => ExpertRawBytes)
+  | {
+      raw: (layer: number, expert: number) => ExpertRawBytes;
+      slab?: (layer: number, expert: number) => Uint8Array;
+    };
+
 export interface SlotRef {
   cls: ExpertClass;
   layout: SlabLayout;
@@ -144,7 +157,7 @@ export class ExpertCache {
   // SOLO su miss (read OPFS: il costo entra in readMs). `pinned` = slot che il
   // token corrente sta per bindare: mai scelti come vittima (i top-4 di un
   // layer devono coesistere).
-  ensure(layer: number, expert: number, readRaw: (layer: number, expert: number) => ExpertRawBytes, pinned?: Set<number>): { slot: SlotRef; hit: boolean } {
+  ensure(layer: number, expert: number, readRaw: ExpertReader, pinned?: Set<number>): { slot: SlotRef; hit: boolean } {
     const cls = ExpertCache.classOf(layer);
     const c = this.cls[cls];
     const key = expertKey(layer, expert);
@@ -170,11 +183,25 @@ export class ExpertCache {
       idx = victim[1];
       this.s.evictions++;
     }
+    // Percorso RAPIDO (C3a fase 3): se la sorgente sa dare lo slab gia'
+    // impacchettato (file slab generato all'import), il pack CPU sparisce dal
+    // path caldo — erano 9,5 ms per miss, 41,4 ms/token al bench.
     const t0 = this.timing ? performance.now() : 0;
-    const raw = readRaw(layer, expert);
-    const t1 = this.timing ? performance.now() : 0;
-    const slab = packExpertSlab(raw.gate, raw.up, raw.down, c.layout);
-    const t2 = this.timing ? performance.now() : 0;
+    let slab: Uint8Array;
+    let rawBytes: number;
+    let t1: number, t2: number;
+    if (typeof readRaw === "object" && readRaw.slab) {
+      slab = readRaw.slab(layer, expert);
+      t1 = t2 = this.timing ? performance.now() : 0; // niente pack: read == tutto
+      rawBytes = slab.length;
+    } else {
+      const read = typeof readRaw === "function" ? readRaw : readRaw.raw;
+      const raw = read(layer, expert);
+      t1 = this.timing ? performance.now() : 0;
+      slab = packExpertSlab(raw.gate, raw.up, raw.down, c.layout);
+      t2 = this.timing ? performance.now() : 0;
+      rawBytes = raw.gate.length + raw.up.length + raw.down.length;
+    }
     const slot = this.slotRef(c, cls, idx);
     this.device.queue.writeBuffer(slot.buffer, slot.offset, slab as unknown as BufferSource);
     if (this.timing) {
@@ -183,7 +210,7 @@ export class ExpertCache {
       this.s.packMs += t2 - t1;
       this.s.uploadMs += t3 - t2;
     }
-    this.s.bytesRead += raw.gate.length + raw.up.length + raw.down.length;
+    this.s.bytesRead += rawBytes;
     this.s.bytesUploaded += slab.length;
     c.lru.set(key, idx);
     return { slot, hit: false };

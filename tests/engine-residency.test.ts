@@ -15,7 +15,7 @@ import {
   EXPERT_GATE_UP_BYTES, EXPERT_DOWN_Q4_0_BYTES, EXPERT_DOWN_Q4_1_BYTES,
 } from "../src/engine/expertstore";
 import { ExpertCache, expertKey, slotBindRanges, PARK_Q4_0, PARK_Q4_1 } from "../src/engine/residency";
-import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../src/engine/moe";
+import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, packExpertSlab } from "../src/engine/moe";
 
 const GGUF_PATH = join(homedir(), ".cache/blab-models/GLM-4.7-Flash-Q4_0.gguf");
 
@@ -124,6 +124,93 @@ const rawFor = (layer: number) => ({
   gate: new Uint8Array(EXPERT_GATE_UP_BYTES),
   up: new Uint8Array(EXPERT_GATE_UP_BYTES),
   down: new Uint8Array(downIsQ4_1(layer) ? EXPERT_DOWN_Q4_1_BYTES : EXPERT_DOWN_Q4_0_BYTES),
+});
+
+describe("ExpertCache — percorso slab pre-impacchettato (C3a fase 3)", () => {
+  beforeAll(() => {
+    (globalThis as Record<string, unknown>).GPUBufferUsage ??= { STORAGE: 0x80, COPY_DST: 8, COPY_SRC: 4 };
+  });
+  const GIB = 1 << 30;
+
+  // device mock che CATTURA i byte scritti (quello sopra tiene solo la taglia)
+  const mkCapturingDevice = () => {
+    const uploads: Uint8Array[] = [];
+    const device = {
+      createBuffer: (d: { size: number }) => ({ size: d.size, destroy() { /* mock */ } }),
+      queue: {
+        writeBuffer: (_b: object, _o: number, data: ArrayBufferView) =>
+          uploads.push(new Uint8Array(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength).slice()),
+      },
+    } as unknown as GPUDevice;
+    return { device, uploads };
+  };
+
+  // byte pseudo-casuali deterministici: se il pack sbagliasse offset o ordine,
+  // il confronto byte-per-byte con il percorso lento lo vedrebbe
+  // loop diretto: Uint8Array.from con lambda su 1,7 MB e' troppo lento per un test
+  const rnd = (n: number, seed: number): Uint8Array => {
+    const out = new Uint8Array(n);
+    let s = seed >>> 0;
+    for (let i = 0; i < n; i++) out[i] = ((s = (s * 1103515245 + 12345) >>> 0) >>> 24) & 0xff;
+    return out;
+  };
+  const rawSeeded = (layer: number, expert: number) => ({
+    gate: rnd(EXPERT_GATE_UP_BYTES, 1000 + layer * 64 + expert),
+    up: rnd(EXPERT_GATE_UP_BYTES, 5000 + layer * 64 + expert),
+    down: rnd(downIsQ4_1(layer) ? EXPERT_DOWN_Q4_1_BYTES : EXPERT_DOWN_Q4_0_BYTES, 9000 + layer * 64 + expert),
+  });
+
+  it("il percorso slab carica byte IDENTICI al percorso raw+pack", () => {
+    const opts = { budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 }, maxBindingBytes: GIB, maxBufferBytes: GIB, timing: true };
+    // percorso lento: raw + packExpertSlab dentro ensure
+    const slow = mkCapturingDevice();
+    const cSlow = new ExpertCache(slow.device, opts);
+    for (const [l, e] of [[5, 0], [2, 1]] as Array<[number, number]>) {
+      cSlow.ensure(l, e, (ll, ee) => rawSeeded(ll, ee));
+    }
+    // percorso rapido: slab gia' impacchettato fuori
+    const fast = mkCapturingDevice();
+    const cFast = new ExpertCache(fast.device, opts);
+    const slabOf = (l: number, e: number) => {
+      const r = rawSeeded(l, e);
+      return packExpertSlab(r.gate, r.up, r.down, downIsQ4_1(l) ? SLAB_DOWN_Q4_1 : SLAB_DOWN_Q4_0);
+    };
+    for (const [l, e] of [[5, 0], [2, 1]] as Array<[number, number]>) {
+      cFast.ensure(l, e, { raw: (ll, ee) => rawSeeded(ll, ee), slab: slabOf });
+    }
+    expect(fast.uploads.length).toBe(slow.uploads.length);
+    // confronto a mano: toEqual su 5,3 MB di Uint8Array e' O(n) ma con overhead
+    // di deep-equality tale da sforare il timeout del test
+    for (let i = 0; i < slow.uploads.length; i++) {
+      const a = slow.uploads[i], b = fast.uploads[i];
+      expect(b.length, `upload ${i}: taglia`).toBe(a.length);
+      let diff = -1;
+      for (let j = 0; j < a.length; j++) if (a[j] !== b[j]) { diff = j; break; }
+      expect(diff, `upload ${i}: primo byte diverso`).toBe(-1);
+    }
+  });
+
+  it("col percorso slab il pack CPU sparisce dalla telemetria", () => {
+    const opts = { budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 }, maxBindingBytes: GIB, maxBufferBytes: GIB, timing: true };
+    const { device } = mkCapturingDevice();
+    const c = new ExpertCache(device, opts);
+    const slabOf = (l: number, e: number) => {
+      const r = rawSeeded(l, e);
+      return packExpertSlab(r.gate, r.up, r.down, downIsQ4_1(l) ? SLAB_DOWN_Q4_1 : SLAB_DOWN_Q4_0);
+    };
+    c.ensure(5, 0, { raw: (ll, ee) => rawSeeded(ll, ee), slab: slabOf });
+    expect(c.stats().packMs).toBe(0); // era 9,5 ms per miss nel path caldo
+    expect(c.stats().misses).toBe(1);
+  });
+
+  it("senza `slab` la cache ripiega sul percorso raw (sorgenti senza file slab)", () => {
+    const opts = { budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 }, maxBindingBytes: GIB, maxBufferBytes: GIB, timing: true };
+    const { device, uploads } = mkCapturingDevice();
+    const c = new ExpertCache(device, opts);
+    c.ensure(5, 0, { raw: (ll, ee) => rawSeeded(ll, ee) });
+    expect(uploads.length).toBe(1);
+    expect(uploads[0].length).toBe(SLAB_DOWN_Q4_0.bytes);
+  });
 });
 
 describe("ExpertCache (LRU due size-class)", () => {

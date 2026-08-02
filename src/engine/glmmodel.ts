@@ -18,7 +18,7 @@
 import { GLM47_FLASH as G } from "./shape";
 import { repackQ4_0, repackQ4_1, repackQ8_0, repackKQuant, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { routerSelect } from "./moe";
-import { ExpertCache, expertKey, slotBindRanges, type ExpertRawBytes, type SlotRef, type BindRange } from "./residency";
+import { ExpertCache, expertKey, slotBindRanges, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
 import {
   addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ5KWgsl, gemvQ6KWgsl, gemvQ8HeadsWgsl,
   gemvQuantWgsl, kvAppendWgsl, mlaAttnDecodeWgsl, ropeMlaNormWgsl, rmsnormWgsl,
@@ -33,6 +33,13 @@ const HL = G.qkNope + G.ropeDims; // 256
 export interface GlmWeightSource {
   nonExpert(name: string): Uint8Array;
   expert(layer: number, expert: number): ExpertRawBytes;
+  /**
+   * Slab GIA' impacchettato (repack all'import, C3a fase 3). Se presente, la
+   * cache salta `packExpertSlab` nel path caldo. Opzionale: i mock dei test e
+   * le sorgenti senza file slab espongono solo `expert`.
+   */
+  expertSlab?(layer: number, expert: number): Uint8Array;
+  hasSlabs?: boolean;
 }
 
 export interface GlmModelOpts {
@@ -347,6 +354,11 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
 
   // ---- cache expert + bind group per-slot (cached: slot stabili) ----
   const cache = new ExpertCache(device, opts.cache);
+  // Reader costruito UNA volta: se la sorgente ha il file slab, la cache prende
+  // il percorso senza pack CPU; altrimenti ripiega sui byte GGUF grezzi.
+  const expertReader: ExpertReader = src.hasSlabs && src.expertSlab
+    ? { raw: (ll, ee) => src.expert(ll, ee), slab: (ll, ee) => src.expertSlab!(ll, ee) }
+    : (ll: number, ee: number) => src.expert(ll, ee);
   interface SlotBgs { gate: GPUBindGroup; up: GPUBindGroup; down: GPUBindGroup[] } // down: uno per wExp[k]
   const slotBgCache = new Map<GPUBuffer, Map<number, SlotBgs>>();
   const slotBgs = (slot: SlotRef): SlotBgs => {
@@ -475,7 +487,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         for (const e of sel.experts) pinned.add(expertKey(l, e));
         const slots: SlotRef[] = [];
         const tEns = nowT();
-        for (const e of sel.experts) slots.push(cache.ensure(l, e, (ll, ee) => src.expert(ll, ee), pinned).slot);
+        for (const e of sel.experts) slots.push(cache.ensure(l, e, expertReader, pinned).slot);
         if (telemOn) {
           const tE = performance.now();
           T.ensureMs += tE - tEns;

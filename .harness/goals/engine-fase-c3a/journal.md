@@ -526,3 +526,77 @@ derivati, il path Qwen (`gpuforward.ts:101-107`) chiede già oggi 256 MiB e
 32 KiB, cioè valori compatibili con i requisiti calcolati: l'inversione di
 permissività ktest-vs-motore si chiude allineando `gpuforward` alla stessa
 derivazione, senza alzare nulla. Item 10 da riscrivere di conseguenza.
+
+---
+
+## it.7 (2026-08-02) — fase 3 slice 2: repack all'import
+
+**Costruito**: `slabfile.ts` (formato: header 4 KiB con magic + versione di
+layout + SHA del GGUF sorgente, poi 2.944 slab contigui; le due size-class in
+ordine — 256 q4_1 poi 2.688 q4_0 — così l'offset è aritmetica chiusa senza
+tabella); generazione in `GlmOpfsSource.open` su file temporaneo + rename
+(un'interruzione non lascia mai un file valido a metà); percorso rapido in
+`ExpertCache.ensure` che salta `packExpertSlab` quando la sorgente offre lo
+slab già impacchettato, con fallback sul percorso raw per i mock dei test.
+
+Il test che conta non è quello sugli offset: carica gli stessi expert per
+**entrambi** i percorsi e confronta i byte caricati in VRAM uno per uno. Un
+offset o un ordine di segmenti sbagliato non passerebbe.
+
+### Risultato: done-when soddisfatto, guadagno metà del previsto
+
+| ms/token | pre-repack | post-repack |
+|---|---|---|
+| pack CPU | 42,5 | **0,0** |
+| read OPFS | 5,8 | **18,4** |
+| upload | 8,1 | 16,2 |
+| **stallo** | **56,1** | **34,5** |
+| decode tok/s | 4,640 | **4,912** (+5,9%) |
+
+Done-when della fase 3 (`pack CPU < 1.0 ms/token`): **soddisfatto**, 0,0.
+Ma il guadagno netto è 21,6 ms/token, non i 41,4 proiettati in spec §2: read e
+upload sono cresciuti di 20,7 e si sono mangiati metà del beneficio.
+
+### Tre ipotesi, due smentite, causa trovata
+
+Il salto di `read` da 5,8 a 18,4 ms/token andava spiegato, non accettato.
+
+1. **Page cache fredda al primo giro** — SMENTITA: seconda run 18,4 contro
+   19,2. Non è un transitorio.
+2. **File slab frammentato** (l'ho scritto senza preallocare) — SMENTITA e nel
+   verso opposto: `filefrag` dà **2 extent** per lo slab contro **263** per il
+   GGUF. Il file meglio disposto è quello lento.
+3. **Throughput del file** — SMENTITA: misurato fuori dal motore con letture
+   random da 5,3 MB, entrambi i file danno ~1,9-2,7 GB/s a freddo e ~10 GB/s a
+   caldo. Il file slab non ha nulla che non va.
+
+**Causa reale**, dal throughput EFFETTIVO per miss:
+- pre-repack **4,08 GB/s** (fra il freddo 2,72 e il caldo 10,6 del GGUF)
+  ⇒ le letture expert erano prevalentemente **in page cache**;
+- post-repack **1,29 GB/s**, sotto persino il freddo misurato ⇒ **quasi tutte
+  fuori cache**.
+
+Prima gli expert si leggevano dallo stesso file che il motore tocca comunque a
+ogni build (i tensori non-expert), quindi il GGUF restava caldo. Ora ci sono
+**due** file — 33 GB contro **31 GB di RAM totali e 14 di page cache** — e
+nessuno dei due resta caldo.
+
+**Il repack non ha eliminato lavoro: ha scambiato 41,4 ms di pack CPU con
+12,6 ms di I/O.** Resta un guadagno netto, ma metà di quello scritto in spec.
+
+### Conseguenza per la fase 4 (che rafforza il ruling sul prefetch)
+
+I 18,4 ms/token di lettura sono ora il secondo termine della residenza e sono
+**tempo in cui la GPU è ferma**. È esattamente ciò che il prefetch — ammesso in
+perimetro dal PI con l'emendamento 2a — va a nascondere dietro il lavoro GPU.
+Il repack da solo vale 21,6 ms/token; repack + sovrapposizione valgono i 34,5
+dello stallo intero. La spec §2 va aggiornata: il budget della leva 1 non è
+−41,4 ma −21,6, e i 12,6 di I/O migrato si recuperano solo con la leva 2.
+
+### Verifica
+
+`npx tsc --noEmit` pulito; `npm test` **251 passed** + 2 skipped (da 235:
++13 formato slab, +3 percorso rapido). Due bench a macchina quiescente. Il
+contatore dei dispatch conferma sul modello di produzione i **1818** reali
+contro i 1816 del piano (la testa che la formula non contava, trovata in it.3).
+Conformance in corso: è l'ultimo pezzo del done-when.

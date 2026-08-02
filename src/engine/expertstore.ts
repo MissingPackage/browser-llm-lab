@@ -222,6 +222,21 @@ export class ExpertOpfsStore {
     return out;
   }
 
+  // Scrittura sequenziale (repack all'import, C3a fase 3): il chiamante
+  // accumula e chiama flush() alla fine. Non c'è un percorso di scrittura
+  // random: il file slab si genera in un passo solo, o si rigenera da capo.
+  write(data: Uint8Array, at: number): number {
+    return this.handle.write(data as unknown as BufferSource, { at });
+  }
+
+  truncate(bytes: number): void {
+    this.handle.truncate(bytes);
+  }
+
+  flush(): void {
+    this.handle.flush();
+  }
+
   close(): void {
     this.handle.close();
   }
