@@ -18,6 +18,7 @@
 import { GLM47_FLASH as G } from "./shape";
 import { repackQ4_0, repackQ4_1, repackQ8_0, repackKQuant, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { routerSelect } from "./moe";
+import { mlaWorkgroupStorageBytes } from "./gpulimits";
 import { ExpertCache, expertKey, slotBindRanges, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
 import {
   addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ5KWgsl, gemvQ6KWgsl, gemvQ8HeadsWgsl,
@@ -111,7 +112,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // fail-fast esplicito: mlaAttnDecode tiene scores[ctxMax] + red[64] in
   // workgroup memory — oltre il limite la pipeline fallirebbe con un errore
   // criptico di validazione (visto su ctxMax 6688 vs default 16 KB, it.10)
-  const wgNeed = ctxMax * 4 + 64 * 4;
+  const wgNeed = mlaWorkgroupStorageBytes(ctxMax); // stessa formula di gpulimits, non riscritta
   if (wgNeed > device.limits.maxComputeWorkgroupStorageSize) {
     throw new Error(
       `glmmodel: ctxMax ${ctxMax} richiede ${wgNeed} B di workgroup storage ` +

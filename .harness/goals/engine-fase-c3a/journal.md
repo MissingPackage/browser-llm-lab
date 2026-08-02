@@ -600,3 +600,71 @@ dello stallo intero. La spec §2 va aggiornata: il budget della leva 1 non è
 contatore dei dispatch conferma sul modello di produzione i **1818** reali
 contro i 1816 del piano (la testa che la formula non contava, trovata in it.3).
 Conformance in corso: è l'ultimo pezzo del done-when.
+
+---
+
+## it.8 (2026-08-02) — allineamento Qwen + analisi complessiva del motore
+
+**Allineamento `gpuforward.ts`** (docket item 10, "cosa da fare non da
+decidere"): sostituita `const need = 256 * 1024 * 1024` — l'ultima costante
+difensiva senza consumatore rimasta nel repo — con la derivazione. I consumatori
+veri del path Qwen: `wOut.qs` (lm_head Q8_0 ripacchettata, **136 134 656 B**,
+calcolata e coincidente col numero dell'inventario) e `rmsPairGemmSiluChunkFast`
+(30 848 B di workgroup storage). `engineNeeds` guadagna `mlaAttention` e
+`kvBytesPerLayer` per non attribuire a Qwen consumatori che non ha. La formula
+del workgroup storage MLA, che era scritta due volte in notazioni diverse
+(`glmmodel.ts` e `gpulimits.ts`), ora vive in un posto solo.
+
+**Verifica del gate di non-regressione Qwen** (il device è cambiato, quindi era
+obbligatoria): conformance **identica** — 98.05% vs golden, 100.00% vs
+cpuref-f64 (512/512), 147 dispatch/token, gate doppio PASS. Bench **322.8 ±
+5.5 tok/s** contro il baseline permanente 321.88 ± 2.60 ⇒ **PASS**, leggermente
+sopra. `npm test` 252 passed, ktest 30/30.
+
+**Tre agenti in parallelo** (storia delle metriche, architettura + copertura,
+debito aperto) per l'analisi complessiva richiesta dal PI. Prodotto:
+`docs/engine/state-2026-08-02.md`.
+
+### Il risultato che riorganizza il resto
+
+Incrociando l'inventario dei kernel con i profili di attribuzione dei due path,
+a parità di device:
+
+| | byte/token | `gpuBusy` | banda utile | % del picco | µs/dispatch |
+|---|---|---|---|---|---|
+| Qwen | 346 MB | 2.22 ms | 155.6 GB/s | **27.0%** | 15.1 |
+| GLM | 2 220 MB | 75.86 ms | 29.3 GB/s | **5.1%** | 41.7 |
+
+**Il path GLM usa 5.3× meno banda utile del path Qwen sullo stesso hardware.**
+Non è taglia del modello: è qualità dei kernel. Dei 30 generatori WGSL, 18 sono
+solo-Qwen e sono la famiglia FUSA; i 7 solo-GLM sono tutti generici.
+
+**Il lavoro di fusione è già fatto, validato e misurato — su un path solo, e non
+è mai stato portato sull'altro.** Riformula la quarta leva di C3a: non inventare
+ottimizzazioni, portare quelle che esistono. Da 5.1% a 27% del picco sarebbe
+`gpuBusy` da 75.9 a ~14 ms/token.
+
+### Altre cose emerse dagli agenti, registrate
+
+- **Nessun worker GLM installa `uncapturederror`**, che sul path Qwen esiste per
+  una ragione documentata (griglia >65535 ⇒ "top-1 0.2% muto"). È la classe di
+  errore silenzioso che la disciplina del progetto teme di più, non intercettata
+  sul path nuovo.
+- **Gli 11 kernel fusi di produzione Qwen non hanno test kernel-level**: ktest
+  importa 16 generatori su 30, i 14 mancanti sono tutti Qwen e tutti fusi.
+  Coperti solo end-to-end dalla conformance, che è statistica — mentre i tre
+  bug storici (telemetria liv.2, `var stride`, varianti "2800 tok/s") sono stati
+  presi proprio da confronti puntuali.
+- **Il 256/256 del gate argmax≡cpuref-f64 GLM non esiste in nessun JSON**: è
+  asserito nei digest e ricostruibile solo indirettamente.
+- **13 artefatti orfani** in `results/engine/`, di cui `prefill-sim-*` è
+  load-bearing (giustifica "submit ogni ~64 token" citato in `prefillplan.ts:7`,
+  produttore cancellato).
+- **Tre rimandi orfani** registrati in ideas-ledger §I (soglia TTFT
+  high-variance, `quality.ts` mai collegato, poll wllama mai meccanizzato):
+  erano in docket di goal chiusi, fuori dal registro ufficiale dei rimandi.
+
+### Verifica
+
+`npx tsc --noEmit` pulito; `npm test` **252 passed** + 2 skipped; ktest 30/30
+exit 0; conformance Qwen gate doppio PASS; bench Qwen sopra il baseline.

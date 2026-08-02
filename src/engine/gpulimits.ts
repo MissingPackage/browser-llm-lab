@@ -79,6 +79,14 @@ export interface EngineNeedsOpts {
    */
   slabClassBytes?: number;
   /**
+   * L'attention MLA (solo GLM) tiene `scores[ctxMax]` in workgroup memory.
+   * Qwen usa un'attention diversa: passare `false` evita di chiedere un limite
+   * per un consumatore che quel modello non ha.
+   */
+  mlaAttention?: boolean;
+  /** Byte della KV cache di UN layer, se bindata intera. Default: formula GLM. */
+  kvBytesPerLayer?: number;
+  /**
    * Binding che non vengono dal modello di produzione ma dall'harness che lo
    * ospita (es. ktest binda i pesi densi veri di blk.0). Ognuno dichiara il
    * proprio consumatore, come tutti gli altri requisiti.
@@ -103,15 +111,20 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
     },
     {
       limit: "maxComputeWorkgroupStorageSize",
-      value: Math.max(QWEN_WORKGROUP_STORAGE_BYTES, mlaWorkgroupStorageBytes(o.ctxMax)),
+      value: o.mlaAttention === false
+        ? QWEN_WORKGROUP_STORAGE_BYTES
+        : Math.max(QWEN_WORKGROUP_STORAGE_BYTES, mlaWorkgroupStorageBytes(o.ctxMax)),
       hard: true,
-      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, mlaAttnDecode 4·ctxMax+256 = ${mlaWorkgroupStorageBytes(o.ctxMax)} B a ctxMax ${o.ctxMax})`,
+      consumer: o.mlaAttention === false
+        ? `rmsPairGemmSiluChunkFast (${QWEN_WORKGROUP_STORAGE_BYTES} B)`
+        : `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, mlaAttnDecode 4·ctxMax+256 = ${mlaWorkgroupStorageBytes(o.ctxMax)} B a ctxMax ${o.ctxMax})`,
     },
   ];
   // Il binding singolo più grande: testa Q6_K, la KV di un layer, o un binding
   // dichiarato dall'harness.
+  const kvBytes = o.kvBytesPerLayer ?? glmKvBytesPerLayer(o.ctxMax);
   const candidates: Array<{ bytes: number; consumer: string }> = [
-    { bytes: glmKvBytesPerLayer(o.ctxMax), consumer: `KV cache di un layer a ctxMax ${o.ctxMax}` },
+    { bytes: kvBytes, consumer: `KV cache di un layer a ctxMax ${o.ctxMax}` },
     ...(o.head ? [{ bytes: q6kHeadBytes(o.head.vocab, o.head.dModel), consumer: "output.weight Q6_K repacked" }] : []),
     ...(o.extraBindings ?? []),
   ];
