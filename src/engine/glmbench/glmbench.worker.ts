@@ -102,14 +102,6 @@ async function main(cfg: Cfg): Promise<void> {
   // timestamp-query: livello 2 dell'attribuzione (gpuBusy). Se l'adapter non la
   // espone il bench gira lo stesso e il report lo dichiara (gpuBusyMs null).
   const hasTsq = adapter.features.has("timestamp-query");
-  // Limiti negoziati al massimo che l'adapter concede (C3a fase 3): prima si
-  // chiedevano 3 limiti e il device prendeva i default di spec sugli altri.
-  const device = await adapter.requestDevice({
-    requiredFeatures: hasTsq ? ["timestamp-query"] : [],
-    requiredLimits: negotiateLimits(adapter),
-  });
-  const limits = grantedLimits(device);
-  const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);
 
   const source = await GlmOpfsSource.open("/models/GLM-4.7-Flash-Q4_0.gguf", progress);
   const golden = (await (await fetch("/models/glm-conf-golden.json")).json()) as Golden;
@@ -120,6 +112,19 @@ async function main(cfg: Cfg): Promise<void> {
   const promptTokens = pr.promptTokens;
   const nPrompt = promptTokens.length;
   const ctxMax = nPrompt + cfg.nGen;
+
+  // Il device si crea DOPO aver saputo ctxMax e budget: i limiti sono DERIVATI
+  // dai consumatori (C3a it.6), non chiesti al massimo dell'adapter.
+  const budgetBytes = Math.floor(cfg.budgetGiB * (1 << 30));
+  const device = await adapter.requestDevice({
+    requiredFeatures: hasTsq ? ["timestamp-query"] : [],
+    requiredLimits: negotiateLimits(adapter, {
+      ctxMax, head: { vocab: G.vocab, dModel: G.dModel },
+      slabClassBytes: budgetBytes, // packing ExpertCache: soft, si tronca al disponibile
+    }),
+  });
+  const limits = grantedLimits(device);
+  const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);
 
   progress("carico token_embd…");
   const embd = source.nonExpert("token_embd.weight");
@@ -136,10 +141,7 @@ async function main(cfg: Cfg): Promise<void> {
     // capacità di telemetria allocata, REGISTRAZIONE spenta: le repliche
     // headline (quelle dei gate) girano a overhead nullo
     telemetry: false, telemetryGpu: hasTsq,
-    cache: {
-      budgetBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
-      maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true,
-    },
+    cache: { budgetBytes, maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true },
   });
   const buildMs = performance.now() - tBuild0;
 

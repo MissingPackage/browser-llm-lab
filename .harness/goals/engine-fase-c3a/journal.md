@@ -445,3 +445,84 @@ non-regressione hard: decisione PI.
 `npx tsc --noEmit` pulito; `npm test` **229 passed** + 2 skipped (da 220: +8
 gpulimits, +1 invariante residenza); **ktest 30/30 PASS exit 0**; probe
 ri-eseguito con artefatto committato.
+
+---
+
+## it.6 (2026-08-02) — limiti DERIVATI dai consumatori (ruling PI)
+
+**Ruling PI**: "non vorrei che facessimo lo stesso errore della prima volta dove
+abbiamo messo dei limiti che poi abbiamo dovuto rivedere. Forse meglio capire
+caso per caso dove ci possiamo spingere?"
+
+**Root cause dei due errori** (stesso difetto, direzioni opposte):
+1. i cap originali (`min(lim.X, 2 GiB)`, `32768`) erano costanti difensive
+   scelte **senza consumatore dichiarato** ⇒ nessuno poteva più distinguere un
+   requisito da una supposizione, e sono stati rivisti a mano;
+2. la mia prima versione li ha sostituiti col **massimo dell'adapter** ⇒
+   identico difetto: si chiedevano 1024 invocazioni per workgroup mentre il
+   kernel più largo del repo ne usa 256. La spec WebGPU §3.6.2 avverte
+   esplicitamente che chiedere più del necessario *può* costare prestazioni.
+
+**Regola adottata**: `min(adapter, requisito_derivato)`. L'adapter è il TETTO,
+non il target. Ogni requisito porta il suo consumatore, e un test ri-deriva le
+costanti **scansionando il WGSL vero**.
+
+### Inventario (subagent, numeri esatti col consumatore)
+
+| limite | default spec | requisito REALE | consumatore |
+|---|---|---|---|
+| `maxComputeInvocationsPerWorkgroup` | 256 | **256** (margine 0) | rmsnorm, argmax1/2 |
+| `maxComputeWorkgroupSizeX` | 256 | **256** | idem |
+| `maxStorageBuffersPerShaderStage` | 8 | **7** | rmsPairGemvSiluFast (Qwen) |
+| `maxStorageBufferBindingSize` | 128 MiB | **262 676 480** (250,5 MiB) | `output.weight` Q6_K GLM |
+| `maxComputeWorkgroupStorageSize` | 16 KiB | **max(30 848, 4·ctxMax+256)** | Qwen pairSilu chunked / mlaAttnDecode |
+| `maxBufferSize` | 256 MiB | 262 676 480 hard + packing soft | testa GLM / ExpertCache |
+
+### Due cose che nessuno aveva scritto
+
+1. **Il cap `32768` limitava il contesto a 8128 token.** `mlaAttnDecode` usa
+   `4·ctxMax + 256` B di workgroup storage: a ctx 8129 sfora. La landmine in
+   HANDOFF diceva «ctx>4k richiede 32 KB negoziati» senza il pezzo che conta,
+   cioè fin dove si arriva. Ora è una formula, quindi si autodocumenta.
+2. **Il consumatore massimo di workgroup storage del path Qwen non è quello che
+   dice il commento.** `gpuforward.ts` cita 19,7 KB (il down-proj), ma il vero
+   massimo è `rmsPairGemmSiluChunkFast` a **30 848 B** — i 32 768 richiesti a
+   mano lasciavano 1 920 B di margine senza che nessuno lo sapesse.
+
+Inoltre: la testa Q6_K (262 676 480 B) sta **appena sotto** il default di spec
+su `maxBufferSize` (268 435 456), margine 2,1%. Un vocabolario più grande
+avrebbe rotto il motore su qualunque device ai default.
+
+### Cosa è stato costruito
+
+`gpulimits.ts` riscritto: `engineNeeds(opts)` produce una lista di `LimitNeed`
+(limite, valore, **consumatore**, hard/soft); `limitsFor` chiede
+`min(adapter, requisito)` e lancia `UnmetLimitError` **col consumatore nel
+messaggio** se un requisito hard non è servibile. I requisiti soft (packing
+della ExpertCache) si troncano al disponibile invece di far fallire.
+
+I 4 worker GLM creano ora il device **dopo** aver saputo `ctxMax` e budget, che
+è la precondizione per derivare invece di indovinare. ktest dichiara il proprio
+consumatore extra (binda i pesi densi VERI di blk.0, 10 485 760 B) invece del
+cap inventato a 1 GiB.
+
+### Il test che tiene insieme limite e consumatore
+
+`tests/gpulimits.test.ts` (14 casi) **scansiona `src/engine/kernels/wgsl.ts`**
+ed estrae i `@workgroup_size` e i binding `var<storage>` per kernel: se qualcuno
+aggiunge un kernel `workgroup_size(512)` senza aggiornare la derivazione, il
+test cade. È l'unica cosa che lega i due — finora vivevano in file diversi
+senza niente in mezzo, ed è esattamente il motivo per cui l'errore è successo
+due volte.
+
+### Verifica
+
+`npx tsc --noEmit` pulito; `npm test` **235 passed** + 2 skipped (da 229);
+**ktest 30/30 PASS exit 0** col device ai limiti derivati.
+
+**Nota su docket item 10**: l'opzione (a) che avevo raccomandato (negoziare
+ovunque al massimo + ri-baseline) è **superata da questo ruling**. Con i limiti
+derivati, il path Qwen (`gpuforward.ts:101-107`) chiede già oggi 256 MiB e
+32 KiB, cioè valori compatibili con i requisiti calcolati: l'inversione di
+permissività ktest-vs-motore si chiude allineando `gpuforward` alla stessa
+derivazione, senza alzare nulla. Item 10 da riscrivere di conseguenza.

@@ -72,14 +72,14 @@ class Gpu {
   async init(): Promise<string> {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) throw new Error("niente adapter WebGPU");
-    // ktest tiene i buffer piccoli di proposito (mini-modello sintetico): il
-    // cap a 1 GiB resta VOLUTO, ma passa da negotiateLimits cosi' gli altri
-    // limiti (invocazioni/workgroup, storage buffer per stage) non ricadono
-    // nei default di spec. (C3a fase 3)
+    // ktest gira mini-modelli sintetici (ctxMax <= 64, vocab ridotto) ma binda
+    // i pesi DENSI VERI di blk.0: il tensore piu' grande e' ffn_gate/up q4_0
+    // [2048 -> 10240] = 10.485.760 B di qs. E' quello a determinare il
+    // requisito, dichiarato come consumatore invece che come cap inventato.
     this.device = await adapter.requestDevice({
       requiredLimits: negotiateLimits(adapter, {
-        maxStorageBufferBindingSize: 1 << 30,
-        maxBufferSize: 1 << 30,
+        ctxMax: 64,
+        extraBindings: [{ bytes: 10_485_760, consumer: "ktest: blk.0 ffn_gate/up q4_0 qs (pesi reali)" }],
       }),
     });
     const info = adapter.info;

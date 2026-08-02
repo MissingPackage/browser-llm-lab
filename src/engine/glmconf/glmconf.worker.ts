@@ -25,9 +25,6 @@ async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("niente adapter WebGPU");
-  // Limiti al massimo concesso dall'adapter (C3a fase 3)
-  const device = await adapter.requestDevice({ requiredLimits: negotiateLimits(adapter) });
-  const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);
   const source = await GlmOpfsSource.open("/models/GLM-4.7-Flash-Q4_0.gguf", progress);
   const golden = (await (await fetch("/models/glm-conf-golden.json")).json()) as Golden;
   if (golden.modelSha256 !== GLM47_FLASH_SHA256) throw new Error("golden: SHA GGUF diverso dal canonico");
@@ -35,6 +32,15 @@ async function main(cfg: Cfg): Promise<void> {
   const prompts = golden.prompts.filter((_, i) => !cfg.prompts || cfg.prompts.includes(i));
   const maxGen = cfg.maxGen ?? Infinity;
   const ctxMax = Math.max(...prompts.map((p) => p.promptTokens.length + Math.min(p.generated.length, maxGen)));
+
+  // Device creato DOPO ctxMax: i limiti sono DERIVATI dai consumatori (C3a it.6)
+  const device = await adapter.requestDevice({
+    requiredLimits: negotiateLimits(adapter, {
+      ctxMax, head: { vocab: G.vocab, dModel: G.dModel },
+      slabClassBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
+    }),
+  });
+  const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);
 
   progress("carico token_embd…");
   const embd = source.nonExpert("token_embd.weight");

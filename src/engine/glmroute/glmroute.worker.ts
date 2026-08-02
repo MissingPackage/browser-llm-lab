@@ -28,12 +28,6 @@ async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("niente adapter WebGPU");
-  // Limiti al massimo concesso dall'adapter (C3a fase 3): mlaAttnDecode tiene
-  // scores[ctxMax] in workgroup memory e il corpus arriva a 6688 pos (26.7 KB),
-  // oltre il default di 16 KB — chiedere il massimo copre anche i ctx futuri.
-  const device = await adapter.requestDevice({ requiredLimits: negotiateLimits(adapter) });
-  const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);
-  progress(`adapter ${adapter.info?.vendor ?? "?"} — maxBuffer ${(maxBuf / 2 ** 30).toFixed(1)} GiB`);
 
   const source = await GlmOpfsSource.open("/models/GLM-4.7-Flash-Q4_0.gguf", progress);
   const trace = (await (await fetch("/models/glm-route-trace.json")).json()) as TraceFile;
@@ -51,6 +45,18 @@ async function main(cfg: Cfg): Promise<void> {
   if (cfg.cap) for (const [p, a] of byPrompt) byPrompt.set(p, a.slice(0, cfg.cap));
   const totalRows = [...byPrompt.values()].reduce((s, a) => s + a.length, 0);
   const ctxMax = Math.max(...[...byPrompt.values()].map((a) => a.length));
+
+  // Device creato DOPO ctxMax: mlaAttnDecode tiene scores[ctxMax] in workgroup
+  // memory (4*ctxMax+256 B) e il corpus arriva a 6688 pos — il requisito si
+  // DERIVA dal contesto invece di chiedere il massimo (C3a it.6).
+  const device = await adapter.requestDevice({
+    requiredLimits: negotiateLimits(adapter, {
+      ctxMax, head: { vocab: G.vocab, dModel: G.dModel },
+      slabClassBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
+    }),
+  });
+  const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);
+  progress(`adapter ${adapter.info?.vendor ?? "?"} — maxBuffer ${(maxBuf / 2 ** 30).toFixed(1)} GiB`);
 
   // embedding: l'intero token_embd in RAM (178 MB), dequant Q4_0 per riga
   progress("carico token_embd…");
