@@ -9,13 +9,16 @@ import {
   gemvQuantWgsl, gemvF32Wgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
   attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
+  routerTopKWgsl,
 } from "../kernels/wgsl";
 import { createGlmLayer0 } from "../glmforward";
 import {
   GlmDenseLayerRefF64, GlmMoeLayerRefF64, glmMoeFfnRefF64, type GlmMoeExpertWeights,
 } from "../cpuref";
 import { createGlmModel, type GlmWeightSource } from "../glmmodel";
-import { routerSelect, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../moe";
+import {
+  routerSelect, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
+} from "../moe";
 import { ExpertOpfsStore } from "../expertstore";
 import { ExpertCache, expertKey, type ExpertRawBytes } from "../residency";
 import {
@@ -755,6 +758,139 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
   };
 }
 
+// Router top-k su GPU vs `routerSelect` (CPU, f64) — C3a fase 4 strato 1.
+// Il kernel calcola in f32 e la CPU in f64: NON e' una replica bit-identica, e
+// questo caso serve a misurare DOVE diverge invece di assumere che non lo faccia.
+//
+// Cosa e' gate e cosa e' misura:
+// - gate: l'INSIEME dei 4 expert deve coincidere su ogni estrazione in cui la
+//   separazione fra il 4o e il 5o punteggio e' >= SEP_GATE. Sotto quella soglia
+//   f32 non ha abbastanza bit per decidere, e un flip li' e' fisica, non un bug.
+// - gate: i pesi di mixing entro tolleranza relativa.
+// - misura riportata in `note`: la separazione piu' piccola a cui l'insieme ha
+//   comunque retto, e quante estrazioni sono cadute sotto la soglia.
+// L'ORDINE dentro i 4 non e' gate: id e peso viaggiano appaiati (slots[k] con
+// wExp[k]), quindi una permutazione non cambia la matematica del layer. Se
+// diverge lo si riporta lo stesso, perche' cambierebbe il confronto posizionale
+// con la routing conformance.
+const ROUTER_SEP_GATE = 1e-5;
+
+async function testRouterTopK(g: Gpu, draws: number): Promise<KResult> {
+  const code = routerTopKWgsl({
+    nExpert: G.nExpert, nUsed: G.nExpertUsed,
+    weightsScale: G.weightsScale, clampMin: WEIGHTS_SUM_CLAMP_MIN,
+  });
+  const nU = G.nExpertUsed;
+  let maxRelW = 0, maxAbsW = 0;
+  let setFlips = 0, orderFlips = 0, belowGate = 0;
+  let minSepHeld = Infinity, maxSepFlipped = 0;
+
+  for (let d = 0; d < draws; d++) {
+    const logits = randF32(G.nExpert, 9001 + d * 7, 4);
+    const bias = randF32(G.nExpert, 4201 + d * 13, 0.1);
+    const ref = routerSelect(logits, bias);
+
+    // separazione fra ultimo selezionato e primo escluso, in f64: e' la
+    // grandezza che decide se f32 puo' sbagliare insieme
+    const sel = Array.from(logits, (v, i) => 1 / (1 + Math.exp(-v)) + bias[i]);
+    const ranked = sel.slice().sort((a, b) => b - a);
+    const sep = ranked[nU - 1] - ranked[nU];
+
+    const lb = g.buf(logits), bb = g.buf(bias);
+    const idsB = g.empty(nU * 4), wtsB = g.empty(nU * 4);
+    await g.run(code, [lb, bb, idsB, wtsB], 1);
+    const ids = new Uint32Array(await g.read(idsB, nU * 4));
+    const wts = new Float32Array(await g.read(wtsB, nU * 4));
+    for (const b of [lb, bb, idsB, wtsB]) b.destroy();
+
+    const sameSet = new Set(ids).size === nU
+      && Array.from(ids).every((e) => Array.from(ref.experts).includes(e));
+    const sameOrder = Array.from(ids).every((e, k) => e === ref.experts[k]);
+    if (sep < ROUTER_SEP_GATE) belowGate++;
+    if (!sameSet) {
+      setFlips += sep >= ROUTER_SEP_GATE ? 1 : 0;
+      maxSepFlipped = Math.max(maxSepFlipped, sep);
+    } else {
+      minSepHeld = Math.min(minSepHeld, sep);
+    }
+    if (!sameOrder) orderFlips++;
+
+    // i pesi si confrontano solo quando l'insieme coincide: su insiemi diversi
+    // sarebbe un confronto fra quantita' diverse, non un errore numerico
+    if (sameSet) {
+      for (let k = 0; k < nU; k++) {
+        const want = ref.weights[Array.from(ref.experts).indexOf(ids[k])];
+        const d1 = Math.abs(wts[k] - want);
+        maxAbsW = Math.max(maxAbsW, d1);
+        maxRelW = Math.max(maxRelW, d1 / Math.max(Math.abs(want), 1e-6));
+      }
+    }
+  }
+
+  const note = `draws=${draws} setFlips(sep>=${ROUTER_SEP_GATE})=${setFlips} `
+    + `orderFlips=${orderFlips} sottoSoglia=${belowGate} `
+    + `minSepRetto=${minSepHeld === Infinity ? "-" : minSepHeld.toExponential(2)}`
+    + (maxSepFlipped > 0 ? ` maxSepFlippato=${maxSepFlipped.toExponential(2)}` : "");
+  return {
+    kernel: "router-top4-gpu-vs-cpu",
+    pass: setFlips === 0 && maxRelW <= 1e-5,
+    maxAbs: maxAbsW, maxRel: maxRelW, note,
+  };
+}
+
+// Near-tie COSTRUITO. Il caso random sopra non esercita mai il gate: con 64
+// expert e punteggi sparsi la separazione fra 4o e 5o non scende sotto ~3e-5 da
+// sola. Qui la separazione si impone — si sposta il bias del primo escluso
+// finche' sel[5o] = sel[4o] - eps — e si scende con eps finche' f32 cede.
+// Serve a rispondere con un numero alla domanda "quanto e' vicino il baratro",
+// invece di dichiarare una soglia che nessuna estrazione ha mai visitato.
+async function testRouterNearTie(g: Gpu, epsList: number[], bases: number): Promise<KResult> {
+  const code = routerTopKWgsl({
+    nExpert: G.nExpert, nUsed: G.nExpertUsed,
+    weightsScale: G.weightsScale, clampMin: WEIGHTS_SUM_CLAMP_MIN,
+  });
+  const nU = G.nExpertUsed;
+  const heldAt: number[] = [], flippedAt: number[] = [];
+
+  for (const eps of epsList) {
+    let held = true;
+    for (let b = 0; b < bases; b++) {
+      const logits = randF32(G.nExpert, 7717 + b * 31, 4);
+      const bias = randF32(G.nExpert, 3313 + b * 17, 0.1);
+      const probs = Array.from(logits, (v) => 1 / (1 + Math.exp(-v)));
+      const sel = probs.map((p, i) => p + bias[i]);
+      // rank per punteggio: il 4o selezionato e il 5o (primo escluso)
+      const order = sel.map((v, i) => [v, i] as const).sort((x, y) => y[0] - x[0]);
+      const last = order[nU - 1][1], first = order[nU][1];
+      // il bias entra additivamente in sel ⇒ la separazione si impone esatta
+      bias[first] = sel[last] - eps - probs[first];
+
+      const ref = routerSelect(logits, bias);
+      const lb = g.buf(logits), bb = g.buf(bias);
+      const idsB = g.empty(nU * 4), wtsB = g.empty(nU * 4);
+      await g.run(code, [lb, bb, idsB, wtsB], 1);
+      const ids = new Uint32Array(await g.read(idsB, nU * 4));
+      for (const x of [lb, bb, idsB, wtsB]) x.destroy();
+
+      const sameSet = new Set(ids).size === nU
+        && Array.from(ids).every((e) => Array.from(ref.experts).includes(e));
+      if (!sameSet) { held = false; break; }
+    }
+    (held ? heldAt : flippedAt).push(eps);
+  }
+
+  const minHeld = heldAt.length ? Math.min(...heldAt) : Infinity;
+  const maxFlipped = flippedAt.length ? Math.max(...flippedAt) : 0;
+  return {
+    kernel: "router-top4-near-tie",
+    pass: minHeld <= ROUTER_SEP_GATE,   // il gate dichiarato deve reggere DAVVERO
+    maxAbs: 0, maxRel: 0,
+    note: `bases=${bases} tenuto fino a eps=${minHeld === Infinity ? "-" : minHeld.toExponential(0)}`
+      + ` primo flip a eps=${maxFlipped ? maxFlipped.toExponential(0) : "nessuno"}`
+      + ` (gate dichiarato ${ROUTER_SEP_GATE.toExponential(0)})`,
+  };
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -783,6 +919,10 @@ async function main(): Promise<void> {
     results.push(await testGemvAccum(g, "q4_1"));
     results.push(await testMoeFfnBlock(g, "q4_0"));
     results.push(await testMoeFfnBlock(g, "q4_1"));
+
+    // --- router top-4 su GPU (C3a fase 4 strato 1): fedelta' f32 vs CPU f64 ---
+    results.push(await testRouterTopK(g, 64));
+    results.push(await testRouterNearTie(g, [1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8], 8));
 
     // --- kernel MLA absorbed (C2 fase 4 slice 2), dims reali GLM ---
     const HL = G.qkNope + G.ropeDims; // 256: head len di q

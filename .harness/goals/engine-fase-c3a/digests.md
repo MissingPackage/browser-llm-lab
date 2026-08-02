@@ -116,3 +116,22 @@
   byte-identiche (VRAM e file su disco, 7 campioni). Resta da fare in fase 6.
 - Verifica: `tsc` pulito, **252 test verdi** (da 220 a inizio goal), ktest
   30/30, due bench a macchina quiescente.
+
+## it.9 (2026-08-02) — fase 4 slice 1: router top-4 su GPU
+
+- **Ruling recepiti**: item 11 (sostituzione della conformance accettata, gate
+  full-corpus alla fase 6) e item 8 (**si paga la residenza totale** ⇒ la leva 2
+  si progetta senza miss). Conseguenza registrata, non decisa: il requant è
+  fuori dagli `owns` della fase 4 ⇒ emendamento PHASES per una **fase 4c**.
+- **`routerTopKWgsl`**: la selezione top-4 esce dalla CPU. È la precondizione
+  dello strato 1 — il binding fisso da solo non toglie il readback, serve che
+  gli id vivano su GPU.
+- **Fedeltà misurata, non dichiarata**: f32 vs f64 dà insiemi identici su 64
+  estrazioni (pesi maxRel 1.6e-7) e, col pareggio **costruito**, tiene fino a
+  1e-6 di separazione con primo flip a 1e-7 ⇒ 10× di margine sul gate 1e-5.
+  Il caso random da solo era un gate finto: non scende mai sotto 3.43e-5.
+- Verifica: `tsc` pulito, `npm test` 252 passed + 2 skipped, **ktest 32/32**.
+- Non fatto: il kernel non è nel path caldo (cablarlo ora non toglierebbe sync —
+  il readback serve anche a sapere cosa caricare). Prossimo: bind group layout
+  esplicito, base-offset nei GEMV expert, `wExp[k]` collassati, tabella slot
+  su GPU.

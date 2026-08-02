@@ -52,7 +52,16 @@
    come soglia UX in regime thinking; errore del modello di banda +/-15% (C3b);
    budget slab di prova 50% e 25% del parco (C3b).
 
-11. **RULING RICHIESTO — conformance full-corpus della fase 3** (2026-08-02,
+11. ~~**RULING RICHIESTO — conformance full-corpus della fase 3**~~
+    **RISOLTO (2026-08-02, PI: "ok item 11 e 8. ok sulla sostituzione")** —
+    opzione (a): la sostituzione byte-identica è accettata come verifica della
+    fase 3, e la conformance full-corpus resta il gate di chiusura della fase 6.
+    Non è stata scelta la (c) (campione ratificato nell'harness): resta come
+    debito registrato in `docs/engine/state-2026-08-02.md` §7 punto 6, insieme
+    al fatto che il 256/256 non esiste come campo in nessun JSON. Se la fase 6
+    dovesse ripresentare il problema "un gate da 5 ore non si esegue", la (c)
+    torna in tavola come item nuovo.
+    Testo originale (2026-08-02,
     it.7). Non blocca: si può fare in fase 6, dove serve comunque.
 
     Il done-when della fase 3 chiede «correttezza invariata (argmax ≡ cpuref-f64
@@ -145,8 +154,29 @@
    totale) più pesante di quanto sembri guardando solo i ms/token.
    Registrato in ideas-ledger §B.
 
-8. **RULING RICHIESTO — residenza totale: pagare 0.67 GiB di qualità per
-   eliminare il drain?** (2026-08-02, it.3). Non blocca le fasi 3-4; serve
+8. ~~**RULING RICHIESTO — residenza totale: pagare 0.67 GiB di qualità per
+   eliminare il drain?**~~ **RISOLTO (2026-08-02, PI: "ok item 11 e 8")** — si
+   paga. La leva 2 si progetta **a residenza totale**: binding fissi + offset
+   aritmetico, che è il pattern provato da ORT/ggml/MLC, e senza miss il
+   readback del router sparisce del tutto (non "si riduce": non serve più).
+
+   **Conseguenze operative del ruling** (registrate qui, non decise nel loop):
+   - Serve una **eval di perdita** prima di ratificare quali expert degradare:
+     il ruling autorizza la spesa, non esonera dal misurarla. Il gate resta
+     top-1 vs golden ≥ 98.83% full-corpus e argmax ≡ cpuref-f64 sul campione.
+   - **Emendamento a PHASES da approvare**: il lavoro di requant (matrice usage
+     C1 → scelta del 5-10% più freddo → quant asimmetrica → nuova versione di
+     layout dello slab) tocca `quant.ts`/`slabfile.ts`/import, che sono gli
+     `owns` della fase 3 (chiusa), non della 4. Proposta: **fase 4c**, dopo la
+     4 e prima della 6, con done-when = deficit 0.67 GiB azzerato a ctx 525 +
+     eval di perdita entro i gate di correttezza. Da confermare al PI: finché
+     non è confermata, la fase 4 procede sulla parte che sta nei suoi owns
+     (router su GPU, binding fissi, offset in shader), che è precondizione
+     della residenza totale in ogni caso.
+   - Il deficit a ctx 4096 è 1.03 GiB, non 0.67: la scelta di quali expert
+     degradare va dimensionata sul contesto che C3b vuole servire, non su 525.
+
+   Testo originale (2026-08-02, it.3). Non blocca le fasi 3-4; serve
    prima di decidere la forma finale della leva 2.
 
    **Il fatto.** Il drain della coda (46 `mapAsync` per token, ognuno una

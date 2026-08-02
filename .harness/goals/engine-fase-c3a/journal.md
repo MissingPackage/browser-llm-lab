@@ -668,3 +668,67 @@ ottimizzazioni, portare quelle che esistono. Da 5.1% a 27% del picco sarebbe
 
 `npx tsc --noEmit` pulito; `npm test` **252 passed** + 2 skipped; ktest 30/30
 exit 0; conformance Qwen gate doppio PASS; bench Qwen sopra il baseline.
+
+---
+
+## it.9 (2026-08-02) — fase 4 slice 1: il router top-4 vive su GPU
+
+**Ruling recepiti** (PI: "ok item 11 e 8. ok sulla sostituzione"):
+- **item 11** — opzione (a): la verifica byte-identica sostituisce la conformance
+  full-corpus per la fase 3; la conformance resta gate di chiusura della fase 6.
+  La (c) (campione ratificato eseguibile in minuti) NON è stata scelta: resta
+  debito registrato, insieme al 256/256 che non esiste come campo in nessun JSON.
+- **item 8** — si paga: la leva 2 si progetta **a residenza totale**. Conseguenza
+  registrata nel docket, non decisa qui: il requant degli expert freddi tocca
+  `quant.ts`/`slabfile.ts`/import, che sono gli `owns` della fase 3 (chiusa) ⇒
+  serve un **emendamento a PHASES** (proposta: fase 4c fra la 4 e la 6, con la
+  eval di perdita nel done-when). Finché non è confermato, la fase 4 procede su
+  ciò che sta nei suoi owns.
+
+**Costruito**: `routerTopKWgsl` (`kernels/wgsl.ts`) — sigmoid, bias nella sola
+selezione, scan lineare con `>` stretto su un thread solo (il tie-break *è* la
+serializzazione: un top-k parallelo con riduzione cambierebbe l'ordine dei
+confronti), somma dei probs senza bias, denominatore clampato, ×1.8. Scrive id e
+pesi in due buffer GPU.
+
+**Perché è il primo pezzo e non un pezzo qualsiasi.** Il binding fisso da solo
+non toglie il readback: serve che gli id vivano su GPU. È la precondizione sia
+dello strato 1 (offset aritmetico) sia della residenza totale appena approvata —
+senza miss il readback non "si riduce", sparisce, ma solo se nessuno su CPU deve
+più sapere chi sono i top-4.
+
+### La fedeltà è stata misurata, non dichiarata
+
+La CPU calcola in f64, il kernel in f32: **non è una replica bit-identica**, e
+questo è il numero che dice quanto conta.
+
+| caso ktest | esito |
+|---|---|
+| `router-top4-gpu-vs-cpu` (64 estrazioni casuali) | insiemi identici 64/64, ordine identico 64/64, pesi maxRel **1.64e-7** |
+| `router-top4-near-tie` (separazione imposta, sweep 1e-3→1e-8) | tiene fino a **eps 1e-6**, primo flip a **1e-7** |
+
+Il primo caso da solo sarebbe stato un gate finto: con 64 expert e punteggi
+sparsi la separazione fra 4o e 5o non scende mai sotto **3.43e-5** da sola, cioè
+il gate dichiarato a 1e-5 non veniva mai esercitato. Il secondo caso costruisce
+il pareggio (sposta il bias del primo escluso finché `sel[5o] = sel[4o] − eps`)
+e trova il bordo vero: **10× di margine** fra il gate e il punto in cui f32 cede.
+
+L'ordine dentro i 4 non è gate — id e peso viaggiano appaiati (`slots[k]` con
+`wExp[k]`), quindi una permutazione non cambia la matematica del layer — ma è
+riportato lo stesso, perché cambierebbe il confronto posizionale con la routing
+conformance.
+
+### Verifica
+
+`npx tsc --noEmit` pulito; `npm test` **252 passed** + 2 skipped (invariato: i
+casi nuovi sono kernel-level, vivono in ktest); **ktest 32/32 PASS exit 0**
+(da 30/30 di it.6, +2 casi router).
+
+### Non fatto, e perché
+
+Il kernel **non è ancora nel path caldo**: cablarlo senza consumare gli id su
+GPU non toglierebbe nessun sync, perché il readback oggi serve anche a sapere
+cosa *caricare*. Il pezzo successivo è lo strato 1 completo — bind group layout
+esplicito al posto di `layout: "auto"`, base-offset nei GEMV expert
+(`wgsl.ts` gate/up/down assumono offset 0), collasso dei 4 buffer `wExp[k]` in
+uno indicizzato, e tabella slot→(buffer, offset) su GPU mantenuta dalla cache.

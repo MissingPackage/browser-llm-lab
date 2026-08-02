@@ -1,8 +1,34 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-02, sessione 18 — goal C3a: fasi 1-3 chiuse)
+# HANDOFF — browser-llm-lab   (updated 2026-08-02, sessione 19 — goal C3a: fase 4 avviata)
 
 ## 1. Next decidable
 
-**FASE 3 CHIUSA (it.4-7).** Limiti WebGPU derivati dai consumatori
+**FASE 4 IN CORSO — strato 1 di spec §3.2-bis.** Fatto in it.9 il primo pezzo:
+**router top-4 su GPU** (`routerTopKWgsl`), con la fedeltà f32-vs-f64 misurata
+invece che dichiarata — insiemi identici su 64 estrazioni, pesi maxRel 1.6e-7,
+e un caso a pareggio costruito che trova il bordo: tiene fino a **1e-6** di
+separazione, primo flip a 1e-7, cioè **10× di margine** sul gate dichiarato.
+ktest 32/32.
+
+**Prossimo pezzo (nessuna decisione pendente, si può eseguire):** il resto dello
+strato 1 — bind group layout esplicito al posto di `layout: "auto"` (6 siti),
+base-offset nei GEMV expert (oggi `qs`/`scales` assumono offset 0), collasso dei
+4 buffer `wExp[k]` in uno indicizzato, tabella slot→(buffer, offset) su GPU
+mantenuta da `ExpertCache`. Solo dopo il readback può sparire.
+
+**Ruling recepiti (2026-08-02)**: **item 11** = sostituzione accettata,
+conformance full-corpus rimandata al gate di fase 6; **item 8** = si paga la
+residenza totale, la leva 2 si progetta senza miss.
+
+**DECISIONE APERTA che il PI deve confermare — emendamento a PHASES.** Il
+requant degli expert freddi (conseguenza dell'item 8) tocca
+`quant.ts`/`slabfile.ts`/import: sono gli `owns` della fase 3, chiusa. Proposta:
+**fase 4c** fra la 4 e la 6, done-when = deficit 0.67 GiB azzerato a ctx 525 +
+eval di perdita entro i gate di correttezza (top-1 ≥98.83%, argmax ≡ cpuref-f64).
+Nota: a ctx 4096 il deficit è 1.03 GiB, quindi il dimensionamento va fatto sul
+contesto che C3b vuole servire, non su 525. Non blocca: la fase 4 ha lavoro nei
+propri owns fino a lì.
+
+**Contesto di fase 3 (chiusa, it.4-8).** Limiti WebGPU derivati dai consumatori
 (`src/engine/gpulimits.ts`: `min(adapter, requisito)`, mai costanti né massimo
 dell'adapter) + repack all'import (`src/engine/slabfile.ts`, file OPFS da
 15,68 GB con header e invalidazione).
@@ -112,8 +138,12 @@ termini) e §7 (fase C splittata).
 
 ## 4. Open threads
 
-- **Goal C3a**: fasi 1-2 DONE (it.1-2), fasi 3-6 gated dal ruling di spec
-  (docket item 6).
+- **Goal C3a**: fasi 1-2-3 DONE (it.1-8), fase 4 avviata (it.9, strato 1).
+  Fasi 4b/5/6/7 a valle; 4c da approvare (v. §1).
+- **Analisi complessiva del motore**: `docs/engine/state-2026-08-02.md` (it.8).
+  Il numero che riorganizza la fase 4b: il path GLM usa **5.3× meno banda
+  utile** del path Qwen sullo stesso device (5.1% vs 27.0% del picco), perché
+  le 18 fusioni WGSL esistenti sono tutte solo-Qwen. Portarle, non inventarle.
 - **[VERIFY] sciolto** (it.3): `scripts/webgpu-limits.mjs` +
   `results/engine/webgpu-limits-4090laptop-2026-08-02.json`. Il device prendeva
   i default di spec su 3 limiti — ora negoziati (`src/engine/gpulimits.ts`).
@@ -169,7 +199,13 @@ termini) e §7 (fase C splittata).
   input C3, non richiede decisione).
 - **C3a item 1 RISOLTO** (2026-08-01): split C3→C3a/C3b + formulazione del
   gate prefill (velocità misurata sull'UX, TTFT 4 s) + soglie confermate.
-  Prossimo item atteso: PLAN-CHECK a iteration 0 di C3a.
+- **C3a RISOLTI 2026-08-02**: item 4 e 5 (ruling 08-01), item 6 (spec),
+  item 7 (prefetch+limiti), item 10 (superato dai limiti derivati), **item 11**
+  (sostituzione della conformance) e **item 8** (residenza totale: si paga).
+- **C3a APERTI**: **emendamento PHASES per la fase 4c** (requant, v. §1) — il
+  solo che serva prima della fase 6; **item 2** (clausola di fallback), che il
+  PI ha rimandato a fine fase 4 e che la fase 4 ha in done-when l'obbligo di
+  ripresentare.
 - C3b: nessuna decisione pendente finché C3a non chiude.
 - fase-1b-matrice (11 item) e fase-2-deep-dive (5 item): stale, da triage
   weekly-maintenance.

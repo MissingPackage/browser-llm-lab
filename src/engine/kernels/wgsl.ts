@@ -1712,3 +1712,63 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   dst[v * ${dstStride}u + ${dstOffset}u + j] = src[v * ${srcStride}u + ${srcOffset}u + j];
 }`;
 }
+
+// Router top-k su GPU (C3a fase 4, strato 1 di spec §3.2-bis): replica esatta di
+// `routerSelect` (moe.ts), che a sua volta replica build_moe_ffn. Scrive gli id
+// selezionati e i pesi di mixing in DUE buffer GPU, così la selezione smette di
+// essere una decisione CPU: e' il pezzo che toglie il readback dal percorso
+// decisionale (il binding fisso da solo non basta — serve che gli id vivano su
+// GPU, pattern ORT #27998 / ggml-webgpu `mul_mat_id_vec`).
+//
+// Fedelta': la CPU calcola in f64, qui si calcola in f32 — non e' una replica
+// bit-identica ed e' misurato, non assunto (ktest `router-top4-*`). L'ordine
+// delle operazioni e' pero' lo stesso: sigmoid, +bias per la sola SELEZIONE,
+// scan lineare con `>` stretto (pareggio ⇒ indice minore, come l'argsort
+// stabile dell'oracolo), somma dei probs SENZA bias nell'ordine di selezione,
+// denominatore clampato, ×weightsScale.
+//
+// La selezione gira su un thread solo: sono nExpert×nUsed confronti (64×4 = 256)
+// e la serializzazione E' la specifica — un top-k parallelo con riduzione
+// cambierebbe l'ordine dei confronti e quindi il tie-break.
+export function routerTopKWgsl(opts: {
+  nExpert: number; nUsed: number; weightsScale: number; clampMin: number;
+}): string {
+  const { nExpert, nUsed, weightsScale, clampMin } = opts;
+  const WG = 64;
+  return `
+@group(0) @binding(0) var<storage, read> logits: array<f32>;
+@group(0) @binding(1) var<storage, read> bias: array<f32>;
+@group(0) @binding(2) var<storage, read_write> ids: array<u32>;
+@group(0) @binding(3) var<storage, read_write> wts: array<f32>;
+const NE = ${nExpert}u;
+const NU = ${nUsed}u;
+var<workgroup> probs: array<f32, ${nExpert}>;
+var<workgroup> sel: array<f32, ${nExpert}>;
+@compute @workgroup_size(${WG})
+fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  for (var i = t; i < NE; i = i + ${WG}u) {
+    let p = 1.0 / (1.0 + exp(-logits[i]));
+    probs[i] = p;
+    sel[i] = p + bias[i];   // il bias entra SOLO nella selezione
+  }
+  workgroupBarrier();
+  if (t != 0u) { return; }
+  var taken: array<bool, ${nExpert}>;
+  for (var i = 0u; i < NE; i = i + 1u) { taken[i] = false; }  // var in loop: azzerata a mano
+  var sum = 0.0;
+  for (var k = 0u; k < NU; k = k + 1u) {
+    var best = NE;                                  // NE = "nessuno" (sentinella)
+    for (var i = 0u; i < NE; i = i + 1u) {
+      if (!taken[i] && (best == NE || sel[i] > sel[best])) { best = i; }
+    }
+    taken[best] = true;
+    ids[k] = best;
+    sum = sum + probs[best];                        // probs SENZA bias
+  }
+  let denom = max(sum, ${clampMin.toExponential()});
+  for (var k = 0u; k < NU; k = k + 1u) {
+    wts[k] = (probs[ids[k]] / denom) * ${weightsScale.toFixed(6)};
+  }
+}`;
+}
