@@ -183,10 +183,21 @@ del codice (convenzione repo). Il benchmark pubblico e la roadmap generale del p
 
 ## 8. Rischi dichiarati
 
-1. **Prefill WebGPU è lento per tutti** (LlamaWeb −21-51% vs competitor; subgroup-matrix
-   assente nei browser). La nostra fusione aiuta ma non è dimostrato che basti: il
-   first-light è dichiarato sul *decode*; il prefill ha come mitigazioni la
-   prefix-cache OPFS (fase B) e il chunking. Rischio accettato, monitorato dal gate A.
+1. **Prefill WebGPU è lento per tutti** (LlamaWeb −21-51% vs competitor). La nostra
+   fusione aiuta ma non è dimostrato che basti: il first-light è dichiarato sul
+   *decode*; il prefill ha come mitigazioni la prefix-cache OPFS (fase B) e il
+   chunking. Rischio accettato, monitorato dal gate A.
+   **CORREZIONE 2026-08-02 (probe C3a it.3, `results/engine/webgpu-limits-4090laptop-2026-08-02.json`)**:
+   la clausola «subgroup-matrix assente nei browser» è **STALE**. L'adapter di
+   questa macchina espone `chromium-experimental-subgroup-matrix`, `subgroups` e
+   `subgroup-size-control`. **Perimetro**: le vediamo perché lanciamo Chrome con
+   `--enable-unsafe-webgpu`, quindi valgono per esplorare il *ceiling* del motore,
+   **non** per un confronto pubblico su browser stock — nei benchmark pubblici la
+   clausola originale resta valida e va dichiarata (§8.4). Conseguenza sulle leve:
+   il GEMV oggi usa `workgroup_size(64)` con riduzione in shared memory, un
+   pattern che le subgroup ops rendono obsoleto; e il device negozia 256
+   invocazioni/workgroup su **1024** disponibili. Materia della guerra ai
+   dispatch (goal C3a fase 4b).
 2. **Residuo 33% del budget 4090 non attribuito** (estimates §2): se fosse
    proporzionale a N_disp, L3 vale il doppio; se fosse fisso, L4 pesa di più. Si
    scioglie solo con timestamp-query nel runtime nostro (telemetria nativa, fase A).

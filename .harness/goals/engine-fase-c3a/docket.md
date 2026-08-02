@@ -52,6 +52,25 @@
    come soglia UX in regime thinking; errore del modello di banda +/-15% (C3b);
    budget slab di prova 50% e 25% del parco (C3b).
 
+9. **FINDING registrato, non una decisione** (2026-08-02, it.3, ruling PI
+   "annota questi 2 findings"). Due cose emerse dal probe e dalla ricerca che
+   serviranno oltre C3a:
+
+   (a) **`subgroup-matrix` NON è più assente dai browser.** L'adapter espone
+   `chromium-experimental-subgroup-matrix`, `subgroups`, `subgroup-size-control`
+   e `chromium-experimental-timestamp-query-inside-passes`. direction §8
+   rischio 1 corretto; ideas-ledger §B guadagna la riga "GEMV con subgroup ops".
+   **Perimetro**: visibili solo con `--enable-unsafe-webgpu` ⇒ valgono per il
+   ceiling del motore, non per i confronti pubblici, dove la clausola originale
+   resta valida e va dichiarata (direction §8.4).
+
+   (b) **Il readback per layer preclude per costruzione il record/replay del
+   grafo di comandi.** Il graph capture di ORT richiede shape statiche *e
+   nessun kernel su CPU*. Quindi il drain MoE non costa solo latenza: chiude
+   un'intera famiglia di ottimizzazioni future. Rende l'item 8 (residenza
+   totale) più pesante di quanto sembri guardando solo i ms/token.
+   Registrato in ideas-ledger §B.
+
 8. **RULING RICHIESTO — residenza totale: pagare 0.67 GiB di qualità per
    eliminare il drain?** (2026-08-02, it.3). Non blocca le fasi 3-4; serve
    prima di decidere la forma finale della leva 2.
@@ -107,8 +126,20 @@
    `maxComputeInvocationsPerWorkgroup` (256 su 1024) e `maxBufferSize`
    (clampato a 2 GiB su 4).
 
-6. **RULING RICHIESTO — spec C3a** (2026-08-01, it.2 fase 2). **BLOCCA le fasi
-   3-6.** ⚠️ **La §3 è stata riscritta in it.3**: il meccanismo attribuito nella
+6. ~~**RULING RICHIESTO — spec C3a**~~ **RISOLTO (2026-08-02, PI: "ok andiamo
+   avanti")**, dopo che le 5 decisioni erano state esposte con raccomandazione
+   esplicita per ciascuna. Interpretazione registrata per essere corretta se
+   sbagliata: approvazione della spec **nella forma raccomandata** —
+   (1) repack come secondo file OPFS da 15.68 GB col GGUF mantenuto;
+   (2) criterio "minimizzare i drain della coda", con lo scarto esplicito del
+   pipelining nel decode; (3) leva 4: prima misurare dove va `gpuBusy`, poi
+   fondere, attribuendo separatamente kernel e clock; (4) prefill M=16 iniziale
+   con identità sull'argmax; (5) gate 13.43/56.58 confermati, TTFT ≤4 s
+   riportato-non-gateato. **Fasi 3-6 SBLOCCATE.**
+   **NON coperto da questo ruling**: l'item 8 (residenza totale, 0.67 GiB di
+   qualità per eliminare il drain) è emerso DOPO ed è una decisione a sé.
+
+   ⚠️ **La §3 è stata riscritta in it.3**: il meccanismo attribuito nella
    v1 ("latenza dei submit") era SBAGLIATO — il costo API di una submit è ~13 µs,
    quindi 47 submit valgono 0.6 ms/token, non 75. Il meccanismo vero è che
    `mapAsync` è una **barriera** che drena la coda: la GPU è idle esattamente

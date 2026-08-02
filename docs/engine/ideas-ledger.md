@@ -63,6 +63,9 @@ controllare) · `da-misurare` (esperimento definibile subito) · `moonshot` (fro
 | Quest-style sparse attention: riassunti pagine su GPU, top-k pagine lette | Quest (Tang'24) | da-verificare |
 | KV tiering GPU→RAM→OPFS guidato dalla selezione sparsa | CacheGen (SIGCOMM'24), LMCache | moonshot |
 | Timestamp-query nativa + roofline su banda misurata (autotuning) | infra micro-bench nostra | stimata (regola v0) |
+| **GEMV con subgroup ops invece di riduzione in shared memory** (oggi `workgroup_size(64)` + `partial[64]`; l'adapter espone `subgroups`, `subgroup-size-control` e `chromium-experimental-subgroup-matrix`, e concede 1024 invocazioni/workgroup contro le 256 che negoziamo) | feature Chromium sperimentale, misurata da noi il 2026-08-02 | **verificata come disponibile** → da-misurare (C3a fase 4b). Vale per il ceiling del motore, NON per confronti pubblici: la vediamo solo con `--enable-unsafe-webgpu` |
+| **Binding fisso + expert come offset aritmetico nello shader** (invece di un bind group per expert selezionato): toglie la selezione dal percorso CPU | ONNX Runtime WebGPU PR #27998 (mergiata 2026-04-10, decode MoE 17→5 dispatch, +21% Meteor Lake) ✅, llama.cpp `ggml-webgpu` `mul_mat_id_vec.wgsl` ✅, MLC `moe_matmul.gemv` | **prior art verificato** — in adozione in C3a fase 4. Nota: nessuno dei tre usa `dispatchWorkgroupsIndirect`; con k costante il caso peggiore è il caso esatto |
+| **Record/replay del grafo di comandi** (graph capture): rigioca la sequenza WebGPU invece di ri-encodarla | ORT `enableGraphCapture` ✅ | **PRECLUSA finché esiste un readback per layer**: il graph capture richiede shape statiche *e nessun kernel su CPU*. È un costo composto del drain MoE, non solo di latenza ⇒ diventa accessibile solo con residenza totale degli expert (v. §A) |
 
 ## C. Terzo asse — intelligenza per byte
 
