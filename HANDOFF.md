@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-01, session 18 — contratti C3a/C3b approvati)
+# HANDOFF — browser-llm-lab   (updated 2026-08-02, sessione 18 — goal C3a: fasi 1-3 chiuse)
 
 ## 1. Next decidable
 
