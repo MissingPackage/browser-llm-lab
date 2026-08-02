@@ -7,9 +7,18 @@
 // 96.4% decode hit a budget 87% con LRU pura.
 //
 // Slot indirizzato (classe, buffer, offset): N buffer GPU per classe con
-// taglia ≤ maxStorageBufferBindingSize negoziato (difensivo: i bind sono
-// comunque sotto-range da ~1.5-2 MB); offset slab multipli di 256
+// taglia ≤ maxBufferSize; offset slab multipli di 256
 // (minStorageBufferOffsetAlignment — garantito dal layout in moe.ts).
+//
+// CORREZIONE C3a it.5: fino a qui la taglia del buffer era cappata con
+// `min(maxStorageBufferBindingSize, maxBufferSize)` "per difesa". È sbagliato:
+// i due limiti misurano cose diverse — `maxStorageBufferBindingSize` è la
+// taglia massima di un GPUBufferBinding (il SOTTO-RANGE che si binda, qui
+// ~1.5 MB), `maxBufferSize` è la taglia massima del buffer. Il min buttava via
+// il limite più grande e su NVIDIA (binding clampato a 2 GiB−4 da Dawn per un
+// bug driver) teneva i buffer a metà di quanto potessero essere: 7 buffer
+// invece di 4 a budget 12 GiB. Ora si cappa col limite giusto e si ASSERTA
+// che il sotto-range più grande stia nel limite di binding.
 import { GLM47_FLASH as G } from "./shape";
 import { packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, type SlabLayout } from "./moe";
 import { downIsQ4_1 } from "./expertstore";
@@ -85,8 +94,15 @@ export class ExpertCache {
     this.timing = opts.timing ?? false;
     const mk = (layout: SlabLayout, nSlots: number): ClassState => {
       if (nSlots < G.nExpertUsed) throw new Error(`residency: ${nSlots} slot < ${G.nExpertUsed} (un token deve poter bindare 4 expert)`);
-      const cap = Math.min(opts.maxBindingBytes, opts.maxBufferBytes);
-      const slabsPerBuffer = Math.max(1, Math.floor(cap / layout.bytes));
+      // Il sotto-range più grande che i kernel bindano è `qsBytes` (~1.5 MB):
+      // deve stare nel limite di BINDING. Se non ci sta, il layout è
+      // incompatibile col device e va detto subito, non scoperto al primo bind.
+      const maxRange = Math.max(layout.qsBytes, layout.gateScalesBytes, layout.downScalesBytes);
+      if (maxRange > opts.maxBindingBytes) {
+        throw new Error(
+          `residency: sotto-range ${maxRange} B > maxStorageBufferBindingSize ${opts.maxBindingBytes}`);
+      }
+      const slabsPerBuffer = Math.max(1, Math.floor(opts.maxBufferBytes / layout.bytes));
       const buffers: GPUBuffer[] = [];
       for (let left = nSlots; left > 0; left -= slabsPerBuffer) {
         buffers.push(device.createBuffer({

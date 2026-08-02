@@ -52,6 +52,49 @@
    come soglia UX in regime thinking; errore del modello di banda +/-15% (C3b);
    budget slab di prova 50% e 25% del parco (C3b).
 
+10. **RULING RICHIESTO — allineamento del path Qwen e ri-baseline del gate**
+    (2026-08-02, it.5, da review avversaria). **Non blocca la fase 3**, ma va
+    deciso prima di far girare il gate della fase 6.
+
+    **(a) Inversione di permissività fra harness e motore.** I limiti sono
+    negoziati sui 4 worker GLM ma NON su `gpuforward.ts:99` (`createEngine`,
+    il motore Qwen usato da bench/conformance/e2e) né su altri 4 siti minori
+    (`engine.worker.ts:513`/`:705` kernel-diag e attn-bench,
+    `microbench.worker.ts:31`). Scenario concreto: la fase 4b riscrive un GEMV
+    con `workgroup_size(1024)` — è dichiaratamente lo scopo per cui si negozia
+    1024. Il device di **ktest** concede 1024 e valida il kernel: PASS. Il
+    device del motore Qwen concede 256 e la pipeline fallisce. **L'harness di
+    correttezza diventa più permissivo del motore che deve validare**, che è
+    l'inversione che lo rende inutile.
+    Non l'ho fatto di mia iniziativa perché toccare il device del path Qwen
+    obbliga a ri-benchmarkare: quel path ha il gate di non-regressione HARD
+    contro il baseline quiescente 2026-08-01.
+
+    **(b) Il baseline del gate GLM non è più confrontabile alla lettera.**
+    `results/engine/bench-glm-4090-b12-quiesced-2026-08-01.json` è stato
+    prodotto con 4 limiti diversi da quelli di adesso e **non contiene** il
+    campo `deviceLimits` (nasce ora). Se il prossimo decode scende, non c'è
+    modo di distinguere rumore da effetto dei limiti. La spec WebGPU §3.6.2
+    avverte esplicitamente che chiedere limiti migliori *può* avere un impatto
+    prestazionale, e nessuno shader committato oggi ha bisogno di >256
+    invocazioni o >8 storage buffer (inventario: max `workgroup_size` 256, max
+    workgroup storage 27008 B, max storage buffer per stage 7).
+
+    **Opzioni**:
+    (a) [RACCOMANDATA] **negoziare ovunque + ri-baseline dichiarata**: si
+        applica `negotiateLimits` anche a `gpuforward.ts` e ai siti minori, si
+        ri-esegue il bench GLM e quello Qwen a macchina quiescente, e i due
+        report nuovi (che ora contengono `deviceLimits`) diventano il baseline
+        di riferimento, con la sostituzione registrata qui. Costo: due run di
+        bench. Beneficio: un solo regime di limiti in tutto il repo, e da qui
+        in avanti ogni confronto è falsificabile.
+    (b) **restringere la negoziazione a ciò che ha un consumatore oggi**:
+        si torna ai limiti vecchi e si alza solo quello che una fase usa
+        davvero, quando lo usa. Più conservativo, ma contraddice il ruling
+        "negoziali subito" e sposta il problema in avanti.
+    (c) **lasciare com'è**: i 4 worker GLM negoziano, il resto no. Sconsigliata:
+        è la configurazione che produce l'inversione descritta in (a).
+
 9. **FINDING registrato, non una decisione** (2026-08-02, it.3, ruling PI
    "annota questi 2 findings"). Due cose emerse dal probe e dalla ricerca che
    serviranno oltre C3a:

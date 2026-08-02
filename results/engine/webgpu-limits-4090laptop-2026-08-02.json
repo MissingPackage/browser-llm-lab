@@ -1,7 +1,7 @@
 {
  "kind": "webgpu-limits",
  "schemaVersion": 1,
- "date": "2026-08-01T22:47:52.118Z",
+ "date": "2026-08-02T08:30:13.966Z",
  "adapterInfo": {
   "vendor": "nvidia",
   "architecture": "lovelace",
@@ -71,19 +71,19 @@
   "maxStorageTexturesInVertexStage": 8
  },
  "deviceLimits": {
-  "maxTextureDimension1D": 8192,
-  "maxTextureDimension2D": 8192,
+  "maxTextureDimension1D": 16384,
+  "maxTextureDimension2D": 16384,
   "maxTextureDimension3D": 2048,
-  "maxTextureArrayLayers": 256,
+  "maxTextureArrayLayers": 2048,
   "maxBindGroups": 4,
   "maxBindGroupsPlusVertexBuffers": 24,
   "maxBindingsPerBindGroup": 1000,
-  "maxDynamicUniformBuffersPerPipelineLayout": 8,
-  "maxDynamicStorageBuffersPerPipelineLayout": 4,
-  "maxSampledTexturesPerShaderStage": 16,
+  "maxDynamicUniformBuffersPerPipelineLayout": 10,
+  "maxDynamicStorageBuffersPerPipelineLayout": 8,
+  "maxSampledTexturesPerShaderStage": 48,
   "maxSamplersPerShaderStage": 16,
-  "maxStorageBuffersPerShaderStage": 8,
-  "maxStorageTexturesPerShaderStage": 4,
+  "maxStorageBuffersPerShaderStage": 16,
+  "maxStorageTexturesPerShaderStage": 8,
   "maxUniformBuffersPerShaderStage": 12,
   "maxUniformBufferBindingSize": 65536,
   "maxStorageBufferBindingSize": 2147483644,
@@ -91,22 +91,22 @@
   "minStorageBufferOffsetAlignment": 256,
   "maxVertexBuffers": 8,
   "maxBufferSize": 4294967292,
-  "maxVertexAttributes": 16,
+  "maxVertexAttributes": 30,
   "maxVertexBufferArrayStride": 2048,
-  "maxInterStageShaderVariables": 16,
+  "maxInterStageShaderVariables": 28,
   "maxColorAttachments": 8,
-  "maxColorAttachmentBytesPerSample": 32,
+  "maxColorAttachmentBytesPerSample": 128,
   "maxComputeWorkgroupStorageSize": 49152,
-  "maxComputeInvocationsPerWorkgroup": 256,
-  "maxComputeWorkgroupSizeX": 256,
-  "maxComputeWorkgroupSizeY": 256,
+  "maxComputeInvocationsPerWorkgroup": 1024,
+  "maxComputeWorkgroupSizeX": 1024,
+  "maxComputeWorkgroupSizeY": 1024,
   "maxComputeWorkgroupSizeZ": 64,
   "maxComputeWorkgroupsPerDimension": 65535,
   "maxImmediateSize": 64,
-  "maxStorageBuffersInFragmentStage": 8,
-  "maxStorageTexturesInFragmentStage": 4,
-  "maxStorageBuffersInVertexStage": 8,
-  "maxStorageTexturesInVertexStage": 4
+  "maxStorageBuffersInFragmentStage": 16,
+  "maxStorageTexturesInFragmentStage": 8,
+  "maxStorageBuffersInVertexStage": 16,
+  "maxStorageTexturesInVertexStage": 8
  },
  "deviceError": null,
  "derived": {
@@ -116,6 +116,7 @@
   "slabsPerBinding_q4_1": 390,
   "slabsPerBuffer_q4_0": 809,
   "bindingsToCoverPark": 8,
-  "note": "parco completo = 2944 expert (2688 q4_0 + 256 q4_1); il residente a slab 12 GiB e' ~2419 slot"
+  "note": "parco completo = 2944 expert (2688 q4_0 + 256 q4_1); il residente a slab 12 GiB e' ~2419 slot",
+  "limitiNonNegoziati": []
  }
 }

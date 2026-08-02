@@ -24,6 +24,7 @@ import {
   Q4_1_BLOCK_BYTES, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES,
 } from "../quant";
 import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
+import { negotiateLimits } from "../gpulimits";
 
 interface KResult { kernel: string; pass: boolean; maxAbs: number; maxRel: number; note?: string }
 
@@ -71,12 +72,15 @@ class Gpu {
   async init(): Promise<string> {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) throw new Error("niente adapter WebGPU");
-    const lim = adapter.limits;
+    // ktest tiene i buffer piccoli di proposito (mini-modello sintetico): il
+    // cap a 1 GiB resta VOLUTO, ma passa da negotiateLimits cosi' gli altri
+    // limiti (invocazioni/workgroup, storage buffer per stage) non ricadono
+    // nei default di spec. (C3a fase 3)
     this.device = await adapter.requestDevice({
-      requiredLimits: {
-        maxStorageBufferBindingSize: Math.min(lim.maxStorageBufferBindingSize, 1 << 30),
-        maxBufferSize: Math.min(lim.maxBufferSize, 1 << 30),
-      },
+      requiredLimits: negotiateLimits(adapter, {
+        maxStorageBufferBindingSize: 1 << 30,
+        maxBufferSize: 1 << 30,
+      }),
     });
     const info = adapter.info;
     return `${info?.vendor ?? "?"} ${info?.architecture ?? ""}`;

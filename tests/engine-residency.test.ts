@@ -199,12 +199,32 @@ describe("ExpertCache (LRU due size-class)", () => {
     for (const e of [0, 1, 2, 3]) expect(c.ensure(6, e, rd).hit).toBe(true); // q4_0 intatta
   });
 
+  it("rifiuta un device il cui limite di BINDING non regge il sotto-range piu' grande", () => {
+    // Invariante nuovo (C3a it.5): la taglia del buffer la decide maxBufferSize,
+    // ma il sotto-range bindato (qs, ~1.5 MB) deve stare in
+    // maxStorageBufferBindingSize. Se non ci sta va detto al costruttore, non
+    // scoperto al primo setBindGroup.
+    const { device } = mkDevice();
+    expect(() => new ExpertCache(device, {
+      budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 },
+      maxBindingBytes: SLAB_DOWN_Q4_0.qsBytes - 1, maxBufferBytes: GIB,
+    })).toThrow(/maxStorageBufferBindingSize/);
+    // al limite esatto invece passa
+    expect(() => new ExpertCache(device, {
+      budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 },
+      maxBindingBytes: SLAB_DOWN_Q4_0.qsBytes, maxBufferBytes: GIB,
+    })).not.toThrow();
+  });
+
   it("slot (classe, buffer, offset): partizione su più buffer e bind range dei 6 segmenti", () => {
     const { device, buffers } = mkDevice();
-    // maxBinding = 2 slab e mezzo ⇒ 2 slab/buffer ⇒ 5 slot su 3 buffer (2+2+1)
+    // maxBUFFER = 2 slab e mezzo ⇒ 2 slab/buffer ⇒ 5 slot su 3 buffer (2+2+1).
+    // C3a it.5: la leva era `maxBindingBytes`, ma la taglia del BUFFER è
+    // limitata da `maxBufferSize`; il binding size limita il SOTTO-RANGE
+    // bindato (~1.5 MB). Cambiata la leva, non l'intento del test.
     const c = new ExpertCache(device, {
       budgetBytes: 0, slotsOverride: { q4_0: 5, q4_1: 4 },
-      maxBindingBytes: Math.floor(2.5 * SLAB_DOWN_Q4_0.bytes), maxBufferBytes: GIB,
+      maxBindingBytes: GIB, maxBufferBytes: Math.floor(2.5 * SLAB_DOWN_Q4_0.bytes),
     });
     const q40 = buffers.filter((b) => b.size % SLAB_DOWN_Q4_0.bytes === 0 && b.size <= 2 * SLAB_DOWN_Q4_0.bytes);
     expect(q40.map((b) => b.size / SLAB_DOWN_Q4_0.bytes)).toEqual([2, 2, 1]);

@@ -2,20 +2,33 @@
 
 ## 1. Next decidable
 
-**RULING sulla spec C3a — docket item 6 (5 decisioni).** Il loop è fermo lì:
-le fasi 3-6 sono gated dal ruling di spec, come in C1/C2. Documento:
-`docs/superpowers/specs/2026-08-01-engine-fase-c3a-design.md`.
-Sintesi delle decisioni: (1) repack come secondo file OPFS da 15.68 GB accanto
-al GGUF; (2) criterio della leva 2 = **minimizzare i submit, non i readback**
-(la misura dice che i readback valgono 7.6 degli 83 ms/token), con la via
-raccomandata condizionata a un **probe dei limiti WebGPU mai letti** [VERIFY],
-e scarto esplicito del pipelining nel decode; (3) leva 4 = prima spezzare
-`gpuBusy` per categoria, poi fondere, attribuendo separatamente kernel e clock;
-(4) prefill M=16 iniziale con identità sull'argmax; (5) conferma dei gate.
+**Fase 3 in corso — repack all'import.** Spec approvata (docket item 6), fasi
+3-6 sbloccate. Della fase 3 è FATTA la **negoziazione dei limiti WebGPU**
+(`src/engine/gpulimits.ts`, applicato ai 4 worker GLM); **manca il repack**:
+secondo file OPFS `*.slabs.bin` da 15.68 GB con header (magic + versione di
+layout + SHA del sorgente), invalidazione su mismatch, scrittura su temporaneo
++ rename, e `ExpertCache.ensure` che salta `packExpertSlab` quando lo slab
+arriva già impacchettato. Obiettivo: pack CPU da 41.4 a <1.0 ms/token.
 
-**Contesto: perché è servito l'emendamento 1** (it.1, già risolto — quarta leva
-ammessa nel perimetro dal PI). La fase 1 ha smentito un'assunzione del
-contratto: le tre leve originali **non raggiungono il gate 13.43**.
+**Decisione PI aperta e non bloccante: docket item 8** — pagare ~0.67 GiB di
+qualità (5% del parco expert, quant asimmetrica sui più freddi) per ottenere la
+residenza totale ed eliminare il drain della coda. È una scelta sulla funzione
+obiettivo (capienza vs velocità), non di implementazione.
+
+**Contesto — le due assunzioni del contratto smentite dalla misura.**
+1. Le tre leve originali **non raggiungono il gate 13.43** (it.1) ⇒ emendamento 1,
+   quarta leva (granularità dispatch) nel perimetro.
+2. Il costo dei 46 sync **non è latenza dei submit** (che vale 0.6 ms/token) ma
+   il fatto che `mapAsync` è una **barriera**: ogni layer drena la coda (it.3).
+   Confermato aritmeticamente: `gpuBusy`/wall 36.4% ≈ utilizzo GPU 34.6%, e
+   `gpu_idle` attivo in 34/40 campioni mentre power-cap e thermal stanno a 1/40.
+   ⇒ emendamento 2, prefetch LOOKA nel perimetro (sovrappone ~54 ms/token di
+   lavoro CPU al lavoro GPU).
+Il pattern che risolve è provato da ORT/ggml-webgpu/MLC: binding **fisso**,
+expert come **offset aritmetico** nello shader. Ma vale solo a residenza
+totale ⇒ item 8.
+
+Dettaglio della fase 1: le tre leve originali **non raggiungono il gate 13.43**.
 - Wall decode 215.0 ms/token = `gpuBusy` **78.2** + stallo residenza **53.8** +
   sync/CPU **83.0** (63.6% fuori GPU). Ma i 46 readback veri costano solo
   **7.6 ms/token** (probe indipendente): il resto è latenza di submit e bolle.
@@ -89,9 +102,16 @@ termini) e §7 (fase C splittata).
 
 - **Goal C3a**: fasi 1-2 DONE (it.1-2), fasi 3-6 gated dal ruling di spec
   (docket item 6).
-- **[VERIFY] mai sciolto**: `maxStorageBufferBindingSize` e `maxBufferSize`
-  reali dell'adapter — il codice negozia `min(limite, 2 GiB)` senza leggerli.
-  Il design della leva 2 ci dipende: probe come primo task della fase 4.
+- **[VERIFY] sciolto** (it.3): `scripts/webgpu-limits.mjs` +
+  `results/engine/webgpu-limits-4090laptop-2026-08-02.json`. Il device prendeva
+  i default di spec su 3 limiti — ora negoziati (`src/engine/gpulimits.ts`).
+  `maxStorageBufferBindingSize` 2 GiB−4 è un tetto duro NVIDIA (workaround Dawn
+  per un bug su `OpArrayLength`): lì il cap del codice era corretto.
+- **`subgroup-matrix` è disponibile** su questo adapter ⇒ direction §8 rischio 1
+  corretto; nuove righe in ideas-ledger §B. Vale per il ceiling, NON per i
+  confronti pubblici (la vediamo solo con `--enable-unsafe-webgpu`).
+- **Record/replay del grafo comandi precluso** finché esiste un readback per
+  layer (graph capture richiede nessun kernel su CPU) — alza la posta di item 8.
 - **Goal C3b**: chartered, parte a C3a chiusa.
 - **TTFT misurato per la prima volta**: 88.06 s a ctx 461 — 22× il budget UX di
   4 s. Il prefill sequenziale (nessun percorso M>1) è la causa diretta.

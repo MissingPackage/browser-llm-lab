@@ -11,6 +11,7 @@ import { GLM47_FLASH as G, GLM47_FLASH_SHA256 } from "../shape";
 import { dequantQ4_0Row } from "../quant";
 import { createGlmModel } from "../glmmodel";
 import { GlmOpfsSource } from "../glmsource";
+import { negotiateLimits, grantedLimits, slabBufferCap } from "../gpulimits";
 import type { GlmTelemetry } from "../glmmodel";
 import type { ExpertCacheStats } from "../residency";
 
@@ -98,19 +99,17 @@ async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("niente adapter WebGPU");
-  const lim = adapter.limits;
-  const maxBuf = Math.min(lim.maxBufferSize, 2 * (1 << 30));
-  const maxBind = Math.min(lim.maxStorageBufferBindingSize, 2 * (1 << 30));
   // timestamp-query: livello 2 dell'attribuzione (gpuBusy). Se l'adapter non la
   // espone il bench gira lo stesso e il report lo dichiara (gpuBusyMs null).
   const hasTsq = adapter.features.has("timestamp-query");
+  // Limiti negoziati al massimo che l'adapter concede (C3a fase 3): prima si
+  // chiedevano 3 limiti e il device prendeva i default di spec sugli altri.
   const device = await adapter.requestDevice({
     requiredFeatures: hasTsq ? ["timestamp-query"] : [],
-    requiredLimits: {
-      maxBufferSize: maxBuf, maxStorageBufferBindingSize: maxBind,
-      maxComputeWorkgroupStorageSize: Math.min(lim.maxComputeWorkgroupStorageSize, 32768),
-    },
+    requiredLimits: negotiateLimits(adapter),
   });
+  const limits = grantedLimits(device);
+  const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);
 
   const source = await GlmOpfsSource.open("/models/GLM-4.7-Flash-Q4_0.gguf", progress);
   const golden = (await (await fetch("/models/glm-conf-golden.json")).json()) as Golden;
@@ -390,7 +389,7 @@ async function main(cfg: Cfg): Promise<void> {
   post({
     type: "done",
     report: {
-      kind: "glm-bench", schemaVersion: 2, date: new Date().toISOString(),
+      kind: "glm-bench", schemaVersion: 3, date: new Date().toISOString(),
       ggufSha256: GLM47_FLASH_SHA256,
       config: {
         promptIdx: cfg.prompt, promptId: pr.id, promptTokens: nPrompt, nGen: cfg.nGen,
@@ -412,6 +411,11 @@ async function main(cfg: Cfg): Promise<void> {
       objective,
       attribution2, syncFloorProbe: syncFloor,
       timestampQuery: { available: hasTsq, used: attribution2?.gpuBusyMsPerToken != null },
+      // I limiti CONCESSI, non quelli sperati: una prestazione misurata su
+      // limiti diversi non e' confrontabile (lezione B2).
+      deviceLimits: limits,
+      deviceFeatures: [...device.features].sort(), // del DEVICE: quelle dell'adapter sono solo annunciate
+      adapterFeatures: [...adapter.features].sort(),
       telemetry: tele,
       warmup: { prefill: warmup.prefill, decode: warmup.decode },
       reps,

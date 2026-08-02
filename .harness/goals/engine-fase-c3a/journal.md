@@ -321,3 +321,127 @@ Spec §3 riscritta di conseguenza (§3.0 meccanismo, §3.0-bis pattern provato,
 PASS exit 0** col gate dispatch ora significativo. Probe eseguito con artefatto
 committato. Verifier indipendente: ora autorizzato dal PI, da usare dalla
 prossima iterazione.
+
+---
+
+## it.4 (2026-08-02) — fase 3 slice 1: negoziazione dei limiti WebGPU
+
+Spec approvata (docket item 6, PI "ok andiamo avanti" dopo esposizione delle 5
+decisioni con raccomandazione per ciascuna; interpretazione registrata nel
+docket per essere corretta se sbagliata). Fasi 3-6 sbloccate.
+
+**Findings di it.3 annotati dove servono** (ruling PI "annota questi 2
+findings"): direction §8 rischio 1 corretto (`subgroup-matrix` non è più assente
+dai browser, col perimetro `--enable-unsafe-webgpu` dichiarato);
+ideas-ledger §B guadagna tre righe — GEMV con subgroup ops, binding fisso +
+offset aritmetico (col prior art ORT/ggml/MLC), record/replay precluso dal
+readback. Docket item 9 li registra come finding, non decisioni.
+
+**Fatto**: `src/engine/gpulimits.ts` — `negotiateLimits(adapter, caps?)`,
+`grantedLimits(device)`, `slabBufferCap(device)`. Applicato ai **4 worker GLM**
+(glmbench, glmroute, glmconf, ktest). Prima ogni worker ripeteva
+`Math.min(lim.X, costante)` per 3 limiti e prendeva i default di spec su tutti
+gli altri; ora si chiede il massimo che l'adapter concede, e i limiti
+**concessi** finiscono nel report (una prestazione misurata su limiti diversi
+non è confrontabile — lezione B2).
+
+Il cap di ktest a 1 GiB è VOLUTO (mini-modello sintetico) ed è preservato via
+`caps`, non perso: senza il parametro sarebbe stata una regressione silenziosa.
+
+**Path Qwen NON toccato di proposito**: `engine.worker.ts` ha il gate di
+non-regressione hard contro il baseline quiescente 2026-08-01, e cambiare i
+limiti del suo device richiederebbe un ri-bench per restare confrontabili.
+Va fatto, ma come slice dichiarata, non di straforo.
+
+**Rischio di regressione principale, escluso aritmeticamente**: alzare
+`maxBufferSize` da 2 a 4 GiB poteva cambiare il numero di buffer allocati dalla
+residenza (`residency.ts:88` usa `min(maxBindingBytes, maxBufferBytes)`). Non
+cambia: il binding size NVIDIA (2 GiB−4) resta il vincolo minore in entrambi i
+casi, quindi cap identico e stessa allocazione.
+`maxComputeWorkgroupStorageSize` passa da 32768 a 49152 richiesti: è una
+rilassazione del fail-fast di `glmmodel.ts` (ctx più lunghi ammessi), non un
+vincolo nuovo.
+
+**Verifica**: `npx tsc --noEmit` pulito; `npm test` 220 passed + 2 skipped;
+**ktest 30/30 PASS exit 0** — quest'ultimo è il test che esercita davvero il
+percorso device con i limiti nuovi. Review avversaria del diff lanciata in
+parallelo (subagent, ora autorizzati dal PI).
+
+**Prossimo**: fase 3 slice 2 — il repack all'import vero e proprio.
+
+---
+
+## it.5 (2026-08-02) — review avversaria della slice 1: il fix non faceva nulla
+
+Subagent `adversarial-reviewer` sul diff di it.4. Verdetto duro e in gran parte
+corretto; 3 finding sostanziali recepiti, 1 rimandato al PI.
+
+### Critical accolto: la negoziazione non produceva NULLA
+
+`residency.ts:88` dimensionava i buffer slab con
+`min(maxBindingBytes, maxBufferBytes)`. Su NVIDIA il binding è clampato da Dawn
+a 2 GiB−4 (bug driver su `OpArrayLength`), quindi il `min` **buttava via** i
+4 GiB di `maxBufferSize` appena sbloccati: 7 buffer prima, 7 dopo. Il payoff
+scritto in spec §3.1 (7→4) non si materializzava.
+
+Ed era anche **semanticamente sbagliato**: `maxStorageBufferBindingSize` limita
+la taglia di un `GPUBufferBinding` (il SOTTO-RANGE bindato — qui `qsBytes`,
+1.5 MB), `maxBufferSize` limita la taglia del buffer. Il commento del file lo
+diceva pure ("difensivo: i bind sono comunque sotto-range da ~1.5-2 MB") senza
+trarne la conseguenza.
+
+Corretto: si cappa con `maxBufferBytes` e si **asserta** che il sotto-range più
+grande stia nel limite di binding (throw al costruttore, non scoperta al primo
+`setBindGroup`). Effetto reale: **809 slab per buffer invece di 404**, 3 buffer
+q4_0 invece di 6 a budget 12 GiB.
+
+**La mia verifica di it.4 era giusta ma per il motivo sbagliato**: avevo
+"escluso aritmeticamente" il cambio di comportamento della residenza. Era vero —
+ed era esattamente il sintomo che il fix non funzionava.
+
+### Important accolti
+
+- **Copertura ZERO** su `gpulimits.ts`: nessun test sarebbe fallito se
+  `negotiateLimits` avesse restituito `{}`. Aggiunto `tests/gpulimits.test.ts`
+  (8 casi che discriminano implementazioni sbagliate reali: `caps` come minimo e
+  non sostituzione, limite assente saltato invece che chiesto a 0, nessuna
+  chiave sopra il massimo dell'adapter, coppie vincolate riallineate) +
+  1 caso nuovo in `engine-residency.test.ts` sull'invariante del sotto-range.
+- **Coppie di limiti desincronizzabili**: cappare `maxComputeInvocationsPerWorkgroup`
+  senza cappare `maxComputeWorkgroupSizeX` dà un device che passa
+  `requestDevice` e poi fallisce alla creazione della pipeline. Aggiunta la
+  tabella `COUPLED` e il riallineamento.
+- **La tesi centrale era NON VERIFICATA**: il probe chiedeva 3 limiti e
+  riportava i default sugli altri, quindi "chiedendoli si ottengono 16 e 1024"
+  era una congettura. Probe corretto (chiede tutto ciò che l'adapter espone) e
+  **ri-eseguito: 16 e 1024 si ottengono davvero**, artefatto aggiornato.
+- `maxBindingsPerBindGroup` tolto da `WANTED` (nessun consumatore, nessuna
+  motivazione — la review ha ragione: il file si dà come regola di dichiarare
+  il perché di ogni limite); `deviceLimits` aggiunto anche ai report di
+  glmroute/glmconf; `deviceFeatures` accanto ad `adapterFeatures` (le feature
+  dell'adapter sono annunciate, non abilitate); `schemaVersion` 2→3.
+
+### Un test esistente è caduto, e andava fatto cadere
+
+`engine-residency.test.ts` forzava la partizione su più buffer via
+`maxBindingBytes`. Con la semantica corretta quella non è più la leva: cambiata
+in `maxBufferBytes`, **intento del test invariato** (verifica ancora la
+partizione e l'indirizzamento degli slot su più buffer). Non è "aggiustare il
+test per far passare il codice": la leva vecchia testava un vincolo che la spec
+WebGPU non impone.
+
+### Rimandato al PI: docket item 10
+
+La review ha trovato due cose che non posso chiudere da solo:
+(a) i limiti sono negoziati sui 4 worker GLM ma non su `gpuforward.ts:99` (il
+motore Qwen) né su 4 siti minori ⇒ **ktest diventa più permissivo del motore
+che deve validare**; (b) il baseline del gate GLM è stato prodotto con limiti
+diversi e non contiene `deviceLimits`, quindi il prossimo confronto non è
+falsificabile. Entrambe costano un ri-bench e toccano il gate di
+non-regressione hard: decisione PI.
+
+### Verifica
+
+`npx tsc --noEmit` pulito; `npm test` **229 passed** + 2 skipped (da 220: +8
+gpulimits, +1 invariante residenza); **ktest 30/30 PASS exit 0**; probe
+ri-eseguito con artefatto committato.

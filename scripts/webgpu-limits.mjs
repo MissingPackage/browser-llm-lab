@@ -34,15 +34,13 @@ const report = await page.evaluate(async () => {
   const info = adapter.info ?? {};
   // Quanto si ottiene DAVVERO chiedendo il massimo: il limite dell'adapter è
   // una promessa, il device è ciò che si ottiene. Li riportiamo entrambi.
+  // Si chiede TUTTO quello che l'adapter espone: è l'unico modo di sapere se un
+  // limite è davvero CONCEDIBILE e non solo annunciato. (Prima il probe ne
+  // chiedeva 3 e riportava i default sugli altri, facendo sembrare non
+  // negoziabili limiti che non erano mai stati chiesti.)
   let deviceLimits = null, deviceError = null;
   try {
-    const dev = await adapter.requestDevice({
-      requiredLimits: {
-        maxBufferSize: lim.maxBufferSize,
-        maxStorageBufferBindingSize: lim.maxStorageBufferBindingSize,
-        maxComputeWorkgroupStorageSize: lim.maxComputeWorkgroupStorageSize,
-      },
-    });
+    const dev = await adapter.requestDevice({ requiredLimits: { ...lim } });
     deviceLimits = {};
     for (const k in dev.limits) deviceLimits[k] = Number(dev.limits[k]);
     dev.destroy();

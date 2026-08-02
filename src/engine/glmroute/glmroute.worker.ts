@@ -10,6 +10,7 @@ import { GLM47_FLASH as G, GLM47_FLASH_SHA256 } from "../shape";
 import { dequantQ4_0Row } from "../quant";
 import { createGlmModel } from "../glmmodel";
 import { GlmOpfsSource } from "../glmsource";
+import { negotiateLimits, slabBufferCap, grantedLimits } from "../gpulimits";
 
 interface TraceRow { p: number; i: number; tok: number; ph: "p" | "d"; e: number[] }
 interface TraceFile {
@@ -27,17 +28,11 @@ async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
   const adapter = await navigator.gpu?.requestAdapter();
   if (!adapter) throw new Error("niente adapter WebGPU");
-  const lim = adapter.limits;
-  const maxBuf = Math.min(lim.maxBufferSize, 2 * (1 << 30));
-  const maxBind = Math.min(lim.maxStorageBufferBindingSize, 2 * (1 << 30));
-  const device = await adapter.requestDevice({
-    requiredLimits: {
-      maxBufferSize: maxBuf, maxStorageBufferBindingSize: maxBind,
-      // mlaAttnDecode: scores[ctxMax] in workgroup memory — il corpus arriva a
-      // 6688 pos (26.7 KB) > default 16 KB; 32 KB negoziati come gpuforward
-      maxComputeWorkgroupStorageSize: Math.min(lim.maxComputeWorkgroupStorageSize, 32768),
-    },
-  });
+  // Limiti al massimo concesso dall'adapter (C3a fase 3): mlaAttnDecode tiene
+  // scores[ctxMax] in workgroup memory e il corpus arriva a 6688 pos (26.7 KB),
+  // oltre il default di 16 KB — chiedere il massimo copre anche i ctx futuri.
+  const device = await adapter.requestDevice({ requiredLimits: negotiateLimits(adapter) });
+  const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);
   progress(`adapter ${adapter.info?.vendor ?? "?"} — maxBuffer ${(maxBuf / 2 ** 30).toFixed(1)} GiB`);
 
   const source = await GlmOpfsSource.open("/models/GLM-4.7-Flash-Q4_0.gguf", progress);
@@ -139,6 +134,7 @@ async function main(cfg: Cfg): Promise<void> {
       importMs: source.importMs,
     },
     dispatchesPerTokenPlanned: model.dispatchesPerTokenPlanned, // DERIVATO dal piano, non contato (C3a it.3)
+    deviceLimits: grantedLimits(device), // limiti CONCESSI: senza, un confronto fra run non e' falsificabile
     wallMs: performance.now() - t0,
     replayMs: performance.now() - tReplay0,
   };
