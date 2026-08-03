@@ -157,3 +157,32 @@
   perché sync/CPU SALE a 99.7 (50% del wall). Le proiezioni del report danno
   **9.77 tok/s anche batchando tutti e 46 i sync**. Finché il drain c'è, la 4b
   non si converte in tok/s. Ordine delle fasi: da riportare al PI.
+
+## it.11 (2026-08-02) — attribuzione per categoria: il bersaglio era l'attention
+
+- `gpuBusy` scomposto per categoria di kernel (replica bycat dedicata):
+  **attn MLA 51.2 ms/token = 74.5%**; la catena expert, 41% dei byte, vale il
+  5.8%. Il modello "byte letti ⇒ tempo" è morto; la 4b si riorganizza
+  sull'attention. Report `bench-glm-4090-b12-bycat-2026-08-02.json`.
+
+## it.12-14 (2026-08-03) — FASE 4b CHIUSA: gpuBusy 78.2 → 54.2, sotto la soglia derivata
+
+- **it.12 flash-decoding sulla MLA**: chunk di cache in shared riusato da
+  tutte le 20 head (via il fattore 20 di riletture del monolitico). attn
+  51.2 → 27.5 ms/token (bycat); decode 4.982.
+- **it.13 famiglia fast sui K-quant**: 8 thread/superblocco e word in registri
+  al posto di 56 thread fermi e load byte-a-byte. shexp 14.6 → 5.5, head
+  9.6 → 3.8; decode **5.054** (nuovo massimo); dispatch/token 1405.
+- **it.14 conformance reale**: argmax ≡ cpuref-f64 **256/256** sul campione
+  ratificato; top-1 golden 99.22% (le 2 divergenze = le stesse di C2, stesso
+  token di cpuref). Full-corpus a fase 6 (item 11).
+- **Gate 4b: gpuBusy 54.2 ≤ 54.5 PASS** con attribuzione kernel-vs-clock:
+  clock SM medi 863 MHz (vs 1746 di it.1, CSV in results/engine/) — la
+  riduzione è tutta kernel, i clock remavano contro.
+- **Processo nuovo**: implementazione delegata a Opus su design chiuso, doppia
+  review avversaria (Opus + Codex) per iterazione, verifier indipendente alla
+  chiusura di fase. Tre round di fix da finding reali, zero difetti numerici
+  sopravvissuti.
+- **Il vincolo confermato**: coi 46 drain i guadagni GPU non diventano tok/s
+  (decode +1.7% a fronte di −15 di gpuBusy). Proiezione: batchare tutto dà
+  12.47 tok/s < gate 13.43 ⇒ la fase 4 (eliminazione) è il prossimo pezzo.

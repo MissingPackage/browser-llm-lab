@@ -914,8 +914,10 @@ tautologico in glmmodel; (3) `attnPartials` assente dai candidates di
 
 ### L'attribuzione kernel-vs-clock (obbligo del done-when 4b)
 
-Clock SM campionati durante la run headline (nvidia-smi, 2 s, 195 campioni
-GPU-attivi): **media 948 MHz** (min 255, max 1455) contro i 1746 di it.1 —
+Clock SM campionati durante la run headline (nvidia-smi ogni 2 s; aggregatore:
+media dei campioni con utilization>10%, n=195; CSV persistito in
+`results/engine/clocks-sm-it12-mlasplit2-2026-08-03.csv`): **media 948 MHz**
+(min 255, max 1455) contro i 1746 di it.1 —
 il cap è 3105. Il paradosso apparente della replica bycat (tutte le categorie
 non-attn ~raddoppiate: shexp 7.16→14.63, head 4.64→9.61, experts 3.95→8.06)
 è questo: meno lavoro GPU ⇒ più bolle relative ⇒ boost più basso ⇒ ms gonfiati
@@ -975,6 +977,9 @@ a 4 consumatori, `dot`→`dotq` (shadowing del builtin).
 
 ktest 44/44; `npm test` 272+2; `tsc` pulito. Bench quiescente ×2 (clock
 campionati: 863 MHz medi run 1):
+(Clock: aggregatore = media dei campioni nvidia-smi ogni 2 s con
+utilization>10%, n=289, min 210 max 1335; CSV persistito in
+`results/engine/clocks-sm-it13-kquantfast-2026-08-03.csv` — copre la run 1.)
 - `bench-glm-4090-b12-kquantfast-2026-08-03.json` (attrib+bycat):
   **shexp 14.63→5.54, head 9.61→3.81** (bycat); attn 27.5→32.0 ed experts
   8.1→13.1 su clock più bassi (863 vs 948) e replica singola — rumore+clock,
@@ -1003,3 +1008,50 @@ campione ratificato, top-1 vs golden ≥ 98.83%): non verificata in it.13 (ktest
 sintetico argmax 6/6 non basta). Prossima iterazione: conformance reale
 (glmconf) + routing, poi la 4b chiude e si ripresenta l'item 2 come da
 done-when della fase 4.
+
+## it.14 (2026-08-03) — conformance reale: la fase 4b CHIUDE
+
+Misura pura, zero codice. glmconf sul campione ratificato 2/8 (p4+p7, 256
+posizioni generate, budget 11 GiB come da precedente C2 anti-OOM, macchina
+quiescente): `logits-conformance-glm47flash-sample47-2026-08-03.json`.
+
+- **Gate (i): argmax motore ≡ cpuref-f64 256/256** (confronto rifatto dai file
+  grezzi contro `logits-cpuref-p{4,7}-2026-08-01.json`, posizione per
+  posizione). Le somme f32 riordinate da it.12 (attention split) e it.13
+  (K-quant fast) non spostano NESSUN argmax del campione.
+- **Top-1 vs golden: 254/256 = 99.22% ≥ 98.83%.** Le 2 divergenze sono le
+  STESSE di C2 (p4 k=34 → 51, p7 k=75 → 1182) e in entrambe il motore sceglie
+  lo stesso token di cpuref-f64: la firma di divergenza oracolo-vs-f64 è
+  intatta. klMean 2.6e-3, maxDl 29.9 (metrica di scala, non gate).
+- Full-corpus: resta il gate di fase 6 (ruling item 11); qui il campione è
+  stato ESEGUITO davvero (non sostituito byte-identico come in fase 3 — con la
+  matematica cambiata la sostituzione non era disponibile).
+
+**FASE 4b DONE (it.10-14).** Checklist del done-when: gpuBusy 54.2 ≤ 54.5
+(kquantfast, attribuzione: tutto kernel, clock 863 MHz CONTRO — zero guadagno
+dai clock, che scendono con le bolle); dispatch/token 1405 e clock riportati;
+correttezza sopra; `npm test` 272+2. Nota onesta: la soglia è presa con 0.3 di
+margine a clock depressi — se la fase 4 alza i clock, gpuBusy scende ancora;
+il rischio inverso (clock ancora più giù) non esiste perché la fase 4 rimuove
+le bolle che li deprimono.
+
+Prossimo: **fase 4** (eliminazione dei 46 drain) — il rischio dichiarato del
+goal. Proiezione it.13 aggiornata: batchare tutti i sync dà 12.47 tok/s,
+ancora sotto il gate 13.43 ⇒ serve l'eliminazione (binding fisso + offset
+aritmetico, spec §3.2-bis), che diventa totale solo con la 4c (residenza).
+A fine fase 4: ripresentare l'item 2 (clausola di fallback) come da done-when.
+
+### Post-verifier (chiusura ratificata)
+
+Verifier indipendente sulla chiusura: sostanza tutta confermata (256/256
+ricalcolato dai grezzi, gpuBusy, dispatch, suite), FAIL su due punti di
+bookkeeping, entrambi sistemati prima del commit: digest it.11-14 scritti
+(erano fermi a it.10) e CSV dei clock persistiti in results/engine/ con
+aggregatore dichiarato (i numeri del journal sono riproducibili esattamente:
+util>10% ⇒ 948/195 e 863/289). Due osservazioni del verifier per la fase 6,
+registrate qui: (a) i report citati nelle chiusure di fase hanno
+`gates.decodePass=false` per costruzione (il gate vive a fase 6) — un campo
+`phaseContext` li renderebbe auto-descrittivi; (b) la coppia
+headline/attribuzione è distinguibile solo dal journal — un campo `run:
+"headline"|"attribution"` nel JSON sarebbe assicurazione a buon mercato per la
+catena di non-regressione di fase 6.

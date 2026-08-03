@@ -12,14 +12,20 @@ emulazione f64 rel≤3e-13 + Codex fault-injection 0/64 escape): kernel corretti
 la tolleranza ktest allargata è stata rifatta su derivazione onesta (il modello
 FMA+associatività reale coincide col device a 4 cifre: 5.869e-4).
 
-**PROSSIMO PEZZO, nessuna decisione pendente: chiudere la fase 4b con la
-correttezza reale** — glmconf (argmax ≡ cpuref-f64, top-1 vs golden) + routing
-conformance non peggiore di `routing-conformance-glm47flash-2026-07-31.json`.
-I kernel di it.12-13 cambiano l'ordine delle somme f32 in attention/shexp/head:
-il ktest sintetico (44/44) non basta per il done-when. Poi la **fase 4** (il
-drain): è lì che vive il gate 13.43 — proiezione aggiornata it.13: 12.47 tok/s
-batchando tutti i 46 sync (K=46), ancora sotto gate ⇒ serve l'eliminazione
-vera (binding fisso + offset aritmetico, spec §3.2-bis), non il batching.
+**FATTO (it.14): FASE 4b CHIUSA.** glmconf sul campione ratificato: **argmax ≡
+cpuref-f64 256/256**, top-1 golden 99.22% (le 2 divergenze sono le stesse di
+C2, stesso token di cpuref). Full-corpus resta il gate di fase 6 (item 11).
+
+**PROSSIMO PEZZO, nessuna decisione pendente: FASE 4 — eliminare i 46 drain.**
+È il rischio dichiarato del goal e l'unico posto dove vive il gate 13.43:
+proiezione it.13: batchare TUTTI i sync dà 12.47 tok/s, sotto gate ⇒ serve
+l'eliminazione (binding fisso + offset aritmetico, spec §3.2-bis), che diventa
+totale solo con la 4c (residenza). It.9 ha già il router top-4 su GPU
+(`routerTopKWgsl`). Il pezzo mancante: catene expert pilotate dagli indici
+GPU-resident senza che la CPU li legga — finché la residenza non è totale il
+readback serve ancora per gli ensure dei miss (hit 97.6%), quindi la fase 4
+costruisce il meccanismo e la 4c lo rende drain-free. A fine fase 4:
+ripresentare item 2 (clausola di fallback).
 
 **FATTO (it.12): flash-decoding sulla MLA.** `mlaAttnSplitPartWgsl` (chunk da
 16 posizioni, 256 thread/wg, cache in shared riusata da tutte le 20 head) +
