@@ -1,23 +1,43 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-02, sessione 19 — goal C3a: fase 4 avviata)
+# HANDOFF — browser-llm-lab   (updated 2026-08-02, sessione 19 — C3a: attribuzione per categoria, il bersaglio è l'attention)
 
 ## 1. Next decidable
 
-**FASE 4 IN CORSO — strato 1 di spec §3.2-bis.** Fatto in it.9 il primo pezzo:
-**router top-4 su GPU** (`routerTopKWgsl`), con la fedeltà f32-vs-f64 misurata
-invece che dichiarata — insiemi identici su 64 estrazioni, pesi maxRel 1.6e-7,
-e un caso a pareggio costruito che trova il bordo: tiene fino a **1e-6** di
-separazione, primo flip a 1e-7, cioè **10× di margine** sul gate dichiarato.
-ktest 32/32.
+**IL FATTO CHE RIORGANIZZA IL GOAL (it.11).** Attribuzione di `gpuBusy` per
+categoria di kernel, misurata (`bench-glm-4090-b12-bycat-2026-08-02.json`):
 
-**Prossimo pezzo (nessuna decisione pendente, si può eseguire):** il resto dello
-strato 1 — bind group layout esplicito al posto di `layout: "auto"` (6 siti),
-base-offset nei GEMV expert (oggi `qs`/`scales` assumono offset 0), collasso dei
-4 buffer `wExp[k]` in uno indicizzato, tabella slot→(buffer, offset) su GPU
-mantenuta da `ExpertCache`. Solo dopo il readback può sparire.
+| categoria | ms/token | quota |
+|---|---|---|
+| **attn (MLA)** | **51.21** | **74.5%** |
+| shexp | 7.16 | 10.4% |
+| head | 4.64 | 6.7% |
+| experts | 3.95 | 5.8% |
+| router / dense / addMoe | 1.73 | 2.5% |
 
-**Ruling recepiti (2026-08-02)**: **item 11** = sostituzione accettata,
-conformance full-corpus rimandata al gate di fase 6; **item 8** = si paga la
-residenza totale, la leva 2 si progetta senza miss.
+**Il modello "byte letti ⇒ tempo" è morto**: la catena expert è il 41% dei byte
+e il 5.8% del tempo; l'attention è ~2.6% dei byte e il 74.5% del tempo. Ogni
+pianificazione fatta sulla banda in questo goal (inclusa `state-2026-08-02` §2)
+va riletta con questa tabella.
+
+**PROSSIMO PEZZO, nessuna decisione pendente: portare `attnSplitPart` +
+`attnSplitReduce` (flash-decoding, path Qwen) sulla MLA.** Causa letta nel
+kernel: `mlaAttnDecodeWgsl` gira su **nHead = 20 workgroup da 64 thread**
+(1280 thread totali) e ogni workgroup riscorre **tutta** la cache KV due volte
+con un loop seriale da 576 iterazioni. Non è banda né FLOP: è parallelismo
+assente. In più le 20 riletture sono ridondanti per costruzione — in MLA la
+cache c_kv è condivisa fra le head, e un kernel che carica un chunk di cache in
+shared e lo usa per tutte le head toglie un fattore 20 di traffico.
+
+**Il vincolo da tenere presente mentre si ottimizza la GPU**: con 46 drain per
+token i guadagni GPU non si convertono in tok/s. Misurato in it.10: −6.75 ms di
+`gpuBusy` → −4.27 di wall → **+1.1% di decode**, e `sync/CPU` è SALITO a 99.7
+(50% del wall). Proiezione nel report: **9.77 tok/s anche batchando tutti e 46 i
+sync**, sotto il gate 13.43. ⇒ la fase 4 (togliere il drain) resta obbligatoria,
+la 4b da sola non porta al gate.
+
+**Ruling recepiti (2026-08-02)**: **item 11** = sostituzione della conformance
+accettata, full-corpus al gate di fase 6; **item 8** = si paga la residenza
+totale, la leva 2 si progetta senza miss; **item 12** = la 4b parte subito
+(portare la famiglia fusa di Qwen), PHASES aggiornata.
 
 **DECISIONE APERTA che il PI deve confermare — emendamento a PHASES.** Il
 requant degli expert freddi (conseguenza dell'item 8) tocca
@@ -138,8 +158,18 @@ termini) e §7 (fase C splittata).
 
 ## 4. Open threads
 
-- **Goal C3a**: fasi 1-2-3 DONE (it.1-8), fase 4 avviata (it.9, strato 1).
-  Fasi 4b/5/6/7 a valle; 4c da approvare (v. §1).
+- **Goal C3a**: fasi 1-2-3 DONE (it.1-8); fase 4 strato 1 avviato (it.9, router
+  su GPU); fase 4b in corso (it.10 catena expert, it.11 attribuzione). Fasi
+  5/6/7 a valle; **4c da approvare** (v. §1 e docket item 8).
+- **Stato it.9-11 (sessione 19)**: `routerTopKWgsl` (fedeltà f32 misurata: regge
+  a 1e-6, primo flip a 1e-7); famiglia fusa sulla catena expert
+  (`pairGemvSiluFastWgsl`, `gemvAccumFastWgsl`) ⇒ dispatch/token 1818 → **1450**,
+  `gpuBusy` 75.9 → **69.1**, decode 4.912 → **4.967**; tagging dei pass per
+  categoria (`setTelemetry(on, gpu, byCat)`). ktest **35/35**, `npm test` 252+2,
+  `tsc` pulito, tutto su origin/main.
+- **Quello che NON è stato portato** (e ora si sa quanto vale): shexp Q5_K/Q6_K
+  10.4%, head 6.7%. `gemvQ5K`/`gemvQ6K` usano `sbyte()`, che fa una load u32
+  intera **per ogni byte** — margine grosso, ma dopo l'attention.
 - **Analisi complessiva del motore**: `docs/engine/state-2026-08-02.md` (it.8).
   Il numero che riorganizza la fase 4b: il path GLM usa **5.3× meno banda
   utile** del path Qwen sullo stesso device (5.1% vs 27.0% del picco), perché
