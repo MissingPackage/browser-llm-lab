@@ -34,19 +34,15 @@ token i guadagni GPU non si convertono in tok/s. Misurato in it.10: −6.75 ms d
 sync**, sotto il gate 13.43. ⇒ la fase 4 (togliere il drain) resta obbligatoria,
 la 4b da sola non porta al gate.
 
-**Ruling recepiti (2026-08-02)**: **item 11** = sostituzione della conformance
-accettata, full-corpus al gate di fase 6; **item 8** = si paga la residenza
-totale, la leva 2 si progetta senza miss; **item 12** = la 4b parte subito
-(portare la famiglia fusa di Qwen), PHASES aggiornata.
+**Ruling recepiti (2026-08-02/03)**: **item 11** = sostituzione della
+conformance accettata, full-corpus al gate di fase 6; **item 8** = si paga la
+residenza totale, la leva 2 si progetta senza miss; **item 12** = la 4b parte
+subito (portare la famiglia fusa di Qwen). **Emendamento 4 scritto** (2026-08-03):
+`GOAL.md` + riga **4c** in PHASES (residenza totale, `blocked-by-4`, fase 6 ora
+`blocked-by-3,4,4b,4c,5`) — è l'unica fase con authority delta.
 
-**DECISIONE APERTA che il PI deve confermare — emendamento a PHASES.** Il
-requant degli expert freddi (conseguenza dell'item 8) tocca
-`quant.ts`/`slabfile.ts`/import: sono gli `owns` della fase 3, chiusa. Proposta:
-**fase 4c** fra la 4 e la 6, done-when = deficit 0.67 GiB azzerato a ctx 525 +
-eval di perdita entro i gate di correttezza (top-1 ≥98.83%, argmax ≡ cpuref-f64).
-Nota: a ctx 4096 il deficit è 1.03 GiB, quindi il dimensionamento va fatto sul
-contesto che C3b vuole servire, non su 525. Non blocca: la fase 4 ha lavoro nei
-propri owns fino a lì.
+**Nessuna decisione PI pendente.** Aperto solo **item 2** (clausola di
+fallback), che per ruling si ripresenta a fine fase 4.
 
 **Contesto di fase 3 (chiusa, it.4-8).** Limiti WebGPU derivati dai consumatori
 (`src/engine/gpulimits.ts`: `min(adapter, requisito)`, mai costanti né massimo
@@ -61,17 +57,6 @@ dell'adapter) + repack all'import (`src/engine/slabfile.ts`, file OPFS da
   ms/token di read residui sono materia della leva 2 (li nasconde il prefetch).
 - Conformance full-corpus NON eseguita (~5 h): sostituita da verifica
   byte-identica in VRAM e su disco. Docket item 11.
-
-**Prossima fase: 4 — i sync del router.** Primo task da spec §3: il probe è già
-fatto (limiti misurati), quindi si parte dal design "binding fisso + expert come
-offset aritmetico" (prior art ORT/ggml/MLC) più la sovrapposizione CPU/GPU via
-prefetch. Da fare come preludio: allineare `gpuforward.ts:101-107` alla
-derivazione dei limiti (docket item 10, non serve ri-bench).
-
-**Decisione PI aperta e non bloccante: docket item 8** — pagare ~0.67 GiB di
-qualità (5% del parco expert, quant asimmetrica sui più freddi) per ottenere la
-residenza totale ed eliminare il drain della coda. È una scelta sulla funzione
-obiettivo (capienza vs velocità), non di implementazione.
 
 **Contesto — le due assunzioni del contratto smentite dalla misura.**
 1. Le tre leve originali **non raggiungono il gate 13.43** (it.1) ⇒ emendamento 1,
@@ -102,9 +87,6 @@ Dettaglio della fase 1: le tre leve originali **non raggiungono il gate 13.43**.
 - Ruling PI: quarta leva **dentro** C3a (GOAL emendamento 1, fase 4b), gate
   invariato. La fase 4 chiude con una ri-misura obbligatoria di clock e
   `gpuBusy` che dimensiona la 4b.
-Aperto anche: **item 2** (clausola di fallback) — rimandato dal PI a fine fase 4,
-quando la ri-misura avrà sciolto la forbice. La fase 4 ha in done-when l'obbligo
-di ripresentarlo.
 - **Perimetro C3a (struttura)**: repack all'import, eliminazione/batching dei
   46 sync router, prefill batched M>1. **Gate di chiusura**: decode ≥13.43 /
   prefill ≥56.58 tok/s (floor oracolo CPU C1, ereditato dalla deroga C2).
@@ -160,7 +142,7 @@ termini) e §7 (fase C splittata).
 
 - **Goal C3a**: fasi 1-2-3 DONE (it.1-8); fase 4 strato 1 avviato (it.9, router
   su GPU); fase 4b in corso (it.10 catena expert, it.11 attribuzione). Fasi
-  5/6/7 a valle; **4c da approvare** (v. §1 e docket item 8).
+  4c (residenza totale, emendamento 4) e 5/6/7 a valle.
 - **Stato it.9-11 (sessione 19)**: `routerTopKWgsl` (fedeltà f32 misurata: regge
   a 1e-6, primo flip a 1e-7); famiglia fusa sulla catena expert
   (`pairGemvSiluFastWgsl`, `gemvAccumFastWgsl`) ⇒ dispatch/token 1818 → **1450**,

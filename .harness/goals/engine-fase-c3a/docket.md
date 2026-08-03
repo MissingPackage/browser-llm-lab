@@ -187,15 +187,13 @@
    - Serve una **eval di perdita** prima di ratificare quali expert degradare:
      il ruling autorizza la spesa, non esonera dal misurarla. Il gate resta
      top-1 vs golden ≥ 98.83% full-corpus e argmax ≡ cpuref-f64 sul campione.
-   - **Emendamento a PHASES da approvare**: il lavoro di requant (matrice usage
-     C1 → scelta del 5-10% più freddo → quant asimmetrica → nuova versione di
-     layout dello slab) tocca `quant.ts`/`slabfile.ts`/import, che sono gli
-     `owns` della fase 3 (chiusa), non della 4. Proposta: **fase 4c**, dopo la
-     4 e prima della 6, con done-when = deficit 0.67 GiB azzerato a ctx 525 +
-     eval di perdita entro i gate di correttezza. Da confermare al PI: finché
-     non è confermata, la fase 4 procede sulla parte che sta nei suoi owns
-     (router su GPU, binding fissi, offset in shader), che è precondizione
-     della residenza totale in ogni caso.
+   - ~~Emendamento a PHASES da approvare~~ **FATTO (2026-08-03, PI: "fai
+     l'emendamento e chiudiamo")**: `GOAL.md` emendamento 4 + riga **4c** in
+     PHASES (`blocked-by-4`, la fase 6 ora è `blocked-by-3,4,4b,4c,5`). È
+     l'unica fase del goal con un authority delta: quant asimmetrica e nuova
+     versione di layout dello slab escono dal must-docket. La scelta di QUALI
+     expert degradare resta vincolata alla eval di perdita — il ruling
+     autorizza la spesa, non esonera dal misurarla.
    - Il deficit a ctx 4096 è 1.03 GiB, non 0.67: la scelta di quali expert
      degradare va dimensionata sul contesto che C3b vuole servire, non su 525.
 

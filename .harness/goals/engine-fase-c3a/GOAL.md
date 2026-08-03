@@ -3,6 +3,29 @@ CPU di C1 (decode >=13.43 tok/s) e possiede un percorso di prefill batched M>1,
 eliminando i tre costi strutturali attribuiti in C2 (pack CPU nel path caldo,
 46 sync router/token, forward sequenziale in prefill) a correttezza invariata.
 
+<!-- EMENDAMENTO 4 (ruling PI 2026-08-03, docket item 8 + "fai l'emendamento"):
+     la RESIDENZA TOTALE entra nel perimetro C3a come fase 4c.
+     Motivo: il PI ha deciso di pagare ~0.67 GiB di qualita' per eliminare il
+     drain (docket item 8). Senza miss il readback del router non si riduce,
+     sparisce — ed e' la condizione che rende applicabile il pattern binding
+     fisso + offset aritmetico di spec §3.2-bis, provato da ORT/ggml/MLC.
+     Perche' serve un emendamento e non bastava il ruling: il lavoro tocca
+     quant.ts / slabfile.ts / il percorso di import, che sono gli `owns` della
+     fase 3, CHIUSA. Senza una fase propria sarebbe lavoro senza owner.
+     Conseguenze sul contratto:
+     (1) PHASES guadagna la fase 4c, fra la 4 e la 6;
+     (2) "quant asimmetrica sugli expert piu' freddi + nuova versione di layout
+         dello slab" esce dal must-docket ed entra nell'authority, MA la scelta
+         di QUALI expert degradare resta vincolata a una eval di perdita: il
+         ruling autorizza la spesa, non esonera dal misurarla;
+     (3) i gate di correttezza restano invariati e valgono come tetto alla
+         perdita ammissibile (top-1 vs golden >= 98.83% full-corpus,
+         argmax = cpuref-f64 sul campione ratificato);
+     (4) il deficit da colmare NON e' un numero fisso: 0.67 GiB a ctx 525,
+         1.03 GiB a ctx 4096. Il dimensionamento va fatto sul contesto che C3b
+         deve servire, e la scelta va scritta nel report.
+     Il gate 13.43 resta INVARIATO. -->
+
 <!-- EMENDAMENTO 2 (ruling PI 2026-08-02, docket item 7): entrano nel perimetro
      C3a due cose prima vietate o non previste.
      (a) PREFETCH LOOKA (era C3b, must-docket in C3a). Motivo: la misura di it.1
