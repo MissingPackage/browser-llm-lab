@@ -13,7 +13,7 @@ import { createGlmModel } from "../glmmodel";
 import { GlmOpfsSource } from "../glmsource";
 import { negotiateLimits, grantedLimits, slabBufferCap } from "../gpulimits";
 import type { GlmTelemetry } from "../glmmodel";
-import type { ExpertCacheStats } from "../residency";
+import { arenaNeeds, type ExpertCacheStats } from "../residency";
 
 interface GoldenPrompt { id: string; promptTokens: number[]; generated: number[] }
 interface Golden { modelSha256: string; prompts: GoldenPrompt[] }
@@ -129,6 +129,13 @@ async function main(cfg: Cfg): Promise<void> {
     requiredLimits: negotiateLimits(adapter, {
       ctxMax, head: { vocab: G.vocab, dModel: G.dModel },
       slabClassBytes: budgetBytes, // packing ExpertCache: soft, si tronca al disponibile
+      // arena expert (C3a fase 4 strato 1): quanti buffer di classe e quanto
+      // grandi. L'aritmetica e' quella della cache (residency), non ricopiata.
+      ...arenaNeeds({
+        budgetBytes,
+        maxBufferBytes: adapter.limits.maxBufferSize,
+        maxBindingBytes: adapter.limits.maxStorageBufferBindingSize,
+      }),
     }),
   });
   const limits = grantedLimits(device);

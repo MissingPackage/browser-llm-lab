@@ -32,8 +32,30 @@ import { GLM47_FLASH } from "./shape";
 /** Il `workgroup_size` più grande del parco: rmsnormWgsl e argmaxStage1/2. */
 export const MAX_WORKGROUP_SIZE = 256;
 
-/** Storage binding nel bind group più affollato: rmsPairGemvSiluFast (Qwen). */
-export const MAX_STORAGE_BINDINGS_PER_STAGE = 7;
+/**
+ * Storage binding nel bind group più affollato fra quelli che il WGSL dichiara
+ * LETTERALMENTE: rmsPairGemvSiluFast (Qwen). Si chiamava
+ * `MAX_STORAGE_BINDINGS_PER_STAGE`: il nome nuovo dice che è il massimo dei
+ * binding STATICI, perché dalla fase 4 esistono kernel il cui numero di binding
+ * è generato (l'arena expert: `expertArenaBindings`) e quel termine non si
+ * scansiona dal sorgente.
+ */
+export const MAX_STATIC_STORAGE_BINDINGS = 7;
+
+/**
+ * Tetto di progetto sui buffer d'arena di UNA classe (C3a fase 4, strato 1).
+ * A finestra 2 GiB servono 6+1 binding a budget 12 GiB e 7+1 a parco completo
+ * (fase 4c): 8 è il margine, non una costante difensiva. Oltre, `ld4` avrebbe
+ * più archi di quanti binding il device conceda.
+ */
+export const ARENA_BUFFERS_MAX = 8;
+
+/**
+ * Storage binding di una pipeline expert in modo arena: gli nBuf buffer
+ * d'arena + x + out + selBuf. L'uniform `MoeIdx` NON entra nel conto:
+ * `maxStorageBuffersPerShaderStage` conta i soli storage.
+ */
+export const expertArenaBindings = (nBuf: number): number => nBuf + 3;
 
 /**
  * Workgroup storage del path Qwen FUSO, indipendente dal contesto:
@@ -103,6 +125,20 @@ export interface EngineNeedsOpts {
    * proprio consumatore, come tutti gli altri requisiti.
    */
   extraBindings?: Array<{ bytes: number; consumer: string }>;
+  /**
+   * Buffer d'arena della classe expert più frammentata (C3a fase 4, strato 1).
+   * Ogni pipeline expert li binda TUTTI: è il termine che alza
+   * `maxStorageBuffersPerShaderStage` sopra i 7 del path Qwen.
+   * Il valore lo calcola `arenaNeeds` (residency.ts), che conosce il riparto
+   * degli slot — qui non si ricopia quell'aritmetica.
+   */
+  arenaBuffers?: number;
+  /**
+   * Byte del buffer d'arena più grande. È IL requisito che alza il binding size
+   * oltre i 250 MiB della testa Q6_K: con l'arena il binding non è più il
+   * sotto-range di uno slab (~1,5 MB) ma il buffer intero.
+   */
+  arenaWindowBytes?: number;
 }
 
 /** I requisiti del motore, ciascuno col suo consumatore. */
@@ -117,7 +153,7 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
       consumer: "rmsnormWgsl / argmaxStage1-2 (workgroup_size 256)",
     },
     {
-      limit: "maxStorageBuffersPerShaderStage", value: MAX_STORAGE_BINDINGS_PER_STAGE, hard: true,
+      limit: "maxStorageBuffersPerShaderStage", value: MAX_STATIC_STORAGE_BINDINGS, hard: true,
       consumer: "rmsPairGemvSiluFastWgsl / rmsPairGemmSiluChunkFastWgsl (7 storage)",
     },
     {
@@ -131,6 +167,17 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
         : `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, mlaAttnDecode 4·ctxMax+256 = ${mlaWorkgroupStorageBytes(o.ctxMax)} B a ctxMax ${o.ctxMax} — glmforward/ktest)`,
     },
   ];
+  if (o.arenaBuffers !== undefined) {
+    if (o.arenaBuffers > ARENA_BUFFERS_MAX) {
+      throw new Error(
+        `gpulimits: ${o.arenaBuffers} buffer d'arena > ARENA_BUFFERS_MAX ${ARENA_BUFFERS_MAX} ` +
+        "(ridurre la classe o allargare la finestra)");
+    }
+    needs.push({
+      limit: "maxStorageBuffersPerShaderStage", value: expertArenaBindings(o.arenaBuffers), hard: true,
+      consumer: `catena expert arena, ${o.arenaBuffers} binding d'arena + x + out + selBuf`,
+    });
+  }
   // Il binding singolo più grande: testa Q6_K, la KV di un layer, il buffer
   // partials dell'attention split, o un binding dichiarato dall'harness.
   const kvBytes = o.kvBytesPerLayer ?? glmKvBytesPerLayer(o.ctxMax);
@@ -146,6 +193,10 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
       bytes: mlaPartialsLen(GLM47_FLASH.nHead, GLM47_FLASH.kvLora, o.ctxMax) * 4,
       consumer: `attnPartials dello split MLA a ctxMax ${o.ctxMax} (glmmodel)`,
     }]),
+    ...(o.arenaWindowBytes ? [{
+      bytes: o.arenaWindowBytes,
+      consumer: `finestra d'arena ExpertCache: un buffer di classe bindato intero (${(o.arenaWindowBytes / 2 ** 20).toFixed(0)} MiB)`,
+    }] : []),
     ...(o.extraBindings ?? []),
   ];
   const biggest = candidates.reduce((a, b) => (b.bytes > a.bytes ? b : a));

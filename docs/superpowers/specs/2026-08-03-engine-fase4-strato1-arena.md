@@ -1,0 +1,215 @@
+# Fase 4 / strato 1 — arena expert a binding fisso, slot come offset aritmetico
+
+Addendum di design alla spec C3a (`2026-08-01-engine-fase-c3a-design.md`
+§3.2-bis), prodotto in it.15 (2026-08-03). Meccanismo ratificato dal ruling di
+spec (docket item 6); questo documento fissa i layout e lo slicing. Redatto da
+agente Plan su lettura dei file veri; rivisto e approvato dall'orchestratore.
+
+## 0. La geometria vera, calcolata (non assunta)
+
+| voce | q4_0 | q4_1 |
+|---|---|---|
+| slab (`moe.ts` `mkLayout`) | 5 308 416 B | 5 505 024 B |
+| parco | 2 688 | 256 |
+| slot a budget 12 GiB (riparto `ExpertCache`) | 2 216 | 203 |
+
+**Fatto n.1.** Oggi `slabBufferCap()` usa `maxBindingBytes` = il negoziato =
+`q6kHeadBytes` (250 MiB), NON 2 GiB: i buffer di classe attuali (~4,29 GB, 3
+q4_0 + 1 q4_1) non sono bindabili per intero. La correzione di it.5
+(`residency.ts:13-21`) è giusta per il regime a sotto-range e si INVERTE nel
+regime arena (il binding È il buffer): va dichiarato nel codice.
+
+**Fatto n.2.** Finestra d'arena al tetto NVIDIA (2 147 483 644 B):
+W(q4_0)=404 slab/binding, W(q4_1)=390 ⇒ 6+1 binding a budget 12 GiB, 7+1 a
+parco completo (4c). Margine di progetto: `ARENA_BUFFERS_MAX = 8`.
+
+**Fatto n.3.** `maxStorageBuffersPerShaderStage` negoziato oggi = 7; le
+pipeline arena chiedono nBuf+3 ≤ 11 (adapter: 16). Da negoziare col
+consumatore dichiarato.
+
+## 1. Architettura
+
+Ogni classe ha N buffer d'arena bindati FISSI in un bind group statico; una
+struttura `Sel` in VRAM (entry per `(layer MoE, k)`) porta `{id, slot, w,
+flags}`; i kernel GEMV expert leggono `Sel[selIdx]` con `selIdx` da uniform a
+dynamic offset (valore CPU-noto: è `(layer,k)`, mai l'expert) e trasformano lo
+slot in indirizzo aritmetico. Chi riempie `Sel` è intercambiabile: CPU
+(writeBuffer, regime attuale) o router+resolve su GPU (a residenza totale).
+I kernel expert NON cambiano fra i due regimi.
+
+Dettagli:
+1. **Arena bindings**: in modo arena `ExpertCache` cappa il buffer di classe a
+   `min(maxBufferBytes, maxBindingBytes)` → un buffer = un binding. nSlots
+   invariato; VRAM identica; buffer 4 → 7.
+2. **Indirizzamento**: binding `array<vec4<u32>>` (offset slab tutti multipli
+   di 256 ⇒ allineati); scale lette dallo stesso binding con selezione di
+   componente `arena[w>>2u][w&3u]` (precedente in produzione:
+   `unpack2x16float(gScales[gb>>1u])[gb&1u]`).
+   `bufIdx = slot / SLABS_PER_BUF`, `base = (slot % SLABS_PER_BUF) * SLAB_W`
+   (costanti compile-time ⇒ mul+shift). Range indici < 2^30, no overflow.
+3. **Selezione del binding**: `fn ld4(b,i)` con switch sui nBuf binding —
+   branch uniforme sull'intero dispatch (un expert per dispatch): scalare,
+   senza divergenza.
+4. **`Sel` + slotTable**: `Sel` è l'indirezione unica; la `slotTable`
+   (expertKey→slot) serve solo al resolve GPU ⇒ entra nello slice B.
+
+### Alternative scartate (sintesi)
+- Dispatch per binding con early-out: +2200 dispatch/token quasi vuoti (resta
+  fallback se R1 patologico).
+- Duplicazione testuale del corpo per buffer: è la mitigazione di R1, non la
+  partenza.
+- Doppio binding qs/scale per buffer: 17 > 16 binding, muore sul limite.
+- Arena separata per le scale: tocca gli owns della fase 3 (chiusa).
+- Buffer 4 GiB con 2 sotto-range: 809 slab non si spezzano in 2 range legali.
+- Fusione 4 expert in 1 dispatch gate/up: il down accumulante sarebbe una race
+  (ordine somme ⇒ viola identità). Rimandata alla leva 4, dichiarata.
+- binding_array/bindless/dynamic offset GPU-driven: non in Dawn / richiedono
+  valore CPU (§3.0-bis).
+
+## 2. Layout esatti
+
+### 2.1 `Sel` (storage, VRAM)
+```
+struct Sel { id: u32, slot: u32, w: f32, flags: u32 }   // 16 B
+selBuf: array<Sel, nMoeLayer*nUsed>                      // 184 entry = 2 944 B
+selIdx = moeLayerIdx*nUsed + k
+```
+`slot = 0xFFFFFFFF` = MISS; `w` già ×1.8 (sostituisce i 4 `wExp[k]`);
+`flags` bit 0 = miss risolto (skip). CPU-select: 1 writeBuffer da 64 B/layer.
+
+### 2.2 `MoeIdx` (uniform, dynamic offset)
+```
+struct MoeIdx { selIdx: u32, tableBase: u32, moeLayer: u32, _pad: u32 }
+stride 256 B (minUniformBufferOffsetAlignment) × 184 entry = 47 104 B
+```
+Bind group: 4 STATICI in tutto ({q4_0,q4_1}×{gate/up,down}), costruiti al
+load; `slotBgCache` sparisce.
+
+### 2.3 Binding pipeline arena
+0..nBuf-1 arena (buffer interi) | nBuf: x | nBuf+1: out | nBuf+2: selBuf |
+nBuf+3: MoeIdx uniform con `hasDynamicOffset: true`. Storage/stage ≤ 11.
+
+### 2.4 Costanti per classe nel WGSL
+SLAB_W (1 327 104 q4_0 / 1 376 256 q4_1), SLABS_PER_BUF, 6 offset in word da
+`SlabLayout` (MAI riscritti a mano — arrivano dal layout di fase 3).
+
+### 2.5 `slotTable` (slice B)
+`array<u32, nLayer*nExpert>` = 12 032 B; mantenuta da `ExpertCache.ensure` via
+writeBuffer con shadow Uint32Array + flush dell'intervallo sporco una volta
+per layer PRIMA delle dispatch; ordine obbligatorio writeBuffer(slab) → poi
+writeBuffer(tabella); chiave globale layer*nExpert+e (l'eviction non rispetta
+i layer).
+
+## 3. File e funzioni (firme)
+
+- `wgsl.ts`: `pairGemvSiluFastWgsl(opts { K, N, arena?: ArenaOpts })` e
+  `gemvAccumFastWgsl(opts { kind, K, N, arena?: ArenaOpts })` — STESSA
+  funzione, opzione aggiuntiva; senza `arena` il testo emesso è IDENTICO a
+  oggi (byte per byte). Il corpo aritmetico esiste una volta sola nel
+  sorgente. `routerTopKWgsl(opts { …, resolve?: { nExpert, nUsed } })` —
+  blocco opzionale in coda, senza `resolve` output testualmente identico a
+  it.9 (slice B).
+  `ArenaOpts { nBuf, slabWords, slabsPerBuf, qsWords, scalesWords,
+  gateQsWords, gateScWords, upQsWords, upScWords, nUsed }`.
+- `residency.ts`: `ExpertCacheOpts += { arena?: boolean; slotTable?: boolean }`;
+  in modo arena `slabsPerBuffer = floor(min(maxBufferBytes, maxBindingBytes) /
+  layout.bytes)` col commento sull'inversione del cap di it.5;
+  `SlotRef += { idx }`; nuova `arenaGeometry(cls)`; `slotTableBuffer()` +
+  manutenzione in `ensure` (slice B); `slotBindRanges()` resta invariato.
+- `gpulimits.ts`: `MAX_STORAGE_BINDINGS_PER_STAGE` → `MAX_STATIC_STORAGE_BINDINGS`
+  (valore invariato); `ARENA_BUFFERS_MAX = 8`;
+  `expertArenaBindings = nBuf+3`; `EngineNeedsOpts += { arenaBuffers?,
+  arenaWindowBytes? }` ⇒ 2 LimitNeed nuovi coi consumatori
+  ("catena expert arena, nBuf binding" / "finestra d'arena: N slab in un
+  binding" — è il requisito che alza il binding size da 250 MiB).
+- `tests/gpulimits.test.ts`: la scansione testuale resta per i binding
+  letterali; caso nuovo che GENERA il WGSL arena a nBuf=8 e conta i @binding
+  nella stringa prodotta vs `expertArenaBindings(8)`.
+- `glmmodel.ts`: mkPipe con layout esplicito opzionale ("auto" resta default
+  per i ~20 kernel non-arena); pipes expert → varianti arena con BGL espliciti
+  (`hasDynamicOffset` NON esprimibile con layout:"auto" — ragione tecnica);
+  wExp eliminato → selBuf + moeIdxUni; slotBgCache/slotBgs eliminati → 4 bind
+  group statici; ciclo k → `setBindGroup(0, expBg[cls][stage], [selIdx*256])`;
+  ensure + 1 writeBuffer da 64 B; `GlmModelOpts += { select?: "cpu"|"gpu"|
+  "shadow", cache.arena?: boolean }`; dispatchesPerTokenPlanned invariato in
+  slice A (+1/layer MoE in B); destroy aggiornata.
+- Worker (glmbench/glmconf/glmroute/ktest): solo `negotiateLimits` con
+  arenaBuffers/arenaWindowBytes calcolati da una funzione esportata da
+  residency.ts (non ricopiata).
+
+## 4. Slicing
+
+### Slice A — arena e offset, la CPU comanda ancora (it.15)
+Kernel arena + ExpertCache arena + BGL espliciti + Sel/uniform + collasso wExp
++ rimozione slotBgCache. Sel riempita dalla CPU dopo gli ensure. Niente
+tabella, niente router GPU. GATE:
+1. ktest `expert-arena-vs-slotrange`: stesso slab bindato a sotto-range
+   (kernel attuale) e dentro un'arena da 3 slab al terzo offset (nBuf=2
+   forzato): uscite f32 IDENTICHE BIT-A-BIT (gate/up e down, entrambe le
+   classi). Fallback R2 dichiarato sotto.
+2. ktest `glm-model-*` invariato ma con maxBindingBytes di test abbassato a
+   3 slab per forzare nBuf ≥ 3 (senno' nBuf=1 e lo switch non ha archi).
+   Gate invariati + PLANNED invariato + misses > 0.
+3. unit node: round-trip idx → (bufIdx, base) vs slotBindRanges per OGNI slot
+   delle due classi.
+4. bench GLM: routerSyncs/submits/dispatches per token IDENTICI al baseline
+   (asserzione esplicita: lo strato 1 non riduce i sync da solo);
+   `gpuByCatMs.experts` non peggiore di it.13 iso-clock oltre il 5%.
+
+### Slice B — selezione su GPU, in ombra (it.16)
+routerTopK+resolve, slotTable, modo `shadow`: router GPU scrive Sel in regione
+ombra mentre la CPU comanda come in A; confronto GPU-vs-CPU al tail (copia
+2×2 944 B nella mapAsync esistente). Misura la fedeltà del router GPU sul
+corpus vero di glmroute (31 274 posizioni) invece delle 64 estrazioni
+sintetiche di it.9. GATE: `gpuRouterAgreement` ≥ 99.99% set-match;
+setMatch decode/prefill verso l'oracolo IDENTICI all'artefatto 07-31 (decide
+ancora la CPU); dispatch +1/layer MoE dichiarato.
+
+### Slice C — l'interruttore (it.17)
+`select:"gpu"`: salta copy logits, submit per layer, mapLogits, routerSelect,
+ensure; routing[] letto da Sel al tail. Ammesso SOLO con residenza totale
+(errore esplicito altrimenti, mai degradazione silenziosa). Verificabile OGGI
+nel ktest: mini-modello con `slotsOverride {q4_1: 64}` ⇒ residenza totale per
+costruzione, modo gpu contro gli stessi riferimenti f64. GATE: identità con A
++ `telemetry().routerSyncs === 0` + `submits === 1` per token.
+
+## 5. Rischi (probabilità, discriminatore, mitigazione)
+
+- **R1 switch nel loop interno costa** (media): discriminatore = ktest arena a
+  nBuf=1 vs nBuf=8 sullo stesso dato (la differenza È il costo dello switch);
+  mitigazione = duplicazione testuale del corpo per buffer (meccanica).
+- **R2 identità bit-a-bit non regge** (media-bassa, contrazione FMA per
+  modulo): se cade, guardare QUANTO: ≤1e-7 = riassociazione benigna ⇒ gate
+  declassato a maxRel ≤ 1e-6 + L2rel modello invariata, dichiarato nel
+  journal; ordini sopra = bug d'indirizzo.
+- **R3 limiti più alti degradano il device** (bassa, spec §3.6.2):
+  discriminatore = gpuByCatMs.attn (non tocca l'arena: se peggiora anche lei
+  è la negoziazione); mitigazione = finestra ridotta a parcoClasse/8 = 1,78
+  GiB.
+- **R4 frammentazione/OOM con 7 buffer da 2,14 GB** (bassa-media): fallimento
+  a createBuffer/buildMs; mitigazione = budget −1 slab per classe o buffer da
+  2·W slab con 2 range.
+- **R5 ordine writeBuffer slab/tabella invertito** (bassa, conseguenza alta):
+  il ktest mini-modello con misses>0 ed evizioni per token lo vede come L2rel
+  che esplode dopo il riempimento; flushSlotTable in un solo punto.
+- **R6 select gpu a residenza parziale** (media, errore naturale della 4c):
+  contatore telemetria NUOVO `selMiss` letto nel tail; il modo gpu rifiuta di
+  partire senza residenza totale; flags rende il degrado definito.
+- **R7 hasDynamicOffset/allineamento**: error scope già attivo.
+- **R8 router f32 flippa dove f64 no** (bassa, NON è un bug: it.9 tiene a
+  1e-6): gpuRouterAgreement dello slice B sul corpus vero decide PRIMA
+  dell'interruttore.
+
+## 6. Cosa NON cambia (e dove si dichiara)
+
+routerSyncs=46 e submits=47 per token in A e B (asserzione nel bench +
+tabella nel journal); percorso ensure (firma, LRU, pinned, contatori);
+formato slab/file slab (fase 3); path Qwen (zero modifiche — unici consumatori
+delle funzioni toccate: glmmodel e ktest); categorie di telemetria (routerTopK
+entra in `router`); GlmRouting.weights Float64Array; conteggio dispatch: A
+invariato, B +46/token, C come B — la fusione gate/up ×4 esplicitamente NON
+fatta qui.
+
+**Aggancio strato 2 (LOOKA)**: slotTable + Sel sono l'interfaccia che il
+prefetch userà — caricare uno slab e pubblicarne lo slot sono asincroni e non
+toccano né bind group né encode. Lo strato 1 non gli lascia nulla da smontare.

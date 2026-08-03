@@ -16,15 +16,24 @@ FMA+associatività reale coincide col device a 4 cifre: 5.869e-4).
 cpuref-f64 256/256**, top-1 golden 99.22% (le 2 divergenze sono le stesse di
 C2, stesso token di cpuref). Full-corpus resta il gate di fase 6 (item 11).
 
-**PROSSIMO PEZZO, nessuna decisione pendente: FASE 4 — eliminare i 46 drain.**
-È il rischio dichiarato del goal e l'unico posto dove vive il gate 13.43:
-proiezione it.13: batchare TUTTI i sync dà 12.47 tok/s, sotto gate ⇒ serve
-l'eliminazione (binding fisso + offset aritmetico, spec §3.2-bis), che diventa
-totale solo con la 4c (residenza). It.9 ha già il router top-4 su GPU
-(`routerTopKWgsl`). Il pezzo mancante: catene expert pilotate dagli indici
-GPU-resident senza che la CPU li legga — finché la residenza non è totale il
-readback serve ancora per gli ensure dei miss (hit 97.6%), quindi la fase 4
-costruisce il meccanismo e la 4c lo rende drain-free. A fine fase 4:
+**FATTO (it.15): FASE 4 SLICE A — arena a binding fisso in produzione.**
+Design persistito in `docs/superpowers/specs/2026-08-03-engine-fase4-strato1-arena.md`
+(leggerlo per gli slice B/C: layout Sel/slotTable, gate, rischi). Implementato
+e verificato: identità BIT-A-BIT arena-vs-sotto-range, kernel non-arena
+byte-identici, ktest 48/48, decode **5.081** (nuovo massimo), contatori
+invariati per contratto (46 sync/47 submit/1405 dispatch — lo slice A non
+riduce i sync: costruisce il meccanismo). R3/R4 sciolti (no OOM coi 6+1
+buffer, attn ferma coi limiti alzati).
+
+**PROSSIMO PEZZO, nessuna decisione pendente: SLICE B del design** —
+`routerTopKWgsl` + blocco resolve, slotTable mantenuta da ExpertCache via
+writeBuffer (shadow + flush intervallo sporco), modo `shadow`: il router GPU
+scrive Sel in regione ombra mentre la CPU comanda; confronto GPU-vs-CPU al
+tail. Misura la fedeltà del router GPU sul corpus VERO di glmroute (31 274
+posizioni) — gate: gpuRouterAgreement ≥ 99.99%, setMatch verso l'oracolo
+IDENTICO all'artefatto 07-31, dispatch +1/layer MoE dichiarato. Poi slice C
+(interruttore, verificabile nel ktest a residenza totale per costruzione) e,
+a valle della 4c, il drain sparisce. A fine fase 4: ri-misura gpuBusy/clock +
 ripresentare item 2 (clausola di fallback).
 
 **FATTO (it.12): flash-decoding sulla MLA.** `mlaAttnSplitPartWgsl` (chunk da

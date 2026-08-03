@@ -11,6 +11,7 @@ import { dequantQ4_0Row } from "../quant";
 import { createGlmModel } from "../glmmodel";
 import { GlmOpfsSource } from "../glmsource";
 import { negotiateLimits, slabBufferCap, grantedLimits } from "../gpulimits";
+import { arenaNeeds } from "../residency";
 
 interface TraceRow { p: number; i: number; tok: number; ph: "p" | "d"; e: number[] }
 interface TraceFile {
@@ -53,6 +54,12 @@ async function main(cfg: Cfg): Promise<void> {
     requiredLimits: negotiateLimits(adapter, {
       ctxMax, head: { vocab: G.vocab, dModel: G.dModel },
       slabClassBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
+      // arena expert (C3a fase 4 strato 1): binding d'arena e finestra
+      ...arenaNeeds({
+        budgetBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
+        maxBufferBytes: adapter.limits.maxBufferSize,
+        maxBindingBytes: adapter.limits.maxStorageBufferBindingSize,
+      }),
     }),
   });
   const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);

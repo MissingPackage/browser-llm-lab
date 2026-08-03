@@ -11,9 +11,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   engineNeeds, limitsFor, negotiateLimits, grantedLimits, UnmetLimitError,
-  MAX_WORKGROUP_SIZE, MAX_STORAGE_BINDINGS_PER_STAGE, QWEN_WORKGROUP_STORAGE_BYTES,
+  MAX_WORKGROUP_SIZE, MAX_STATIC_STORAGE_BINDINGS, QWEN_WORKGROUP_STORAGE_BYTES,
+  ARENA_BUFFERS_MAX, expertArenaBindings,
   mlaWorkgroupStorageBytes, q6kHeadBytes, glmKvBytesPerLayer,
 } from "../src/engine/gpulimits";
+import { pairGemvSiluFastWgsl, gemvAccumFastWgsl, type ArenaOpts } from "../src/engine/kernels/wgsl";
+import { SLAB_DOWN_Q4_1 as SLAB } from "../src/engine/moe";
 import { GLM47_FLASH as G } from "../src/engine/shape";
 
 // Limiti misurati sul 4090 Laptop (results/engine/webgpu-limits-4090laptop-2026-08-02.json)
@@ -48,21 +51,74 @@ describe("derivazione vs parco kernel (scansione del WGSL vero)", () => {
     expect(Math.max(...sizes)).toBe(MAX_WORKGROUP_SIZE);
   });
 
-  it("MAX_STORAGE_BINDINGS_PER_STAGE copre il bind group più affollato", () => {
+  it("MAX_STATIC_STORAGE_BINDINGS copre il bind group più affollato", () => {
     // conta i binding `var<storage>` dentro ogni generatore (blocchi separati
     // da `export function`), perché gli indici ripartono da 0 a ogni kernel
     const blocks = src.split(/^export function /m).slice(1);
     const perKernel = blocks.map((b) => (b.match(/@group\(0\)\s*@binding\(\d+\)\s*var<storage/g) ?? []).length);
     expect(blocks.length).toBeGreaterThan(20);
-    expect(Math.max(...perKernel)).toBe(MAX_STORAGE_BINDINGS_PER_STAGE);
+    expect(Math.max(...perKernel)).toBe(MAX_STATIC_STORAGE_BINDINGS);
   });
 
-  it("nessun kernel dichiara più binding di quanti il limite ne conceda", () => {
+  it("nessun kernel dichiara più binding LETTERALI di quanti il limite ne conceda", () => {
     const blocks = src.split(/^export function /m).slice(1);
     for (const b of blocks) {
       const n = (b.match(/@group\(0\)\s*@binding\(\d+\)\s*var<storage/g) ?? []).length;
-      expect(n).toBeLessThanOrEqual(MAX_STORAGE_BINDINGS_PER_STAGE);
+      expect(n).toBeLessThanOrEqual(MAX_STATIC_STORAGE_BINDINGS);
     }
+  });
+
+  // La scansione qui sopra vede solo i binding scritti a mano. I kernel d'arena
+  // (fase 4, strato 1) ne generano nBuf+3, e quel numero non è nel sorgente: si
+  // conta sul WGSL PRODOTTO, al tetto di progetto.
+  it("i kernel d'arena emettono esattamente expertArenaBindings(nBuf) storage", () => {
+    const arena = (nBuf: number): ArenaOpts => ({
+      nBuf, slabWords: SLAB.bytes / 4, slabsPerBuf: 390,
+      qsWords: SLAB.downQs / 4, scalesWords: SLAB.downScales / 4,
+      gateQsWords: SLAB.gateQs / 4, gateScWords: SLAB.gateScales / 4,
+      upQsWords: SLAB.upQs / 4, upScWords: SLAB.upScales / 4,
+    });
+    for (const nBuf of [1, 3, ARENA_BUFFERS_MAX]) {
+      const codes = [
+        pairGemvSiluFastWgsl({ K: G.dModel, N: G.dFfnExpert, arena: arena(nBuf) }),
+        gemvAccumFastWgsl({ kind: "q4_1", K: G.dFfnExpert, N: G.dModel, arena: arena(nBuf) }),
+      ];
+      for (const code of codes) {
+        const storages = (code.match(/@group\(0\) @binding\(\d+\) var<storage/g) ?? []).length;
+        const uniforms = (code.match(/@group\(0\) @binding\(\d+\) var<uniform/g) ?? []).length;
+        expect(storages, `nBuf=${nBuf}`).toBe(expertArenaBindings(nBuf));
+        expect(uniforms).toBe(1); // MoeIdx: non conta nel limite sugli storage
+        // Un arco di `ld4` per buffer, e ogni arco deve leggere IL SUO buffer:
+        // la backreference lega l'indice del case a quello del binding. Senza,
+        // uno switch con tutti i case su `arena0` — cioè un'arena che ignora il
+        // buffer scelto — passerebbe il conteggio.
+        const cases = [...code.matchAll(/^ {4}case (\d+)u: \{ return arena\1\[i\]; \}$/gm)].map((m) => Number(m[1]));
+        expect(cases, `nBuf=${nBuf}: archi di ld4`).toEqual(Array.from({ length: nBuf }, (_, j) => j));
+        // e il default esiste (la grammatica WGSL lo impone) senza aggiungere archi
+        expect((code.match(/^ {4}default: \{ return arena0\[i\]; \}$/gm) ?? []).length).toBe(1);
+        // ogni buffer dichiarato è raggiungibile da un arco, e viceversa
+        const declared = [...code.matchAll(/@binding\(\d+\) var<storage, read> arena(\d+):/g)].map((m) => Number(m[1]));
+        expect(declared).toEqual(cases);
+      }
+    }
+    // il tetto di progetto sta nel limite che l'adapter di riferimento offre
+    expect(expertArenaBindings(ARENA_BUFFERS_MAX)).toBeLessThanOrEqual(ADAPTER_4090.maxStorageBuffersPerShaderStage);
+  });
+
+  it("senza `arena` i due generatori emettono il testo a binding fisso di prima", () => {
+    // Vincolo duro del design: il regime a sotto-range non cambia di un byte.
+    // Qui si asserisce la forma (binding letterali, nessuna traccia d'arena);
+    // l'identità byte-per-byte è stata verificata sul diff dei due dump in it.15.
+    const pair = pairGemvSiluFastWgsl({ K: G.dModel, N: G.dFfnExpert });
+    const down = gemvAccumFastWgsl({ kind: "q4_1", K: G.dFfnExpert, N: G.dModel });
+    expect((pair.match(/@group\(0\) @binding\(\d+\) var<storage/g) ?? []).length).toBe(6);
+    expect((down.match(/@group\(0\) @binding\(\d+\) var<storage/g) ?? []).length).toBe(5);
+    for (const code of [pair, down]) {
+      for (const token of ["ld4", "ldw", "selBuf", "moeIdx", "SLAB_W", "arena0"]) {
+        expect(code.includes(token), token).toBe(false);
+      }
+    }
+    expect(down.includes("accScale[0]")).toBe(true); // il peso è ancora un binding
   });
 });
 
@@ -85,6 +141,24 @@ describe("requisiti derivati", () => {
     // il vecchio cap a mano di 32768 tagliava il contesto a 8128 senza dirlo
     expect(mlaWorkgroupStorageBytes(8128)).toBeLessThanOrEqual(32768);
     expect(mlaWorkgroupStorageBytes(8129)).toBeGreaterThan(32768);
+  });
+
+  it("l'arena alza binding size e storage per stage, col suo consumatore", () => {
+    const window = 390 * SLAB.bytes; // finestra da 2 GiB, classe q4_1
+    const needs = engineNeeds({ ...GLM_NEEDS, arenaBuffers: 7, arenaWindowBytes: window });
+    const bind = needs.find((n) => n.limit === "maxStorageBufferBindingSize")!;
+    expect(bind.value).toBe(window);            // batte la testa Q6_K (250 MiB)
+    expect(bind.consumer).toMatch(/arena/);
+    const stage = needs.filter((n) => n.limit === "maxStorageBuffersPerShaderStage");
+    expect(stage.map((n) => n.value)).toEqual([MAX_STATIC_STORAGE_BINDINGS, expertArenaBindings(7)]);
+    expect(limitsFor(fakeAdapter(ADAPTER_4090), needs).maxStorageBuffersPerShaderStage).toBe(10);
+    // il buffer segue il binding: un binding di N byte vive in un buffer >= N
+    expect(needs.find((n) => n.limit === "maxBufferSize")!.value).toBe(window);
+  });
+
+  it("oltre ARENA_BUFFERS_MAX si ferma qui, non al createBindGroupLayout", () => {
+    expect(() => engineNeeds({ ...GLM_NEEDS, arenaBuffers: ARENA_BUFFERS_MAX + 1 }))
+      .toThrow(/ARENA_BUFFERS_MAX/);
   });
 
   it("ogni requisito porta il suo consumatore", () => {

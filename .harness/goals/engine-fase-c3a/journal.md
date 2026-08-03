@@ -1055,3 +1055,60 @@ registrate qui: (a) i report citati nelle chiusure di fase hanno
 headline/attribuzione è distinguibile solo dal journal — un campo `run:
 "headline"|"attribution"` nel JSON sarebbe assicurazione a buon mercato per la
 catena di non-regressione di fase 6.
+
+## it.15 (2026-08-03) — fase 4 strato 1, slice A: arena a binding fisso
+
+Design prima del codice: proposta prodotta da agente Plan sui file veri,
+rivista e approvata, persistita in
+`docs/superpowers/specs/2026-08-03-engine-fase4-strato1-arena.md` (addendum a
+spec §3.2-bis). Due fatti scoperti nel design che cambiavano le assunzioni:
+il binding cap negoziato era 250 MiB (la testa Q6_K), non 2 GiB — i buffer di
+classe attuali non erano bindabili interi; e la finestra al tetto NVIDIA dà
+404/390 slab per binding ⇒ 6+1 buffer a budget 12 GiB, 7+1 a parco completo.
+
+**Slice A implementato** (Sel {id,slot,w,flags} + uniform MoeIdx a dynamic
+offset, kernel expert con opzione `arena` — corpo aritmetico unico nei due
+regimi —, ExpertCache in modo arena, BGL espliciti, 4 bind group statici al
+posto di ~2419×5 cached, wExp e slotBgCache rimossi). La CPU comanda ancora:
+lo slice A non riduce i sync per contratto — costruisce il meccanismo per cui
+alla residenza totale (4c) il readback sparisce.
+
+### Review e fix (protocollo consueto)
+
+Opus + Codex convergenti: ZERO difetti di correttezza (byte-identità dei
+kernel non-arena ri-derivata da git archive; geometria/offset/MISS/barrier/
+dynamic-offset riprodotti numericamente da entrambi, inclusi i bordi slot
+403/404 e 389/390). Finding veri, tutti da mutation testing sui TEST:
+il round-trip node confrontava TS con TS (mutazione dell'indirizzamento WGSL
+⇒ 39/39 verdi) e la regex di ld4 non legava case↔arena (tutti su arena0 ⇒
+18/18 verdi). Fix round: estrazione delle costanti e delle espressioni dal
+WGSL GENERATO, backreference case↔binding — entrambe le mutazioni ora
+FALLISCONO (provato applicandole e rimuovendole); più assert %16, guardie
+arenaNeeds sui degeneri, caso ktest MISS (slot 0xffffffff, w≠0: uscite
+bit-per-bit intatte), tipo `select` allargato all'interfaccia del design.
+
+### Verifica
+
+- ktest **48/48** (identità arena-vs-slotrange BIT-A-BIT su entrambe le
+  classi con slab nel buffer 1 — l'arco dello switch è esercitato; MISS
+  bit-per-bit; glm-model-2layer a nBuf=3 coi numeri storici); `npm test`
+  283+2; `tsc` pulito; kernel non-arena byte-identici a HEAD.
+- **Bench arena in produzione** (`bench-glm-4090-b12-arena-2026-08-03.json`,
+  quiescente, clock util>10%: 892 MHz medi n=282, CSV committato):
+  **decode 5.081 ≥ 5.054 PASS** (reps 5.147/5.064/5.081); contatori
+  **identici**: 46.0 sync, 47.0 submit, 1405 dispatch per token (asserzione
+  del design §4 gate 4, verificata dal report); prefill mediana 5.673 (reps
+  6.306/5.672/5.673 — stessa banda statistica dell'item 14, con la prima
+  replica sopra il record).
+- **Rischi di produzione sciolti**: R4 NO (6+1 buffer da ~2.14 GB creati
+  senza OOM); R3 NO (attn bycat 31.97→31.57: i limiti alzati non degradano);
+  R1 sotto il rumore (experts bycat 13.08→12.38, in discesa).
+- **Discordanza documentata**: gpuBusy della replica attrib 54.2→56.6 mentre
+  la somma bycat scende 58.35→56.14 — due strumenti, direzioni opposte, a
+  clock diversi fra repliche: rumore, non effetto. Nessuno dei due è gate di
+  questa iterazione; il gate 4b (54.5) è stato preso alla chiusura di fase
+  con la sua misura, e la ri-misura di fine fase 4 è già nel done-when.
+
+Prossimo: **slice B** — routerTopK+resolve, slotTable, modo shadow: la
+fedeltà del router GPU misurata sul corpus vero di glmroute (31 274
+posizioni) invece delle 64 estrazioni sintetiche di it.9.

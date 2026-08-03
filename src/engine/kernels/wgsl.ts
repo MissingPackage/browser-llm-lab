@@ -1933,20 +1933,115 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // stata applicata a monte del router (`preRouter`) e l'input e' condiviso dai
 // 4 expert — rifarla qui la ricalcolerebbe 4 volte per layer.
 
+// ====================== ARENA EXPERT A BINDING FISSO (fase 4, strato 1) ======
+// Il regime a SOTTO-RANGE (uno slot = un GPUBufferBinding {offset, size} per
+// segmento) costringe a un bind group per slot: la cache ne ha migliaia, e
+// soprattutto il bind group si puo' costruire solo quando la CPU SA gia' quale
+// expert e' stato scelto — cioe' dopo il sync col router. E' quel vincolo, non
+// la banda, a tenere in piedi i 46 sync per token.
+//
+// In modo arena la classe espone N buffer INTERI, bindati una volta sola in un
+// bind group statico. Lo slot smette di essere un binding e diventa un
+// INDIRIZZO: bufIdx = slot / SLABS_PER_BUF, base = (slot % SLABS_PER_BUF)·SLAB_W
+// (costanti compile-time ⇒ mul+shift). Quale slot leggere lo dice
+// `selBuf[moeIdx.selIdx]`, con selIdx da uniform a dynamic offset: e' un valore
+// CPU-NOTO (la coppia (layer MoE, k)), mai l'expert. Chi riempie `Sel` e'
+// intercambiabile — la CPU oggi, il router+resolve su GPU nello slice B — e i
+// kernel non cambiano fra i due regimi.
+//
+// Gli offset dei sei segmenti arrivano in WORD (u32) da `SlabLayout` (moe.ts):
+// qui non si riscrive nessuna costante di layout.
+export interface ArenaOpts {
+  nBuf: number;          // buffer d'arena della classe: binding 0..nBuf-1
+  slabWords: number;     // SlabLayout.bytes / 4
+  slabsPerBuf: number;
+  qsWords: number;       // segmenti letti da gemvAccumFast (down)
+  scalesWords: number;
+  gateQsWords: number;   // segmenti letti da pairGemvSiluFast
+  gateScWords: number;
+  upQsWords: number;
+  upScWords: number;
+}
+
+/**
+ * Testa comune dei kernel d'arena: struct, i nBuf binding d'arena, i binding
+ * propri del kernel (`mid`, che partono da nBuf), `Sel` e l'uniform a dynamic
+ * offset, i due accessori e le costanti di classe.
+ * `ld4` fa uno switch sui binding: il ramo e' UNIFORME sull'intero dispatch (un
+ * expert per dispatch) ⇒ scalare, senza divergenza fra lane.
+ */
+function arenaHeadWgsl(a: ArenaOpts, mid: string[]): string {
+  const lines = [
+    "struct Sel { id: u32, slot: u32, w: f32, flags: u32 }",
+    "struct MoeIdx { selIdx: u32, tableBase: u32, moeLayer: u32, pad: u32 }",
+  ];
+  for (let j = 0; j < a.nBuf; j++) {
+    lines.push(`@group(0) @binding(${j}) var<storage, read> arena${j}: array<vec4<u32>>;`);
+  }
+  mid.forEach((d, i) => lines.push(`@group(0) @binding(${a.nBuf + i}) ${d};`));
+  lines.push(`@group(0) @binding(${a.nBuf + mid.length}) var<storage, read> selBuf: array<Sel>;`);
+  lines.push(`@group(0) @binding(${a.nBuf + mid.length + 1}) var<uniform> moeIdx: MoeIdx;`);
+  lines.push("fn ld4(b: u32, i: u32) -> vec4<u32> {");
+  lines.push("  switch b {");
+  for (let j = 0; j < a.nBuf; j++) lines.push(`    case ${j}u: { return arena${j}[i]; }`);
+  lines.push("    default: { return arena0[i]; }");
+  lines.push("  }");
+  lines.push("}");
+  lines.push("fn ldw(b: u32, w: u32) -> u32 { return ld4(b, w >> 2u)[w & 3u]; }");
+  lines.push(`const SLAB_W = ${a.slabWords}u;`);
+  lines.push(`const SLABS_PER_BUF = ${a.slabsPerBuf}u;`);
+  return lines.join("\n");
+}
+
+/**
+ * Preambolo di `main`: legge la Sel e trasforma lo slot in (binding, base).
+ * `slot == 0xffffffff` e' il MISS dichiarato nel layout di Sel: `ok` lo propaga
+ * alle guardie invece di uscire con un `return`, che romperebbe l'analisi di
+ * uniformita' dei workgroupBarrier a valle. In slice A non puo' accadere (la
+ * CPU fa `ensure` prima di riempire Sel); esiste perche' il degrado sia
+ * DEFINITO — niente uscita, non un indirizzo a caso.
+ */
+const arenaSlotWgsl = `
+  let sel = selBuf[moeIdx.selIdx];
+  let ok = sel.slot != 0xffffffffu;
+  let slot = select(0u, sel.slot, ok);
+  let bi = slot / SLABS_PER_BUF;
+  let base = (slot % SLABS_PER_BUF) * SLAB_W;`;
+
 // gate+up+silu del blocco expert in UN dispatch (sostituisce 3 gemvQuant+siluMul).
 // x e' gia' normalizzato: si carica in shared cosi' com'e'.
-export function pairGemvSiluFastWgsl(opts: { K: number; N: number }): string {
-  const { K, N } = opts;
+// Senza `arena` il testo emesso e' IDENTICO a quello di prima dello strato 1,
+// byte per byte: il corpo aritmetico esiste una volta sola per i due regimi.
+export function pairGemvSiluFastWgsl(opts: { K: number; N: number; arena?: ArenaOpts }): string {
+  const { K, N, arena } = opts;
   const blocksPerRow = K / 32;
   if (N % 4 !== 0) throw new Error("pairGemvSiluFast: N non multiplo di 4");
   if (K % 32 !== 0) throw new Error("pairGemvSiluFast: K non multiplo di 32");
-  return `
-@group(0) @binding(0) var<storage, read> gQs4: array<vec4<u32>>;
+  const head = arena
+    ? arenaHeadWgsl(arena, [
+        "var<storage, read> x: array<f32>",
+        "var<storage, read_write> out: array<f32>",
+      ])
+    : `@group(0) @binding(0) var<storage, read> gQs4: array<vec4<u32>>;
 @group(0) @binding(1) var<storage, read> gScales: array<u32>;
 @group(0) @binding(2) var<storage, read> uQs4: array<vec4<u32>>;
 @group(0) @binding(3) var<storage, read> uScales: array<u32>;
 @group(0) @binding(4) var<storage, read> x: array<f32>;
-@group(0) @binding(5) var<storage, read_write> out: array<f32>;
+@group(0) @binding(5) var<storage, read_write> out: array<f32>;`;
+  const pre = arena
+    ? `${arenaSlotWgsl}
+  let gQ4 = (base + ${arena.gateQsWords}u) >> 2u;
+  let gSc = base + ${arena.gateScWords}u;
+  let uQ4 = (base + ${arena.upQsWords}u) >> 2u;
+  let uSc = base + ${arena.upScWords}u;`
+    : "";
+  const live = arena ? " && ok" : "";
+  const gQs = arena ? "ld4(bi, gQ4 + gb)" : "gQs4[gb]";
+  const gSca = arena ? "ldw(bi, gSc + (gb >> 1u))" : "gScales[gb >> 1u]";
+  const uQs = arena ? "ld4(bi, uQ4 + gb)" : "uQs4[gb]";
+  const uSca = arena ? "ldw(bi, uSc + (gb >> 1u))" : "uScales[gb >> 1u]";
+  return `
+${head}
 const K = ${K}u;
 const BLOCKS_PER_ROW = ${blocksPerRow}u;
 var<workgroup> redG: array<f32, 64>;
@@ -1954,7 +2049,7 @@ var<workgroup> redU: array<f32, 64>;
 var<workgroup> xn4: array<vec4<f32>, ${K / 4}>;
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let t = lid.x;
+  let t = lid.x;${pre}
   for (var i = t; i < K / 4u; i = i + 64u) {
     xn4[i] = vec4(x[i * 4u], x[i * 4u + 1u], x[i * 4u + 2u], x[i * 4u + 3u]);
   }
@@ -1964,12 +2059,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
   var accG = 0.0;
   var accU = 0.0;
-  if (r < ${N}u) {
+  if (r < ${N}u${live}) {
     for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
       let gb = r * BLOCKS_PER_ROW + b;
       let x4 = b * 8u;
       {
-        let w4 = gQs4[gb];
+        let w4 = ${gQs};
         var lo = 0.0; var hi = 0.0;
         for (var wi = 0u; wi < 4u; wi = wi + 1u) {
           let word = w4[wi];
@@ -1978,10 +2073,10 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
           lo = lo + dot(nibLo, xn4[x4 + wi]);
           hi = hi + dot(nibHi, xn4[x4 + 4u + wi]);
         }
-        accG = accG + unpack2x16float(gScales[gb >> 1u])[gb & 1u] * (lo + hi);
+        accG = accG + unpack2x16float(${gSca})[gb & 1u] * (lo + hi);
       }
       {
-        let w4 = uQs4[gb];
+        let w4 = ${uQs};
         var lo = 0.0; var hi = 0.0;
         for (var wi = 0u; wi < 4u; wi = wi + 1u) {
           let word = w4[wi];
@@ -1990,7 +2085,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
           lo = lo + dot(nibLo, xn4[x4 + wi]);
           hi = hi + dot(nibHi, xn4[x4 + 4u + wi]);
         }
-        accU = accU + unpack2x16float(uScales[gb >> 1u])[gb & 1u] * (lo + hi);
+        accU = accU + unpack2x16float(${uSca})[gb & 1u] * (lo + hi);
       }
     }
   }
@@ -2003,7 +2098,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     workgroupBarrier();
     stride = stride >> 1u;
   }
-  if (lane == 0u && r < ${N}u) {
+  if (lane == 0u && r < ${N}u${live}) {
     let g = redG[sub * 16u];
     out[r] = (g / (1.0 + exp(-g))) * redU[sub * 16u];
   }
@@ -2012,15 +2107,39 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 
 // down del blocco expert: y[r] += accScale[0]·dot, struttura fast. Stesso ordine
 // di binding del generico con scaledAccum, cosi' i bind group non cambiano forma.
-export function gemvAccumFastWgsl(opts: { kind: "q4_0" | "q4_1"; K: number; N: number }): string {
-  const { kind, K, N } = opts;
+// In modo arena il peso di mixing NON e' piu' un binding suo: e' `sel.w`, gia'
+// ×1.8, dentro la Sel — sono i quattro `wExp[k]` che collassano nella stessa
+// indirezione degli slot.
+export function gemvAccumFastWgsl(opts: { kind: "q4_0" | "q4_1"; K: number; N: number; arena?: ArenaOpts }): string {
+  const { kind, K, N, arena } = opts;
   const blocksPerRow = K / 32;
   if (N % 4 !== 0) throw new Error("gemvAccumFast: N non multiplo di 4");
   if (K % 32 !== 0) throw new Error("gemvAccumFast: K non multiplo di 32");
+  const qsE = arena ? "ld4(bi, qsW4 + gb)" : "qs4[gb]";
+  const scE = arena
+    ? (kind === "q4_0" ? "ldw(bi, scW + (gb >> 1u))" : "ldw(bi, scW + gb)")
+    : (kind === "q4_0" ? "scales[gb >> 1u]" : "scales[gb]");
+  const wE = arena ? "sel.w" : "accScale[0]";
+  const live = arena ? " && ok" : "";
+  const head = arena
+    ? arenaHeadWgsl(arena, [
+        "var<storage, read> x: array<f32>",
+        "var<storage, read_write> y: array<f32>",
+      ])
+    : `@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> x: array<f32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+@group(0) @binding(4) var<storage, read> accScale: array<f32>;`;
+  const pre = arena
+    ? `${arenaSlotWgsl}
+  let qsW4 = (base + ${arena.qsWords}u) >> 2u;
+  let scW = base + ${arena.scalesWords}u;`
+    : "";
   // q4_0: w = (q-8)·d. q4_1: w = q·d + m ⇒ servono Σ(q·x) e Σx separati.
   const body = kind === "q4_0"
     ? `
-      let w4 = qs4[gb];
+      let w4 = ${qsE};
       var lo = 0.0; var hi = 0.0;
       for (var wi = 0u; wi < 4u; wi = wi + 1u) {
         let word = w4[wi];
@@ -2029,9 +2148,9 @@ export function gemvAccumFastWgsl(opts: { kind: "q4_0" | "q4_1"; K: number; N: n
         lo = lo + dot(nibLo, xn4[x4 + wi]);
         hi = hi + dot(nibHi, xn4[x4 + 4u + wi]);
       }
-      acc = acc + unpack2x16float(scales[gb >> 1u])[gb & 1u] * (lo + hi);`
+      acc = acc + unpack2x16float(${scE})[gb & 1u] * (lo + hi);`
     : `
-      let w4 = qs4[gb];
+      let w4 = ${qsE};
       var dq = 0.0; var sx = 0.0;
       for (var wi = 0u; wi < 4u; wi = wi + 1u) {
         let word = w4[wi];
@@ -2042,21 +2161,17 @@ export function gemvAccumFastWgsl(opts: { kind: "q4_0" | "q4_1"; K: number; N: n
         dq = dq + dot(nibLo, xl) + dot(nibHi, xh);
         sx = sx + dot(vec4(1.0, 1.0, 1.0, 1.0), xl) + dot(vec4(1.0, 1.0, 1.0, 1.0), xh);
       }
-      let dm = unpack2x16float(scales[gb]);
+      let dm = unpack2x16float(${scE});
       acc = acc + dm.x * dq + dm.y * sx;`;
   return `
-@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
-@group(0) @binding(1) var<storage, read> scales: array<u32>;
-@group(0) @binding(2) var<storage, read> x: array<f32>;
-@group(0) @binding(3) var<storage, read_write> y: array<f32>;
-@group(0) @binding(4) var<storage, read> accScale: array<f32>;
+${head}
 const K = ${K}u;
 const BLOCKS_PER_ROW = ${blocksPerRow}u;
 var<workgroup> red: array<f32, 64>;
 var<workgroup> xn4: array<vec4<f32>, ${K / 4}>;
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let t = lid.x;
+  let t = lid.x;${pre}
   for (var i = t; i < K / 4u; i = i + 64u) {
     xn4[i] = vec4(x[i * 4u], x[i * 4u + 1u], x[i * 4u + 2u], x[i * 4u + 3u]);
   }
@@ -2065,7 +2180,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   let lane = t & 15u;
   let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 4u + sub;
   var acc = 0.0;
-  if (r < ${N}u) {
+  if (r < ${N}u${live}) {
     for (var b = lane; b < BLOCKS_PER_ROW; b = b + 16u) {
       let gb = r * BLOCKS_PER_ROW + b;
       let x4 = b * 8u;
@@ -2080,7 +2195,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     workgroupBarrier();
     stride = stride >> 1u;
   }
-  if (lane == 0u && r < ${N}u) { y[r] = y[r] + accScale[0] * red[sub * 16u]; }
+  if (lane == 0u && r < ${N}u${live}) { y[r] = y[r] + ${wE} * red[sub * 16u]; }
 }`;
 }
 

@@ -14,8 +14,9 @@ import {
   Sha256Stream, GgufExpertIndex, downIsQ4_1,
   EXPERT_GATE_UP_BYTES, EXPERT_DOWN_Q4_0_BYTES, EXPERT_DOWN_Q4_1_BYTES,
 } from "../src/engine/expertstore";
-import { ExpertCache, expertKey, slotBindRanges, PARK_Q4_0, PARK_Q4_1 } from "../src/engine/residency";
+import { ExpertCache, arenaNeeds, expertKey, slotBindRanges, PARK_Q4_0, PARK_Q4_1, type ExpertClass } from "../src/engine/residency";
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, packExpertSlab } from "../src/engine/moe";
+import { pairGemvSiluFastWgsl, gemvAccumFastWgsl, type ArenaOpts } from "../src/engine/kernels/wgsl";
 
 const GGUF_PATH = join(homedir(), ".cache/blab-models/GLM-4.7-Flash-Q4_0.gguf");
 
@@ -327,5 +328,206 @@ describe("ExpertCache (LRU due size-class)", () => {
     expect(r.downScales.offset).toBe(SLAB_DOWN_Q4_0.bytes + SLAB_DOWN_Q4_0.downScales);
     expect(r.downScales.size).toBe(SLAB_DOWN_Q4_0.downScalesBytes);
     for (const k of Object.values(r)) expect(k.offset % 256).toBe(0);
+  });
+});
+
+// --------------------------- regime ARENA (C3a fase 4) ----------------------
+// Lo slot smette di essere un binding e diventa un indirizzo: qui si verifica
+// che l'indirizzo cada ESATTAMENTE dove il regime a sotto-range bindava, per
+// OGNI slot delle due classi. È il gate 3 dello slice A: se l'aritmetica del
+// WGSL e i BindRange divergessero anche di un solo slot, il kernel leggerebbe
+// pesi di un altro expert senza che niente esploda.
+describe("ExpertCache — arena a binding fisso", () => {
+  beforeAll(() => {
+    (globalThis as Record<string, unknown>).GPUBufferUsage ??= { STORAGE: 0x80, COPY_DST: 8, COPY_SRC: 4 };
+  });
+  // limiti veri del 4090 Laptop (results/engine/webgpu-limits-4090laptop-2026-08-02)
+  const MAX_BUFFER = 4_294_967_292;
+  const MAX_BINDING = 2_147_483_644;
+  // riparto a budget 12 GiB (design §0): 2.216 + 203 slot
+  const SLOTS = { q4_0: 2216, q4_1: 203 };
+  const mkArena = () => {
+    const { device, buffers } = mkDevice();
+    const c = new ExpertCache(device, {
+      budgetBytes: 0, slotsOverride: SLOTS, arena: true,
+      maxBufferBytes: MAX_BUFFER, maxBindingBytes: MAX_BINDING,
+    });
+    return { c, buffers };
+  };
+
+  it("il buffer È il binding: la finestra la cappa il min dei due limiti", () => {
+    const { c } = mkArena();
+    // 2 GiB / 5.308.416 = 404 slab (q4_0), / 5.505.024 = 390 (q4_1): sono i
+    // numeri del design. Col cap del solo maxBufferSize sarebbero 809 e 780.
+    expect(c.arenaGeometry("q4_0").slabsPerBuf).toBe(404);
+    expect(c.arenaGeometry("q4_1").slabsPerBuf).toBe(390);
+    expect(c.arenaGeometry("q4_0").nBuf).toBe(6);   // ceil(2216/404)
+    expect(c.arenaGeometry("q4_1").nBuf).toBe(1);   // 203 < 390
+    // fuori dal regime arena il cap resta quello di it.5 (solo maxBufferSize)
+    const { device } = mkDevice();
+    const plain = new ExpertCache(device, {
+      budgetBytes: 0, slotsOverride: SLOTS,
+      maxBufferBytes: MAX_BUFFER, maxBindingBytes: MAX_BINDING,
+    });
+    expect(plain.arenaGeometry("q4_0").slabsPerBuf).toBe(809);
+  });
+
+  it("SLAB_W e la geometria vengono dal layout, non da costanti riscritte", () => {
+    const { c } = mkArena();
+    expect(c.arenaGeometry("q4_0").slabWords).toBe(SLAB_DOWN_Q4_0.bytes / 4);
+    expect(c.arenaGeometry("q4_1").slabWords).toBe(SLAB_DOWN_Q4_1.bytes / 4);
+    expect(c.arenaGeometry("q4_0").slabWords).toBe(1_327_104);
+    expect(c.arenaGeometry("q4_1").slabWords).toBe(1_376_256);
+  });
+
+  /**
+   * L'aritmetica dello slot LETTA DAL WGSL GENERATO, non riscritta in TS.
+   * Senza questa estrazione il round-trip qui sotto confronterebbe TypeScript
+   * con TypeScript: una mutazione dentro il generatore (p.es. `bi = (slot + 1u)
+   * / SLABS_PER_BUF`) lo lascerebbe verde mentre il kernel legge lo slab
+   * sbagliato. Le regex sono ANCORATE alla forma emessa: se la forma cambia, il
+   * test cade e va riletto — che è il punto.
+   */
+  const addressingFromWgsl = (code: string) => {
+    const num = (re: RegExp, what: string): number => {
+      const m = re.exec(code);
+      if (!m) throw new Error(`WGSL: nessun ${what} nella forma attesa`);
+      return Number(m[1]);
+    };
+    // `let bi = slot / SLABS_PER_BUF;` e `let base = (slot % SLABS_PER_BUF) * SLAB_W;`
+    const bi = /^ {2}let bi = (\w+) \/ (\w+);$/m.exec(code);
+    const base = /^ {2}let base = \((\w+) % (\w+)\) \* (\w+);$/m.exec(code);
+    if (!bi || !base) throw new Error("WGSL: aritmetica dello slot non nella forma attesa");
+    if (bi[1] !== "slot" || bi[2] !== "SLABS_PER_BUF") throw new Error(`WGSL: bi = ${bi[1]} / ${bi[2]}`);
+    if (base[1] !== "slot" || base[2] !== "SLABS_PER_BUF" || base[3] !== "SLAB_W") {
+      throw new Error(`WGSL: base = (${base[1]} % ${base[2]}) * ${base[3]}`);
+    }
+    // `let slot = select(0u, sel.slot, ok);` con `ok = sel.slot != 0xffffffffu`
+    if (!/^ {2}let slot = select\(0u, sel\.slot, ok\);$/m.test(code)) throw new Error("WGSL: slot non da Sel");
+    return {
+      slabWords: num(/^const SLAB_W = (\d+)u;$/m, "SLAB_W"),
+      slabsPerBuf: num(/^const SLABS_PER_BUF = (\d+)u;$/m, "SLABS_PER_BUF"),
+      // gli offset di sezione, sempre in word, come li emette il generatore
+      gateQs: num(/^ {2}let gQ4 = \(base \+ (\d+)u\) >> 2u;$/m, "gateQs"),
+      gateSc: num(/^ {2}let gSc = base \+ (\d+)u;$/m, "gateScales"),
+      upQs: num(/^ {2}let uQ4 = \(base \+ (\d+)u\) >> 2u;$/m, "upQs"),
+      upSc: num(/^ {2}let uSc = base \+ (\d+)u;$/m, "upScales"),
+    };
+  };
+  const downAddressingFromWgsl = (code: string) => ({
+    qs: Number(/^ {2}let qsW4 = \(base \+ (\d+)u\) >> 2u;$/m.exec(code)![1]),
+    sc: Number(/^ {2}let scW = base \+ (\d+)u;$/m.exec(code)![1]),
+  });
+  const arenaOptsOf = (geo: { nBuf: number; slabWords: number; slabsPerBuf: number; layout: typeof SLAB_DOWN_Q4_0 }): ArenaOpts => ({
+    nBuf: geo.nBuf, slabWords: geo.slabWords, slabsPerBuf: geo.slabsPerBuf,
+    qsWords: geo.layout.downQs / 4, scalesWords: geo.layout.downScales / 4,
+    gateQsWords: geo.layout.gateQs / 4, gateScWords: geo.layout.gateScales / 4,
+    upQsWords: geo.layout.upQs / 4, upScWords: geo.layout.upScales / 4,
+  });
+
+  it("round-trip idx → (binding, base) vs slotBindRanges, per OGNI slot", () => {
+    const { c, buffers } = mkArena();
+    for (const cls of ["q4_0", "q4_1"] as ExpertClass[]) {
+      const geo = c.arenaGeometry(cls);
+      const l = geo.layout;
+      const arenaBufs = c.arenaBuffers(cls);
+      expect(arenaBufs.length).toBe(geo.nBuf);
+      // le costanti e gli offset con cui il round-trip gira arrivano dal TESTO
+      // del kernel che girerà davvero, non dalla geometria TS
+      const a = arenaOptsOf(geo);
+      const wg = addressingFromWgsl(pairGemvSiluFastWgsl({ K: G.dModel, N: G.dFfnExpert, arena: a }));
+      const wgDown = downAddressingFromWgsl(gemvAccumFastWgsl({ kind: cls, K: G.dFfnExpert, N: G.dModel, arena: a }));
+      expect(wg.slabWords, `${cls}: SLAB_W nel WGSL`).toBe(geo.slabWords);
+      expect(wg.slabsPerBuf, `${cls}: SLABS_PER_BUF nel WGSL`).toBe(geo.slabsPerBuf);
+      expect([wg.gateQs * 4, wg.gateSc * 4, wg.upQs * 4, wg.upSc * 4, wgDown.qs * 4, wgDown.sc * 4])
+        .toEqual([l.gateQs, l.gateScales, l.upQs, l.upScales, l.downQs, l.downScales]);
+      for (let idx = 0; idx < geo.nSlots; idx++) {
+        // ESATTAMENTE l'aritmetica del WGSL (in word u32, non in byte),
+        // con le costanti estratte dal WGSL
+        const bi = Math.floor(idx / wg.slabsPerBuf);
+        const baseW = (idx % wg.slabsPerBuf) * wg.slabWords;
+        const r = slotBindRanges(c.slotAt(cls, idx));
+        expect(arenaBufs[bi], `${cls} slot ${idx}: binding`).toBe(r.gateQs.buffer);
+        const seg: Array<[number, number]> = [
+          [baseW * 4 + l.gateQs, r.gateQs.offset], [baseW * 4 + l.gateScales, r.gateScales.offset],
+          [baseW * 4 + l.upQs, r.upQs.offset], [baseW * 4 + l.upScales, r.upScales.offset],
+          [baseW * 4 + l.downQs, r.downQs.offset], [baseW * 4 + l.downScales, r.downScales.offset],
+        ];
+        for (const [got, want] of seg) expect(got, `${cls} slot ${idx}`).toBe(want);
+        // l'indice in word dell'ultimo byte dello slab sta nel buffer bindato
+        const size = (buffers.find((b) => b === (arenaBufs[bi] as unknown as { size: number }))!).size;
+        expect(baseW * 4 + l.bytes, `${cls} slot ${idx}: dentro il buffer`).toBeLessThanOrEqual(size);
+        // gli indici vec4 restano ben dentro i 2^30 dichiarati nel design
+        expect((baseW + l.downQs / 4) / 4 + (G.dFfnExpert / 32) * G.dModel).toBeLessThan(2 ** 30);
+      }
+    }
+  });
+
+  it("arenaNeeds dà i requisiti che i kernel poi consumano davvero", () => {
+    const { c } = mkArena();
+    const need = arenaNeeds({
+      budgetBytes: 0, slotsOverride: SLOTS, maxBufferBytes: MAX_BUFFER, maxBindingBytes: MAX_BINDING,
+    });
+    // il buffer più grande che la cache crea DAVVERO = la finestra chiesta
+    expect(need.arenaWindowBytes).toBe(404 * SLAB_DOWN_Q4_0.bytes);
+    expect(need.arenaWindowBytes).toBeLessThanOrEqual(MAX_BINDING);
+    expect(need.arenaBuffers).toBe(Math.max(c.arenaGeometry("q4_0").nBuf, c.arenaGeometry("q4_1").nBuf));
+    // a parco completo (fase 4c, residenza totale) i buffer diventano 7
+    expect(arenaNeeds({
+      budgetBytes: 0, slotsOverride: { q4_0: PARK_Q4_0, q4_1: PARK_Q4_1 },
+      maxBufferBytes: MAX_BUFFER, maxBindingBytes: MAX_BINDING,
+    }).arenaBuffers).toBe(7);
+  });
+
+  it("arenaBuffers conta sulla finestra chiesta, non sul tetto dell'adapter", () => {
+    // Caso asimmetrico: la classe q4_1 (slab più grandi) fissa la finestra e la
+    // q4_0 deve starci dentro. Contando sul tetto si otterrebbe un nBuf più
+    // piccolo del vero, cioè un `maxStorageBuffersPerShaderStage` insufficiente
+    // scoperto solo a createComputePipeline.
+    const window3 = 3 * SLAB_DOWN_Q4_1.bytes;
+    const need = arenaNeeds({
+      budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 7 },
+      maxBufferBytes: window3, maxBindingBytes: window3,
+    });
+    expect(need.arenaWindowBytes).toBe(window3);
+    expect(need.arenaBuffers).toBe(3); // ceil(7/3); q4_0: ceil(4/3) = 2
+    // e i buffer VERI della cache non superano mai quel numero
+    const { device } = mkDevice();
+    const c = new ExpertCache(device, {
+      budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 7 }, arena: true,
+      maxBufferBytes: window3, maxBindingBytes: window3,
+    });
+    for (const cls of ["q4_0", "q4_1"] as ExpertClass[]) {
+      expect(c.arenaGeometry(cls).nBuf).toBeLessThanOrEqual(need.arenaBuffers);
+    }
+    expect(c.arenaGeometry("q4_1").nBuf).toBe(3);
+  });
+
+  it("input degeneri: errore esplicito, mai un NaN dentro requiredLimits", () => {
+    const base = { maxBufferBytes: MAX_BUFFER, maxBindingBytes: MAX_BINDING };
+    // budget zero senza override ⇒ 0 slot per classe: prima dava ceil(0/0) = NaN,
+    // e NaN passa QUALUNQUE confronto (anche `> ARENA_BUFFERS_MAX`) fino ad
+    // arrivare in requiredLimits.
+    expect(() => arenaNeeds({ ...base, budgetBytes: 0 })).toThrow(/slot/);
+    expect(() => arenaNeeds({ ...base, budgetBytes: 0, slotsOverride: { q4_0: 0, q4_1: 4 } })).toThrow(/q4_0/);
+    expect(() => arenaNeeds({ ...base, budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 0 } })).toThrow(/q4_1/);
+    // budget che non basta a una classe sola (il riparto è proporzionale al parco)
+    expect(() => arenaNeeds({ ...base, budgetBytes: 10 * SLAB_DOWN_Q4_0.bytes })).toThrow(/q4_1/);
+    // e quando NON solleva, i due numeri sono conteggi interi e positivi
+    const ok = arenaNeeds({ ...base, budgetBytes: 12 * (1 << 30) });
+    expect(Number.isInteger(ok.arenaBuffers) && ok.arenaBuffers >= 1).toBe(true);
+    expect(Number.isInteger(ok.arenaWindowBytes) && ok.arenaWindowBytes >= 1).toBe(true);
+  });
+
+  it("uno slab che non sta in un binding è un errore al costruttore", () => {
+    const { device } = mkDevice();
+    expect(() => new ExpertCache(device, {
+      budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 }, arena: true,
+      maxBufferBytes: MAX_BUFFER, maxBindingBytes: SLAB_DOWN_Q4_1.bytes - 1,
+    })).toThrow(/arena/);
+    expect(() => arenaNeeds({
+      budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 },
+      maxBufferBytes: MAX_BUFFER, maxBindingBytes: SLAB_DOWN_Q4_1.bytes - 1,
+    })).toThrow();
   });
 });

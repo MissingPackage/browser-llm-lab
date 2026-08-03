@@ -13,8 +13,13 @@
 // Il costo del sync è dichiarato e si misura in fase 6 (journal it.6).
 //
 // Pipeline WGSL condivise tra i 47 layer (shape identiche); bind group fissi
-// per-layer precostruiti al load; bind group expert cached per-slot (la cache
-// LRU ha slot stabili: ~2.5k voci massime per pipeline).
+// per-layer precostruiti al load.
+// Dalla fase 4 (strato 1) anche gli expert hanno bind group FISSI: la cache
+// espone i suoi buffer come arena bindata intera e lo slot viaggia in `Sel`
+// (VRAM) invece che nel bind group. Erano fino a ~2,5k bind group per pipeline
+// costruiti a runtime, e soprattutto costruibili solo DOPO aver saputo quale
+// expert il router aveva scelto: è quel legame — non la banda — che teneva
+// l'encode del blocco expert dietro al sync per layer.
 import { GLM47_FLASH as G } from "./shape";
 import { repackQ4_0, repackQ4_1, repackQ8_0, repackKQuant, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { routerSelect } from "./moe";
@@ -22,16 +27,26 @@ import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen, mlaSplitWorkgroupStorageBytes } f
 import {
   pairGemvSiluQ5KFastWorkgroupStorageBytes, gemvQ6KFastWorkgroupStorageBytes,
 } from "./kquantfast";
-import { ExpertCache, expertKey, slotBindRanges, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
+import { ExpertCache, expertKey, type ArenaGeometry, type ExpertClass, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
+import { expertArenaBindings } from "./gpulimits";
 import {
   addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ6KFastWgsl, gemvQ8HeadsWgsl,
   gemvQuantWgsl, kvAppendWgsl, mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,
   ropeMlaNormWgsl, rmsnormWgsl,
   siluMulWgsl, stridedCopyWgsl, pairGemvSiluFastWgsl, pairGemvSiluQ5KFastWgsl,
-  gemvAccumFastWgsl,
+  gemvAccumFastWgsl, type ArenaOpts,
 } from "./kernels/wgsl";
 
 const HL = G.qkNope + G.ropeDims; // 256
+
+// Indirezione dell'arena expert (C3a fase 4 strato 1, design §2).
+// `Sel` = una entry per (layer MoE, k): {id, slot, w già ×1.8, flags}, 16 B.
+const SEL_BYTES = 16;
+// `MoeIdx` = 16 B utili, ma le entry vanno spaziate a
+// minUniformBufferOffsetAlignment perché l'uniform si binda a dynamic offset.
+// 256 è il default di spec e il massimo che un device possa chiedere.
+const MOE_IDX_BYTES = 16;
+const MOE_IDX_STRIDE = 256;
 
 // Sorgente pesi: byte GREZZI GGUF. In produzione è OPFS (ExpertOpfsStore +
 // GgufExpertIndex); nei test un mock sintetico. `nonExpert` riceve il nome
@@ -56,6 +71,16 @@ export interface GlmModelOpts {
   head?: boolean;
   vocab?: number;
   cache: { budgetBytes: number; maxBindingBytes: number; maxBufferBytes: number; slotsOverride?: { q4_0: number; q4_1: number }; timing?: boolean };
+  /**
+   * Chi riempie `Sel`, cioe' chi decide quali expert bindare (C3a fase 4).
+   * Slice A implementa SOLO "cpu": la selezione resta il routerSelect f64 dopo
+   * il sync per layer. "shadow" (router GPU in ombra, decide ancora la CPU) e
+   * "gpu" (router+resolve on-device, un submit per token) sono gli slice B e C:
+   * il TIPO li contiene gia' perche' l'interruttore sia uno solo e gli slice
+   * successivi non debbano cambiare l'interfaccia — chiederli oggi e' un errore
+   * esplicito, mai una degradazione silenziosa a "cpu".
+   */
+  select?: "cpu" | "gpu" | "shadow";
   // Telemetria di attribuzione (goal C3a fase 1). Zero-overhead da spenta
   // (contratto CONSTRAINTS): senza `telemetry` non si chiama nemmeno
   // performance.now(). `telemetryGpu` aggiunge timestampWrites a ogni compute
@@ -229,8 +254,86 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     upload(repackKQuant(raw, 0, raw.length / blockBytes, blockBytes));
 
   // ---- pipeline condivise ----
-  const mkPipe = (code: string) =>
-    device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code }), entryPoint: "main" } });
+  // `layout: "auto"` resta il default dei ~20 kernel a binding fisso; il layout
+  // esplicito serve alle sole pipeline expert, perche' `hasDynamicOffset` NON e'
+  // esprimibile con "auto" (WebGPU deriva il layout dal WGSL, e il WGSL non dice
+  // se un uniform e' bindato a offset dinamico).
+  const mkPipe = (code: string, layout?: GPUBindGroupLayout) =>
+    device.createComputePipeline({
+      layout: layout ? device.createPipelineLayout({ bindGroupLayouts: [layout] }) : "auto",
+      compute: { module: device.createShaderModule({ code }), entryPoint: "main" },
+    });
+
+  // ---- cache expert in modo ARENA (C3a fase 4, strato 1) ----
+  // La cache si costruisce PRIMA delle pipeline expert: e' lei a dire quanti
+  // buffer ha una classe, e quel numero e' baked nel WGSL (i binding d'arena e
+  // gli archi dello switch di `ld4`). Al contrario del regime a sotto-range, qui
+  // il bind group non dipende piu' dallo slot: e' UNO per (classe, stadio),
+  // costruito al load, e lo slot entra come indirizzo attraverso `Sel`.
+  if (opts.select !== undefined && opts.select !== "cpu") {
+    throw new Error(
+      `glmmodel: select "${opts.select}" non e' implementato (slice B/C della fase 4) — ` +
+      'lo slice A accetta solo "cpu"');
+  }
+  const cache = new ExpertCache(device, { ...opts.cache, arena: true });
+  const arenaOptsOf = (geo: ArenaGeometry): ArenaOpts => {
+    const l = geo.layout;
+    // Gli offset arrivano da SlabLayout (moe.ts), che li garantisce multipli di
+    // 256. Il requisito dei kernel d'arena è più forte di quello della word:
+    // `ld4` indicizza `array<vec4<u32>>`, cioè a 16 B, e l'indice si ottiene
+    // con `>> 2u` sulla word — un offset multiplo di 4 ma non di 16 verrebbe
+    // TRONCATO in silenzio al vec4 precedente, leggendo pesi sfasati invece di
+    // fallire. Si asserta qui, sezione per sezione, e non si spera.
+    const secs: Array<[string, number]> = [
+      ["gateQs", l.gateQs], ["gateScales", l.gateScales], ["upQs", l.upQs], ["upScales", l.upScales],
+      ["downQs", l.downQs], ["downScales", l.downScales], ["bytes (passo dello slab)", l.bytes],
+    ];
+    for (const [nm, off] of secs) {
+      if (off % 16 !== 0) {
+        throw new Error(
+          `glmmodel arena: ${nm} = ${off} B non e' multiplo di 16 (indice vec4 di ld4) — ` +
+          "il >> 2u lo troncherebbe senza errore");
+      }
+    }
+    return {
+      nBuf: geo.nBuf, slabWords: geo.slabWords, slabsPerBuf: geo.slabsPerBuf,
+      qsWords: l.downQs / 4, scalesWords: l.downScales / 4,
+      gateQsWords: l.gateQs / 4, gateScWords: l.gateScales / 4,
+      upQsWords: l.upQs / 4, upScWords: l.upScales / 4,
+    };
+  };
+  const mkExpertClass = (cls: ExpertClass) => {
+    const geo = cache.arenaGeometry(cls);
+    const need = expertArenaBindings(geo.nBuf);
+    if (need > device.limits.maxStorageBuffersPerShaderStage) {
+      throw new Error(
+        `glmmodel arena: la classe ${cls} ha ${geo.nBuf} buffer ⇒ ${need} storage binding, ` +
+        `il device ne concede ${device.limits.maxStorageBuffersPerShaderStage} — negoziare ` +
+        "maxStorageBuffersPerShaderStage con arenaBuffers (gpulimits/arenaNeeds)");
+    }
+    const arena = arenaOptsOf(geo);
+    const bgl = device.createBindGroupLayout({
+      entries: [
+        ...Array.from({ length: geo.nBuf }, (_, j) => ({
+          binding: j, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const },
+        })),
+        { binding: geo.nBuf, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } },
+        { binding: geo.nBuf + 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" as const } },
+        { binding: geo.nBuf + 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } },
+        {
+          binding: geo.nBuf + 3, visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "uniform" as const, hasDynamicOffset: true, minBindingSize: MOE_IDX_BYTES },
+        },
+      ],
+    });
+    return {
+      geo, bgl,
+      gu: mkPipe(pairGemvSiluFastWgsl({ K: G.dModel, N: G.dFfnExpert, arena }), bgl),
+      down: mkPipe(gemvAccumFastWgsl({ kind: cls, K: G.dFfnExpert, N: G.dModel, arena }), bgl),
+    };
+  };
+  const expert = { q4_0: mkExpertClass("q4_0"), q4_1: mkExpertClass("q4_1") };
+
   const pipes = {
     rmsD: mkPipe(rmsnormWgsl(G.dModel, G.rmsEps)),
     rmsQA: mkPipe(rmsnormWgsl(G.qLora, G.rmsEps)),
@@ -266,12 +369,8 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     // (gemvQ5KWgsl/gemvQ6KWgsl) restano nel repo: li usano i ktest.
     pairSiluShexp: mkPipe(pairGemvSiluQ5KFastWgsl({ K: G.dModel, N: G.dFfnExpert })),
     gemvShexpDown: mkPipe(gemvQ6KFastWgsl({ K: G.dFfnExpert, N: G.dModel })),
-    // catena expert: famiglia fusa portata da Qwen (C3a fase 4b). gate+up+silu
-    // in un dispatch solo; down con la stessa struttura vec4/shared-x/4-righe.
-    // I gemelli generici restano nel repo — li usano ancora denso e ktest.
-    pairSiluExp: mkPipe(pairGemvSiluFastWgsl({ K: G.dModel, N: G.dFfnExpert })),
-    gemvExpDown40: mkPipe(gemvAccumFastWgsl({ kind: "q4_0", K: G.dFfnExpert, N: G.dModel })),
-    gemvExpDown41: mkPipe(gemvAccumFastWgsl({ kind: "q4_1", K: G.dFfnExpert, N: G.dModel })),
+    // (la catena expert vive in `expert[cls]`: e' l'unica famiglia a layout
+    // esplicito, perche' e' l'unica che binda l'arena a dynamic offset)
     add: mkPipe(addInPlaceWgsl(G.dModel)),
   };
 
@@ -300,7 +399,8 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const gateE = storage(G.dFfnExpert * 4);
   const moeOut = storage(G.dModel * 4);
   const logitsB = storage(G.nExpert * 4);
-  const wExp = Array.from({ length: G.nExpertUsed }, () => storage(4)); // peso mixing per catena
+  // niente piu' `wExp`: il peso di mixing e' il campo `w` di Sel (§2.1 del
+  // design) — la stessa indirezione che porta lo slot porta anche il peso.
   const P = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   const logitsStaging = device.createBuffer({ size: G.nExpert * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const hiddenStaging = device.createBuffer({ size: G.dModel * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -321,6 +421,8 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
 
   interface MoeLayerGpu {
     bias: Float32Array;
+    cls: ExpertClass;        // classe degli expert del layer (down q4_0 o q4_1)
+    selBase: number;         // prima entry di Sel del layer: moeLayerIdx * nUsed
     preRouter: Step[];       // ffn_norm + router (dopo l'attention)
     shexp: Step[];           // scrive moeOut
     addMoe: Step;            // x += moeOut
@@ -334,6 +436,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   }
 
   const layers: LayerGpu[] = [];
+  let nMoeSeen = 0;                   // indice del layer MoE, per la base in Sel
   const weightBufs: GPUBuffer[] = []; // per destroy
   const track = <T extends GPUBuffer>(b: T): T => { weightBufs.push(b); return b; };
 
@@ -405,6 +508,8 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         attn, kpeCopy, cache,
         moe: {
           bias,
+          cls: ExpertCache.classOf(l),
+          selBase: nMoeSeen++ * G.nExpertUsed,
           preRouter: [
             step(pipes.rmsD, [x, ffnNorm, fnB], 1),
             step(pipes.router, [routerW, fnB, logitsB], G.nExpert),
@@ -419,29 +524,63 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     }
   }
 
-  // ---- cache expert + bind group per-slot (cached: slot stabili) ----
-  const cache = new ExpertCache(device, opts.cache);
+  // ---- Sel + MoeIdx + i 4 bind group STATICI dell'arena ----
   // Reader costruito UNA volta: se la sorgente ha il file slab, la cache prende
   // il percorso senza pack CPU; altrimenti ripiega sui byte GGUF grezzi.
   const expertReader: ExpertReader = src.hasSlabs && src.expertSlab
     ? { raw: (ll, ee) => src.expert(ll, ee), slab: (ll, ee) => src.expertSlab!(ll, ee) }
     : (ll: number, ee: number) => src.expert(ll, ee);
-  interface SlotBgs { gu: GPUBindGroup; down: GPUBindGroup[] } // down: uno per wExp[k]
-  const slotBgCache = new Map<GPUBuffer, Map<number, SlotBgs>>();
-  const slotBgs = (slot: SlotRef): SlotBgs => {
-    let byOff = slotBgCache.get(slot.buffer);
-    if (!byOff) { byOff = new Map(); slotBgCache.set(slot.buffer, byOff); }
-    let got = byOff.get(slot.offset);
-    if (!got) {
-      const r = slotBindRanges(slot);
-      const downPipe = slot.cls === "q4_1" ? pipes.gemvExpDown41 : pipes.gemvExpDown40;
-      got = {
-        gu: bg(pipes.pairSiluExp, [r.gateQs, r.gateScales, r.upQs, r.upScales, fnB, gateE]),
-        down: wExp.map((wb) => bg(downPipe, [r.downQs, r.downScales, gateE, moeOut, wb])),
-      };
-      byOff.set(slot.offset, got);
+  const nMoeLayer = nMoeSeen;
+  const nSel = Math.max(1, nMoeLayer * G.nExpertUsed);
+  if (MOE_IDX_STRIDE % device.limits.minUniformBufferOffsetAlignment !== 0) {
+    throw new Error(
+      `glmmodel arena: stride ${MOE_IDX_STRIDE} non multiplo di ` +
+      `minUniformBufferOffsetAlignment ${device.limits.minUniformBufferOffsetAlignment}`);
+  }
+  const selBuf = device.createBuffer({
+    size: nSel * SEL_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+  });
+  const moeIdxUni = device.createBuffer({
+    size: nSel * MOE_IDX_STRIDE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  // MoeIdx e' STATICA: contenuto noto al load, una scrittura sola. Il dynamic
+  // offset seleziona la entry, la entry dice quale Sel leggere. `tableBase` e
+  // `moeLayer` non servono allo slice A (li usa il resolve GPU dello slice B):
+  // stanno qui perche' il layout della uniform sia gia' quello definitivo.
+  {
+    const u = new Uint32Array(nSel * (MOE_IDX_STRIDE / 4));
+    for (let m = 0; m < nMoeLayer; m++) {
+      for (let k = 0; k < G.nExpertUsed; k++) {
+        const selIdx = m * G.nExpertUsed + k;
+        const w = selIdx * (MOE_IDX_STRIDE / 4);
+        u[w] = selIdx; u[w + 1] = m * G.nExpert; u[w + 2] = m; u[w + 3] = 0;
+      }
     }
-    return got;
+    device.queue.writeBuffer(moeIdxUni, 0, u as unknown as BufferSource);
+  }
+  // Sel per-token: 4 entry (64 B) per layer MoE, scritte dopo gli `ensure`.
+  const selScratch = new ArrayBuffer(G.nExpertUsed * SEL_BYTES);
+  const selU32 = new Uint32Array(selScratch);
+  const selF32 = new Float32Array(selScratch);
+  const arenaBg = (cls: ExpertClass, xBuf: GPUBuffer, outBuf: GPUBuffer): GPUBindGroup => {
+    const e = expert[cls];
+    return device.createBindGroup({
+      layout: e.bgl,
+      entries: [
+        ...cache.arenaBuffers(cls).map((b, j) => ({ binding: j, resource: { buffer: b } })),
+        { binding: e.geo.nBuf, resource: { buffer: xBuf } },
+        { binding: e.geo.nBuf + 1, resource: { buffer: outBuf } },
+        { binding: e.geo.nBuf + 2, resource: { buffer: selBuf } },
+        // `size` ESPLICITA: con hasDynamicOffset la validazione chiede
+        // offset+dynamicOffset+size <= buffer.size, e senza `size` il binding
+        // varrebbe l'intero buffer ⇒ qualunque offset dinamico > 0 sarebbe illegale.
+        { binding: e.geo.nBuf + 3, resource: { buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES } },
+      ],
+    });
+  };
+  const expBg = {
+    q4_0: { gu: arenaBg("q4_0", fnB, gateE), down: arenaBg("q4_0", gateE, moeOut) },
+    q4_1: { gu: arenaBg("q4_1", fnB, gateE), down: arenaBg("q4_1", gateE, moeOut) },
   };
 
   // (con l'it.13 anche lo shexp Q5_K/Q6_K e' passato alla famiglia fusa: nel
@@ -574,23 +713,35 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           T.ensureMs += tE - tEns;
           tSeg += tE - tEns; // ensure NON è encode: scalarlo dal segmento corrente
         }
+        // ---- Sel del layer: 4 entry, un writeBuffer da 64 B ----
+        // ORDINE OBBLIGATORIO: prima gli `ensure` (che fanno writeBuffer degli
+        // slab), poi questa. La coda le esegue in ordine di enqueue, quindi lo
+        // slot pubblicato qui e' gia' pieno quando i dispatch lo leggono.
         for (let k = 0; k < G.nExpertUsed; k++) {
-          device.queue.writeBuffer(wExp[k], 0, new Float32Array([sel.weights[k]]));
+          selU32[k * 4] = sel.experts[k];
+          selU32[k * 4 + 1] = slots[k].idx;
+          selF32[k * 4 + 2] = sel.weights[k]; // gia' ×1.8 (routerSelect)
+          selU32[k * 4 + 3] = 0;
         }
+        device.queue.writeBuffer(selBuf, m.selBase * SEL_BYTES, selScratch);
         // ---- encode MoE: shexp scrive moeOut, gli expert accumulano ----
         enc = device.createCommandEncoder();
         ensurePass("shexp");
         runSteps(pass!, m.shexp);
         ensurePass("experts");
+        // Bind group STATICI: cambia solo il dynamic offset, che dice quale
+        // entry di Sel leggere — un valore CPU-noto (il layer e il k), MAI
+        // l'expert. E' il punto dello strato 1: l'encode non dipende piu' dalla
+        // selezione, quindi lo slice C potra' toglierne il sync.
+        const ex = expert[m.cls];
         for (let k = 0; k < G.nExpertUsed; k++) {
-          const bgs = slotBgs(slots[k]);
-          pass!.setPipeline(pipes.pairSiluExp);
-          pass!.setBindGroup(0, bgs.gu);
+          const off = (m.selBase + k) * MOE_IDX_STRIDE;
+          pass!.setPipeline(ex.gu);
+          pass!.setBindGroup(0, expBg[m.cls].gu, [off]);
           const [gx, gy] = gemvGrid(G.dFfnExpert / 4); // 4 righe per workgroup
           pass!.dispatchWorkgroups(gx, gy);
-          const downPipe = slots[k].cls === "q4_1" ? pipes.gemvExpDown41 : pipes.gemvExpDown40;
-          pass!.setPipeline(downPipe);
-          pass!.setBindGroup(0, bgs.down[k]);
+          pass!.setPipeline(ex.down);
+          pass!.setBindGroup(0, expBg[m.cls].down, [off]);
           const [dx, dy] = gemvGrid(G.dModel / 4);
           pass!.dispatchWorkgroups(dx, dy);
         }
@@ -667,7 +818,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       };
     },
     destroy() {
-      for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnPartials, attnMla, tmp, fnB, gateD, upD, gateE, moeOut, logitsB, ...wExp, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
+      for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnPartials, attnMla, tmp, fnB, gateD, upD, gateE, moeOut, logitsB, selBuf, moeIdxUni, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
       tsqResolve?.destroy();
       querySet?.destroy();
       cache.destroy();

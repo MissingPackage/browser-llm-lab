@@ -9,7 +9,7 @@ import {
   gemvQuantWgsl, gemvF32Wgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
   attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
-  routerTopKWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl, gemvGrid,
+  routerTopKWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl, gemvGrid, type ArenaOpts,
   mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,
   pairGemvSiluQ5KFastWgsl, gemvQ6KFastWgsl,
 } from "../kernels/wgsl";
@@ -24,7 +24,7 @@ import {
   routerSelect, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
 } from "../moe";
 import { ExpertOpfsStore } from "../expertstore";
-import { ExpertCache, expertKey, type ExpertRawBytes } from "../residency";
+import { ExpertCache, arenaNeeds, expertKey, type ExpertRawBytes } from "../residency";
 import {
   repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
   dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ5_K, dequantQ6_K,
@@ -101,6 +101,14 @@ function mlaAttnRefF64(q: Float32Array, cache: Float32Array, nPast: number, scal
   return ref;
 }
 
+// Arena expert nel ktest (C3a fase 4 strato 1): la finestra si TAGLIA a 3 slab
+// apposta. A finestra piena una classe da pochi slot starebbe in un buffer solo
+// (nBuf = 1) e lo switch di `ld4` non avrebbe archi: il caso che conta — slot in
+// un buffer diverso dal primo — non verrebbe mai eseguito. Con 3 slab per buffer
+// e 7 slot la classe q4_1 del mini-modello ha nBuf = 3.
+const KTEST_ARENA_WINDOW = 3 * SLAB_DOWN_Q4_1.bytes;
+const KTEST_SLOTS = { q4_0: 4, q4_1: 7 };
+
 class Gpu {
   device!: GPUDevice;
   async init(): Promise<string> {
@@ -114,6 +122,12 @@ class Gpu {
       requiredLimits: negotiateLimits(adapter, {
         ctxMax: 64,
         extraBindings: [{ bytes: 10_485_760, consumer: "ktest: blk.0 ffn_gate/up q4_0 qs (pesi reali)" }],
+        // i due requisiti dell'arena, calcolati dalla stessa aritmetica della
+        // cache (residency.arenaNeeds) e non ricopiati qui
+        ...arenaNeeds({
+          budgetBytes: 0, slotsOverride: KTEST_SLOTS,
+          maxBufferBytes: KTEST_ARENA_WINDOW, maxBindingBytes: KTEST_ARENA_WINDOW,
+        }),
       }),
     });
     const info = adapter.info;
@@ -700,9 +714,16 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
     gateShexp: dq(1, "ffn_gate_shexp.weight"), upShexp: dq(1, "ffn_up_shexp.weight"), downShexp: dq(1, "ffn_down_shexp.weight"),
   });
 
+  // Finestra d'arena tagliata a 3 slab (KTEST_ARENA_WINDOW): con 7 slot la
+  // classe q4_1 — l'unica che blk.1 usa — sta su 3 buffer, quindi lo switch di
+  // `ld4` ha archi veri e gli slot cadono anche fuori dal primo buffer. A
+  // finestra piena questo test avrebbe nBuf = 1 e non proverebbe niente.
   const model = createGlmModel(g.device, srcMock, {
-    nLayer: 2, ctxMax: 16, head: true, vocab: VOCAB_T,
-    cache: { budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 6 }, maxBindingBytes: 1 << 30, maxBufferBytes: 1 << 30, timing: true },
+    nLayer: 2, ctxMax: 16, head: true, vocab: VOCAB_T, select: "cpu",
+    cache: {
+      budgetBytes: 0, slotsOverride: KTEST_SLOTS,
+      maxBindingBytes: KTEST_ARENA_WINDOW, maxBufferBytes: KTEST_ARENA_WINDOW, timing: true,
+    },
   });
   // ref f64 dell'head: rms(output_norm) + matvec Q6_K dequant
   const outNormF = deqBy(nonExpert("output_norm.weight"), "f32");
@@ -761,6 +782,13 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
     }
   }
   const st = model.cacheStats();
+  // Il gate 2 dello slice A chiede nBuf >= 3: se la finestra o gli slot
+  // cambiassero, questo test tornerebbe a girare a buffer singolo senza dirlo.
+  const nBufTest = arenaNeeds({
+    budgetBytes: 0, slotsOverride: KTEST_SLOTS,
+    maxBufferBytes: KTEST_ARENA_WINDOW, maxBindingBytes: KTEST_ARENA_WINDOW,
+  }).arenaBuffers;
+  if (nBufTest < 3) problems.push(`arena a nBuf=${nBufTest}: lo switch di ld4 non ha archi`);
   // Dispatch: due asserzioni DISTINTE, non una tautologia. Prima di C3a il gate
   // era `dispatchesPerToken === 61`, cioe' la formula confrontata con se stessa:
   // passava sempre, e non avrebbe mai visto un pass WGSL aggiunto o tolto.
@@ -791,7 +819,8 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
     kernel: name, pass, maxAbs, maxRel,
     note: `${NPOS} pos, L2rel=${l2.toExponential(2)}, wMaxRel=${wMaxRel.toExponential(2)}, ` +
       `argmax ${argmaxOk}/${NPOS}, logitMaxRel=${logitMaxRel.toExponential(2)}, ` +
-      `h${st.hits}/m${st.misses}/ev${st.evictions}, ${measuredPerToken} dispatch/token misurati ` +
+      `h${st.hits}/m${st.misses}/ev${st.evictions}, arena nBuf=${nBufTest}, ` +
+      `${measuredPerToken} dispatch/token misurati ` +
       `(piano ${model.dispatchesPerTokenPlanned} + testa ${HEAD})` +
       (problems.length ? `; ${problems.join("; ")}` : ""),
   };
@@ -905,6 +934,184 @@ async function testGemvAccumFast(g: Gpu, kind: "q4_0" | "q4_1"): Promise<KResult
   await g.run(gemvAccumFastWgsl({ kind, K, N }),
     [g.buf(qs), g.buf(scales), g.buf(x), y, g.buf(new Float32Array([s]))], gemvGrid(N / 4)[0]);
   return compare(`gemv-${kind}-accum-fast`, new Float32Array(await g.read(y, N * 4)), ref, 2e-4, 1e-3);
+}
+
+// ---- arena expert vs binding a sotto-range (C3a fase 4 strato 1, gate 1) ----
+// LO STESSO slab, letto nei due regimi: bindato a sotto-range dai kernel a
+// binding fisso (quello che gira in produzione fino a it.14) e dentro un'arena
+// da 3 slab, al TERZO offset del SECONDO buffer — cosi' l'aritmetica dello slot
+// deve produrre insieme l'arco giusto dello switch e una base diversa da zero.
+// Il gate e' l'identita' BIT-A-BIT delle uscite f32: cambia da dove i byte
+// arrivano, non che cosa il kernel ci fa sopra. Fallback dichiarato nel design
+// (R2): se la contrazione FMA cade in modo diverso fra i due moduli, il gate si
+// declassa a maxRel <= 1e-6 — e il note lo DICE, non lo nasconde.
+const ARENA_R2_FALLBACK_REL = 1e-6;
+
+async function testExpertArenaVsSlotRange(g: Gpu, cls: "q4_0" | "q4_1"): Promise<KResult[]> {
+  const name = `expert-arena-vs-slotrange-${cls}`;
+  const dev = g.device;
+  const layout = cls === "q4_0" ? SLAB_DOWN_Q4_0 : SLAB_DOWN_Q4_1;
+  const K = G.dModel, N = G.dFfnExpert;
+  const exBlocks = (G.dModel / 32) * G.dFfnExpert;
+  const downBB = cls === "q4_0" ? 18 : Q4_1_BLOCK_BYTES;
+  const seed = cls === "q4_0" ? 12_100 : 12_200;
+
+  const gateRaw = randBytes(exBlocks * 18, seed); fixScales(gateRaw, 18);
+  const upRaw = randBytes(exBlocks * 18, seed + 1); fixScales(upRaw, 18);
+  const downRaw = randBytes(exBlocks * downBB, seed + 2);
+  if (cls === "q4_0") fixScales(downRaw, 18); else fixScalesAt(downRaw, Q4_1_BLOCK_BYTES, [1, 3]);
+  const slab = packExpertSlab(gateRaw, upRaw, downRaw, layout);
+  const x = randF32(K, seed + 3, 0.5);
+  const y0 = randF32(G.dModel, seed + 4, 0.5);
+  const wMix = new Float32Array([0.6789]); // stesso f32 nei due regimi
+
+  const SLABS_PER_BUF = 3, NBUF = 2, SLOT = 5, SEL_IDX = 3, NSEL = 4;
+  const MISS_IDX = 1, MISS_SLOT = 0xffffffff;
+  const arena: ArenaOpts = {
+    nBuf: NBUF, slabWords: layout.bytes / 4, slabsPerBuf: SLABS_PER_BUF,
+    qsWords: layout.downQs / 4, scalesWords: layout.downScales / 4,
+    gateQsWords: layout.gateQs / 4, gateScWords: layout.gateScales / 4,
+    upQsWords: layout.upQs / 4, upScWords: layout.upScales / 4,
+  };
+
+  // --- regime a sotto-range: un buffer da uno slab, sei binding {offset,size} ---
+  const one = g.empty(layout.bytes);
+  dev.queue.writeBuffer(one, 0, slab as unknown as BufferSource);
+  const sub = (off: number, size: number) => ({ buffer: one, offset: off, size });
+  const xRefB = g.buf(x), xArenaB = g.buf(x), wMixB = g.buf(wMix);
+  const guRef = g.empty(N * 4);
+  await g.run(pairGemvSiluFastWgsl({ K, N }), [
+    sub(layout.gateQs, layout.qsBytes), sub(layout.gateScales, layout.gateScalesBytes),
+    sub(layout.upQs, layout.qsBytes), sub(layout.upScales, layout.gateScalesBytes),
+    xRefB, guRef,
+  ], gemvGrid(N / 4)[0]);
+  const yRef = g.buf(y0);
+  await g.run(gemvAccumFastWgsl({ kind: cls, K: G.dFfnExpert, N: G.dModel }), [
+    sub(layout.downQs, layout.qsBytes), sub(layout.downScales, layout.downScalesBytes),
+    guRef, yRef, wMixB,
+  ], gemvGrid(G.dModel / 4)[0]);
+
+  // --- regime arena: 2 buffer da 3 slab, lo slab nello slot 5 (buf 1, base 2) ---
+  const bufs = [g.empty(SLABS_PER_BUF * layout.bytes), g.empty(SLABS_PER_BUF * layout.bytes)];
+  dev.queue.writeBuffer(bufs[1], 2 * layout.bytes, slab as unknown as BufferSource);
+  const selBytes = new ArrayBuffer(NSEL * 16);
+  const selU32 = new Uint32Array(selBytes), selF32 = new Float32Array(selBytes);
+  selU32[SEL_IDX * 4] = 42;          // id expert (non letto dai kernel)
+  selU32[SEL_IDX * 4 + 1] = SLOT;
+  selF32[SEL_IDX * 4 + 2] = wMix[0];
+  selU32[SEL_IDX * 4 + 3] = 0;
+  // entry di MISS: slot sentinella, peso NON nullo (se il kernel scrivesse lo
+  // stesso, un peso a zero lo nasconderebbe) e flags con il bit 0 alzato
+  selU32[MISS_IDX * 4] = 99;
+  selU32[MISS_IDX * 4 + 1] = MISS_SLOT;
+  selF32[MISS_IDX * 4 + 2] = 0.5;
+  selU32[MISS_IDX * 4 + 3] = 1;
+  const selBuf = g.buf(new Uint32Array(selBytes));
+  const uniData = new Uint32Array(NSEL * 64);
+  for (let i = 0; i < NSEL; i++) uniData[i * 64] = i; // MoeIdx.selIdx
+  const uni = dev.createBuffer({ size: uniData.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  dev.queue.writeBuffer(uni, 0, uniData as unknown as BufferSource);
+
+  const runArena = async (code: string, xB: GPUBuffer, outB: GPUBuffer, wg: number, selIdx = SEL_IDX): Promise<void> => {
+    const module = dev.createShaderModule({ code });
+    const info = await module.getCompilationInfo();
+    const errs = info.messages.filter((m) => m.type === "error");
+    if (errs.length) throw new Error(`WGSL arena: ${errs[0].message} @${errs[0].lineNum}`);
+    const st = (type: GPUBufferBindingType, binding: number): GPUBindGroupLayoutEntry =>
+      ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type } });
+    const bgl = dev.createBindGroupLayout({
+      entries: [
+        ...bufs.map((_, j) => st("read-only-storage", j)),
+        st("read-only-storage", NBUF), st("storage", NBUF + 1), st("read-only-storage", NBUF + 2),
+        {
+          binding: NBUF + 3, visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "uniform", hasDynamicOffset: true, minBindingSize: 16 },
+        },
+      ],
+    });
+    const pipeline = dev.createComputePipeline({
+      layout: dev.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+      compute: { module, entryPoint: "main" },
+    });
+    const bg = dev.createBindGroup({
+      layout: bgl,
+      entries: [
+        ...bufs.map((b, j) => ({ binding: j, resource: { buffer: b } })),
+        { binding: NBUF, resource: { buffer: xB } },
+        { binding: NBUF + 1, resource: { buffer: outB } },
+        { binding: NBUF + 2, resource: { buffer: selBuf } },
+        { binding: NBUF + 3, resource: { buffer: uni, offset: 0, size: 16 } },
+      ],
+    });
+    const enc = dev.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bg, [selIdx * 256]);
+    pass.dispatchWorkgroups(wg);
+    pass.end();
+    dev.queue.submit([enc.finish()]);
+  };
+
+  const guArena = g.empty(N * 4);
+  await runArena(pairGemvSiluFastWgsl({ K, N, arena }), xArenaB, guArena, gemvGrid(N / 4)[0]);
+  const yArena = g.buf(y0);
+  await runArena(gemvAccumFastWgsl({ kind: cls, K: G.dFfnExpert, N: G.dModel, arena }),
+    guArena, yArena, gemvGrid(G.dModel / 4)[0]);
+
+  // --- MISS: slot sentinella ⇒ contributo NULLO, non un indirizzo a caso ---
+  // E' la rete su cui si appoggeranno gli slice B e C (flags/selMiss): il
+  // degrado a residenza parziale dev'essere DEFINITO. I due buffer di uscita
+  // sono pre-riempiti con valori noti e devono restare tali, bit per bit.
+  const guMiss0 = randF32(N, seed + 5, 0.5);
+  const yMiss0 = randF32(G.dModel, seed + 6, 0.5);
+  const guMiss = g.buf(guMiss0), yMiss = g.buf(yMiss0);
+  await runArena(pairGemvSiluFastWgsl({ K, N, arena }), xArenaB, guMiss, gemvGrid(N / 4)[0], MISS_IDX);
+  await runArena(gemvAccumFastWgsl({ kind: cls, K: G.dFfnExpert, N: G.dModel, arena }),
+    guMiss, yMiss, gemvGrid(G.dModel / 4)[0], MISS_IDX);
+
+  // --- confronto BIT-A-BIT (e, se cade, di quanto) ---
+  const bits = async (a: GPUBuffer, b: GPUBuffer, n: number) => {
+    const A = new Uint32Array(await g.read(a, n * 4)), B = new Uint32Array(await g.read(b, n * 4));
+    const fA = new Float32Array(A.buffer), fB = new Float32Array(B.buffer);
+    let diff = 0, maxRel = 0, maxAbs = 0;
+    for (let i = 0; i < n; i++) {
+      if (A[i] !== B[i]) diff++;
+      const d = Math.abs(fA[i] - fB[i]);
+      maxAbs = Math.max(maxAbs, d);
+      maxRel = Math.max(maxRel, d / Math.max(Math.abs(fA[i]), 1e-6));
+    }
+    return { diff, maxRel, maxAbs };
+  };
+  const gu = await bits(guRef, guArena, N);
+  const yy = await bits(yRef, yArena, G.dModel);
+  // il MISS si confronta con i valori PRE-ESISTENTI, non con l'altro regime
+  const guM = new Uint32Array(await g.read(guMiss, N * 4));
+  const yM = new Uint32Array(await g.read(yMiss, G.dModel * 4));
+  const guM0 = new Uint32Array(guMiss0.buffer.slice(0)), yM0 = new Uint32Array(yMiss0.buffer.slice(0));
+  let missDiff = 0;
+  for (let i = 0; i < N; i++) if (guM[i] !== guM0[i]) missDiff++;
+  for (let i = 0; i < G.dModel; i++) if (yM[i] !== yM0[i]) missDiff++;
+  for (const b of [one, xRefB, xArenaB, wMixB, guRef, yRef, guArena, yArena, guMiss, yMiss, selBuf, uni, ...bufs]) {
+    b.destroy();
+  }
+
+  const diff = gu.diff + yy.diff;
+  const maxRel = Math.max(gu.maxRel, yy.maxRel);
+  const maxAbs = Math.max(gu.maxAbs, yy.maxAbs);
+  const note = diff === 0
+    ? `BIT-A-BIT identico su ${N} + ${G.dModel} f32 (slot ${SLOT} = buffer 1 offset 2, selIdx ${SEL_IDX})`
+    : `NON bit-identico: ${diff} f32 diversi (gate/up ${gu.diff}, down ${yy.diff}), `
+      + `maxRel=${maxRel.toExponential(2)} — fallback R2 del design `
+      + `(soglia ${ARENA_R2_FALLBACK_REL.toExponential(0)})`;
+  return [
+    { kernel: name, pass: diff === 0 || maxRel <= ARENA_R2_FALLBACK_REL, maxAbs, maxRel, note },
+    {
+      kernel: `expert-arena-miss-${cls}`, pass: missDiff === 0, maxAbs: missDiff, maxRel: 0,
+      note: missDiff === 0
+        ? `slot 0xffffffff (w=0.5, flags=1): gate/up e down non toccano l'uscita, bit per bit`
+        : `slot di MISS: ${missDiff} f32 SCRITTI — il degrado non e' definito`,
+    },
+  ];
 }
 
 // Router top-k su GPU vs `routerSelect` (CPU, f64) — C3a fase 4 strato 1.
@@ -1077,6 +1284,11 @@ async function main(): Promise<void> {
     results.push(await testPairGemvSiluFast(g));
     results.push(await testGemvAccumFast(g, "q4_0"));
     results.push(await testGemvAccumFast(g, "q4_1"));
+
+    // --- arena expert (C3a fase 4 strato 1, slice A): stesso slab, due regimi,
+    //     piu' la semantica del MISS ---
+    results.push(...await testExpertArenaVsSlotRange(g, "q4_0"));
+    results.push(...await testExpertArenaVsSlotRange(g, "q4_1"));
 
     // --- famiglia fast sui K-quant (C3a fase 4b it.13): shexp + head ---
     results.push(await testPairGemvSiluQ5KFast(g));
