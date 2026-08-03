@@ -167,6 +167,53 @@ diverge da quanto scritto sopra, con la ragione.
    di `routerSelect` chiude R5 dal lato che decide — gate nel ktest
    (`vramChecked` completo, zero difformità) e nel report di glmroute.
 
+### 3-ter. Attuazione dello slice C (it.17)
+
+Come sopra: i punti in cui il codice dice qualcosa di più — o di diverso — da §4.
+
+1. **Residenza totale = preload al load, non pin.** In modo `gpu` la CPU non vede
+   la selezione, quindi non può caricare né pinnare *durante* il token: il parco
+   del modello entra in VRAM in `createGlmModel` (un `ensure` per expert dei layer
+   MoE) e la `slotTable` si pubblica con UN flush. Niente pin, perché con
+   `nSlots >= parco` (precondizione verificata *prima* di costruire la cache, così
+   un rifiuto non lascia GB appesi) la free list non si esaurisce e il ramo di
+   eviction non è raggiungibile: è geometria, non policy — e si asserta
+   (`evictions === 0`, più `misses` e occupancy per classe == parco). Dopo il load
+   la slotTable NON cambia più: nessun flush per token, in nessun punto.
+   **Caveat di scala, dichiarato**: il preload è sincrono e bloccante, ed è
+   dimensionato sul ktest (64 expert, ~350 MB). Sul modello vero sono 2 944 read
+   OPFS in fila più altrettante `writeBuffer` senza yield: stallo di minuti e
+   pressione sulla staging interna della coda (firma R4). La 4c non riusa questo
+   ciclo com'è — le serve il percorso file-slab (`expertSlab`, senza pack CPU) con
+   preload chunked/asincrono e pubblicazione della slotTable per blocchi.
+2. **Nessuna entry di `MoeIdx` in più.** In shadow il router usa le
+   `nMoeLayer` entry dedicate (selIdx nell'ombra); in gpu usa la entry
+   `(layer, k=0)`, che *esiste già* e porta esattamente `selIdx = m·nUsed` e il
+   `tableBase` giusto. Cambia il dynamic offset, non il buffer, non il WGSL.
+3. **L'identità con A NON è bit-a-bit, e non poteva esserlo.** La differenza è UNA
+   e sola: il peso di mixing in `Sel`, che in modo gpu lo calcola il router in f32
+   mentre in cpu lo calcola `routerSelect` in f64. È intrinseca all'interruttore —
+   il senso dello slice è che la CPU non calcoli più nulla.
+   **Cosa porta davvero il claim** (le misure che il caso cpu non fa già):
+   `hidden` `maxRel` 2,50e-7 gpu-vs-cpu (bit-identici 8 309/12 288), id degli
+   expert identici **per k e nell'ordine** su tutte le posizioni, pesi `maxRel`
+   1,27e-7 — lo stesso numero dell'ombra dello slice B, che è la firma del
+   narrowing f32 e non di un'altra causa. Gate derivati dalla misura, non dal
+   limite teorico: 1e-6 su hidden (~4×, ed è la soglia R2) e 1e-6 sui pesi (~8×).
+   **Cosa NON lo porta**: l'uguaglianza degli argmax gpu-vs-cpu è *implicata* —
+   entrambi i run sono già gated a `argmax == argmax(ref f64)` — e va letta come
+   leggibilità del report, non come copertura.
+   Sui LOGIT nessuna di queste soglie si applica: la testa amplifica di ~1e3
+   (GEMV su 2048 termini con cancellazione, pavimento 1e-3 al denominatore) e i due
+   run distano 2,56e-4, cioè quanto il run cpu dista già dal riferimento f64
+   (1,91e-4). La soglia per disuguaglianza triangolare (2·5e-3) sarebbe a sua volta
+   implicata dai gate esistenti: si prende invece la banda della misura, 1e-3
+   (~4×), che è un vincolo indipendente.
+4. **`selMiss`** (R6) conta le entry MISS della regione di PRODUZIONE in tutti i
+   modi con readback di Sel; in modo gpu > 0 ⇒ il forward alza un errore (token
+   invalido) che cita il seam evict-post-resolve. L'ombra non entra nel conto: lì
+   i MISS sono attesi.
+
 ## 4. Slicing
 
 ### Slice A — arena e offset, la CPU comanda ancora (it.15)

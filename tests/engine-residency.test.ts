@@ -9,14 +9,14 @@ import { existsSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseGguf, tensorByteSize } from "../src/engine/gguf";
-import { validateGlm47Flash, GLM47_FLASH as G } from "../src/engine/shape";
+import { validateGlm47Flash, GLM47_FLASH as G, GLM47_DOWN_EXPS_Q4_1_LAST } from "../src/engine/shape";
 import {
   Sha256Stream, GgufExpertIndex, downIsQ4_1,
   EXPERT_GATE_UP_BYTES, EXPERT_DOWN_Q4_0_BYTES, EXPERT_DOWN_Q4_1_BYTES,
 } from "../src/engine/expertstore";
 import {
-  ExpertCache, arenaNeeds, expertKey, slotBindRanges, PARK_Q4_0, PARK_Q4_1,
-  SLOT_TABLE_ENTRIES, SLOT_TABLE_MISS, type ExpertClass,
+  ExpertCache, arenaNeeds, expertKey, expertSlots, modelExpertPark, slotBindRanges,
+  PARK_Q4_0, PARK_Q4_1, SLOT_TABLE_ENTRIES, SLOT_TABLE_MISS, type ExpertClass,
 } from "../src/engine/residency";
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, packExpertSlab } from "../src/engine/moe";
 import { pairGemvSiluFastWgsl, gemvAccumFastWgsl, type ArenaOpts } from "../src/engine/kernels/wgsl";
@@ -646,5 +646,36 @@ describe("ExpertCache — slotTable", () => {
     expect(read()[expertKey(2, 5)]).toBe(0);
     expect(read()[expertKey(6, 5)]).toBe(0); // stesso indice slot, classi diverse
     expect(expertKey(2, 5)).not.toBe(expertKey(6, 5));
+  });
+});
+
+// Le due funzioni su cui poggia la precondizione di residenza totale del modo
+// `select:"gpu"` (C3a fase 4 slice C). Sono l'unica cosa che sta fra "il modo gpu
+// parte" e la corruzione silenziosa, e girano PRIMA che esista una cache: qui si
+// verificano senza device.
+describe("precondizione di residenza totale (slice C)", () => {
+  it("modelExpertPark conta il parco dei layer che ci sono, non del modello intero", () => {
+    // mini-modello del ktest: blk.0 denso + blk.1 MoE ⇒ solo q4_1
+    expect(modelExpertPark(2)).toEqual({ q4_0: 0, q4_1: G.nExpert });
+    // il modello intero torna il parco documentato (le due costanti storiche)
+    expect(modelExpertPark(G.nLayer)).toEqual({ q4_0: PARK_Q4_0, q4_1: PARK_Q4_1 });
+    expect(modelExpertPark(G.denseLead)).toEqual({ q4_0: 0, q4_1: 0 }); // nessun MoE
+  });
+
+  it("il confine q4_1→q4_0 cade fra il layer 4 e il 5 (GLM47_DOWN_EXPS_Q4_1_LAST)", () => {
+    const L = GLM47_DOWN_EXPS_Q4_1_LAST; // 4
+    // fino a L compreso: tutto q4_1, un layer alla volta
+    expect(modelExpertPark(L + 1)).toEqual({ q4_0: 0, q4_1: (L + 1 - G.denseLead) * G.nExpert });
+    // il layer L+1 e' il primo q4_0: e' l'unico delta fra le due chiamate
+    expect(modelExpertPark(L + 2)).toEqual({ q4_0: G.nExpert, q4_1: (L + 1 - G.denseLead) * G.nExpert });
+    expect(downIsQ4_1(L)).toBe(true);
+    expect(downIsQ4_1(L + 1)).toBe(false);
+  });
+
+  it("expertSlots: l'override vince sul budget, altrimenti riparto proporzionale", () => {
+    expect(expertSlots({ budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 64 } }))
+      .toEqual({ q4_0: 4, q4_1: 64 });
+    // a budget enorme si cappa al parco: e' la condizione di residenza totale vera
+    expect(expertSlots({ budgetBytes: 64 * 2 ** 30 })).toEqual({ q4_0: PARK_Q4_0, q4_1: PARK_Q4_1 });
   });
 });

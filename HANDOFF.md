@@ -34,14 +34,28 @@ riordinate di it.12/13, non slice B — invarianza cpu-vs-shadow bit-identica)
 albero congelato e GPU esclusiva — una review che esegue ktest o un edit di
 src/engine/** con vite HMR attivo uccidono il full-corpus (VRAM/full-reload).
 
-**PROSSIMO PEZZO, nessuna decisione pendente: SLICE C** (design §4) —
-`select:"gpu"`: salta copy logits, submit per layer, mapLogits, routerSelect,
-ensure; routing[] letto da Sel al tail. Ammesso SOLO a residenza totale
-(errore esplicito citando anche il seam evict-post-resolve). Verificabile
-SUBITO nel ktest: mini-modello con slotsOverride ⇒ residenza totale per
-costruzione, gate = identità con slice A + routerSyncs===0 + submits===1 per
-token. In produzione si accende con la 4c. Poi: ri-misura gpuBusy/clock di
-fine fase 4 + ripresentare item 2 (clausola di fallback).
+**FATTO (it.17): SLICE C — il meccanismo della fase 4 è COMPLETO.**
+`select:"gpu"` misurato nel ktest a residenza totale per costruzione:
+**1 submit / 0 sync per token** (observer indipendente su queue.submit),
+selMiss 0, preload 64/64 asserito, id expert identici per-k, precondizione
+con rifiuto esplicito. Decode **5.166** / prefill **5.747** (entrambi
+record). Il gate formale della fase 4 (≤2 sync/token nel bench di
+produzione) è misurabile solo a residenza totale ⇒ **fase 4 e 4c chiudono
+insieme**. **Item 2 RIPRESENTATO al PI nel docket** coi numeri per decidere
+(batching = max 12.47, sotto gate; eliminazione via 4c = sopra per
+aritmetica, incognite: clock e costo qualità).
+
+**PROSSIMO PEZZO: FASE 4c (residenza totale, emendamento 4 — authority
+concessa).** Quattro pezzi: (1) quant asimmetrica sui ~135 expert più freddi
+(matrice usage C1; deficit 0.67 GiB @ctx525 / 1.03 @4096 — la scelta del
+contesto va scritta nel report); (2) nuova versione di layout dello slab con
+invalidazione testata come in fase 3; (3) **eval di perdita OBBLIGATORIA**
+(gate: top-1 ≥ 98.83% full-corpus, argmax ≡ cpuref campione — sotto soglia
+si docketa, non si assorbe); (4) preload chunked/asincrono dal file slab
+(quello attuale è a scala ktest: 2944 read bloccanti sul modello vero =
+minuti di stallo, caveat §3-ter.1). Il done-when 4c: hit-rate 100%, 0
+miss/token, contesto dichiarato. Poi bench di produzione in `select:"gpu"`:
+è lì che si vede se il gate 13.43 cade.
 
 **FATTO (it.12): flash-decoding sulla MLA.** `mlaAttnSplitPartWgsl` (chunk da
 16 posizioni, 256 thread/wg, cache in shared riusata da tutte le 20 head) +

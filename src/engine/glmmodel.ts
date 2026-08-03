@@ -12,6 +12,14 @@
 //            (down scaledAccum ×peso); residuo — prosegue nel submit successivo
 // Il costo del sync è dichiarato e si misura in fase 6 (journal it.6).
 //
+// Con `select:"gpu"` (C3a fase 4 slice C) quella struttura sparisce: il router e
+// il resolve girano su GPU e scrivono `Sel` direttamente dove i kernel expert la
+// leggono, quindi il token è UN SOLO encode e UN SOLO submit — zero readback del
+// router, zero `ensure` nel forward, `routing[]` ricostruito al tail dalla copia
+// di Sel che si faceva già. Ammesso solo a residenza TOTALE: senza, un errore
+// esplicito al load (senza sync la CPU non pinna più niente, e uno slot risolto
+// potrebbe essere evinto dopo la risoluzione dentro lo stesso token).
+//
 // Pipeline WGSL condivise tra i 47 layer (shape identiche); bind group fissi
 // per-layer precostruiti al load.
 // Dalla fase 4 (strato 1) anche gli expert hanno bind group FISSI: la cache
@@ -27,7 +35,7 @@ import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen, mlaSplitWorkgroupStorageBytes } f
 import {
   pairGemvSiluQ5KFastWorkgroupStorageBytes, gemvQ6KFastWorkgroupStorageBytes,
 } from "./kquantfast";
-import { ExpertCache, expertKey, type ArenaGeometry, type ExpertClass, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
+import { ExpertCache, expertKey, expertSlots, modelExpertPark, type ArenaGeometry, type ExpertClass, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
 import { expertArenaBindings } from "./gpulimits";
 import {
   addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ6KFastWgsl, gemvQ8HeadsWgsl,
@@ -80,8 +88,13 @@ export interface GlmModelOpts {
    *   Costa 1 dispatch per layer MoE, 12 KB di slotTable e un readback di 5,7 KB
    *   su staging dedicata, mappata INSIEME a quella dell'hidden (un round-trip
    *   host solo, non uno in piu').
-   * - "gpu" (slice C, non implementato): un submit per token, niente readback.
-   * Chiedere "gpu" oggi e' un errore esplicito, mai una degradazione silenziosa.
+   * - "gpu" (slice C): il router+resolve scrive Sel nella regione di PRODUZIONE e
+   *   i kernel expert la leggono direttamente. Sparisce tutto il blocco di sync
+   *   per layer (copy dei logits, submit, mapAsync, routerSelect, ensure): un
+   *   UNICO submit per token, zero readback del router. `routing[]` si ricostruisce
+   *   al tail dalla copia di Sel che gia' si faceva.
+   *   AMMESSO SOLO A RESIDENZA TOTALE: senza, e' un errore esplicito in
+   *   createGlmModel, mai una degradazione silenziosa (vedi la precondizione).
    */
   select?: "cpu" | "gpu" | "shadow";
   // Telemetria di attribuzione (goal C3a fase 1). Zero-overhead da spenta
@@ -104,8 +117,12 @@ export interface GlmRouting {
    */
   gpu?: { experts: Int32Array; weights: Float64Array; slots: Uint32Array; flags: Uint32Array };
   /**
-   * La regione di PRODUZIONE di Sel riletta dalla VRAM (stessi campi, stesso
-   * modo `shadow`): e' cio' che i kernel expert hanno letto davvero. Confrontarla
+   * La regione di PRODUZIONE di Sel riletta dalla VRAM (stessi campi, in modo
+   * `shadow` e in modo `gpu`): e' cio' che i kernel expert hanno letto davvero.
+   * In modo `gpu` e' anche la SORGENTE di `experts`/`weights` — li' non esiste
+   * un'altra opinione da confrontare: la decisione e la lettura coincidono, e
+   * `slots`/`flags` sono l'unico modo di vedere che la residenza ha retto.
+   * Confrontarla
    * con `experts`/`weights` e con gli slot degli `ensure` e' l'unica verifica
    * diretta che la writeBuffer della CPU sia arrivata dove e quando doveva
    * (rischio R5 del design, lato produzione). Non costa un readback in piu': la
@@ -128,6 +145,15 @@ export interface GlmTelemetry {
   tailWaitMs: number;     // tempo nell'await finale (hidden + logits)
   routerSyncs: number;    // readback router EFFETTIVI (non una costante)
   submits: number;        // submit effettivi
+  /**
+   * Entry di Sel di PRODUZIONE trovate col flag MISS al tail (R6 del design):
+   * expert che i kernel hanno dovuto saltare perche' il resolve non ha trovato
+   * uno slot pubblicato. Deve essere 0 SEMPRE — in modo "cpu"/"shadow" la Sel di
+   * produzione la scrive la CPU dopo gli `ensure`, in modo "gpu" la residenza e'
+   * totale per precondizione. In modo "gpu" un valore > 0 rende il token
+   * INVALIDO e il forward alza un errore invece di restituire numeri sbagliati.
+   */
+  selMiss: number;
   gpuBusyMs: number | null; // somma delle durate dei pass (solo telemetryGpu)
   gpuPasses: number;
   gpuPassOverflow: number;  // pass non strumentati per ring pieno (atteso 0)
@@ -222,7 +248,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const pendingTsq: Promise<{ ms: number; passes: number; byCat: Map<string, number>; byCatN: Map<string, number> }>[] = [];
   const T = {
     forwards: 0, encodeCpuMs: 0, ensureMs: 0, routerWaitMs: 0, tailWaitMs: 0,
-    routerSyncs: 0, submits: 0, gpuBusyMs: 0, gpuPasses: 0, gpuPassOverflow: 0,
+    routerSyncs: 0, submits: 0, selMiss: 0, gpuBusyMs: 0, gpuPasses: 0, gpuPassOverflow: 0,
     dispatches: 0,
   };
   const catMs = new Map<string, number>();
@@ -296,13 +322,37 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // ma chi comanda resta la CPU — stesso readback, stesso routerSelect f64,
   // stessi ensure, stessa Sel di produzione. Serve a misurare la fedelta' del
   // router GPU sul corpus vero PRIMA di dargli il volante (slice C).
+  // "gpu" (slice C): comanda il router GPU. La CPU non sa piu' chi e' stato
+  // scelto, quindi non puo' ne' caricare ne' pinnare niente durante il token: e'
+  // ammesso solo se il parco expert del modello e' GIA' tutto in VRAM.
   const shadow = opts.select === "shadow";
-  if (opts.select !== undefined && opts.select !== "cpu" && !shadow) {
-    throw new Error(
-      `glmmodel: select "${opts.select}" non e' implementato (slice C della fase 4) — ` +
-      'oggi si accettano "cpu" e "shadow"');
+  const gpuSel = opts.select === "gpu";
+  if (opts.select !== undefined && opts.select !== "cpu" && !shadow && !gpuSel) {
+    throw new Error(`glmmodel: select "${opts.select}" non esiste — "cpu", "shadow" o "gpu"`);
   }
-  const cache = new ExpertCache(device, { ...opts.cache, arena: true, slotTable: shadow });
+  // Il router GPU (routerTopK + resolve) gira in shadow e in gpu: cambia dove
+  // scrive, non se gira. In shadow va nella regione ombra e non decide niente;
+  // in gpu scrive la regione di produzione ed e' l'unico a decidere.
+  const routerGpu = shadow || gpuSel;
+  // PRECONDIZIONE DI RESIDENZA TOTALE (design §4 slice C, R6). Si verifica PRIMA
+  // di costruire la cache: un errore dopo lascerebbe in giro i buffer d'arena
+  // (GB di VRAM) di un modello che non nascera' mai.
+  if (gpuSel) {
+    const slots = expertSlots(opts.cache);
+    const park = modelExpertPark(nLayer);
+    const corte = (["q4_0", "q4_1"] as const).filter((c) => park[c] > slots[c]);
+    if (corte.length > 0) {
+      throw new Error(
+        'glmmodel: select "gpu" esige la RESIDENZA TOTALE — ' +
+        corte.map((c) => `classe ${c}: ${slots[c]} slot per ${park[c]} expert del modello`).join("; ") +
+        ". In modo gpu la CPU non vede piu' la selezione, quindi non puo' ne' caricare ne' pinnare " +
+        "durante il token: a residenza parziale uno slot risolto puo' essere evinto DOPO la " +
+        "risoluzione, nello stesso token (seam evict-post-resolve), e i kernel expert leggerebbero " +
+        "lo slab di un altro expert senza che nessun contatore lo dica. Allargare gli slot " +
+        '(residenza totale, fase 4c) oppure usare select "cpu".');
+    }
+  }
+  const cache = new ExpertCache(device, { ...opts.cache, arena: true, slotTable: routerGpu });
   const arenaOptsOf = (geo: ArenaGeometry): ArenaOpts => {
     const l = geo.layout;
     // Gli offset arrivano da SlabLayout (moe.ts), che li garantisce multipli di
@@ -543,7 +593,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         attn, kpeCopy, cache,
         moe: {
           bias,
-          biasBuf: shadow ? track(upload(bias)) : null,
+          biasBuf: routerGpu ? track(upload(bias)) : null,
           cls: ExpertCache.classOf(l),
           moeIdx: nMoeSeen,
           routerBind: null, // riempito dopo selBuf/moeIdxUni (esistono solo dopo)
@@ -568,6 +618,37 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const expertReader: ExpertReader = src.hasSlabs && src.expertSlab
     ? { raw: (ll, ee) => src.expert(ll, ee), slab: (ll, ee) => src.expertSlab!(ll, ee) }
     : (ll: number, ee: number) => src.expert(ll, ee);
+  // ---- residenza TOTALE del modo gpu: tutto il parco caricato QUI, al load ----
+  // Meccanismo scelto (il piu' semplice che garantisca zero evict): un `ensure`
+  // per ogni expert dei layer MoE, alla costruzione, e un solo flush della
+  // slotTable. Niente pin: il pin serve a proteggere dalla vittima, e qui la
+  // vittima non esiste — la precondizione ha appena verificato nSlots >= parco,
+  // quindi la lista `free` non si esaurisce e il ramo di eviction di `ensure` non
+  // e' raggiungibile. E' una proprieta' della geometria, non della policy: si
+  // asserta subito dopo, perche' e' l'ipotesi su cui poggia tutto il modo gpu
+  // (dopo questo punto la slotTable NON cambia piu' per tutta la vita del
+  // modello — se servisse un flush per token, il modo gpu sarebbe sbagliato).
+  //
+  // SCALA: questo ciclo e' SINCRONO e BLOCCANTE, ed e' dimensionato sul ktest
+  // (64 expert, ~350 MB). Sul modello vero sarebbero 2 944 read OPFS in fila piu'
+  // altrettante writeBuffer senza mai cedere il controllo: minuti di stallo e
+  // pressione sulla staging interna della coda (firma R4 del design). La fase 4c
+  // non deve riusare questo ciclo cosi' com'e': le serve il percorso file-slab
+  // (`expertSlab`, che salta il pack CPU) con preload chunked/asincrono e la
+  // pubblicazione della slotTable per blocchi. Qui il meccanismo e' il piu'
+  // semplice che garantisca zero evict, non il piu' veloce.
+  if (gpuSel) {
+    for (const l of moeLayerAbs) {
+      for (let e = 0; e < G.nExpert; e++) cache.ensure(l, e, expertReader);
+    }
+    cache.flushSlotTable();
+    const ev = cache.stats().evictions;
+    if (ev !== 0) {
+      throw new Error(
+        `glmmodel: preload a residenza totale con ${ev} evizioni — la precondizione sugli slot ` +
+        "e' passata ma la cache ha comunque evinto (riparto degli slot per classe incoerente col parco)");
+    }
+  }
   const nMoeLayer = nMoeSeen;
   const nSel = Math.max(1, nMoeLayer * G.nExpertUsed);
   if (MOE_IDX_STRIDE % device.limits.minUniformBufferOffsetAlignment !== 0) {
@@ -579,7 +660,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // di produzione — quella che i kernel expert leggono e che riempie la CPU —,
   // [nSel, 2·nSel) e' l'ombra dove scrive il resolve GPU. Due regioni dello
   // stesso buffer e non due buffer: al tail si copiano insieme, e lo stesso
-  // kernel servira' lo slice C cambiando solo la entry di uniform che lo indirizza.
+  // kernel serve lo slice C cambiando solo la entry di uniform che lo indirizza.
+  // In modo gpu la regione e' UNA SOLA: il resolve scrive la produzione, e non
+  // c'e' niente da mettere in ombra perche' non c'e' piu' una seconda opinione.
   const nSelTot = shadow ? nSel * 2 : nSel;
   const selBuf = device.createBuffer({
     size: nSelTot * SEL_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
@@ -587,7 +670,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // Entry di MoeIdx: nSel di produzione (una per (layer MoE, k)) piu', in modo
   // shadow, una per layer MoE che indirizza il router — `selIdx` gia' spostato
   // nell'ombra. E' cosi' che il kernel di resolve resta identico fra shadow e
-  // slice C: cambia la entry, non il WGSL.
+  // modo gpu: cambia la entry, non il WGSL. In modo gpu le entry in piu' NON
+  // servono: il router scrive la produzione, e la entry (layer, k=0) — che
+  // esiste gia' — porta esattamente `selIdx = m·nUsed` e il `tableBase` giusto.
   const nMoeIdx = nSel + (shadow ? nMoeLayer : 0);
   const moeIdxUni = device.createBuffer({
     size: nMoeIdx * MOE_IDX_STRIDE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -637,18 +722,19 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     q4_1: { gu: arenaBg("q4_1", fnB, gateE), down: arenaBg("q4_1", gateE, moeOut) },
   };
 
-  // ---- router GPU + resolve (slice B, in ombra) ----
-  // Un dispatch per layer MoE, in coda al GEMV del router e nello STESSO submit:
+  // ---- router GPU + resolve (slice B in ombra, slice C al comando) ----
+  // Un dispatch per layer MoE, in coda al GEMV del router e nello STESSO pass:
   // legge i logits appena scritti, sceglie i top-4 come la CPU e risolve gli
-  // slot dalla slotTable. Gira PRIMA degli `ensure` del suo layer — e' l'ordine
-  // del path attuale, non una scelta: cio' che il layer sta per caricare non e'
-  // ancora nella tabella, quindi in shadow un expert appena entrato si risolve
-  // MISS. Non e' un difetto della risoluzione: e' la residenza parziale vista da
-  // GPU, ed e' esattamente la ragione per cui lo slice C esige la totale.
-  const routerIds = shadow ? storage(G.nExpertUsed * 4) : null;
-  const routerWts = shadow ? storage(G.nExpertUsed * 4) : null;
+  // slot dalla slotTable. In SHADOW gira PRIMA degli `ensure` del suo layer —
+  // e' l'ordine del path attuale, non una scelta: cio' che il layer sta per
+  // caricare non e' ancora nella tabella, quindi un expert appena entrato si
+  // risolve MISS. Non e' un difetto della risoluzione: e' la residenza parziale
+  // vista da GPU, ed e' esattamente la ragione per cui il modo gpu esige la
+  // totale — dove la tabella e' completa dal load e ogni risoluzione e' un hit.
+  const routerIds = routerGpu ? storage(G.nExpertUsed * 4) : null;
+  const routerWts = routerGpu ? storage(G.nExpertUsed * 4) : null;
   let routerGpuPipe: GPUComputePipeline | null = null;
-  if (shadow) {
+  if (routerGpu) {
     const bglRouter = device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
@@ -685,10 +771,13 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       });
     }
   }
-  // Copia di ENTRAMBE le regioni di Sel nel tail (5 888 B): l'ombra per il
-  // confronto col router GPU, la produzione per rileggere cio' che i kernel
-  // expert hanno visto. La mapAsync parte insieme a quella dell'hidden.
-  const selStaging = shadow
+  // Copia di TUTTE le regioni di Sel nel tail: in shadow sono due (5 888 B) —
+  // l'ombra per il confronto col router GPU, la produzione per rileggere cio' che
+  // i kernel expert hanno visto —, in modo gpu e' una sola (2 944 B) ed e' l'unica
+  // fonte di `routing[]`: nessuno sulla CPU ha mai visto la selezione di questo
+  // token. La mapAsync parte insieme a quella dell'hidden, quindi non aggiunge
+  // round-trip: e' il tail che c'era gia'.
+  const selStaging = routerGpu
     ? device.createBuffer({ size: nSelTot * SEL_BYTES, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ })
     : null;
 
@@ -728,15 +817,18 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // split ne aggiunge uno, part+reduce al posto del kernel monolitico) + denso
   // 6 (solo blk.0) + per layer
   // MoE 2 preRouter + 2 shexp (it.13: gate+up+silu Q5_K fusi, era 4) + 4 catene
-  // expert da 2 (fase 4b: gate+up+silu fusi) + 1 add = 13; in modo shadow
-  // (slice B) il router+resolve su GPU ne aggiunge 1 per layer MoE ⇒ 14.
+  // expert da 2 (fase 4b: gate+up+silu fusi) + 1 add = 13; col router+resolve su
+  // GPU (shadow e gpu, slice B e C) 1 dispatch in piu' per layer MoE ⇒ 14.
+  // Lo slice C NON cambia questo numero: sposta i confini dei SUBMIT (da 1 per
+  // layer MoE + 1 a 1 per token) e toglie i readback, non i dispatch — il
+  // routerTopK resta, e nessun dispatch sparisce ne' compare.
   // NON include la testa (rms + lm_head = 2), che con readLogits gira a ogni
   // token: e' la ragione per cui questo numero e' sempre stato 2 sotto il vero.
   // Il conteggio reale e' `telemetry().dispatches` (contatore in runSteps e
   // nelle catene expert).
   const nMoe = layers.filter((l) => l.moe).length;
   const nDense = layers.filter((l) => l.dense).length;
-  const dispatchesPerTokenPlanned = 17 * nLayer + 6 * nDense + (shadow ? 14 : 13) * nMoe;
+  const dispatchesPerTokenPlanned = 17 * nLayer + 6 * nDense + (routerGpu ? 14 : 13) * nMoe;
 
   const mapLogits = async (): Promise<Float32Array> => {
     await logitsStaging.mapAsync(GPUMapMode.READ);
@@ -802,61 +894,74 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         const m = L.moe!;
         ensurePass("router");
         runSteps(pass!, m.preRouter);
-        if (shadow) {
+        if (routerGpu) {
           // stessa categoria di telemetria del GEMV che lo precede (`router`) e
-          // stesso pass: e' selezione, non un blocco nuovo
+          // stesso pass: e' selezione, non un blocco nuovo.
+          // L'unica differenza fra shadow e gpu e' la ENTRY di MoeIdx che il
+          // dynamic offset seleziona — in shadow quella dedicata, che punta
+          // all'ombra; in gpu la entry (layer, k=0), che punta alla produzione.
+          // Il WGSL e il bind group sono gli stessi.
           pass!.setPipeline(routerGpuPipe!);
-          pass!.setBindGroup(0, m.routerBind!, [(nSel + m.moeIdx) * MOE_IDX_STRIDE]);
+          pass!.setBindGroup(0, m.routerBind!, [(gpuSel ? m.selBase : nSel + m.moeIdx) * MOE_IDX_STRIDE]);
           pass!.dispatchWorkgroups(1);
           T.dispatches++;
         }
-        endPass();
-        enc.copyBufferToBuffer(logitsB, 0, logitsStaging, 0, G.nExpert * 4);
-        device.queue.submit([enc.finish()]);
-        // ---- sync GPU→CPU: selezione ----
-        if (telemOn) { T.encodeCpuMs += performance.now() - tSeg; T.submits++; T.routerSyncs++; }
-        const tWait = nowT();
-        const logits = await mapLogits();
-        if (telemOn) tSeg = performance.now();
-        if (telemOn) T.routerWaitMs += tSeg - tWait;
-        const sel = routerSelect(logits, m.bias);
-        routing.push({ layer: l, experts: sel.experts, weights: sel.weights });
-        const pinned = new Set<number>();
-        for (const e of sel.experts) pinned.add(expertKey(l, e));
-        const slots: SlotRef[] = [];
-        const tEns = nowT();
-        for (const e of sel.experts) slots.push(cache.ensure(l, e, expertReader, pinned).slot);
-        // slotTable: un flush per layer, DOPO gli ensure (le writeBuffer degli
-        // slab sono gia' in coda) e prima di qualunque dispatch che la legga —
-        // il primo sara' il router del layer MoE successivo, che sta in un
-        // encoder ancora da creare. Da spenta (`select:"cpu"`) e' un no-op.
-        // Il suo costo cade in `ensureMs`: e' manutenzione della residenza.
-        cache.flushSlotTable();
-        if (telemOn) {
-          const tE = performance.now();
-          T.ensureMs += tE - tEns;
-          tSeg += tE - tEns; // ensure NON è encode: scalarlo dal segmento corrente
+        if (!gpuSel) {
+          endPass();
+          enc.copyBufferToBuffer(logitsB, 0, logitsStaging, 0, G.nExpert * 4);
+          device.queue.submit([enc.finish()]);
+          // ---- sync GPU→CPU: selezione ----
+          if (telemOn) { T.encodeCpuMs += performance.now() - tSeg; T.submits++; T.routerSyncs++; }
+          const tWait = nowT();
+          const logits = await mapLogits();
+          if (telemOn) tSeg = performance.now();
+          if (telemOn) T.routerWaitMs += tSeg - tWait;
+          const sel = routerSelect(logits, m.bias);
+          routing.push({ layer: l, experts: sel.experts, weights: sel.weights });
+          const pinned = new Set<number>();
+          for (const e of sel.experts) pinned.add(expertKey(l, e));
+          const slots: SlotRef[] = [];
+          const tEns = nowT();
+          for (const e of sel.experts) slots.push(cache.ensure(l, e, expertReader, pinned).slot);
+          // slotTable: un flush per layer, DOPO gli ensure (le writeBuffer degli
+          // slab sono gia' in coda) e prima di qualunque dispatch che la legga —
+          // il primo sara' il router del layer MoE successivo, che sta in un
+          // encoder ancora da creare. Da spenta (`select:"cpu"`) e' un no-op.
+          // Il suo costo cade in `ensureMs`: e' manutenzione della residenza.
+          cache.flushSlotTable();
+          if (telemOn) {
+            const tE = performance.now();
+            T.ensureMs += tE - tEns;
+            tSeg += tE - tEns; // ensure NON è encode: scalarlo dal segmento corrente
+          }
+          // ---- Sel del layer: 4 entry, un writeBuffer da 64 B ----
+          // ORDINE OBBLIGATORIO: prima gli `ensure` (che fanno writeBuffer degli
+          // slab), poi questa. La coda le esegue in ordine di enqueue, quindi lo
+          // slot pubblicato qui e' gia' pieno quando i dispatch lo leggono.
+          for (let k = 0; k < G.nExpertUsed; k++) {
+            selU32[k * 4] = sel.experts[k];
+            selU32[k * 4 + 1] = slots[k].idx;
+            selF32[k * 4 + 2] = sel.weights[k]; // gia' ×1.8 (routerSelect)
+            selU32[k * 4 + 3] = 0;
+          }
+          device.queue.writeBuffer(selBuf, m.selBase * SEL_BYTES, selScratch);
+          // ---- encode MoE: shexp scrive moeOut, gli expert accumulano ----
+          enc = device.createCommandEncoder();
         }
-        // ---- Sel del layer: 4 entry, un writeBuffer da 64 B ----
-        // ORDINE OBBLIGATORIO: prima gli `ensure` (che fanno writeBuffer degli
-        // slab), poi questa. La coda le esegue in ordine di enqueue, quindi lo
-        // slot pubblicato qui e' gia' pieno quando i dispatch lo leggono.
-        for (let k = 0; k < G.nExpertUsed; k++) {
-          selU32[k * 4] = sel.experts[k];
-          selU32[k * 4 + 1] = slots[k].idx;
-          selF32[k * 4 + 2] = sel.weights[k]; // gia' ×1.8 (routerSelect)
-          selU32[k * 4 + 3] = 0;
-        }
-        device.queue.writeBuffer(selBuf, m.selBase * SEL_BYTES, selScratch);
-        // ---- encode MoE: shexp scrive moeOut, gli expert accumulano ----
-        enc = device.createCommandEncoder();
+        // In modo gpu qui non e' successo NIENTE fra il router e lo shexp: niente
+        // copy dei logits, niente submit, niente mapAsync, niente routerSelect,
+        // niente ensure, niente writeBuffer di Sel. L'encode prosegue nello stesso
+        // encoder e nello stesso pass, e le entry di Sel che i dispatch qui sotto
+        // leggeranno le ha appena scritte il dispatch di resolve: il dato passa
+        // per la VRAM e non tocca piu' l'host.
         ensurePass("shexp");
         runSteps(pass!, m.shexp);
         ensurePass("experts");
         // Bind group STATICI: cambia solo il dynamic offset, che dice quale
         // entry di Sel leggere — un valore CPU-noto (il layer e il k), MAI
-        // l'expert. E' il punto dello strato 1: l'encode non dipende piu' dalla
-        // selezione, quindi lo slice C potra' toglierne il sync.
+        // l'expert. E' il punto dello strato 1, e in modo gpu e' cio' che rende
+        // possibile l'interruttore: queste righe sono identiche nei tre modi,
+        // perche' l'encode non ha mai avuto bisogno di sapere chi fosse scelto.
         const ex = expert[m.cls];
         for (let k = 0; k < G.nExpertUsed; k++) {
           const off = (m.selBase + k) * MOE_IDX_STRIDE;
@@ -883,9 +988,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       endPass();
       enc.copyBufferToBuffer(x, 0, hiddenStaging, 0, G.dModel * 4);
       if (readLogits) enc.copyBufferToBuffer(logitsVocab!, 0, vocabStaging!, 0, vocab * 4);
-      // Sel intera (produzione + ombra) nel submit finale: e' l'unico momento in
-      // cui le due regioni sono complete per tutti i layer del token.
-      if (shadow) enc.copyBufferToBuffer(selBuf, 0, selStaging!, 0, nSelTot * SEL_BYTES);
+      // Sel intera (produzione, piu' l'ombra in shadow) nel submit finale: e' il
+      // solo momento in cui le regioni sono complete per tutti i layer del token.
+      if (selStaging) enc.copyBufferToBuffer(selBuf, 0, selStaging, 0, nSelTot * SEL_BYTES);
       // resolve dei timestamp del token DENTRO il submit finale; la mapAsync
       // (armTsq) parte dopo — mai prima, altrimenti Dawn droppa il command
       // buffer (known-issue fase A, root-cause in tsq-diag-2026-07-29).
@@ -913,7 +1018,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       // staging propria, mappata in parallelo: dirlo com'e' costa una riga.
       const maps: Promise<undefined>[] = [hiddenStaging.mapAsync(GPUMapMode.READ)];
       if (readLogits) maps.push(vocabStaging!.mapAsync(GPUMapMode.READ));
-      if (shadow) maps.push(selStaging!.mapAsync(GPUMapMode.READ));
+      if (selStaging) maps.push(selStaging.mapAsync(GPUMapMode.READ));
       await Promise.all(maps);
       const hidden = new Float32Array(hiddenStaging.getMappedRange().slice(0));
       hiddenStaging.unmap();
@@ -922,15 +1027,16 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         logits = new Float32Array(vocabStaging!.getMappedRange().slice(0));
         vocabStaging!.unmap();
       }
-      if (shadow) {
-        const raw = selStaging!.getMappedRange().slice(0);
-        selStaging!.unmap();
+      let selMissTok = 0;
+      if (selStaging) {
+        const raw = selStaging.getMappedRange().slice(0);
+        selStaging.unmap();
         const u = new Uint32Array(raw), f = new Float32Array(raw);
-        // Si legge la Sel INTERA, non la sola ombra: la copia costa 5 888 B
-        // invece di 2 944 e in cambio si vede anche cio' che la GPU ha letto
-        // DAVVERO nella regione di produzione. E' l'unico modo di chiudere R5
-        // dal lato che conta — che la writeBuffer della CPU sia arrivata in VRAM
-        // com'era, nell'ordine giusto, per il layer giusto.
+        // In shadow si legge la Sel INTERA, non la sola ombra: la copia costa
+        // 5 888 B invece di 2 944 e in cambio si vede anche cio' che la GPU ha
+        // letto DAVVERO nella regione di produzione. E' l'unico modo di chiudere
+        // R5 dal lato che conta — che la writeBuffer della CPU sia arrivata in
+        // VRAM com'era, nell'ordine giusto, per il layer giusto.
         const readSel = (base: number) => {
           const experts = new Int32Array(G.nExpertUsed);
           const weights = new Float64Array(G.nExpertUsed);
@@ -944,13 +1050,45 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           }
           return { experts, weights, slots, flags };
         };
-        for (const [mi, r] of routing.entries()) {
-          // `routing` e' nell'ordine di visita dei layer MoE ⇒ l'indice E' m
-          r.vram = readSel(mi * G.nExpertUsed * 4);
-          r.gpu = readSel((nSel + mi * G.nExpertUsed) * 4);
+        const countMiss = (flags: Uint32Array) => {
+          for (const fl of flags) if ((fl & 1) !== 0) selMissTok++;
+        };
+        if (gpuSel) {
+          // Qui `routing` e' ancora VUOTO: in modo gpu nessuno sulla CPU ha visto
+          // la selezione mentre il token girava. Si ricostruisce ORA, dalla stessa
+          // copia di Sel che serviva gia' al confronto — la regione e' una sola,
+          // ed e' insieme la decisione del router e cio' che i kernel hanno letto.
+          for (let mi = 0; mi < nMoeLayer; mi++) {
+            const r = readSel(mi * G.nExpertUsed * 4);
+            countMiss(r.flags);
+            routing.push({ layer: moeLayerAbs[mi], experts: r.experts, weights: r.weights, vram: r });
+          }
+        } else {
+          for (const [mi, r] of routing.entries()) {
+            // `routing` e' nell'ordine di visita dei layer MoE ⇒ l'indice E' m
+            r.vram = readSel(mi * G.nExpertUsed * 4);
+            r.gpu = readSel((nSel + mi * G.nExpertUsed) * 4);
+            countMiss(r.vram.flags); // l'ombra NO: li' i MISS sono attesi (§4)
+          }
         }
+        T.selMiss += selMissTok;
       }
       if (telemOn) T.tailWaitMs += performance.now() - tTail;
+      // R6: in modo gpu un MISS nella Sel di produzione significa che i kernel
+      // expert hanno saltato un expert — il token e' INVALIDO e si dice, invece di
+      // restituire numeri plausibili. Non e' raggiungibile a residenza totale (la
+      // slotTable e' completa dal load e non cambia piu'): se scatta, l'ipotesi da
+      // cui dipende il modo gpu e' caduta. E' il seam evict-post-resolve: a
+      // residenza parziale uno slot risolto puo' essere evinto DOPO la risoluzione,
+      // nello stesso token, e questo flag e' l'unico posto in cui si vedrebbe.
+      // Le staging sono gia' smappate e gli error scope gia' drenati: si puo' alzare.
+      if (gpuSel && selMissTok > 0) {
+        throw new Error(
+          `glmmodel select "gpu": ${selMissTok} entry di Sel con flag MISS in questo token — ` +
+          "token INVALIDO (i kernel expert hanno letto uno slot mai pubblicato). A residenza totale " +
+          "non puo' accadere; a residenza parziale e' il seam evict-post-resolve — uno slot risolto " +
+          "evinto DOPO la risoluzione, nello stesso token.");
+      }
       return { hidden, logits, routing };
     },
     setTelemetry(on: boolean, gpu = true, byCat = false) {
@@ -971,7 +1109,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       return {
         on: telemOn, forwards: T.forwards, encodeCpuMs: T.encodeCpuMs, ensureMs: T.ensureMs,
         routerWaitMs: T.routerWaitMs, tailWaitMs: T.tailWaitMs, routerSyncs: T.routerSyncs,
-        submits: T.submits, gpuBusyMs: canGpuTs ? T.gpuBusyMs : null,
+        submits: T.submits, selMiss: T.selMiss, gpuBusyMs: canGpuTs ? T.gpuBusyMs : null,
         gpuPasses: T.gpuPasses, gpuPassOverflow: T.gpuPassOverflow,
         dispatches: T.dispatches,
         gpuByCatMs: catMs.size ? Object.fromEntries(catMs) : null,

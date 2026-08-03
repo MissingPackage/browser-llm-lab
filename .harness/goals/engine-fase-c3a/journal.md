@@ -1177,3 +1177,58 @@ vogliono eseguire ktest lo dichiarano e si serializzano.
 Prossimo: **slice C** (interruttore `select:"gpu"`) — verificabile subito nel
 ktest a residenza totale per costruzione; in produzione richiede la 4c.
 Poi ri-misura gpuBusy/clock di fine fase 4 + ripresentazione item 2.
+
+## it.17 (2026-08-04) — fase 4 slice C: l'interruttore, e il meccanismo è completo
+
+`select:"gpu"`: un solo command encoder e UN SOLO submit per token (tail
+incluso), zero readback del router, routing[] ricostruito dal readback di Sel
+al tail, precondizione di residenza totale PRIMA di costruire la cache (stessa
+`expertSlots`/`downIsQ4_1` della cache: divergenza impossibile per
+costruzione), preload al load con zero evict garantito dalla geometria,
+contatore `selMiss` con throw. Misurato nel ktest a residenza totale per
+costruzione: **1 submit / 0 sync per token** (osservatore INDIPENDENTE: wrap
+di queue.submit — 6 osservati = 6 dichiarati), selMiss 0, preload 64/64,
+id expert identici per-k al run cpu, hidden maxRel 2.50e-7 (gate 1e-6),
+pesi 1.27e-7 (il narrowing f32 strutturale: la CPU non calcola più nulla),
+logit 2.56e-4 in banda indipendente 1e-3. NOTA (dal reviewer): L2rel del
+mini-modello è una statistica quasi-degenere (range dinamico ~1e14) —
+l'evidenza dello slice è il confronto valore-per-valore, non gli aggregati.
+
+### Review e fix (protocollo consueto)
+
+Opus + Codex: zero difetti critici. Codex: ricerca esaustiva su 31.9M
+combinazioni layer/slot — zero casi precondizione-pass-ma-evict. Il finding
+più prezioso (Opus): due dei tre pilastri del claim d'identità erano
+TAUTOLOGICI (implicati per disuguaglianza triangolare da gate già in vigore)
+— claim riscritto sui portatori veri e soglia logit resa indipendente.
+Codex: completezza del preload non asserita (ora misses==64 e occupancy) e
+submit-observer non indipendente (ora monkey-patch). Tolleranze derivate
+dalla misura (margini 4×/7.9×/3.9×). +3 unit node (modelExpertPark ai
+confini q4_1/q4_0).
+
+### Verifica
+
+ktest 53/53; `npm test` 291+2; `tsc` pulito. Bench (2 run, clock CSV
+committato): la prima contaminata da jitter host (probe mapAsync 2.75 ms vs
+0.110 sano, stdev 0.94 — dichiarata e scartata come da norma macchina
+quiescente), la seconda pulita: **decode 5.166 ≥ 5.163 PASS** (reps
+5.225/5.056/5.166) e **prefill 5.747 — sopra il vecchio record 5.736**.
+Contatori di produzione invariati (il default resta cpu).
+
+### Stato della fase 4 e ripresentazione item 2
+
+Il MECCANISMO della fase 4 è completo e verificato (slice A: arena bit-a-bit;
+B: router GPU 99.9991% sul corpus vero; C: 1 submit/0 sync a residenza
+totale). Il GATE formale (≤2 sync/token nel bench di produzione) è
+misurabile solo a residenza totale ⇒ la fase 4 chiude INSIEME alla 4c, che
+il suo blocked-by intendeva sbloccare proprio a meccanismo pronto. Il
+preload sincrono attuale è a scala ktest: la 4c deve portare preload
+chunked/asincrono dal file slab (caveat in §3-ter.1). Item 2 ripresentato
+al PI nel docket, con la forbice misurata.
+
+Prossimo: **fase 4c** (residenza totale, emendamento 4) — quant asimmetrica
+sugli expert freddi (matrice usage C1) + nuova versione di layout slab +
+eval di perdita OBBLIGATORIA (il ruling autorizza la spesa, non esonera dal
+misurarla; gate: top-1 ≥ 98.83% full-corpus, argmax ≡ cpuref sul campione)
++ preload asincrono + dimensionamento sul contesto scelto (0.67 GiB @525 /
+1.03 @4096, scelta da scrivere nel report).

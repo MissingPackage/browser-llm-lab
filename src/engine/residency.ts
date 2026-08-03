@@ -131,15 +131,30 @@ export interface ArenaGeometry {
   nSlots: number;
 }
 
-/** Riparto del budget fra le due classi (spec §5). Usato dal costruttore e da
- *  `arenaNeeds`, che deve poterlo calcolare PRIMA che il device esista. */
-function slotSplit(o: { budgetBytes: number; slotsOverride?: { q4_0: number; q4_1: number } }): { q4_0: number; q4_1: number } {
+/** Riparto del budget fra le due classi (spec §5). Usato dal costruttore, da
+ *  `arenaNeeds` e dalla precondizione di residenza totale dello slice C: tutti
+ *  devono poterlo calcolare PRIMA che la cache (e quindi la VRAM) esista. */
+export function expertSlots(o: { budgetBytes: number; slotsOverride?: { q4_0: number; q4_1: number } }): { q4_0: number; q4_1: number } {
   if (o.slotsOverride) return o.slotsOverride;
   const park = PARK_Q4_0 + PARK_Q4_1;
   return {
     q4_0: Math.min(Math.floor((o.budgetBytes * PARK_Q4_0 / park) / SLAB_DOWN_Q4_0.bytes), PARK_Q4_0),
     q4_1: Math.min(Math.floor((o.budgetBytes * PARK_Q4_1 / park) / SLAB_DOWN_Q4_1.bytes), PARK_Q4_1),
   };
+}
+
+/**
+ * Il parco expert per classe di un modello di `nLayer` layer: quanti expert
+ * DEVONO stare in VRAM perché la residenza sia TOTALE (C3a fase 4 slice C).
+ * Non è `PARK_Q4_0`/`PARK_Q4_1`, che sono il parco del modello INTERO: i
+ * mini-modelli dei ktest hanno 2 layer, e la residenza totale per loro è 64
+ * expert, non 2 944. Il conto è sui layer che ci sono davvero, con la stessa
+ * `classOf` che decide dove finisce lo slab.
+ */
+export function modelExpertPark(nLayer: number): Record<ExpertClass, number> {
+  const park: Record<ExpertClass, number> = { q4_0: 0, q4_1: 0 };
+  for (let l = G.denseLead; l < nLayer; l++) park[downIsQ4_1(l) ? "q4_1" : "q4_0"] += G.nExpert;
+  return park;
 }
 
 /** Slab per buffer nel regime arena: il buffer È il binding, quindi lo cappano
@@ -161,7 +176,7 @@ export function arenaNeeds(o: {
   maxBufferBytes: number;
   maxBindingBytes: number;
 }): { arenaBuffers: number; arenaWindowBytes: number } {
-  const slots = slotSplit(o);
+  const slots = expertSlots(o);
   const classes = [["q4_0", SLAB_DOWN_Q4_0], ["q4_1", SLAB_DOWN_Q4_1]] as const;
   // 1) la finestra: il buffer più grande che la cache creerebbe ai tetti dati.
   let arenaWindowBytes = 0;
@@ -263,7 +278,7 @@ export class ExpertCache {
       };
     };
     // riparto del budget tra le classi in proporzione al parco (spec §5)
-    const { q4_0: n40, q4_1: n41 } = slotSplit(opts);
+    const { q4_0: n40, q4_1: n41 } = expertSlots(opts);
     this.cls = { q4_0: mk(SLAB_DOWN_Q4_0, n40), q4_1: mk(SLAB_DOWN_Q4_1, n41) };
     if (opts.slotTable === true) {
       // Dimensionata sul parco INTERO (47×64), non sui layer del modello: la

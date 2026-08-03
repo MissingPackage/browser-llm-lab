@@ -339,7 +339,29 @@
    scenderebbe verso ~5-6 s, **ancora sopra i 4 s** — il prefill ha bisogno
    anche delle leve 1/2/4, non solo del batching.
 
-2. **RULING RICHIESTO — clausola di fallback per la fase 4 (sync router)**
+2. **RULING RICHIESTO — clausola di fallback: RIPRESENTATO (2026-08-04, it.17,
+   come da done-when della fase 4).** Il meccanismo della fase 4 è completo
+   (slice A/B/C: arena bit-a-bit, router GPU 99.9991% sul corpus vero,
+   1 submit/0 sync a residenza totale nel ktest). La forbice di it.1 è ora
+   sciolta dalla misura, e i numeri per decidere sono questi:
+   - batching dei sync (la via che NON elimina): proiezione misurata **12.47
+     tok/s anche a K=46** — sotto il gate 13.43. Non è una via di chiusura.
+   - eliminazione via `select:"gpu"` (la via costruita): richiede la
+     residenza totale (4c). A quel punto spariscono ~120-125 ms/token di
+     sync/CPU dal wall (~198 ms) ⇒ l'aritmetica dice sopra il gate, ma con
+     due incognite: quanto risalgono i clock (oggi 863-892 MHz su 3105, il
+     boost torna quando spariscono le bolle) e il costo della 4c in qualità
+     (eval di perdita obbligatoria, gate top-1 ≥ 98.83%).
+   - il gate formale della fase 4 (≤2 sync/token nel bench) è misurabile
+     solo a residenza totale ⇒ fase 4 e 4c chiudono insieme.
+   **Domanda al PI (le opzioni di allora, aggiornate)**: (a) clausola
+   simmetrica a C1 — se dopo la 4c, ri-misurato quiescente, il decode resta
+   sotto 13.43, C3a chiude con la misura e l'attribuzione, leva residua a
+   docket, decisione al PI; (b) nessuna clausola (sotto gate = FAIL e
+   ri-scope). La (a) resta la raccomandata: il ramo pessimistico è ora
+   quantificato solo a metà (i clock), e una chiusura ordinata sotto gate
+   vale più di una deroga sotto pressione.
+   Testo del rimando originale:
    ⏸ **RIMANDATO dal PI (2026-08-01, opzione c): "decidere dopo la fase 4"** —
    la clausola si scrive quando si vedrà l'effetto reale della rimozione dei
    sync sui clock GPU, cioè quando la forbice 10.2-15.6 sarà sciolta da una
