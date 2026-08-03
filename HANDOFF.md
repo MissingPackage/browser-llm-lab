@@ -1,6 +1,25 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-03, sessione 20 — C3a it.12: flash-decoding sulla MLA, l'attention dimezzata)
+# HANDOFF — browser-llm-lab   (updated 2026-08-03, sessione 20 — C3a it.12-13: attention dimezzata, K-quant fast, gpuBusy sotto la soglia 4b)
 
 ## 1. Next decidable
+
+**FATTO (it.13): famiglia fast sui K-quant.** shexp 14.6→5.5, head 9.6→3.8
+ms/token (bycat); decode **5.054** (nuovo massimo, medie 6-rep 4.972→5.024);
+dispatch/token 1405; **`gpuBusy` 54.2 ≤ 54.5 — soglia del gate 4b raggiunta**
+coi clock contro (863 MHz vs 1746 di it.1: la riduzione è tutta kernel).
+Prefill 5.69 statisticamente fermo (Welch t=0.82 su 6v6 repliche; ratifica
+della banda di rumore a docket item 14). Doppia review avversaria (Opus con
+emulazione f64 rel≤3e-13 + Codex fault-injection 0/64 escape): kernel corretti;
+la tolleranza ktest allargata è stata rifatta su derivazione onesta (il modello
+FMA+associatività reale coincide col device a 4 cifre: 5.869e-4).
+
+**PROSSIMO PEZZO, nessuna decisione pendente: chiudere la fase 4b con la
+correttezza reale** — glmconf (argmax ≡ cpuref-f64, top-1 vs golden) + routing
+conformance non peggiore di `routing-conformance-glm47flash-2026-07-31.json`.
+I kernel di it.12-13 cambiano l'ordine delle somme f32 in attention/shexp/head:
+il ktest sintetico (44/44) non basta per il done-when. Poi la **fase 4** (il
+drain): è lì che vive il gate 13.43 — proiezione aggiornata it.13: 12.47 tok/s
+batchando tutti i 46 sync (K=46), ancora sotto gate ⇒ serve l'eliminazione
+vera (binding fisso + offset aritmetico, spec §3.2-bis), non il batching.
 
 **FATTO (it.12): flash-decoding sulla MLA.** `mlaAttnSplitPartWgsl` (chunk da
 16 posizioni, 256 thread/wg, cache in shared riusata da tutte le 20 head) +
@@ -104,7 +123,14 @@ Riancorarsi da: `.harness/goals/engine-fase-c3a/{GOAL,docket}.md`, docket C2
 item 8 (input C3 completo), direction.md §2 (funzione obiettivo a due
 termini) e §7 (fase C splittata).
 
-## 2. State delta (sessione 20 — it.12)
+## 2. State delta (sessione 20 — it.12-13)
+
+- **it.13 (fase 4b)**: `pairGemvSiluQ5KFastWgsl` + `gemvQ6KFastWgsl` (8
+  thread/superblocco, word in registri, x in shared paddato); shexp 4→2 step,
+  head su fast, `upE` rimosso; modulo `kquantfast.ts` (tolleranze derivate +
+  sizing shared); floor test `engine-kquant-f32floor.test.ts` (metà
+  strutturale sul WGSL vero + metà numerica con associatività reale); guardia
+  shared glmmodel a 4 consumatori. Bench ×2 committati, docket item 14.
 
 - **it.12 (fase 4b)**: flash-decoding MLA — kernel `mlaAttnSplitPart/Reduce`
   nuovi in `kernels/wgsl.ts`, wiring in `glmmodel.ts` (17 step attn/layer,

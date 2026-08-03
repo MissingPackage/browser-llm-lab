@@ -19,12 +19,16 @@ import { GLM47_FLASH as G } from "./shape";
 import { repackQ4_0, repackQ4_1, repackQ8_0, repackKQuant, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { routerSelect } from "./moe";
 import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen, mlaSplitWorkgroupStorageBytes } from "./mlasplit";
+import {
+  pairGemvSiluQ5KFastWorkgroupStorageBytes, gemvQ6KFastWorkgroupStorageBytes,
+} from "./kquantfast";
 import { ExpertCache, expertKey, slotBindRanges, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
 import {
-  addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ5KWgsl, gemvQ6KWgsl, gemvQ8HeadsWgsl,
+  addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ6KFastWgsl, gemvQ8HeadsWgsl,
   gemvQuantWgsl, kvAppendWgsl, mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,
   ropeMlaNormWgsl, rmsnormWgsl,
-  siluMulWgsl, stridedCopyWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl,
+  siluMulWgsl, stridedCopyWgsl, pairGemvSiluFastWgsl, pairGemvSiluQ5KFastWgsl,
+  gemvAccumFastWgsl,
 } from "./kernels/wgsl";
 
 const HL = G.qkNope + G.ropeDims; // 256
@@ -122,21 +126,29 @@ export interface GlmModel {
 export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: GlmModelOpts): GlmModel {
   const nLayer = opts.nLayer ?? G.nLayer;
   const ctxMax = opts.ctxMax;
-  // Guardia sul workgroup storage dello split (max fra pass 1 e pass 2).
+  // Guardia sul workgroup storage: il MASSIMO fra tutti i kernel del modello
+  // che usano shared memory. Non solo lo split MLA — i kernel fast K-quant
+  // (it.13) tengono x intero in shared, quindi il loro fabbisogno CRESCE con K
+  // (8 448 B di solo x a K=2048) e va nel conto per ogni K di produzione.
   // ONESTA' SU COSA E': sui path attuali NON puo' scattare. La negoziazione
   // chiede sempre almeno i 30 848 B del path Qwen fuso (requisito hard,
-  // gpulimits), e lo split ne vuole 10 800 costanti — il confronto e' vinto in
-  // partenza. Resta come guardia per gli EDIT FUTURI dei kernel: se qualcuno
-  // allarga un tile o rimette un array [sMax] in shared, si ferma qui con un
-  // messaggio invece che a runtime con un errore di validazione criptico.
-  // Cio' che NON e' piu': un vincolo sul contesto. Il monolitico teneva
+  // gpulimits) e il massimo qui sotto e' ~9 KB. Resta come guardia per gli
+  // EDIT FUTURI dei kernel: se qualcuno allarga un tile, alza un K o rimette
+  // un array [sMax] in shared, si ferma qui con un messaggio invece che a
+  // runtime con un errore di validazione criptico.
+  // Cio' che NON e' piu': un vincolo sul CONTESTO. Il monolitico MLA teneva
   // scores[ctxMax] in shared (4·ctxMax+256 B, che tagliava ctxMax a 8128 sul
-  // default 16 KiB, it.10); qui il contesto e' partizionato e il fabbisogno di
-  // entrambi i pass e' costante.
-  const wgNeed = mlaSplitWorkgroupStorageBytes(G.nHead); // stessa formula di mlasplit, non riscritta
-  if (wgNeed > device.limits.maxComputeWorkgroupStorageSize) {
+  // default 16 KiB, it.10); ora nessuno dei kernel dipende da ctxMax.
+  const wgNeeds: Array<[string, number]> = [ // formule dai moduli, non riscritte
+    ["mlaAttnSplitPart", mlaSplitWorkgroupStorageBytes(G.nHead)],
+    ["pairGemvSiluQ5KFast (shexp gate/up)", pairGemvSiluQ5KFastWorkgroupStorageBytes(G.dModel)],
+    ["gemvQ6KFast (shexp down)", gemvQ6KFastWorkgroupStorageBytes(G.dFfnExpert)],
+    ["gemvQ6KFast (testa)", gemvQ6KFastWorkgroupStorageBytes(G.dModel)],
+  ];
+  const worst = wgNeeds.reduce((a, b) => (b[1] > a[1] ? b : a));
+  if (worst[1] > device.limits.maxComputeWorkgroupStorageSize) {
     throw new Error(
-      `glmmodel: mlaAttnSplitPart richiede ${wgNeed} B di workgroup storage ` +
+      `glmmodel: ${worst[0]} richiede ${worst[1]} B di workgroup storage ` +
       `(limite ${device.limits.maxComputeWorkgroupStorageSize}) — negoziare ` +
       `maxComputeWorkgroupStorageSize`);
   }
@@ -249,9 +261,11 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     siluDense: mkPipe(siluMulWgsl(G.dFfnDense)),
     // MoE
     router: mkPipe(gemvF32Wgsl({ K: G.dModel, N: G.nExpert })),
-    gemvShexpGU: mkPipe(gemvQ5KWgsl({ K: G.dModel, N: G.dFfnExpert })),
-    gemvShexpDown: mkPipe(gemvQ6KWgsl({ K: G.dFfnExpert, N: G.dModel })),
-    siluExp: mkPipe(siluMulWgsl(G.dFfnExpert)),
+    // shexp: famiglia fast portata sui K-quant (it.13). gate+up+silu Q5_K in un
+    // dispatch, down Q6_K con la stessa struttura. I gemelli lenti
+    // (gemvQ5KWgsl/gemvQ6KWgsl) restano nel repo: li usano i ktest.
+    pairSiluShexp: mkPipe(pairGemvSiluQ5KFastWgsl({ K: G.dModel, N: G.dFfnExpert })),
+    gemvShexpDown: mkPipe(gemvQ6KFastWgsl({ K: G.dFfnExpert, N: G.dModel })),
     // catena expert: famiglia fusa portata da Qwen (C3a fase 4b). gate+up+silu
     // in un dispatch solo; down con la stessa struttura vec4/shared-x/4-righe.
     // I gemelli generici restano nel repo — li usano ancora denso e ktest.
@@ -281,8 +295,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const fnB = storage(G.dModel * 4);
   const gateD = storage(G.dFfnDense * 4);
   const upD = storage(G.dFfnDense * 4);
+  // gateE tiene gia' silu(gate)·up: sia la catena expert sia lo shexp fondono
+  // gate+up+silu in un dispatch, quindi non esiste piu' un buffer `up` separato
   const gateE = storage(G.dFfnExpert * 4);
-  const upE = storage(G.dFfnExpert * 4);
   const moeOut = storage(G.dModel * 4);
   const logitsB = storage(G.nExpert * 4);
   const wExp = Array.from({ length: G.nExpertUsed }, () => storage(4)); // peso mixing per catena
@@ -395,9 +410,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
             step(pipes.router, [routerW, fnB, logitsB], G.nExpert),
           ],
           shexp: [
-            step(pipes.gemvShexpGU, [gateShexp, fnB, gateE], gemvGrid(G.dFfnExpert)),
-            step(pipes.gemvShexpGU, [upShexp, fnB, upE], gemvGrid(G.dFfnExpert)),
-            step(pipes.siluExp, [gateE, upE], Math.ceil(G.dFfnExpert / 64)),
+            step(pipes.pairSiluShexp, [gateShexp, upShexp, fnB, gateE], gemvGrid(G.dFfnExpert)),
             step(pipes.gemvShexpDown, [downShexp, gateE, moeOut], gemvGrid(G.dModel)),
           ],
           addMoe: step(pipes.add, [x, moeOut], Math.ceil(G.dModel / 64)),
@@ -431,10 +444,11 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     return got;
   };
 
-  // (il bind group silu per-expert e' sparito con la fusione gate+up+silu:
-  // `pipes.siluExp` resta perche' lo shexp Q5_K/Q6_K non e' ancora portato)
+  // (con l'it.13 anche lo shexp Q5_K/Q6_K e' passato alla famiglia fusa: nel
+  // modello non resta nessun dispatch silu separato — solo il denso di blk.0,
+  // che usa `pipes.siluDense`)
 
-  // ---- output head (fase 6): rms(output_norm) → gemvQ6K [2048→vocab] ----
+  // ---- output head (fase 6): rms(output_norm) → gemvQ6K fast [2048→vocab] ----
   const vocab = opts.vocab ?? G.vocab;
   let headSteps: Step[] = [];
   let logitsVocab: GPUBuffer | null = null;
@@ -442,7 +456,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   if (opts.head) {
     const outNorm = track(upload(f32Of(src.nonExpert("output_norm.weight"))));
     const outW = track(kquantBuf(src.nonExpert("output.weight"), Q6_K_BLOCK_BYTES));
-    const headPipe = mkPipe(gemvQ6KWgsl({ K: G.dModel, N: vocab }));
+    const headPipe = mkPipe(gemvQ6KFastWgsl({ K: G.dModel, N: vocab }));
     logitsVocab = storage(vocab * 4);
     weightBufs.push(logitsVocab);
     vocabStaging = device.createBuffer({ size: vocab * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -465,15 +479,15 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // Valore DERIVATO dal piano: attn 17/layer (16 fino alla fase 4b; l'attention
   // split ne aggiunge uno, part+reduce al posto del kernel monolitico) + denso
   // 6 (solo blk.0) + per layer
-  // MoE 2 preRouter + 4 shexp + 4 catene expert da 2 (fase 4b: gate+up+silu
-  // fusi) + 1 add = 15.
+  // MoE 2 preRouter + 2 shexp (it.13: gate+up+silu Q5_K fusi, era 4) + 4 catene
+  // expert da 2 (fase 4b: gate+up+silu fusi) + 1 add = 13.
   // NON include la testa (rms + lm_head = 2), che con readLogits gira a ogni
   // token: e' la ragione per cui questo numero e' sempre stato 2 sotto il vero.
   // Il conteggio reale e' `telemetry().dispatches` (contatore in runSteps e
   // nelle catene expert).
   const nMoe = layers.filter((l) => l.moe).length;
   const nDense = layers.filter((l) => l.dense).length;
-  const dispatchesPerTokenPlanned = 17 * nLayer + 6 * nDense + 15 * nMoe;
+  const dispatchesPerTokenPlanned = 17 * nLayer + 6 * nDense + 13 * nMoe;
 
   const mapLogits = async (): Promise<Float32Array> => {
     await logitsStaging.mapAsync(GPUMapMode.READ);
@@ -653,7 +667,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       };
     },
     destroy() {
-      for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnPartials, attnMla, tmp, fnB, gateD, upD, gateE, upE, moeOut, logitsB, ...wExp, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
+      for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnPartials, attnMla, tmp, fnB, gateD, upD, gateE, moeOut, logitsB, ...wExp, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
       tsqResolve?.destroy();
       querySet?.destroy();
       cache.destroy();

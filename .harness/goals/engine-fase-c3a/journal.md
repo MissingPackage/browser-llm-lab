@@ -935,3 +935,71 @@ it.10: la fase 4 non è opzionale.
   reale: glmforward/glmroute, ktest). Il tetto di contesto di GLMMODEL non è
   più la shared: è la VRAM della KV. Decisione di rimozione/condizionamento →
   docket item 13.
+
+## it.13 (2026-08-03) — fase 4b: famiglia fast sui K-quant (shexp + head)
+
+Le due categorie più grosse dopo l'attention usavano `gemvQ5K`/`gemvQ6K` con
+due difetti strutturali letti nel kernel: 1 riga per workgroup da 64 thread con
+soli 8 superblocchi per riga (K=2048) ⇒ 56 thread su 64 fermi, e `sbyte()` che
+fa una load u32 dal global PER OGNI BYTE. Due kernel nuovi (sole aggiunte):
+`pairGemvSiluQ5KFastWgsl` (gate+up Q5_K + silu fusi — lo shexp passa da 4
+dispatch a 2) e `gemvQ6KFastWgsl` (down shexp e head): 8 thread per
+superblocco (utilizzo pieno a K=2048), word in registri, x in shared paddato
+(e+(e>>5), anti bank-conflict), riduzione ad albero. Aritmetica bit-fedele ai
+gemelli lenti, che restano nel repo. `upE` eliminato (nessun silu separato
+sopravvive nel path MoE). Modulo nuovo `kquantfast.ts` (tolleranze e sizing).
+
+### Review (stesso protocollo di it.12) e il caso della tolleranza
+
+Il ktest dello shexp fuso sfondava la tolleranza storica 2e-4 (maxRel
+5.87e-4). L'implementatore l'ha giustificato con un'emulazione; la review
+avversaria Opus ha PROVATO la correttezza (emulazione f64 del WGSL: rel ≤3e-13
+su tutte le righe; copertura esattamente-una-volta per K 256→8192; 6 mutazioni
+strutturali + fault-injection Codex su tutti i 64 sottogruppi: 0 escape, il
+più favorevole dei fault dà maxRel 32 contro gate 1e-3) ma ha DEMOLITO la
+giustificazione: la causa non era "l'exp del device" (amplificazione ≤1,
+quindi ≤3.6e-7) ma la contrazione FMA; il cond era 1.4e5 non 4e3; e "sui pesi
+veri non succede" era smentito sperimentalmente. Punto decisivo: anche la
+pipeline VECCHIA (2 gemv lenti + silu separato) sfonda i 2e-4 sugli stessi
+dati (3.09e-4) — il pavimento era sempre stato lì, il caso vecchio non lo
+vedeva perché non fondeva il silu nel confronto. Fix round: floor test
+riscritto sui kernel VERI (metà strutturale che genera il WGSL + metà
+numerica con l'associatività reale — il modello corretto coincide col device
+a 4 cifre: 5.869e-4), tolleranze derivate dal caso peggiore LECITO
+(Q5_K pair 1e-3, margine 1.70× sul device; Q6_K 5e-4, margine 2.07× sul
+no-FMA — un driver spec-compliant senza contrazione non deve dare falso
+FAIL), costanti condivise in kquantfast.ts, guardia shared di glmmodel estesa
+a 4 consumatori, `dot`→`dotq` (shadowing del builtin).
+
+### Verifica
+
+ktest 44/44; `npm test` 272+2; `tsc` pulito. Bench quiescente ×2 (clock
+campionati: 863 MHz medi run 1):
+- `bench-glm-4090-b12-kquantfast-2026-08-03.json` (attrib+bycat):
+  **shexp 14.63→5.54, head 9.61→3.81** (bycat); attn 27.5→32.0 ed experts
+  8.1→13.1 su clock più bassi (863 vs 948) e replica singola — rumore+clock,
+  non regressione kernel (nessun kernel attn/experts toccato).
+- `bench-glm-4090-b12-kquantfast2-2026-08-03.json` (headline): **decode 5.054
+  ≥ 4.982: PASS, nuovo massimo** (medie 6-replicate: 4.972→5.024);
+  dispatch/token 1405 (da 1497); **gpuBusy 54.2 ≤ 54.5: prima volta sotto la
+  soglia derivata del gate 4b**, coi clock CONTRO (863 MHz vs 948 di it.12 vs
+  1746 di it.1): la riduzione è tutta kernel, zero dai clock.
+
+### Prefill: analisi di non-regressione (onesta, non assorbita)
+
+Mediane headline 5.674/5.697 contro il 5.736 committato (it.12 run 2). A
+livello di repliche (6 vs 6): it.12 media 5.706 sd 0.039, it.13 media 5.691
+sd 0.022, Welch t=0.82 — statisticamente indistinguibili; il 5.736 è la
+mediana della tripla più fortunata, cioè un massimo storico. It.13 toglie
+lavoro dal prefill (stesso forward), e il decode delle stesse run migliora.
+Conclusione: nessuna regressione misurabile; un effetto reale ≤0.5% non è
+escludibile dai dati. Interpretazione a banda di rumore del gate → docket
+item 14 per ratifica PI (rollback a un commit se non concorda).
+
+### Fase 4b: cosa manca per chiuderla
+
+Il done-when chiede anche correttezza invariata (argmax ≡ cpuref-f64 sul
+campione ratificato, top-1 vs golden ≥ 98.83%): non verificata in it.13 (ktest
+sintetico argmax 6/6 non basta). Prossima iterazione: conformance reale
+(glmconf) + routing, poi la 4b chiude e si ripresenta l'item 2 come da
+done-when della fase 4.

@@ -11,8 +11,10 @@ import {
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
   routerTopKWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl, gemvGrid,
   mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,
+  pairGemvSiluQ5KFastWgsl, gemvQ6KFastWgsl,
 } from "../kernels/wgsl";
 import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen } from "../mlasplit";
+import { KQUANT_FAST_Q5K_PAIR_REL_TOL, KQUANT_FAST_Q6K_REL_TOL } from "../kquantfast";
 import { createGlmLayer0 } from "../glmforward";
 import {
   GlmDenseLayerRefF64, GlmMoeLayerRefF64, glmMoeFfnRefF64, type GlmMoeExpertWeights,
@@ -773,8 +775,9 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
   // dispatch (gate, up, silu, down) a 2 (gate+up+silu fusi, down) ⇒ il termine
   // MoE scende da 23 a 15 e il totale da 61 a 53. Fase 4c: l'attention split
   // spezza il kernel MLA in part+reduce ⇒ il termine attn sale da 16 a 17 per
-  // layer e il totale da 53 a 55.
-  const PLANNED = 17 * 2 + 6 * 1 + (2 + 4 + G.nExpertUsed * 2 + 1) * 1, HEAD = 2;
+  // layer e il totale da 53 a 55. It.13: lo shexp fonde gate+up+silu Q5_K ⇒ il
+  // suo termine scende da 4 a 2 e il totale da 55 a 53.
+  const PLANNED = 17 * 2 + 6 * 1 + (2 + 2 + G.nExpertUsed * 2 + 1) * 1, HEAD = 2;
   const dispatchOk = model.dispatchesPerTokenPlanned === PLANNED && measuredPerToken === PLANNED + HEAD;
   if (!dispatchOk) {
     problems.push(`dispatch: piano ${model.dispatchesPerTokenPlanned} (atteso ${PLANNED}), ` +
@@ -819,6 +822,64 @@ async function testPairGemvSiluFast(g: Gpu): Promise<KResult> {
     [g.buf(gp.qs), g.buf(gp.scales), g.buf(up.qs), g.buf(up.scales), g.buf(x), out],
     gemvGrid(N / 4)[0]);
   return compare("pair-gemv-silu-fast-exp", new Float32Array(await g.read(out, N * 4)), ref, 2e-4, 1e-3);
+}
+
+// Famiglia fast portata sui K-quant (C3a fase 4b it.13). Stessi riferimenti
+// dequant CPU e stesse tolleranze dei casi gemv-q5_K/gemv-q6_K: la struttura
+// nuova (8 thread per superblocco, word in registri, x in shared) deve dare la
+// stessa risposta dei gemelli lenti — cambia come legge la memoria, non la
+// matematica.
+async function testPairGemvSiluQ5KFast(g: Gpu): Promise<KResult> {
+  const K = G.dModel, N = G.dFfnExpert;
+  const nBlocks = (K / 256) * N;
+  const gSrc = randBytes(nBlocks * Q5_K_BLOCK_BYTES, 7701); fixScalesAt(gSrc, Q5_K_BLOCK_BYTES, [1, 3]);
+  const uSrc = randBytes(nBlocks * Q5_K_BLOCK_BYTES, 7702); fixScalesAt(uSrc, Q5_K_BLOCK_BYTES, [1, 3]);
+  const gw = new Float32Array(nBlocks * 256), uw = new Float32Array(nBlocks * 256);
+  dequantQ5_K(gSrc, 0, nBlocks, gw);
+  dequantQ5_K(uSrc, 0, nBlocks, uw);
+  const x = randF32(K, 7703);
+  const ref = new Float32Array(N);
+  for (let r = 0; r < N; r++) {
+    let ag = 0, au = 0;
+    for (let i = 0; i < K; i++) { ag += gw[r * K + i] * x[i]; au += uw[r * K + i] * x[i]; }
+    ref[r] = (ag / (1 + Math.exp(-ag))) * au;
+  }
+  const out = g.empty(N * 4);
+  await g.run(pairGemvSiluQ5KFastWgsl({ K, N }), [
+    g.buf(repackKQuant(gSrc, 0, nBlocks, Q5_K_BLOCK_BYTES)),
+    g.buf(repackKQuant(uSrc, 0, nBlocks, Q5_K_BLOCK_BYTES)),
+    g.buf(x), out,
+  ], gemvGrid(N)[0]);
+  // Tolleranza IMPORTATA da kquantfast.ts, non ricopiata: la sua derivazione
+  // (pavimento f32 della forma fattorizzata + contrazione FMA) e' misurata in
+  // tests/engine-kquant-f32floor.test.ts, che importa la stessa costante.
+  return compare("pair-gemv-silu-q5k-fast-shexp", new Float32Array(await g.read(out, N * 4)), ref,
+    KQUANT_FAST_Q5K_PAIR_REL_TOL, 1e-3);
+}
+
+async function testGemvQ6KFast(g: Gpu, K: number, N: number): Promise<KResult> {
+  const nBlocks = (K / 256) * N;
+  const src = randBytes(nBlocks * Q6_K_BLOCK_BYTES, 7800 + K + N);
+  fixScalesAt(src, Q6_K_BLOCK_BYTES, [209]);
+  const w = new Float32Array(nBlocks * 256);
+  dequantQ6_K(src, 0, nBlocks, w);
+  const x = randF32(K, 7810 + K);
+  const ref = new Float32Array(N);
+  for (let r = 0; r < N; r++) {
+    let acc = 0;
+    for (let i = 0; i < K; i++) acc += w[r * K + i] * x[i];
+    ref[r] = acc;
+  }
+  const y = g.empty(N * 4);
+  await g.run(gemvQ6KFastWgsl({ K, N }),
+    [g.buf(repackKQuant(src, 0, nBlocks, Q6_K_BLOCK_BYTES)), g.buf(x), y], gemvGrid(N)[0]);
+  // relTol dal modulo di sizing e non i 2e-4 storici: a 2e-4 questo kernel
+  // passa SOLO se il device contrae a·b+c in FMA — cosa che la spec WGSL
+  // permette ma non impone. Il pavimento senza contrazione e' ~2,4e-4
+  // (misurato in tests/engine-kquant-f32floor.test.ts): un driver conforme che
+  // non fonde darebbe FAIL su un kernel corretto.
+  return compare(`gemv-q6k-fast-${K}x${N}`, new Float32Array(await g.read(y, N * 4)), ref,
+    KQUANT_FAST_Q6K_REL_TOL, 1e-3);
 }
 
 async function testGemvAccumFast(g: Gpu, kind: "q4_0" | "q4_1"): Promise<KResult> {
@@ -1016,6 +1077,11 @@ async function main(): Promise<void> {
     results.push(await testPairGemvSiluFast(g));
     results.push(await testGemvAccumFast(g, "q4_0"));
     results.push(await testGemvAccumFast(g, "q4_1"));
+
+    // --- famiglia fast sui K-quant (C3a fase 4b it.13): shexp + head ---
+    results.push(await testPairGemvSiluQ5KFast(g));
+    results.push(await testGemvQ6KFast(g, G.dFfnExpert, G.dModel)); // down shexp, K=1536 (6 superblocchi)
+    results.push(await testGemvQ6KFast(g, G.dModel, 1024));         // output head, K=2048 (N ridotto)
 
     // --- kernel MLA absorbed (C2 fase 4 slice 2), dims reali GLM ---
     const HL = G.qkNope + G.ropeDims; // 256: head len di q

@@ -2084,6 +2084,236 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 }`;
 }
 
+// ============ FAMIGLIA FAST PER I K-QUANT (C3a fase 4b, it.13) ==============
+// Stessa terapia della famiglia Q4, applicata a Q5_K/Q6_K — che dopo l'it.12
+// sono le due categorie piu' grosse rimaste (shexp 14,6 ms/token, head 9,6).
+// CAVEAT sui due numeri: vengono dal bycat a 948 MHz (journal it.12) e sono
+// gonfiati dal clock — la QUOTA e' quella, dominante dopo l'attention, ma il
+// valore assoluto non e' iso-clock e non va confrontato con misure a clock
+// pieno senza rinormalizzare.
+// I tre difetti dei gemelli lenti (gemvQ5KWgsl/gemvQ6KWgsl), letti nel codice:
+//   (a) UN superblocco per thread con `for sb = t; sb < SB_PER_ROW; sb += 64`:
+//       a K=2048 i superblocchi per riga sono 8, quindi 56 thread su 64 non
+//       fanno NIENTE. Il workgroup e' pieno all'12,5%;
+//   (b) `sbyte()` fa una load u32 dal global PER OGNI BYTE: la stessa word
+//       viene riletta 4 volte, e le scale Q6_K una volta per peso;
+//   (c) x riletto dal global da ogni riga.
+//
+// La struttura nuova, comune ai due formati: un workgroup da 64 thread per
+// riga, e il lavoro tagliato per SOTTOGRUPPI DI 32 PESI invece che per
+// superblocco. Un superblocco K-quant sono 256 pesi = 8 sottogruppi, quindi 8
+// thread per superblocco: a K=2048 sono 64 sottogruppi per riga, cioe' un
+// thread ciascuno, workgroup pieno. Le word che servono al thread si caricano
+// una volta in registri (8 word di quanti + le scale), i byte si estraggono di
+// li'. x sta in shared, letto una volta per workgroup.
+//
+// PADDING DI x IN SHARED (+1 f32 ogni 32): senza, i 32 thread di un warp
+// leggono indirizzi tutti congrui mod 32 — i sottogruppi distano esattamente 32
+// f32 — cioe' TUTTI nello stesso banco, conflitto a 32 vie sull'accesso piu'
+// caldo del kernel. Con l'indice `e + (e >> 5)` la distanza diventa 33 e i
+// banchi si separano. Costa K/32 f32 di shared (64 su 2048).
+//
+// L'aritmetica delle SCALE e' bit-identica ai riferimenti dequantQ5_K /
+// dequantQ6_K (get_scale_min_k4 e sint8, stesse espressioni dei gemelli lenti):
+// e' un vincolo di conformance, non un'ottimizzazione da rivedere. Cambia solo
+// il RAGGRUPPAMENTO delle somme (per sottogruppo invece che per peso), come
+// gia' fatto dalla famiglia Q4 — ed e' per questo che i ktest confrontano
+// contro gli stessi riferimenti CPU con le stesse tolleranze.
+
+// Q5_K gate+up + silu·mul fusi (shexp): sostituisce gemvShexpGU ×2 + siluExp,
+// tre dispatch in uno. Superblocco Q5_K = 44 word: [d|dmin][scales 12 B]
+// [qh 32 B][qs 128 B]. Il sottogruppo g del superblocco e' la coppia
+// (gruppo j = g>>1, meta' g&1) della struttura a 4 gruppi da 64 — e l'indice di
+// scala `is` coincide con g, che e' esattamente 2j + meta'.
+export function pairGemvSiluQ5KFastWgsl(opts: { K: number; N: number }): string {
+  const { K, N } = opts;
+  if (K % 256 !== 0) throw new Error("pairGemvSiluQ5KFast: K non multiplo di 256");
+  const sbPerRow = K / 256;
+  const nSub = K / 32; // sottogruppi da 32 pesi per riga
+  return `
+@group(0) @binding(0) var<storage, read> gBlocks: array<u32>;
+@group(0) @binding(1) var<storage, read> uBlocks: array<u32>;
+@group(0) @binding(2) var<storage, read> x: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+const K = ${K}u;
+const SB_PER_ROW = ${sbPerRow}u;
+const N_SUB = ${nSub}u;
+var<workgroup> redG: array<f32, 64>;
+var<workgroup> redU: array<f32, 64>;
+var<workgroup> xs: array<f32, ${K + K / 32}>; // x paddato: +1 f32 ogni 32
+fn scByte(sw: vec3<u32>, i: u32) -> u32 { return (sw[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu; }
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  for (var i = t; i < K; i = i + 64u) { xs[i + (i >> 5u)] = x[i]; }
+  workgroupBarrier();
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  var accG = 0.0;
+  var accU = 0.0;
+  var dotq = 0.0; // non "dot": e' il nome di un builtin WGSL
+  var sx = 0.0;
+  var q = 0.0;
+  var sc = 0u;
+  var mn = 0u;
+  if (r < ${N}u) {
+    // un sottogruppo da 32 pesi per thread (a K=2048: 64 sottogruppi, uno
+    // ciascuno; a K non multiplo di 2048 il loop stride copre il resto)
+    for (var su = t; su < N_SUB; su = su + 64u) {
+      let sb = su >> 3u;
+      let g = su & 7u;
+      let j = g >> 1u;
+      let half = g & 1u;
+      let mask = (1u + half) << (2u * j); // qh: u1 = 1<<2j, u2 = 2<<2j
+      let xb = sb * 256u + j * 64u + half * 32u;
+      let sbBase = (r * SB_PER_ROW + sb) * 44u;
+      for (var side = 0u; side < 2u; side = side + 1u) {
+        // side 0 = gate, side 1 = up: stesse posizioni, buffer diverso
+        var dm = vec2(0.0, 0.0);
+        var sw = vec3(0u, 0u, 0u);
+        if (side == 0u) {
+          dm = unpack2x16float(gBlocks[sbBase]);
+          sw = vec3(gBlocks[sbBase + 1u], gBlocks[sbBase + 2u], gBlocks[sbBase + 3u]);
+        } else {
+          dm = unpack2x16float(uBlocks[sbBase]);
+          sw = vec3(uBlocks[sbBase + 1u], uBlocks[sbBase + 2u], uBlocks[sbBase + 3u]);
+        }
+        // get_scale_min_k4(is) con is = g — espressioni identiche al riferimento
+        if (g < 4u) {
+          sc = scByte(sw, g) & 63u;
+          mn = scByte(sw, g + 4u) & 63u;
+        } else {
+          sc = (scByte(sw, g + 4u) & 0xfu) | ((scByte(sw, g - 4u) >> 6u) << 4u);
+          mn = (scByte(sw, g + 4u) >> 4u) | ((scByte(sw, g) >> 6u) << 4u);
+        }
+        dotq = 0.0;
+        sx = 0.0;
+        for (var wI = 0u; wI < 8u; wI = wI + 1u) {
+          var qsWord = 0u;
+          var qhWord = 0u;
+          if (side == 0u) {
+            qsWord = gBlocks[sbBase + 12u + j * 8u + wI]; // qs a byte 48
+            qhWord = gBlocks[sbBase + 4u + wI];           // qh a byte 16
+          } else {
+            qsWord = uBlocks[sbBase + 12u + j * 8u + wI];
+            qhWord = uBlocks[sbBase + 4u + wI];
+          }
+          for (var b = 0u; b < 4u; b = b + 1u) {
+            let sh = b * 8u;
+            let ql = (qsWord >> sh) & 0xffu;
+            let qhb = (qhWord >> sh) & 0xffu;
+            q = f32(select(ql >> 4u, ql & 0xfu, half == 0u));
+            if ((qhb & mask) != 0u) { q = q + 16.0; }
+            let e = xb + wI * 4u + b;
+            let xv = xs[e + (e >> 5u)];
+            dotq = dotq + q * xv;
+            sx = sx + xv;
+          }
+        }
+        let d1 = dm.x * f32(sc);
+        let min1 = dm.y * f32(mn);
+        if (side == 0u) { accG = accG + d1 * dotq - min1 * sx; }
+        else { accU = accU + d1 * dotq - min1 * sx; }
+      }
+    }
+  }
+  redG[t] = accG;
+  redU[t] = accU;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { redG[t] = redG[t] + redG[t + stride]; redU[t] = redU[t] + redU[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (t == 0u && r < ${N}u) {
+    let gv = redG[0];
+    out[r] = (gv / (1.0 + exp(-gv))) * redU[0];
+  }
+}`;
+}
+
+// Q6_K con la stessa struttura (shexp down E output head: stessa famiglia di
+// shape). Firma dei binding IDENTICA a gemvQ6KWgsl, così il wiring cambia solo
+// la pipeline. Superblocco = 53 word: [ql 128 B][qh 64 B][scales int8 16 B]
+// [d f16 in coda]. Il sottogruppo g e' la coppia (meta' n = g>>2, quarto
+// k = g&3) dei 4 termini q1..q4 del riferimento.
+export function gemvQ6KFastWgsl(opts: { K: number; N: number }): string {
+  const { K, N } = opts;
+  if (K % 256 !== 0) throw new Error("gemvQ6KFast: K non multiplo di 256");
+  const sbPerRow = K / 256;
+  const nSub = K / 32;
+  return `
+@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+const K = ${K}u;
+const SB_PER_ROW = ${sbPerRow}u;
+const N_SUB = ${nSub}u;
+var<workgroup> partial: array<f32, 64>;
+var<workgroup> xs: array<f32, ${K + K / 32}>; // x paddato: +1 f32 ogni 32
+// scala int8 dal byte bi (0..7) del gruppo, letta dalle due word gia' in registri
+fn s8(w0: u32, w1: u32, bi: u32) -> f32 {
+  let w = select(w1, w0, bi < 4u);
+  return f32((i32((w >> ((bi & 3u) * 8u)) & 0xffu) << 24u) >> 24u);
+}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  for (var i = t; i < K; i = i + 64u) { xs[i + (i >> 5u)] = x[i]; }
+  workgroupBarrier();
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  var acc = 0.0;
+  var acc0 = 0.0; // pesi l<16 (scala is=0)
+  var acc1 = 0.0; // pesi l>=16 (scala is=1)
+  var q = 0.0;
+  if (r < ${N}u) {
+    for (var su = t; su < N_SUB; su = su + 64u) {
+      let sb = su >> 3u;
+      let g = su & 7u;
+      let n = g >> 2u;
+      let k = g & 3u;
+      let wb = (r * SB_PER_ROW + sb) * 53u;
+      let d = unpack2x16float(blocks[wb + 52u]).x; // d f16 a byte 208
+      // scale del gruppo n: 8 byte a partire da byte 192+n*8 = word 48+n*2
+      let scW0 = blocks[wb + 48u + n * 2u];
+      let scW1 = blocks[wb + 49u + n * 2u];
+      let sc0 = s8(scW0, scW1, 2u * k);      // is = 0
+      let sc1 = s8(scW0, scW1, 2u * k + 1u); // is = 1
+      let qlW = wb + n * 16u + (k & 1u) * 8u; // ql: byte n*64 + (k&1)*32
+      let qhW = wb + 32u + n * 8u;            // qh: byte 128 + n*32
+      let xb = sb * 256u + n * 128u + k * 32u;
+      acc0 = 0.0;
+      acc1 = 0.0;
+      for (var wI = 0u; wI < 8u; wI = wI + 1u) {
+        let qlWord = blocks[qlW + wI];
+        let qhWord = blocks[qhW + wI];
+        for (var b = 0u; b < 4u; b = b + 1u) {
+          let sh = b * 8u;
+          let ql = (qlWord >> sh) & 0xffu;
+          let qh = (qhWord >> sh) & 0xffu;
+          // nibble basso per k<2 (q1,q2), alto per k>=2 (q3,q4); 2 bit alti a k*2
+          let lo = select(ql >> 4u, ql & 0xfu, k < 2u);
+          q = f32(lo | (((qh >> (k * 2u)) & 3u) << 4u)) - 32.0;
+          let e = xb + wI * 4u + b;
+          let xv = xs[e + (e >> 5u)];
+          if (wI < 4u) { acc0 = acc0 + q * xv; } else { acc1 = acc1 + q * xv; }
+        }
+      }
+      acc = acc + d * (sc0 * acc0 + sc1 * acc1);
+    }
+  }
+  partial[t] = acc;
+  workgroupBarrier();
+  var stride = 32u;
+  while (stride > 0u) {
+    if (t < stride) { partial[t] = partial[t] + partial[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (t == 0u && r < ${N}u) { y[r] = partial[0]; }
+}`;
+}
+
 // Router top-k su GPU (C3a fase 4, strato 1 di spec §3.2-bis): replica esatta di
 // `routerSelect` (moe.ts), che a sua volta replica build_moe_ffn. Scrive gli id
 // selezionati e i pesi di mixing in DUE buffer GPU, così la selezione smette di

@@ -1,5 +1,20 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+14. **RATIFICA RICHIESTA — banda di rumore nel gate di non-regressione tok/s**
+    (2026-08-03, it.13). Il gate confronta MEDIANE di 3 repliche con varianza
+    run-to-run ~±1%: confrontare ogni run nuova col MASSIMO storico delle
+    mediane respinge rumore puro circa metà delle volte, e prima o poi blocca
+    un merge sano (ratchet statistico). Caso concreto: prefill it.13
+    5.674/5.697 contro il record 5.736 — a livello di repliche (6 vs 6) Welch
+    t=0.82, indistinguibili; il decode delle stesse run MIGLIORA
+    (4.972→5.024 di media). Ho committato con l'analisi nel journal invece di
+    fermare il loop: se non concordi, il revert è un commit. **Proposta da
+    ratificare**: regressione = mediana nuova sotto il riferimento oltre il
+    2% OPPURE sotto in modo statisticamente significativo a livello di
+    repliche; sotto quelle soglie i report si committano e il riferimento
+    resta il massimo storico. Alternativa più severa: obbligo di 6 repliche
+    quando la mediana scende sotto il riferimento.
+
 13. **FINDING registrato, non una decisione PI** (2026-08-03, it.12, dalle due
     review avversarie). Con lo split MLA in produzione, il termine
     `mlaWorkgroupStorageBytes(ctxMax)` in `gpulimits.ts` ha come consumatori
