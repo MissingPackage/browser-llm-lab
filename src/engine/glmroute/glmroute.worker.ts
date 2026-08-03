@@ -25,6 +25,20 @@ const progress = (msg: string) => post({ type: "progress", msg });
 
 interface LayerCounter { total: number; match: number }
 
+// Fedelta' del router GPU (C3a fase 4 slice B). Il modello gira in modo
+// `shadow`: il router+resolve su GPU scrive Sel in una regione ombra mentre a
+// decidere resta il routerSelect f64 su CPU. Qui si confronta quello che il
+// router GPU AVREBBE scelto con quello che la CPU ha scelto, sulle 31 274
+// posizioni del corpus vero invece che sulle 64 estrazioni sintetiche di it.9.
+// Il gate e' l'insieme (l'ordine dentro i 4 non cambia la matematica del layer:
+// id e peso viaggiano appaiati in Sel); i pesi si confrontano solo quando
+// l'insieme coincide — su insiemi diversi sarebbe un confronto fra quantita'
+// diverse, non un errore numerico.
+const GPU_AGREEMENT_GATE = 99.99;
+// f32 (GPU) vs f64 (CPU) sullo stesso ingresso: it.9 ha misurato maxRel 1.6e-7
+// su 64 estrazioni. La tolleranza dichiarata e' quella del gate ktest, 1e-5.
+const GPU_WEIGHT_REL_TOL = 1e-5;
+
 async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
   const adapter = await navigator.gpu?.requestAdapter();
@@ -73,6 +87,10 @@ async function main(cfg: Cfg): Promise<void> {
   progress(`costruisco il modello (47 layer, ctxMax ${ctxMax})…`);
   const model = createGlmModel(device, source, {
     ctxMax,
+    // il path che decide NON cambia: shadow aggiunge un dispatch per layer MoE e
+    // una regione di Sel, e lascia CPU-side ogni esito (setMatch verso l'oracolo
+    // deve restare identico all'artefatto del 31-07)
+    select: "shadow",
     cache: {
       budgetBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
       maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true,
@@ -84,6 +102,16 @@ async function main(cfg: Cfg): Promise<void> {
   const perLayerDecode: LayerCounter[] = Array.from({ length: G.nLayer }, () => ({ total: 0, match: 0 }));
   const phase = { p: { total: 0, match: 0 }, d: { total: 0, match: 0 } };
   const samples: Array<{ p: number; i: number; layer: number; got: number[]; want: number[] }> = [];
+  // accumulatori del confronto GPU-vs-CPU (uno per (posizione, layer MoE))
+  const gpuAgr = {
+    total: 0, setMatch: 0, orderMatch: 0, weightOutOfTol: 0, weightMaxRel: 0,
+    slotResolved: 0, slotMiss: 0, missing: 0,
+    // Sel di PRODUZIONE riletta dalla VRAM: e' quello che i kernel expert hanno
+    // letto davvero. Confrontarla con la decisione di routerSelect e' l'unica
+    // verifica diretta dell'ordine writeBuffer→dispatch sul corpus vero (R5).
+    vramChecked: 0, vramMismatch: 0,
+  };
+  const gpuSamples: Array<{ p: number; i: number; layer: number; gpu: number[]; cpu: number[] }> = [];
   let doneRows = 0;
   const tReplay0 = performance.now();
 
@@ -104,6 +132,39 @@ async function main(cfg: Cfg): Promise<void> {
           if (ok) perLayerDecode[r.layer].match++;
         }
         if (!ok && samples.length < 30) samples.push({ p, i: row.i, layer: r.layer, got, want });
+
+        // --- fedelta' del router GPU (shadow): GPU vs CPU, non vs oracolo ---
+        gpuAgr.total++;
+        if (!r.gpu) { gpuAgr.missing++; continue; }
+        const gpuIds = Array.from(r.gpu.experts);
+        const sameSet = new Set(gpuIds).size === 4 && gpuIds.every((e) => got.includes(e));
+        if (sameSet) {
+          gpuAgr.setMatch++;
+          if (gpuIds.every((e, k) => e === got[k])) gpuAgr.orderMatch++;
+          for (let k = 0; k < 4; k++) {
+            const want2 = r.weights[got.indexOf(gpuIds[k])];
+            const rel = Math.abs(r.gpu.weights[k] - want2) / Math.max(Math.abs(want2), 1e-9);
+            gpuAgr.weightMaxRel = Math.max(gpuAgr.weightMaxRel, rel);
+            if (rel > GPU_WEIGHT_REL_TOL) gpuAgr.weightOutOfTol++;
+          }
+        } else if (gpuSamples.length < 30) {
+          gpuSamples.push({ p, i: row.i, layer: r.layer, gpu: gpuIds, cpu: got });
+        }
+        // Slot risolti: NON un gate in shadow. Il router GPU gira prima degli
+        // `ensure` del suo layer, quindi un expert che il token sta per caricare
+        // risulta MISS per costruzione — e' la residenza parziale vista da GPU,
+        // ed e' la misura di quanto lo slice C dipenda dalla residenza totale.
+        for (const f of r.gpu.flags) (f & 1 ? gpuAgr.slotMiss++ : gpuAgr.slotResolved++);
+        // R5 lato produzione: id e peso in VRAM devono essere quelli che
+        // routerSelect ha deciso (il peso in f32, come Sel lo tiene).
+        if (r.vram) {
+          for (let k = 0; k < r.experts.length; k++) {
+            gpuAgr.vramChecked++;
+            if (r.vram.experts[k] !== r.experts[k]
+              || r.vram.weights[k] !== Math.fround(r.weights[k])
+              || r.vram.flags[k] !== 0) gpuAgr.vramMismatch++;
+          }
+        }
       }
       doneRows++;
       if (doneRows % 25 === 0) {
@@ -114,6 +175,7 @@ async function main(cfg: Cfg): Promise<void> {
         post({
           type: "tick",
           msg: `${doneRows}/${totalRows} pos (${rate.toFixed(1)}/s, prompt ${p}) — match p ${pm}% d ${dm}% — ` +
+            `gpuRouter ${(100 * gpuAgr.setMatch / Math.max(1, gpuAgr.total)).toFixed(4)}% — ` +
             `hit ${(100 * st.hits / Math.max(1, st.hits + st.misses)).toFixed(1)}% (${st.misses} miss, ${(st.bytesRead / 2 ** 30).toFixed(1)} GiB letti)`,
         });
       }
@@ -125,7 +187,10 @@ async function main(cfg: Cfg): Promise<void> {
   source.close();
   const report = {
     kind: "glm-routing-conformance",
-    schemaVersion: 1,
+    // v2 (C3a fase 4 slice B): aggiunto `gpuRouterAgreement`. Tutto il resto del
+    // report ha lo stesso significato di v1 — e' il confronto con l'artefatto
+    // del 31-07 a dirlo, e deve restare identico.
+    schemaVersion: 2,
     date: new Date().toISOString(),
     ggufSha256: GLM47_FLASH_SHA256,
     oracle: { llamaCppCommit: trace.header.llamaCppCommit, corpusHash: trace.header.corpusHash },
@@ -136,6 +201,26 @@ async function main(cfg: Cfg): Promise<void> {
       decode: { ...phase.d, pct: phase.d.total ? 100 * phase.d.match / phase.d.total : null },
     },
     gate: { threshold: 99, pass: phase.d.total > 0 && 100 * phase.d.match / phase.d.total >= 99 },
+    // Gate dello slice B: il router GPU concorda con la CPU su almeno il 99.99%
+    // delle (posizione, layer). `missing` > 0 significa che il modo shadow non
+    // ha prodotto la regione ombra — il confronto non esiste, non "e' passato".
+    gpuRouterAgreement: {
+      mode: "shadow",
+      ...gpuAgr,
+      pct: gpuAgr.total ? 100 * gpuAgr.setMatch / gpuAgr.total : null,
+      orderPct: gpuAgr.total ? 100 * gpuAgr.orderMatch / gpuAgr.total : null,
+      weightRelTol: GPU_WEIGHT_REL_TOL,
+      gate: {
+        threshold: GPU_AGREEMENT_GATE, weightRelTol: GPU_WEIGHT_REL_TOL,
+        pass: gpuAgr.total > 0 && gpuAgr.missing === 0
+          && 100 * gpuAgr.setMatch / gpuAgr.total >= GPU_AGREEMENT_GATE
+          && gpuAgr.weightOutOfTol === 0
+          // la Sel che decide dev'essere ESATTA: qui non c'e' tolleranza da
+          // concedere, e' la scrittura della CPU riletta com'e' arrivata
+          && gpuAgr.vramChecked === gpuAgr.total * G.nExpertUsed && gpuAgr.vramMismatch === 0,
+      },
+      mismatchSamples: gpuSamples,
+    },
     perLayerDecode: perLayerDecode
       .map((c, l) => ({ layer: l, ...c, pct: c.total ? 100 * c.match / c.total : null }))
       .filter((c) => c.total > 0),

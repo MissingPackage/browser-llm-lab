@@ -14,7 +14,10 @@ import {
   Sha256Stream, GgufExpertIndex, downIsQ4_1,
   EXPERT_GATE_UP_BYTES, EXPERT_DOWN_Q4_0_BYTES, EXPERT_DOWN_Q4_1_BYTES,
 } from "../src/engine/expertstore";
-import { ExpertCache, arenaNeeds, expertKey, slotBindRanges, PARK_Q4_0, PARK_Q4_1, type ExpertClass } from "../src/engine/residency";
+import {
+  ExpertCache, arenaNeeds, expertKey, slotBindRanges, PARK_Q4_0, PARK_Q4_1,
+  SLOT_TABLE_ENTRIES, SLOT_TABLE_MISS, type ExpertClass,
+} from "../src/engine/residency";
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, packExpertSlab } from "../src/engine/moe";
 import { pairGemvSiluFastWgsl, gemvAccumFastWgsl, type ArenaOpts } from "../src/engine/kernels/wgsl";
 
@@ -529,5 +532,119 @@ describe("ExpertCache — arena a binding fisso", () => {
       budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 },
       maxBufferBytes: MAX_BUFFER, maxBindingBytes: SLAB_DOWN_Q4_1.bytes - 1,
     })).toThrow();
+  });
+});
+
+// --------------------- slotTable (C3a fase 4, slice B) ----------------------
+// La tabella expertKey → slot è ciò che permette al resolve GPU di tradurre un
+// expert in indirizzo senza chiedere niente alla CPU. Qui si verifica la
+// MANUTENZIONE (chi la sporca, quando arriva sulla GPU, cosa succede a una
+// vittima); che il WGSL la legga con la base giusta è il ktest
+// `router-resolve-slottable`, che ha una GPU vera.
+describe("ExpertCache — slotTable", () => {
+  beforeAll(() => {
+    (globalThis as Record<string, unknown>).GPUBufferUsage ??= { STORAGE: 0x80, COPY_DST: 8, COPY_SRC: 4 };
+  });
+  const GIB = 1 << 30;
+  const baseOpts = { budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 }, maxBindingBytes: GIB, maxBufferBytes: GIB };
+
+  // device mock che APPLICA le scritture: della tabella conta il contenuto, non
+  // il numero di byte. Tiene anche l'ordine, che è l'invariante R5 del design.
+  const mkTableDevice = () => {
+    const order: string[] = [];
+    let table: { buf: object; data: Uint32Array } | null = null;
+    const device = {
+      createBuffer: (d: { size: number }) => {
+        const b = { size: d.size, destroy() { /* mock */ } };
+        // il primo buffer da 12 032 B è la slotTable (gli slab sono ~5 MB)
+        if (d.size === SLOT_TABLE_ENTRIES * 4 && !table) table = { buf: b, data: new Uint32Array(SLOT_TABLE_ENTRIES) };
+        return b;
+      },
+      queue: {
+        writeBuffer: (buf: object, offset: number, data: ArrayBufferView, dataOffset = 0, size?: number) => {
+          if (table && buf === table.buf) {
+            const src = data as Uint32Array;
+            const n = size ?? src.length - dataOffset;
+            for (let i = 0; i < n; i++) table.data[offset / 4 + i] = src[dataOffset + i];
+            order.push(`table[${offset / 4}..${offset / 4 + n - 1}]`);
+          } else {
+            order.push(`slab@${offset}`);
+          }
+        },
+      },
+    } as unknown as GPUDevice;
+    return { device, order, read: (): Uint32Array => table!.data };
+  };
+  const rd = (l: number) => rawFor(l);
+
+  it("nasce tutta MISS, e senza l'opzione non esiste", () => {
+    const { device, read, order } = mkTableDevice();
+    const c = new ExpertCache(device, { ...baseOpts, slotTable: true });
+    expect(read().every((v) => v === SLOT_TABLE_MISS)).toBe(true);
+    expect(order).toEqual([`table[0..${SLOT_TABLE_ENTRIES - 1}]`]);
+    expect(c.slotTableBuffer()).toBeDefined();
+    expect(SLOT_TABLE_ENTRIES * 4).toBe(12_032); // design §2.5
+    const { device: d2 } = mkDevice();
+    expect(() => new ExpertCache(d2, baseOpts).slotTableBuffer()).toThrow(/slotTable/);
+  });
+
+  it("l'ensure pubblica lo slot, ma solo dopo il flush — e SEMPRE dopo lo slab", () => {
+    const { device, read, order } = mkTableDevice();
+    const c = new ExpertCache(device, { ...baseOpts, slotTable: true });
+    order.length = 0;
+    const s = c.ensure(5, 7, rd).slot;
+    // prima del flush la GPU non sa niente: c'è solo lo slab in coda
+    expect(order).toEqual(["slab@0"]);
+    expect(read()[expertKey(5, 7)]).toBe(SLOT_TABLE_MISS);
+    c.flushSlotTable();
+    // ORDINE (R5): lo slab è già in coda quando la tabella lo indirizza
+    expect(order).toEqual(["slab@0", `table[${expertKey(5, 7)}..${expertKey(5, 7)}]`]);
+    expect(read()[expertKey(5, 7)]).toBe(s.idx);
+    // un flush senza modifiche non scrive niente
+    order.length = 0;
+    c.flushSlotTable();
+    expect(order).toEqual([]);
+    // e un hit non sporca la tabella
+    c.ensure(5, 7, rd);
+    c.flushSlotTable();
+    expect(order).toEqual([]);
+  });
+
+  it("un flush per layer copre l'intervallo dei 4 ensure, non 4 scritture", () => {
+    const { device, read, order } = mkTableDevice();
+    const c = new ExpertCache(device, { ...baseOpts, slotTable: true });
+    order.length = 0;
+    for (const e of [9, 2, 30, 11]) c.ensure(6, e, rd);
+    c.flushSlotTable();
+    expect(order.filter((o) => o.startsWith("table"))).toEqual([`table[${expertKey(6, 2)}..${expertKey(6, 30)}]`]);
+    for (const e of [9, 2, 30, 11]) expect(read()[expertKey(6, e)]).toBeLessThan(4);
+    // slot distinti: quattro expert non possono condividere un indirizzo
+    expect(new Set([9, 2, 30, 11].map((e) => read()[expertKey(6, e)])).size).toBe(4);
+  });
+
+  it("la vittima dell'eviction torna MISS (altrimenti indirizza lo slab di un altro)", () => {
+    const { device, read } = mkTableDevice();
+    const c = new ExpertCache(device, { ...baseOpts, slotTable: true });
+    const L = 5; // classe q4_0, 4 slot
+    for (const e of [0, 1, 2, 3]) c.ensure(L, e, rd);
+    c.flushSlotTable();
+    const victimSlot = read()[expertKey(L, 0)];
+    c.ensure(L, 9, rd); // evince 0 (LRU)
+    c.flushSlotTable();
+    expect(read()[expertKey(L, 0)]).toBe(SLOT_TABLE_MISS);
+    expect(read()[expertKey(L, 9)]).toBe(victimSlot); // lo slot è passato di mano
+    // gli altri tre non si sono mossi
+    for (const e of [1, 2, 3]) expect(read()[expertKey(L, e)]).not.toBe(SLOT_TABLE_MISS);
+  });
+
+  it("le due classi vivono nella stessa tabella senza pestarsi (chiave = layer assoluto)", () => {
+    const { device, read } = mkTableDevice();
+    const c = new ExpertCache(device, { ...baseOpts, slotTable: true });
+    c.ensure(2, 5, rd);  // q4_1
+    c.ensure(6, 5, rd);  // q4_0, stesso expert, layer diverso
+    c.flushSlotTable();
+    expect(read()[expertKey(2, 5)]).toBe(0);
+    expect(read()[expertKey(6, 5)]).toBe(0); // stesso indice slot, classi diverse
+    expect(expertKey(2, 5)).not.toBe(expertKey(6, 5));
   });
 });

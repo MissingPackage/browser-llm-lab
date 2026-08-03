@@ -1,5 +1,16 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+14b. **Addendum all'item 14 (2026-08-03, it.16)** — secondo caso concreto,
+    stavolta sul routing: il done-when di fase 4 chiede conformance "non
+    peggiore" dell'artefatto 07-31, ma quell'artefatto è pre-it.12/13 (somme
+    f32 riordinate, validate da argmax≡cpuref 256/256): il full-corpus nuovo
+    dà prefill +151 match su 1.2M e decode −19 su 235k (−0.008 pp) — segno
+    misto, grandezza da near-tie, netto +132. La stessa ratifica dell'item 14
+    dovrebbe coprire anche i confronti di conformance fra motori con ordine
+    di somma legittimamente diverso: proposta = il riferimento si aggiorna
+    quando il cambio di matematica è validato dai gate di correttezza forti
+    (argmax vs cpuref), e "non peggiore" si valuta sull'aggregato.
+
 14. **RATIFICA RICHIESTA — banda di rumore nel gate di non-regressione tok/s**
     (2026-08-03, it.13). Il gate confronta MEDIANE di 3 repliche con varianza
     run-to-run ~±1%: confrontare ogni run nuova col MASSIMO storico delle

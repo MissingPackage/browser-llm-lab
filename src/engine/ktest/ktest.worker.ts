@@ -33,7 +33,16 @@ import {
 import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 import { negotiateLimits } from "../gpulimits";
 
-interface KResult { kernel: string; pass: boolean; maxAbs: number; maxRel: number; note?: string }
+interface KResult {
+  kernel: string; pass: boolean; maxAbs: number; maxRel: number; note?: string;
+  /**
+   * Misure NUMERICHE del caso, per i confronti fra due esecuzioni (la pagina le
+   * ignora: mostra kernel/esito/max/note). Servono a un gate che nessun singolo
+   * caso puo' dare — "questa variante non ha cambiato NIENTE dell'esito" si
+   * verifica solo mettendo due run uno accanto all'altro.
+   */
+  metrics?: Record<string, number>;
+}
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
 
@@ -602,8 +611,9 @@ async function testResidencyOpfs(g: Gpu): Promise<KResult> {
 // sort-based indipendenti). Confronta hidden post-2-layer, insiemi top-4 e
 // pesi di mixing su 6 posizioni decode con cache expert volutamente stretta
 // (eviction e re-fetch inclusi nel percorso).
-async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
-  const name = "glm-model-2layer";
+async function testGlmModel2Layer(g: Gpu, select: "cpu" | "shadow" = "cpu"): Promise<KResult> {
+  const shadow = select === "shadow";
+  const name = shadow ? "glm-model-2layer-shadow" : "glm-model-2layer";
   const exBlocks = (G.dModel / 32) * G.dFfnExpert;
   const b32 = (n: number) => (n / 32);
   const sizes: Record<string, [number, "f32" | "q4_0" | "q4_1" | "q8_0" | "q5_K" | "q6_K"]> = {
@@ -719,12 +729,18 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
   // `ld4` ha archi veri e gli slot cadono anche fuori dal primo buffer. A
   // finestra piena questo test avrebbe nBuf = 1 e non proverebbe niente.
   const model = createGlmModel(g.device, srcMock, {
-    nLayer: 2, ctxMax: 16, head: true, vocab: VOCAB_T, select: "cpu",
+    nLayer: 2, ctxMax: 16, head: true, vocab: VOCAB_T, select,
     cache: {
       budgetBytes: 0, slotsOverride: KTEST_SLOTS,
       maxBindingBytes: KTEST_ARENA_WINDOW, maxBufferBytes: KTEST_ARENA_WINDOW, timing: true,
     },
   });
+  // Registrazione dei contatori CPU accesa (gpu=false: senza timestamp-query
+  // gpuBusy resta null, e qui servono solo submit e routerSyncs). Senza questa
+  // riga restavano a zero e l'invariante del design §6 — "in shadow i contatori
+  // non cambiano" — non era testata da nessuno: un submit aggiunto nel ramo
+  // shadow sarebbe passato sotto ogni gate.
+  model.setTelemetry(true, false);
   // ref f64 dell'head: rms(output_norm) + matvec Q6_K dequant
   const outNormF = deqBy(nonExpert("output_norm.weight"), "f32");
   const outWF = deqBy(nonExpert("output.weight"), "q6_K");
@@ -745,6 +761,8 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
   let l2e = 0, l2r = 0, maxAbs = 0, maxRel = 0, wMaxRel = 0, logitMaxRel = 0;
   let argmaxOk = 0;
   const problems: string[] = [];
+  // --- accumulatori del solo modo shadow (router GPU + resolve in ombra) ---
+  let gpuSetOk = 0, gpuOrderOk = 0, gpuWMaxRel = 0, gpuResolved = 0, gpuMiss = 0, vramChecked = 0;
   for (let p = 0; p < NPOS; p++) {
     const xIn = randF32(G.dModel, 60_000 + p, 0.5);
     const refH = ref1.forward(ref0.forward(xIn));
@@ -761,6 +779,71 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
       const kRef = Array.from(refR.experts).indexOf(e);
       const d = Math.abs(got.routing[0].weights[k] - refR.weights[kRef]);
       wMaxRel = Math.max(wMaxRel, d / Math.max(Math.abs(refR.weights[kRef]), 1e-9));
+    }
+    // --- shadow: cosa AVREBBE scelto il router GPU, e come ha risolto gli slot ---
+    // NIENTE `continue` qui dentro: le posizioni contano tutte nel denominatore
+    // di L2rel e dell'argmax, e un ramo shadow che ne saltasse una lascerebbe la
+    // nota a dire "6 pos" su 5 misurate.
+    if (shadow) {
+      const cpu = Array.from(got.routing[0].experts);
+      const gpu = got.routing[0].gpu;
+      const vram = got.routing[0].vram;
+      if (!gpu || !vram) {
+        problems.push(`pos ${p}: modo shadow senza le due regioni di Sel`);
+      } else {
+        const ids = Array.from(gpu.experts);
+        if (new Set(ids).size === 4 && ids.every((e) => cpu.includes(e))) {
+          gpuSetOk++;
+          if (ids.every((e, k) => e === cpu[k])) gpuOrderOk++;
+          for (let k = 0; k < 4; k++) {
+            const want = got.routing[0].weights[cpu.indexOf(ids[k])];
+            gpuWMaxRel = Math.max(gpuWMaxRel, Math.abs(gpu.weights[k] - want) / Math.max(Math.abs(want), 1e-9));
+          }
+        } else {
+          problems.push(`pos ${p}: top4 GPU {${ids}} != CPU {${cpu}}`);
+        }
+        // Il router GPU gira PRIMA degli `ensure` del suo layer: alla posizione 0
+        // la tabella e' ancora tutta MISS per costruzione, ed e' l'unico modo di
+        // vedere che il resolve la legge davvero (se leggesse zeri darebbe slot 0).
+        const bySlot = new Map<number, number>();
+        for (let k = 0; k < 4; k++) {
+          const miss = (gpu.flags[k] & 1) !== 0;
+          if (miss !== (gpu.slots[k] === 0xffffffff)) {
+            problems.push(`pos ${p} k${k}: flags ${gpu.flags[k]} incoerente con slot ${gpu.slots[k]}`);
+          }
+          if (miss) { gpuMiss++; continue; }
+          gpuResolved++;
+          if (gpu.slots[k] >= KTEST_SLOTS.q4_1) problems.push(`pos ${p} k${k}: slot ${gpu.slots[k]} fuori da [0,${KTEST_SLOTS.q4_1})`);
+          const prev = bySlot.get(gpu.slots[k]);
+          if (prev !== undefined) problems.push(`pos ${p}: expert ${prev} e ${ids[k]} sullo stesso slot ${gpu.slots[k]}`);
+          bySlot.set(gpu.slots[k], ids[k]);
+        }
+        if (p === 0 && gpu.flags.some((f) => (f & 1) === 0)) {
+          problems.push("pos 0: uno slot risolto prima del primo ensure (tabella non azzerata?)");
+        }
+        // --- Sel di PRODUZIONE riletta dalla VRAM (R5, lato che decide) ---
+        // E' quello che i kernel expert hanno letto davvero: se la writeBuffer
+        // della CPU finisse nel layer sbagliato, arrivasse in ritardo o venisse
+        // sovrascritta, qui i quattro id non sarebbero quelli di routerSelect.
+        // I pesi si confrontano dopo `Math.fround`: in Sel stanno in f32, la CPU
+        // li decide in f64 — la troncatura e' attesa, un valore diverso no.
+        for (let k = 0; k < 4; k++) {
+          if (vram.experts[k] !== cpu[k]) {
+            problems.push(`pos ${p} k${k}: Sel in VRAM ha id ${vram.experts[k]}, la CPU aveva scelto ${cpu[k]}`);
+          }
+          if (vram.weights[k] !== Math.fround(got.routing[0].weights[k])) {
+            problems.push(`pos ${p} k${k}: peso in VRAM ${vram.weights[k]} != f32(${got.routing[0].weights[k]})`);
+          }
+          if (vram.flags[k] !== 0) problems.push(`pos ${p} k${k}: flags ${vram.flags[k]} nella Sel di produzione`);
+          if (vram.slots[k] >= KTEST_SLOTS.q4_1) {
+            problems.push(`pos ${p} k${k}: slot di produzione ${vram.slots[k]} fuori da [0,${KTEST_SLOTS.q4_1})`);
+          }
+          vramChecked++;
+        }
+        if (new Set(Array.from(vram.slots)).size !== 4) {
+          problems.push(`pos ${p}: la Sel di produzione ripete uno slot (${Array.from(vram.slots)})`);
+        }
+      }
     }
     for (let i = 0; i < G.dModel; i++) {
       const d = Math.abs(got.hidden[i] - refH[i]);
@@ -804,25 +887,88 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
   // MoE scende da 23 a 15 e il totale da 61 a 53. Fase 4c: l'attention split
   // spezza il kernel MLA in part+reduce ⇒ il termine attn sale da 16 a 17 per
   // layer e il totale da 53 a 55. It.13: lo shexp fonde gate+up+silu Q5_K ⇒ il
-  // suo termine scende da 4 a 2 e il totale da 55 a 53.
-  const PLANNED = 17 * 2 + 6 * 1 + (2 + 2 + G.nExpertUsed * 2 + 1) * 1, HEAD = 2;
+  // suo termine scende da 4 a 2 e il totale da 55 a 53. Slice B: in modo shadow
+  // il router+resolve su GPU aggiunge 1 dispatch per layer MoE (53 → 54); in
+  // modo "cpu" il termine NON c'e', ed e' il gate a dirlo.
+  const ROUTER_GPU = shadow ? 1 : 0;
+  const PLANNED = 17 * 2 + 6 * 1 + (2 + ROUTER_GPU + 2 + G.nExpertUsed * 2 + 1) * 1, HEAD = 2;
   const dispatchOk = model.dispatchesPerTokenPlanned === PLANNED && measuredPerToken === PLANNED + HEAD;
   if (!dispatchOk) {
     problems.push(`dispatch: piano ${model.dispatchesPerTokenPlanned} (atteso ${PLANNED}), ` +
       `misurati ${measuredPerToken}/token (atteso ${PLANNED + HEAD} = piano + testa)`);
   }
+  const planned = model.dispatchesPerTokenPlanned;
   model.destroy();
   const l2 = Math.sqrt(l2e / Math.max(l2r, 1e-30));
+  // In shadow si aggiungono tre condizioni: l'insieme del router GPU coincide
+  // con quello della CPU su OGNI posizione, i pesi stanno nella tolleranza f32
+  // di it.9, e il resolve ha risolto almeno uno slot davvero (senza questo, un
+  // resolve che marcasse tutto MISS passerebbe le prime due).
+  // (piu' il cross-check sulla Sel di produzione: 4 entry per posizione, tutte
+  // controllate, altrimenti la rilettura non ha guardato niente)
+  const shadowOk = !shadow || (gpuSetOk === NPOS && gpuWMaxRel <= 1e-5 && gpuResolved > 0 && gpuMiss > 0
+    && vramChecked === NPOS * G.nExpertUsed);
   const pass = problems.length === 0 && l2 <= 1e-3 && wMaxRel <= 1e-3 && st.misses > 0
-    && dispatchOk && argmaxOk === NPOS && logitMaxRel <= 5e-3;
+    && dispatchOk && argmaxOk === NPOS && logitMaxRel <= 5e-3 && shadowOk;
   return {
     kernel: name, pass, maxAbs, maxRel,
     note: `${NPOS} pos, L2rel=${l2.toExponential(2)}, wMaxRel=${wMaxRel.toExponential(2)}, ` +
       `argmax ${argmaxOk}/${NPOS}, logitMaxRel=${logitMaxRel.toExponential(2)}, ` +
       `h${st.hits}/m${st.misses}/ev${st.evictions}, arena nBuf=${nBufTest}, ` +
       `${measuredPerToken} dispatch/token misurati ` +
-      `(piano ${model.dispatchesPerTokenPlanned} + testa ${HEAD})` +
+      `(piano ${planned} + testa ${HEAD})` +
+      `, ${tel.submits} submit / ${tel.routerSyncs} sync per token` +
+      (shadow
+        ? `; router GPU: set ${gpuSetOk}/${NPOS}, ordine ${gpuOrderOk}/${NPOS}, ` +
+          `wMaxRel=${gpuWMaxRel.toExponential(2)}, slot risolti ${gpuResolved}, miss ${gpuMiss}, ` +
+          `Sel di produzione riletta ${vramChecked}/${NPOS * G.nExpertUsed}`
+        : "") +
       (problems.length ? `; ${problems.join("; ")}` : ""),
+    // le grandezze che il confronto cpu-vs-shadow deve trovare IDENTICHE
+    metrics: {
+      l2, wMaxRel, maxAbs, maxRel, logitMaxRel, argmaxOk,
+      hits: st.hits, misses: st.misses, evictions: st.evictions,
+      // §6 del design: submit e routerSyncs NON cambiano fra A e B — sono i due
+      // numeri che dicono se il sync per layer e' ancora dov'era
+      submits: tel.submits / Math.max(1, tel.forwards),
+      routerSyncs: tel.routerSyncs / Math.max(1, tel.forwards),
+      dispatchPerToken: measuredPerToken, planned,
+    },
+  };
+}
+
+// Lo slice B dichiara che in ombra la CPU decide ANCORA tutto: il forward non
+// cambia di un bit. Non e' verificabile dentro un caso solo — si verifica
+// mettendo i due run uno accanto all'altro e chiedendo che ogni misura
+// coincida ESATTAMENTE (non entro tolleranza: identica), tranne il conteggio
+// dei dispatch, che deve differire di 1 per layer MoE e non di piu'.
+// `submits` e `routerSyncs` sono nella lista per il design §6: in B il sync per
+// layer resta esattamente dov'era, e un submit in piu' nel ramo shadow — che
+// nessun'altra asserzione vedrebbe — cade qui.
+function testShadowInvariance(cpu: KResult, shadow: KResult, nMoeLayer: number): KResult {
+  const a = cpu.metrics!, b = shadow.metrics!;
+  const problems: string[] = [];
+  for (const k of [
+    "l2", "wMaxRel", "maxAbs", "maxRel", "logitMaxRel", "argmaxOk",
+    "hits", "misses", "evictions", "submits", "routerSyncs",
+  ]) {
+    if (!Object.is(a[k], b[k])) problems.push(`${k}: cpu ${a[k]} != shadow ${b[k]}`);
+  }
+  // e i due contatori devono essere quelli VERI del mini-modello, non zero:
+  // un `setTelemetry` dimenticato renderebbe il confronto sopra una tautologia
+  if (!(a.submits > 0 && a.routerSyncs > 0)) {
+    problems.push(`contatori spenti (submits ${a.submits}, routerSyncs ${a.routerSyncs}): il confronto non prova niente`);
+  }
+  const dDispatch = b.dispatchPerToken - a.dispatchPerToken;
+  if (dDispatch !== nMoeLayer) problems.push(`dispatch/token: +${dDispatch}, atteso +${nMoeLayer}`);
+  if (b.planned - a.planned !== nMoeLayer) problems.push(`piano: +${b.planned - a.planned}, atteso +${nMoeLayer}`);
+  return {
+    kernel: "glm-model-shadow-invariance",
+    pass: problems.length === 0,
+    maxAbs: Math.abs(b.l2 - a.l2), maxRel: 0,
+    note: `L2rel ${a.l2.toExponential(2)} in entrambi, ${a.dispatchPerToken} → ${b.dispatchPerToken} dispatch/token, `
+      + `submit ${a.submits} e sync ${a.routerSyncs} per token invariati`
+      + (problems.length ? `; ${problems.join("; ")}` : ""),
   };
 }
 
@@ -1247,6 +1393,109 @@ async function testRouterNearTie(g: Gpu, epsList: number[], bases: number): Prom
   };
 }
 
+// Resolve + slotTable (C3a fase 4 slice B) allo stato puro: il router GPU
+// scrive Sel leggendo la tabella che ExpertCache mantiene, e la tabella e'
+// quella VERA — gli slot li dichiara `ensure`, non il test. E' l'unico punto in
+// cui si puo' verificare l'indirizzo risolto CONTRO un valore noto: dentro il
+// modello gli slot li sceglie la LRU e nessuno di fuori li vede.
+// Tre cose, in ordine: (a) chi e' residente si risolve al suo slot; (b) chi non
+// lo e' esce MISS con flags bit 0; (c) dopo l'eviction la tabella torna MISS —
+// e' il rischio R5 del design, l'unico che si vede solo qui.
+async function testRouterResolveSlotTable(g: Gpu): Promise<KResult> {
+  const nU = G.nExpertUsed, LAYER = 1; // blk.1-4: classe q4_1 (7 slot nel ktest)
+  const code = routerTopKWgsl({
+    nExpert: G.nExpert, nUsed: nU,
+    weightsScale: G.weightsScale, clampMin: WEIGHTS_SUM_CLAMP_MIN,
+    resolve: { nExpert: G.nExpert, nUsed: nU },
+  });
+  const cache = new ExpertCache(g.device, {
+    budgetBytes: 0, slotsOverride: KTEST_SLOTS,
+    maxBindingBytes: KTEST_ARENA_WINDOW, maxBufferBytes: KTEST_ARENA_WINDOW,
+    arena: true, slotTable: true,
+  });
+  const zero = new Uint8Array(SLAB_DOWN_Q4_1.bytes); // il contenuto non conta: conta lo slot
+  const reader = {
+    raw: (): ExpertRawBytes => { throw new Error("resolve-slottable: percorso raw non previsto"); },
+    slab: () => zero,
+  };
+
+  const logits = randF32(G.nExpert, 8811, 4);
+  const bias = randF32(G.nExpert, 8822, 0.1);
+  const ref = routerSelect(logits, bias);
+  const sel4 = Array.from(ref.experts);
+  // residenti: il 1o e il 3o dei quattro selezionati, piu' un expert ESTRANEO
+  // alla selezione (se il resolve sbagliasse base della tabella, il suo slot
+  // finirebbe addosso a qualcun altro e il confronto se ne accorgerebbe)
+  const resident = new Map<number, number>();
+  for (const e of [sel4[0], sel4[2], (sel4[0] + 7) % G.nExpert]) {
+    if (resident.has(e)) continue;
+    resident.set(e, cache.ensure(LAYER, e, reader).slot.idx);
+  }
+  cache.flushSlotTable();
+
+  // Sel a 8 entry, scritte a partire da selIdx=4: le prime 4 sono veleno e
+  // devono restare tali (il resolve scrive DOVE dice l'uniform, non a offset 0)
+  const NSEL = 8, SEL_BASE = 4, POISON = 0xdeadbeef;
+  const poison = new Uint32Array(NSEL * 4).fill(POISON);
+  const selB = g.buf(poison);
+  const uniOf = (selIdx: number): GPUBuffer => {
+    const b = g.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    g.device.queue.writeBuffer(b, 0, new Uint32Array([selIdx, LAYER * G.nExpert, 0, 0]));
+    return b;
+  };
+  const idsB = g.empty(nU * 4), wtsB = g.empty(nU * 4);
+  const table = cache.slotTableBuffer();
+  const runResolve = async (): Promise<{ id: number; slot: number; w: number; flags: number }[]> => {
+    await g.run(code, [g.buf(logits), g.buf(bias), idsB, wtsB, selB, table], 1, uniOf(SEL_BASE));
+    const raw = await g.read(selB, NSEL * 16);
+    const u = new Uint32Array(raw), f = new Float32Array(raw);
+    return Array.from({ length: nU }, (_, k) => {
+      const o = (SEL_BASE + k) * 4;
+      return { id: u[o], slot: u[o + 1], w: f[o + 2], flags: u[o + 3] };
+    });
+  };
+
+  const problems: string[] = [];
+  let maxRelW = 0, maxAbsW = 0;
+  const got = await runResolve();
+  // (0) le entry fuori dal layer non sono state toccate
+  {
+    const u = new Uint32Array(await g.read(selB, SEL_BASE * 16));
+    if (!u.every((v) => v === POISON)) problems.push("il resolve ha scritto fuori dalle entry del layer");
+  }
+  for (let k = 0; k < nU; k++) {
+    if (got[k].id !== sel4[k]) problems.push(`k${k}: id ${got[k].id} != CPU ${sel4[k]}`);
+    const want = resident.has(sel4[k]) ? resident.get(sel4[k])! : 0xffffffff;
+    if (got[k].slot !== want) problems.push(`k${k}: slot ${got[k].slot} != ${want} (expert ${sel4[k]})`);
+    const wantFlag = resident.has(sel4[k]) ? 0 : 1;
+    if (got[k].flags !== wantFlag) problems.push(`k${k}: flags ${got[k].flags} != ${wantFlag}`);
+    const d = Math.abs(got[k].w - ref.weights[k]);
+    maxAbsW = Math.max(maxAbsW, d);
+    maxRelW = Math.max(maxRelW, d / Math.max(Math.abs(ref.weights[k]), 1e-9));
+  }
+  // (c) eviction: 7 expert nuovi riempiono tutti gli slot della classe ⇒ i
+  // residenti di prima sono usciti, e la tabella deve dirlo
+  for (let i = 0; i < KTEST_SLOTS.q4_1; i++) cache.ensure(LAYER, 32 + i, reader);
+  cache.flushSlotTable();
+  const after = await runResolve();
+  for (let k = 0; k < nU; k++) {
+    if (after[k].slot !== 0xffffffff || after[k].flags !== 1) {
+      problems.push(`post-eviction k${k}: slot ${after[k].slot} flags ${after[k].flags} (atteso MISS)`);
+    }
+  }
+  cache.destroy();
+  for (const b of [selB, idsB, wtsB]) b.destroy();
+  return {
+    kernel: "router-resolve-slottable",
+    pass: problems.length === 0 && maxRelW <= 1e-5,
+    maxAbs: maxAbsW, maxRel: maxRelW,
+    note: `residenti ${[...resident.entries()].map(([e, s]) => `e${e}→s${s}`).join(",")}, `
+      + `top4 CPU {${sel4}}, wMaxRel=${maxRelW.toExponential(2)}, `
+      + `MISS post-eviction ${after.filter((s) => s.flags === 1).length}/${nU}`
+      + (problems.length ? `; ${problems.join("; ")}` : ""),
+  };
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -1279,6 +1528,8 @@ async function main(): Promise<void> {
     // --- router top-4 su GPU (C3a fase 4 strato 1): fedelta' f32 vs CPU f64 ---
     results.push(await testRouterTopK(g, 64));
     results.push(await testRouterNearTie(g, [1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8], 8));
+    // slice B: la coda di resolve scrive Sel leggendo la slotTable vera
+    results.push(await testRouterResolveSlotTable(g));
 
     // --- famiglia fusa portata su GLM (C3a fase 4b) ---
     results.push(await testPairGemvSiluFast(g));
@@ -1521,8 +1772,13 @@ async function main(): Promise<void> {
     // residenza minima (fase 5 slice 2): OPFS + cache VRAM su hardware vero
     results.push(await testResidencyOpfs(g));
 
-    // forward multi-layer (fase 5 slice 3): path di produzione vs ref f64
-    results.push(await testGlmModel2Layer(g));
+    // forward multi-layer (fase 5 slice 3): path di produzione vs ref f64.
+    // Due esecuzioni: quella di produzione ("cpu") e quella con il router GPU in
+    // ombra ("shadow", slice B), piu' il confronto fra le due — e' quest'ultimo
+    // a dire che l'ombra non ha spostato niente.
+    const mCpu = await testGlmModel2Layer(g, "cpu");
+    const mShadow = await testGlmModel2Layer(g, "shadow");
+    results.push(mCpu, mShadow, testShadowInvariance(mCpu, mShadow, 1));
 
     // conformance layer-level con pesi reali (fase 4 slice 3) — il test lungo in coda
     results.push(await testGlmLayer0Real(g));

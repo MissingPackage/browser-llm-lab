@@ -1963,6 +1963,14 @@ export interface ArenaOpts {
   upScWords: number;
 }
 
+// Le due struct dell'indirezione expert (design §2.1 e §2.2). Stanno qui come
+// costanti e non come stringhe ripetute perche' le scrivono DUE generatori —
+// i kernel d'arena che leggono `Sel` e il router+resolve che la riempie: se i
+// due layout divergessero, il resolve scriverebbe campi che il kernel legge
+// spostati, e nessun errore lo direbbe.
+const SEL_STRUCT_WGSL = "struct Sel { id: u32, slot: u32, w: f32, flags: u32 }";
+const MOE_IDX_STRUCT_WGSL = "struct MoeIdx { selIdx: u32, tableBase: u32, moeLayer: u32, pad: u32 }";
+
 /**
  * Testa comune dei kernel d'arena: struct, i nBuf binding d'arena, i binding
  * propri del kernel (`mid`, che partono da nBuf), `Sel` e l'uniform a dynamic
@@ -1971,10 +1979,7 @@ export interface ArenaOpts {
  * expert per dispatch) ⇒ scalare, senza divergenza fra lane.
  */
 function arenaHeadWgsl(a: ArenaOpts, mid: string[]): string {
-  const lines = [
-    "struct Sel { id: u32, slot: u32, w: f32, flags: u32 }",
-    "struct MoeIdx { selIdx: u32, tableBase: u32, moeLayer: u32, pad: u32 }",
-  ];
+  const lines = [SEL_STRUCT_WGSL, MOE_IDX_STRUCT_WGSL];
   for (let j = 0; j < a.nBuf; j++) {
     lines.push(`@group(0) @binding(${j}) var<storage, read> arena${j}: array<vec4<u32>>;`);
   }
@@ -2446,16 +2451,66 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 // La selezione gira su un thread solo: sono nExpert×nUsed confronti (64×4 = 256)
 // e la serializzazione E' la specifica — un top-k parallelo con riduzione
 // cambierebbe l'ordine dei confronti e quindi il tie-break.
+//
+// RESOLVE (slice B): con `resolve` il kernel non si ferma a id+pesi — scrive
+// direttamente `Sel`, cioe' la stessa struttura che la CPU riempie in slice A.
+// Lo slot lo prende dalla `slotTable` (expertKey → slot, mantenuta da
+// ExpertCache), quindi la traduzione expert → indirizzo smette di essere una
+// decisione CPU. E' un blocco IN CODA: la selezione — e con lei il tie-break —
+// resta scritta una volta sola, e senza `resolve` il testo emesso e' identico
+// byte per byte a quello di it.9 (i ktest router-top4-* restano gate senza
+// riscrittura).
 export function routerTopKWgsl(opts: {
   nExpert: number; nUsed: number; weightsScale: number; clampMin: number;
+  /**
+   * Coda di resolve. I due campi ripetono nExpert/nUsed perche' qui contano
+   * come PASSI di indicizzazione (stride della slotTable per layer, stride di
+   * Sel per layer MoE) e non come dimensioni del router: si asserta che
+   * coincidano, cosi' la ripetizione non puo' diventare una seconda verita'.
+   */
+  resolve?: { nExpert: number; nUsed: number };
 }): string {
   const { nExpert, nUsed, weightsScale, clampMin } = opts;
   const WG = 64;
-  return `
+  const res = opts.resolve;
+  if (res && (res.nExpert !== nExpert || res.nUsed !== nUsed)) {
+    throw new Error(
+      `routerTopK resolve: (${res.nExpert}, ${res.nUsed}) != (${nExpert}, ${nUsed}) — ` +
+      "la slotTable e Sel devono avere gli stessi passi del router");
+  }
+  // Le due dichiarazioni in piu' e la coda esistono SOLO con resolve: senza,
+  // entrambe sono la stringa vuota e il template torna quello di it.9.
+  const resDecl = res
+    ? `
+@group(0) @binding(4) var<storage, read_write> selBuf: array<Sel>;
+@group(0) @binding(5) var<storage, read> slotTable: array<u32>;
+@group(0) @binding(6) var<uniform> moeIdx: MoeIdx;`
+    : "";
+  // le STESSE struct dei kernel d'arena, dalla stessa costante
+  const resStruct = res ? `\n${SEL_STRUCT_WGSL}\n${MOE_IDX_STRUCT_WGSL}` : "";
+  // `moeIdx.selIdx` e' la prima entry di Sel del layer (k=0) e `tableBase` la
+  // base del layer nella slotTable: due valori CPU-noti che arrivano
+  // dall'uniform a dynamic offset, mai dall'expert scelto.
+  // Il binding si chiama `selBuf` e non `sel` perche' in questo kernel `sel` e'
+  // gia' l'array workgroup dei punteggi di selezione (probs+bias); `selBuf` e'
+  // anche il nome che la stessa struttura ha nei kernel d'arena.
+  const resTail = res
+    ? `
+  for (var k = 0u; k < NU; k = k + 1u) {
+    let e = ids[k];
+    let slot = slotTable[moeIdx.tableBase + e];
+    let o = moeIdx.selIdx + k;
+    selBuf[o].id = e;
+    selBuf[o].slot = slot;
+    selBuf[o].w = wts[k];
+    selBuf[o].flags = select(0u, 1u, slot == 0xffffffffu); // bit 0 = miss risolto
+  }`
+    : "";
+  return `${resStruct}
 @group(0) @binding(0) var<storage, read> logits: array<f32>;
 @group(0) @binding(1) var<storage, read> bias: array<f32>;
 @group(0) @binding(2) var<storage, read_write> ids: array<u32>;
-@group(0) @binding(3) var<storage, read_write> wts: array<f32>;
+@group(0) @binding(3) var<storage, read_write> wts: array<f32>;${resDecl}
 const NE = ${nExpert}u;
 const NU = ${nUsed}u;
 var<workgroup> probs: array<f32, ${nExpert}>;
@@ -2485,6 +2540,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
   let denom = max(sum, ${clampMin.toExponential()});
   for (var k = 0u; k < NU; k = k + 1u) {
     wts[k] = (probs[ids[k]] / denom) * ${weightsScale.toFixed(6)};
-  }
+  }${resTail}
 }`;
 }

@@ -111,6 +111,9 @@ i layer).
   it.9 (slice B).
   `ArenaOpts { nBuf, slabWords, slabsPerBuf, qsWords, scalesWords,
   gateQsWords, gateScWords, upQsWords, upScWords, nUsed }`.
+  Le struct `Sel`/`MoeIdx` sono DUE costanti condivise (`SEL_STRUCT_WGSL`,
+  `MOE_IDX_STRUCT_WGSL`) usate sia dai kernel d'arena sia dal resolve: le
+  scrivono due generatori, e un layout che divergesse non darebbe errore.
 - `residency.ts`: `ExpertCacheOpts += { arena?: boolean; slotTable?: boolean }`;
   in modo arena `slabsPerBuffer = floor(min(maxBufferBytes, maxBindingBytes) /
   layout.bytes)` col commento sull'inversione del cap di it.5;
@@ -135,7 +138,34 @@ i layer).
   slice A (+1/layer MoE in B); destroy aggiornata.
 - Worker (glmbench/glmconf/glmroute/ktest): solo `negotiateLimits` con
   arenaBuffers/arenaWindowBytes calcolati da una funzione esportata da
-  residency.ts (non ricopiata).
+  residency.ts (non ricopiata). In slice B `glmroute` passa `select:"shadow"`
+  e aggiunge al report `gpuRouterAgreement` (schemaVersion 1 → 2).
+
+### 3-bis. Deroghe dello slice B, ratificate in it.16
+
+Il documento descrive ciò che il codice fa: qui i tre punti in cui l'attuazione
+diverge da quanto scritto sopra, con la ragione.
+
+1. **Regione ombra indirizzata da entry di uniform, non da offset di binding.**
+   §4 dice "raddoppia il buffer": il buffer È raddoppiato, ma la regione ombra
+   NON si binda a offset — `nSel·16 = 2 944 B` non è multiplo di
+   `minStorageBufferOffsetAlignment` (256), quindi un `{buffer, offset}` sarebbe
+   illegale. `moeIdxUni` porta invece `nMoeLayer` entry in più, una per layer
+   MoE, col `selIdx` già spostato nell'ombra: il WGSL del resolve è lo STESSO
+   che servirà allo slice C — cambia la entry che il dynamic offset seleziona,
+   non il kernel.
+2. **`tableBase` è il layer ASSOLUTO × nExpert.** In slice A la uniform portava
+   l'indice MoE; la chiave della slotTable è `expertKey`, che usa il layer vero
+   (l'eviction non rispetta i layer). Campo inerte fino a qui, corretto in B.
+3. **Readback dell'ombra: staging dedicata, mappata insieme all'hidden.** Non
+   "viaggia dentro" la mapAsync esistente (buffer diversi non si mappano
+   insieme): `selStaging` è propria, e le mapAsync di coda partono in
+   `Promise.all` dopo lo stesso submit ⇒ un round-trip host solo, come prima.
+   La copia è dell'INTERA Sel (5 888 B): oltre all'ombra si rilegge la regione
+   di produzione, esposta come `GlmRouting.vram` accanto a `GlmRouting.gpu`. È
+   ciò che i kernel expert hanno letto davvero, e confrontarla con la decisione
+   di `routerSelect` chiude R5 dal lato che decide — gate nel ktest
+   (`vramChecked` completo, zero difformità) e nel report di glmroute.
 
 ## 4. Slicing
 
@@ -159,11 +189,13 @@ tabella, niente router GPU. GATE:
 ### Slice B — selezione su GPU, in ombra (it.16)
 routerTopK+resolve, slotTable, modo `shadow`: router GPU scrive Sel in regione
 ombra mentre la CPU comanda come in A; confronto GPU-vs-CPU al tail (copia
-2×2 944 B nella mapAsync esistente). Misura la fedeltà del router GPU sul
-corpus vero di glmroute (31 274 posizioni) invece delle 64 estrazioni
-sintetiche di it.9. GATE: `gpuRouterAgreement` ≥ 99.99% set-match;
+2×2 944 B su staging dedicata, mappata insieme all'hidden — §3-bis.3). Misura
+la fedeltà del router GPU sul corpus vero di glmroute (31 274 posizioni) invece
+delle 64 estrazioni sintetiche di it.9. GATE: `gpuRouterAgreement` ≥ 99.99%
+set-match e zero difformità sulla Sel di produzione riletta;
 setMatch decode/prefill verso l'oracolo IDENTICI all'artefatto 07-31 (decide
-ancora la CPU); dispatch +1/layer MoE dichiarato.
+ancora la CPU); dispatch +1/layer MoE dichiarato, submit e routerSyncs
+invariati (asserito nel ktest `glm-model-shadow-invariance`).
 
 ### Slice C — l'interruttore (it.17)
 `select:"gpu"`: salta copy logits, submit per layer, mapLogits, routerSelect,

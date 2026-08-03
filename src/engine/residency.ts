@@ -96,6 +96,13 @@ export interface ExpertCacheOpts {
    * (e quindi quanti sono): nSlots, LRU, contatori e VRAM totale sono identici.
    */
   arena?: boolean;
+  /**
+   * Tabella expertKey → slot in VRAM (C3a fase 4, slice B): la SOLA struttura
+   * che permette al resolve GPU di tradurre un expert in indirizzo senza
+   * chiedere niente alla CPU. Costa 12 032 B e una writeBuffer per layer con
+   * miss; da spenta la cache e' identica a prima (nessun campo tocca il path).
+   */
+  slotTable?: boolean;
 }
 
 export interface ExpertCacheStats {
@@ -196,11 +203,19 @@ export function arenaNeeds(o: {
   return { arenaBuffers, arenaWindowBytes };
 }
 
+/** Entry della slotTable: nessuno slot pubblicato (design §2.1, `Sel.slot`). */
+export const SLOT_TABLE_MISS = 0xffffffff;
+/** Chiavi della slotTable: TUTTO il parco, layer assoluti (come `expertKey`). */
+export const SLOT_TABLE_ENTRIES = G.nLayer * G.nExpert;
+
 export class ExpertCache {
   private device: GPUDevice;
   private cls: Record<ExpertClass, ClassState>;
   private timing: boolean;
   private s = { hits: 0, misses: 0, evictions: 0, bytesRead: 0, bytesUploaded: 0, readMs: 0, packMs: 0, uploadMs: 0 };
+  // slotTable (slice B): ombra CPU + intervallo sporco. La GPU la vede solo
+  // quando il chiamante chiama `flushSlotTable`, cioe' una volta per layer.
+  private table: { buf: GPUBuffer; shadow: Uint32Array; lo: number; hi: number } | null = null;
 
   constructor(device: GPUDevice, opts: ExpertCacheOpts) {
     this.device = device;
@@ -250,6 +265,53 @@ export class ExpertCache {
     // riparto del budget tra le classi in proporzione al parco (spec §5)
     const { q4_0: n40, q4_1: n41 } = slotSplit(opts);
     this.cls = { q4_0: mk(SLAB_DOWN_Q4_0, n40), q4_1: mk(SLAB_DOWN_Q4_1, n41) };
+    if (opts.slotTable === true) {
+      // Dimensionata sul parco INTERO (47×64), non sui layer del modello: la
+      // chiave e' `expertKey`, che usa il layer assoluto perche' l'eviction non
+      // rispetta i layer. Sono 12 032 B: tenerla piena costa meno che avere due
+      // convenzioni di chiave.
+      const shadow = new Uint32Array(SLOT_TABLE_ENTRIES).fill(SLOT_TABLE_MISS);
+      const buf = device.createBuffer({
+        size: shadow.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      // stato iniziale ESPLICITO: senza questa scrittura il buffer sarebbe
+      // zero, cioe' "tutti gli expert nello slot 0" — un miss che si legge come
+      // hit sull'indirizzo sbagliato.
+      device.queue.writeBuffer(buf, 0, shadow as unknown as BufferSource);
+      this.table = { buf, shadow, lo: SLOT_TABLE_ENTRIES, hi: -1 };
+    }
+  }
+
+  /** Il buffer della slotTable (solo con `slotTable: true`). */
+  slotTableBuffer(): GPUBuffer {
+    if (!this.table) throw new Error("residency: slotTable non abilitata (ExpertCacheOpts.slotTable)");
+    return this.table.buf;
+  }
+
+  private tableSet(key: number, slot: number): void {
+    const t = this.table;
+    if (!t || t.shadow[key] === slot) return;
+    t.shadow[key] = slot;
+    if (key < t.lo) t.lo = key;
+    if (key > t.hi) t.hi = key;
+  }
+
+  /**
+   * Pubblica sulla GPU le variazioni accumulate dagli `ensure`. Va chiamata UNA
+   * volta per layer, DOPO gli ensure di quel layer e prima che qualcuno legga la
+   * tabella: le writeBuffer degli slab sono gia' in coda, quindi la tabella
+   * arriva dopo il dato che indirizza (R5 del design — l'ordine inverso
+   * pubblicherebbe uno slot ancora vuoto). Un solo intervallo [lo,hi]: gli
+   * expert di un layer sono contigui per costruzione della chiave, le vittime no
+   * — nel caso peggiore si riscrive qualche KB, che e' meno di quanto costi
+   * tenere una lista di intervalli.
+   */
+  flushSlotTable(): void {
+    const t = this.table;
+    if (!t || t.hi < t.lo) return;
+    this.device.queue.writeBuffer(t.buf, t.lo * 4, t.shadow, t.lo, t.hi - t.lo + 1);
+    t.lo = SLOT_TABLE_ENTRIES;
+    t.hi = -1;
   }
 
   static classOf(layer: number): ExpertClass {
@@ -319,6 +381,10 @@ export class ExpertCache {
       c.lru.delete(victim[0]);
       idx = victim[1];
       this.s.evictions++;
+      // lo slot cambia proprietario: la vittima torna MISS PRIMA che il nuovo
+      // expert lo pubblichi (fra le due scritture nessuno legge — il flush e'
+      // uno solo, a fine layer)
+      this.tableSet(victim[0], SLOT_TABLE_MISS);
     }
     // Percorso RAPIDO (C3a fase 3): se la sorgente sa dare lo slab gia'
     // impacchettato (file slab generato all'import), il pack CPU sparisce dal
@@ -350,6 +416,7 @@ export class ExpertCache {
     this.s.bytesRead += rawBytes;
     this.s.bytesUploaded += slab.length;
     c.lru.set(key, idx);
+    this.tableSet(key, idx);
     return { slot, hit: false };
   }
 
@@ -367,5 +434,6 @@ export class ExpertCache {
 
   destroy(): void {
     for (const cls of [this.cls.q4_0, this.cls.q4_1]) for (const b of cls.buffers) b.destroy();
+    this.table?.buf.destroy();
   }
 }

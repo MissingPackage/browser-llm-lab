@@ -23,9 +23,13 @@ worker.onmessage = (e: MessageEvent) => {
     if (m.type === "progress") log(m.msg ?? "");
   } else if (m.type === "done") {
     (window as unknown as { __report?: unknown }).__report = m.report;
-    const gate = (m.report as { gate?: { pass?: boolean } }).gate;
-    $("status").textContent = gate?.pass ? "done" : "done-gate-fail";
-    log("done");
+    // DUE gate: quello storico verso l'oracolo (setMatch decode) e quello dello
+    // slice B (accordo del router GPU in ombra). Lo status ne riflette la
+    // congiunzione — un run che passa l'uno e non l'altro non e' un run buono.
+    const r = m.report as { gate?: { pass?: boolean }; gpuRouterAgreement?: { gate?: { pass?: boolean }; pct?: number } };
+    const ok = r.gate?.pass === true && r.gpuRouterAgreement?.gate?.pass === true;
+    $("status").textContent = ok ? "done" : "done-gate-fail";
+    log(`done — oracolo ${r.gate?.pass} / router GPU ${r.gpuRouterAgreement?.gate?.pass} (${r.gpuRouterAgreement?.pct?.toFixed(4) ?? "—"}%)`);
   } else if (m.type === "error") {
     $("status").textContent = `ERROR: ${m.message?.slice(0, 400)}`;
   }

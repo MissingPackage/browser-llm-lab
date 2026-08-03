@@ -86,6 +86,14 @@ for (;;) {
     const d = report.setMatch?.decode ?? {};
     const p = report.setMatch?.prefill ?? {};
     console.log(`[glmroute] ${status} — decode ${d.match}/${d.total} (${d.pct?.toFixed(4)}%) prefill ${p.match}/${p.total} (${p.pct?.toFixed(4)}%) gate=${g.pass}`);
+    // Lo status (e quindi l'exit code) è la congiunzione dei DUE gate: senza
+    // questa riga un exit 4 con `gate=true` sopra sembrerebbe inspiegabile.
+    const a = report.gpuRouterAgreement;
+    if (a) {
+      console.log(`[glmroute] router GPU (ombra) — set-match ${a.setMatch}/${a.total} (${a.pct?.toFixed(4)}%) `
+        + `pesi maxRel ${a.weightMaxRel?.toExponential(2)} fuori tolleranza ${a.weightOutOfTol} `
+        + `Sel di produzione ${a.vramMismatch}/${a.vramChecked} difformi gate=${a.gate?.pass}`);
+    }
     process.exit(status === "done" ? 0 : status === "done-gate-fail" ? 4 : 2);
   }
   await new Promise((r) => setTimeout(r, 5000));

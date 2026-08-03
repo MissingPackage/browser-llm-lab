@@ -1112,3 +1112,68 @@ bit-per-bit intatte), tipo `select` allargato all'interfaccia del design.
 Prossimo: **slice B** — routerTopK+resolve, slotTable, modo shadow: la
 fedeltà del router GPU misurata sul corpus vero di glmroute (31 274
 posizioni) invece delle 64 estrazioni sintetiche di it.9.
+
+## it.16 (2026-08-03) — fase 4 slice B: la selezione vive su GPU, in ombra
+
+`routerTopKWgsl` + blocco `resolve` (senza resolve: testo byte-identico a
+it.9, 1318/1318 B — verificato da entrambe le review), slotTable mantenuta da
+ExpertCache (shadow + flush intervallo sporco per layer, ordine slab→tabella),
+modo `select:"shadow"` (il router GPU scrive Sel in regione ombra via entry
+MoeIdx dedicate — deroga ratificata: 2944 B non è multiplo di 256, il raddoppio
+a offset di binding era illegale — mentre la CPU comanda identica), harness
+glmroute con `gpuRouterAgreement`. Bonus del fix round: `GlmRouting.vram` —
+la Sel di PRODUZIONE riletta dalla VRAM e confrontata con la decisione CPU.
+Trovato e corretto un bug latente dello slice A: `tableBase` indicizzato sul
+layer MoE invece che assoluto (inerte allora: nessun lettore).
+
+### Review e fix
+
+Opus + Codex convergenti: zero difetti critici; formula del resolve identica a
+routerSelect al bit (emulazione f32: wMaxRel 1.65e-7, zero flip); 5/5 mutazioni
+uccise sulle unit slotTable; scenario cross-layer (vittima layer 40 + ensure
+layer 5 ⇒ un flush [321,2560]) riprodotto. Fix round 7/7: contatori
+submits/routerSyncs ora ASSERITI nel ktest shadow (prima telemOn=false li
+lasciava a 0: l'invariante §6 non era testata), Promise.all sui tre mapAsync
+(il commento "viaggia nella mapAsync esistente" era falso), struct WGSL
+condivise, runner con la riga del gate GPU, design doc §3-bis con le deroghe.
+
+### Lezione operativa (pagata due volte)
+
+Run GPU lunghe e altro lavoro NON convivono: (1) la review Opus ha eseguito
+ktest durante il full-corpus ⇒ VRAM esaurita (14.5 GiB del run + Chrome ktest)
+⇒ device perso a 2250/31274; (2) il fix round ha editato wgsl.ts con vite HMR
+attivo ⇒ full-reload della pagina harness a metà run 2. Norma da qui in poi:
+il full-corpus si lancia ad ALBERO CONGELATO e GPU esclusiva; le review che
+vogliono eseguire ktest lo dichiarano e si serializzano.
+
+### Verifica (catena finale: ktest → full-corpus → bench, albero congelato)
+
+- ktest: done, tutti PASS (incl. shadow-invariance con Object.is su l2/argmax/
+  contatori: submits e routerSyncs invariati fra cpu e shadow, Δdispatch
+  esattamente +nMoeLayer).
+- **Full-corpus glmroute (31 274 posizioni, 700.9 GiB letti):
+  `routing-conformance-glm47flash-shadow-2026-08-03.json`**:
+  - **gate router GPU PASS: set-match 1 438 591/1 438 604 = 99.9991%**
+    (soglia 99.99); ordine 99.9978%; pesi maxRel 4.43e-7, fuori tolleranza 0.
+  - **Sel di produzione: 0/5 754 416 difformi** — R5 chiuso con lettura
+    diretta di ciò che i kernel expert hanno consumato, non per inferenza.
+  - I 13 flip: tutti sul 4° expert (rate 9.0e-6), firma R8 attesa (near-tie
+    f32; it.9: tiene a 1e-6). Numero che lo slice C deve citare.
+  - setMatch verso l'oracolo: prefill 87.0667% (+151 match su 1.2M vs 07-31),
+    decode 88.5025% (−19 su 235k). NON identico all'artefatto 07-31 e NON è
+    un bug dello slice B: l'invarianza cpu-vs-shadow è bit-identica (ktest),
+    l'artefatto 07-31 è pre-it.12/13 — il riordino legittimo delle somme f32
+    (validato da argmax≡cpuref 256/256 in it.14) flippa i near-tie in
+    entrambe le direzioni. Netto: +132. Il "non peggiore" del done-when di
+    fase 4 sul componente decode (−0.008 pp) va letto con la banda di rumore
+    → aggiunto come secondo caso concreto al docket item 14.
+- **Bench** (`bench-glm-4090-b12-shadow-2026-08-03.json`, quiescente):
+  **decode 5.163 ≥ 5.081 PASS (quinto massimo consecutivo)**; gpuBusy 53.8;
+  contatori 46 sync / 47 submit / 1405 dispatch INVARIATI (il bench gira in
+  modo cpu: lo shadow è opt-in dell'harness routing). Prefill mediana 5.667
+  (banda invariata, item 14).
+- `npm test` 288+2, `tsc` pulito (stato finale).
+
+Prossimo: **slice C** (interruttore `select:"gpu"`) — verificabile subito nel
+ktest a residenza totale per costruzione; in produzione richiede la 4c.
+Poi ri-misura gpuBusy/clock di fine fase 4 + ripresentazione item 2.

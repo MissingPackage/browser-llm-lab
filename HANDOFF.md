@@ -16,25 +16,32 @@ FMA+associatività reale coincide col device a 4 cifre: 5.869e-4).
 cpuref-f64 256/256**, top-1 golden 99.22% (le 2 divergenze sono le stesse di
 C2, stesso token di cpuref). Full-corpus resta il gate di fase 6 (item 11).
 
-**FATTO (it.15): FASE 4 SLICE A — arena a binding fisso in produzione.**
-Design persistito in `docs/superpowers/specs/2026-08-03-engine-fase4-strato1-arena.md`
-(leggerlo per gli slice B/C: layout Sel/slotTable, gate, rischi). Implementato
-e verificato: identità BIT-A-BIT arena-vs-sotto-range, kernel non-arena
-byte-identici, ktest 48/48, decode **5.081** (nuovo massimo), contatori
-invariati per contratto (46 sync/47 submit/1405 dispatch — lo slice A non
-riduce i sync: costruisce il meccanismo). R3/R4 sciolti (no OOM coi 6+1
-buffer, attn ferma coi limiti alzati).
+**FATTO (it.15-16): FASE 4 SLICE A+B.** Slice A: arena a binding fisso in
+produzione (identità bit-a-bit, decode 5.081). Slice B: **il router GPU vive
+in ombra e la sua fedeltà è misurata sul corpus vero** — set-match
+**99.9991% su 1.44M confronti** (13 flip near-tie sul 4° expert, rate 9e-6 =
+il numero R8 che lo slice C deve citare), pesi maxRel 4.43e-7, e la Sel di
+produzione riletta dalla VRAM è **0/5.75M difforme** dalla decisione CPU (R5
+chiuso con lettura diretta). Decode **5.163** (quinto massimo consecutivo),
+contatori invariati (46/47/1405). Artefatti:
+`routing-conformance-glm47flash-shadow-2026-08-03.json`,
+`bench-glm-4090-b12-shadow-2026-08-03.json`. Il setMatch oracolo NON è
+identico al 07-31 (+151 prefill/−19 decode su 1.4M: near-tie da somme
+riordinate di it.12/13, non slice B — invarianza cpu-vs-shadow bit-identica)
+→ docket item 14b.
 
-**PROSSIMO PEZZO, nessuna decisione pendente: SLICE B del design** —
-`routerTopKWgsl` + blocco resolve, slotTable mantenuta da ExpertCache via
-writeBuffer (shadow + flush intervallo sporco), modo `shadow`: il router GPU
-scrive Sel in regione ombra mentre la CPU comanda; confronto GPU-vs-CPU al
-tail. Misura la fedeltà del router GPU sul corpus VERO di glmroute (31 274
-posizioni) — gate: gpuRouterAgreement ≥ 99.99%, setMatch verso l'oracolo
-IDENTICO all'artefatto 07-31, dispatch +1/layer MoE dichiarato. Poi slice C
-(interruttore, verificabile nel ktest a residenza totale per costruzione) e,
-a valle della 4c, il drain sparisce. A fine fase 4: ri-misura gpuBusy/clock +
-ripresentare item 2 (clausola di fallback).
+**LEZIONE OPERATIVA (pagata 2 volte in it.16)**: run GPU lunghe SOLO ad
+albero congelato e GPU esclusiva — una review che esegue ktest o un edit di
+src/engine/** con vite HMR attivo uccidono il full-corpus (VRAM/full-reload).
+
+**PROSSIMO PEZZO, nessuna decisione pendente: SLICE C** (design §4) —
+`select:"gpu"`: salta copy logits, submit per layer, mapLogits, routerSelect,
+ensure; routing[] letto da Sel al tail. Ammesso SOLO a residenza totale
+(errore esplicito citando anche il seam evict-post-resolve). Verificabile
+SUBITO nel ktest: mini-modello con slotsOverride ⇒ residenza totale per
+costruzione, gate = identità con slice A + routerSyncs===0 + submits===1 per
+token. In produzione si accende con la 4c. Poi: ri-misura gpuBusy/clock di
+fine fase 4 + ripresentare item 2 (clausola di fallback).
 
 **FATTO (it.12): flash-decoding sulla MLA.** `mlaAttnSplitPartWgsl` (chunk da
 16 posizioni, 256 thread/wg, cache in shared riusata da tutte le 20 head) +
