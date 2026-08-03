@@ -21,6 +21,9 @@
 // limite e il codice che lo consuma — finora vivevano in file diversi senza
 // niente in mezzo, ed è per questo che nessuno dei due si accorgeva dell'altro.
 
+import { mlaPartialsLen } from "./mlasplit";
+import { GLM47_FLASH } from "./shape";
+
 // ---------------------------------------------------------------------------
 // Costanti derivate dall'inventario del parco kernel (C3a it.6).
 // Ognuna è ri-verificata dal test scansionando src/engine/kernels/wgsl.ts.
@@ -42,7 +45,15 @@ export const MAX_STORAGE_BINDINGS_PER_STAGE = 7;
  */
 export const QWEN_WORKGROUP_STORAGE_BYTES = 30_848;
 
-/** mlaAttnDecode: scores[ctxMax] + red[64]. È il `wgNeed` del fail-fast GLM. */
+/**
+ * mlaAttnDecode (kernel MLA MONOLITICO): scores[ctxMax] + red[64].
+ * CONSUMATORE, dal 2026-08-03: `glmforward` (path per-layer, usato da glmroute)
+ * e i ktest. NON più `glmmodel`: il forward di produzione è passato
+ * all'attention split (fase 4b), il cui fabbisogno è costante in ctxMax
+ * (`mlaSplitWorkgroupStorageBytes` in mlasplit.ts). Il termine resta qui perché
+ * il monolitico è ancora eseguito da quei due consumatori: toglierlo o
+ * condizionarlo è una decisione da docket, non un ritocco.
+ */
 export const mlaWorkgroupStorageBytes = (ctxMax: number): number => 4 * ctxMax + 256;
 
 /** KV cache GLM per layer: ctxMax × keyLen(576) × 4 B. */
@@ -117,15 +128,24 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
       hard: true,
       consumer: o.mlaAttention === false
         ? `rmsPairGemmSiluChunkFast (${QWEN_WORKGROUP_STORAGE_BYTES} B)`
-        : `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, mlaAttnDecode 4·ctxMax+256 = ${mlaWorkgroupStorageBytes(o.ctxMax)} B a ctxMax ${o.ctxMax})`,
+        : `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, mlaAttnDecode 4·ctxMax+256 = ${mlaWorkgroupStorageBytes(o.ctxMax)} B a ctxMax ${o.ctxMax} — glmforward/ktest)`,
     },
   ];
-  // Il binding singolo più grande: testa Q6_K, la KV di un layer, o un binding
-  // dichiarato dall'harness.
+  // Il binding singolo più grande: testa Q6_K, la KV di un layer, il buffer
+  // partials dell'attention split, o un binding dichiarato dall'harness.
   const kvBytes = o.kvBytesPerLayer ?? glmKvBytesPerLayer(o.ctxMax);
   const candidates: Array<{ bytes: number; consumer: string }> = [
     { bytes: kvBytes, consumer: `KV cache di un layer a ctxMax ${o.ctxMax}` },
     ...(o.head ? [{ bytes: q6kHeadBytes(o.head.vocab, o.head.dModel), consumer: "output.weight Q6_K repacked" }] : []),
+    ...(o.mlaAttention === false ? [] : [{
+      // formula IMPORTATA da mlasplit.ts, non ricopiata: è lo stesso sizing con
+      // cui glmmodel alloca il buffer. Oggi non vince mai (la testa Q6_K è 250
+      // MiB contro ~1,3 MiB a ctxMax 525), ma la regola del file è che ogni
+      // binding del motore compaia col suo consumatore: un binding che non è
+      // nella lista è un requisito che nessuno sta guardando.
+      bytes: mlaPartialsLen(GLM47_FLASH.nHead, GLM47_FLASH.kvLora, o.ctxMax) * 4,
+      consumer: `attnPartials dello split MLA a ctxMax ${o.ctxMax} (glmmodel)`,
+    }]),
     ...(o.extraBindings ?? []),
   ];
   const biggest = candidates.reduce((a, b) => (b.bytes > a.bytes ? b : a));

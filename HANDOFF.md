@@ -1,38 +1,36 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-02, sessione 19 — C3a: attribuzione per categoria, il bersaglio è l'attention)
+# HANDOFF — browser-llm-lab   (updated 2026-08-03, sessione 20 — C3a it.12: flash-decoding sulla MLA, l'attention dimezzata)
 
 ## 1. Next decidable
 
-**IL FATTO CHE RIORGANIZZA IL GOAL (it.11).** Attribuzione di `gpuBusy` per
-categoria di kernel, misurata (`bench-glm-4090-b12-bycat-2026-08-02.json`):
+**FATTO (it.12): flash-decoding sulla MLA.** `mlaAttnSplitPartWgsl` (chunk da
+16 posizioni, 256 thread/wg, cache in shared riusata da tutte le 20 head) +
+`mlaAttnSplitReduceWgsl` (LSE esatto, shared O(1)) al posto del monolitico in
+glmmodel. **attn 51.21 → 27.49 ms/token** (replica bycat), decode **4.982**
+(≥ 4.967: non-regressione PASS), prefill 5.74, TTFT 88 → 80.4 s, `gpuBusy`
+69.1 → **64.4** (gate 4b ≤ 54.5 ancora FAIL). ktest 41/41, doppia review
+avversaria (Opus + Codex) convergente: zero difetti numerici. Report:
+`bench-glm-4090-b12-mlasplit{,2}-2026-08-03.json`, journal it.12.
 
-| categoria | ms/token | quota |
-|---|---|---|
-| **attn (MLA)** | **51.21** | **74.5%** |
-| shexp | 7.16 | 10.4% |
-| head | 4.64 | 6.7% |
-| experts | 3.95 | 5.8% |
-| router / dense / addMoe | 1.73 | 2.5% |
+**IL DATO NUOVO: i clock.** SM medio **948 MHz** durante la run headline
+(campionati, 195 campioni attivi) contro 1746 di it.1, cap 3105. Meno lavoro
+GPU ⇒ più bolle ⇒ boost più basso: nella replica bycat tutte le categorie
+non-attn sembrano ~raddoppiate (shexp 14.6, head 9.6, experts 8.1 ms/token) —
+è inflazione da clock, non regressione. Il −46% dell'attn è un lower bound del
+guadagno a iso-clock.
 
-**Il modello "byte letti ⇒ tempo" è morto**: la catena expert è il 41% dei byte
-e il 5.8% del tempo; l'attention è ~2.6% dei byte e il 74.5% del tempo. Ogni
-pianificazione fatta sulla banda in questo goal (inclusa `state-2026-08-02` §2)
-va riletta con questa tabella.
+**PROSSIMO PEZZO, nessuna decisione pendente: chiudere il margine kernel della
+4b portando shexp (Q5_K/Q6_K) e head (Q6_K) alla struttura fast** — sono le due
+categorie più grosse rimaste dopo l'attention e usano `gemvQ5K`/`gemvQ6K` con
+`sbyte()`: una load u32 intera PER OGNI BYTE, contro la struttura vec4 +
+shared-x + 4 righe/wg della famiglia fast (it.10). Stesso profilo di rischio
+basso: si porta una struttura validata, non si inventa. Poi la **fase 4** (il
+drain), che è dove vive il gate.
 
-**PROSSIMO PEZZO, nessuna decisione pendente: portare `attnSplitPart` +
-`attnSplitReduce` (flash-decoding, path Qwen) sulla MLA.** Causa letta nel
-kernel: `mlaAttnDecodeWgsl` gira su **nHead = 20 workgroup da 64 thread**
-(1280 thread totali) e ogni workgroup riscorre **tutta** la cache KV due volte
-con un loop seriale da 576 iterazioni. Non è banda né FLOP: è parallelismo
-assente. In più le 20 riletture sono ridondanti per costruzione — in MLA la
-cache c_kv è condivisa fra le head, e un kernel che carica un chunk di cache in
-shared e lo usa per tutte le head toglie un fattore 20 di traffico.
-
-**Il vincolo da tenere presente mentre si ottimizza la GPU**: con 46 drain per
-token i guadagni GPU non si convertono in tok/s. Misurato in it.10: −6.75 ms di
-`gpuBusy` → −4.27 di wall → **+1.1% di decode**, e `sync/CPU` è SALITO a 99.7
-(50% del wall). Proiezione nel report: **9.77 tok/s anche batchando tutti e 46 i
-sync**, sotto il gate 13.43. ⇒ la fase 4 (togliere il drain) resta obbligatoria,
-la 4b da sola non porta al gate.
+**Il vincolo confermato per la terza volta (it.10, it.12)**: con 46 drain per
+token i guadagni GPU non si convertono in tok/s — attn dimezzata, decode fermo
+(+0.3%), sync/CPU salito a 121-178 ms/token e clock a 948 MHz. La fase 4 resta
+obbligatoria; la 4b da sola non porta al gate 13.43 (proiezione it.10: 9.77
+anche batchando tutti i sync).
 
 **Ruling recepiti (2026-08-02/03)**: **item 11** = sostituzione della
 conformance accettata, full-corpus al gate di fase 6; **item 8** = si paga la
@@ -106,7 +104,22 @@ Riancorarsi da: `.harness/goals/engine-fase-c3a/{GOAL,docket}.md`, docket C2
 item 8 (input C3 completo), direction.md §2 (funzione obiettivo a due
 termini) e §7 (fase C splittata).
 
-## 2. State delta (sessione 17 — chiusura C2)
+## 2. State delta (sessione 20 — it.12)
+
+- **it.12 (fase 4b)**: flash-decoding MLA — kernel `mlaAttnSplitPart/Reduce`
+  nuovi in `kernels/wgsl.ts`, wiring in `glmmodel.ts` (17 step attn/layer,
+  buffer `attnPartials`), sizing in `mlasplit.ts` (nuovo), `attnPartials` nei
+  candidates di `engineNeeds`. Monolitico conservato (glmforward/ktest).
+- **Processo nuovo**: implementazione delegata a subagent Opus, doppia review
+  avversaria indipendente (adversarial-reviewer Opus con simulatore
+  thread-level + Codex), fix round sui 3 finding strutturali (reduce O(ctxMax)
+  in shared, fail-fast tautologico, candidate mancante). Zero difetti numerici.
+- Bench: 2 run quiescenti committate (`mlasplit` con bycat, `mlasplit2`
+  headline), clock SM campionati (948 MHz medi). Docket item 13 (consumatore
+  fantasma gpulimits, finding non-decisione), PHASES riga 4b aggiornata.
+- Verifica: ktest 41/41 (6 casi nuovi), npm test 261+2, tsc pulito.
+
+## 2-bis. State delta (sessione 17 — chiusura C2)
 
 - **it.11**: harness `glmbench` nuovo (B2 sul forward di produzione, decode
   greedy reale, telemetria per-token); gate GLM falliti con attribuzione;
@@ -196,8 +209,10 @@ termini) e §7 (fase C splittata).
   ⇒ KV 361 MB ⇒ OOM. Budget slab ctx-aware in C3.
 - `/tmp` è tmpfs 16 GB: profilo Chrome con OPFS 17 GB in
   `~/.cache/blab-glmroute-profile` (E2E_PROFILE); import skip su size-match.
-- mlaAttnDecode: ctx>4k richiede maxComputeWorkgroupStorageSize 32 KB
-  negoziato (fail-fast in createGlmModel).
+- mlaAttnDecode MONOLITICO (glmforward/glmroute, ktest): ctx>4k richiede
+  maxComputeWorkgroupStorageSize negoziato — il termine 4·ctxMax+256 resta in
+  gpulimits per quei consumatori (docket C3a item 13). glmmodel (split, it.12)
+  non ha più il vincolo: il suo tetto di contesto è la VRAM della KV.
 - Runner in background: NIENTE pipe su tail/grep (maschera exit code);
   output diretto su file.
 - Mini-modello sintetico ktest: NON estendere in profondità (overflow f32).

@@ -18,11 +18,12 @@
 import { GLM47_FLASH as G } from "./shape";
 import { repackQ4_0, repackQ4_1, repackQ8_0, repackKQuant, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { routerSelect } from "./moe";
-import { mlaWorkgroupStorageBytes } from "./gpulimits";
+import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen, mlaSplitWorkgroupStorageBytes } from "./mlasplit";
 import { ExpertCache, expertKey, slotBindRanges, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
 import {
   addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ5KWgsl, gemvQ6KWgsl, gemvQ8HeadsWgsl,
-  gemvQuantWgsl, kvAppendWgsl, mlaAttnDecodeWgsl, ropeMlaNormWgsl, rmsnormWgsl,
+  gemvQuantWgsl, kvAppendWgsl, mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,
+  ropeMlaNormWgsl, rmsnormWgsl,
   siluMulWgsl, stridedCopyWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl,
 } from "./kernels/wgsl";
 
@@ -121,15 +122,23 @@ export interface GlmModel {
 export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: GlmModelOpts): GlmModel {
   const nLayer = opts.nLayer ?? G.nLayer;
   const ctxMax = opts.ctxMax;
-  // fail-fast esplicito: mlaAttnDecode tiene scores[ctxMax] + red[64] in
-  // workgroup memory — oltre il limite la pipeline fallirebbe con un errore
-  // criptico di validazione (visto su ctxMax 6688 vs default 16 KB, it.10)
-  const wgNeed = mlaWorkgroupStorageBytes(ctxMax); // stessa formula di gpulimits, non riscritta
+  // Guardia sul workgroup storage dello split (max fra pass 1 e pass 2).
+  // ONESTA' SU COSA E': sui path attuali NON puo' scattare. La negoziazione
+  // chiede sempre almeno i 30 848 B del path Qwen fuso (requisito hard,
+  // gpulimits), e lo split ne vuole 10 800 costanti — il confronto e' vinto in
+  // partenza. Resta come guardia per gli EDIT FUTURI dei kernel: se qualcuno
+  // allarga un tile o rimette un array [sMax] in shared, si ferma qui con un
+  // messaggio invece che a runtime con un errore di validazione criptico.
+  // Cio' che NON e' piu': un vincolo sul contesto. Il monolitico teneva
+  // scores[ctxMax] in shared (4·ctxMax+256 B, che tagliava ctxMax a 8128 sul
+  // default 16 KiB, it.10); qui il contesto e' partizionato e il fabbisogno di
+  // entrambi i pass e' costante.
+  const wgNeed = mlaSplitWorkgroupStorageBytes(G.nHead); // stessa formula di mlasplit, non riscritta
   if (wgNeed > device.limits.maxComputeWorkgroupStorageSize) {
     throw new Error(
-      `glmmodel: ctxMax ${ctxMax} richiede ${wgNeed} B di workgroup storage ` +
+      `glmmodel: mlaAttnSplitPart richiede ${wgNeed} B di workgroup storage ` +
       `(limite ${device.limits.maxComputeWorkgroupStorageSize}) — negoziare ` +
-      `maxComputeWorkgroupStorageSize o spezzare l'attention (attnsplit)`);
+      `maxComputeWorkgroupStorageSize`);
   }
 
   // ---- telemetria di attribuzione (C3a fase 1) ----
@@ -223,7 +232,15 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     absorbKb: mkPipe(gemvQ8HeadsWgsl({ K: G.qkNope, rowsPerHead: G.kvLora, nHead: G.nHead, xStride: HL, xOffset: 0 })),
     copyCkv: mkPipe(stridedCopyWgsl({ nVec: G.nHead, len: G.kvLora, srcStride: G.kvLora, srcOffset: 0, dstStride: G.keyLen, dstOffset: 0 })),
     copyQRope: mkPipe(stridedCopyWgsl({ nVec: G.nHead, len: G.ropeDims, srcStride: HL, srcOffset: G.qkNope, dstStride: G.keyLen, dstOffset: G.kvLora })),
-    attn: mkPipe(mlaAttnDecodeWgsl({ nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax, scale: 1 / Math.sqrt(G.headLenMla) })),
+    // attention MLA split sul contesto (fase 4c): part su sMax workgroup che
+    // coprono TUTTE le head, reduce log-sum-exp su nHead. Il monolitico
+    // (mlaAttnDecodeWgsl) resta nel repo: lo usano glmforward e i ktest, ed e'
+    // il riferimento del test di identita'.
+    attnPart: mkPipe(mlaAttnSplitPartWgsl({
+      nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax,
+      scale: 1 / Math.sqrt(G.headLenMla), chunk: MLA_CHUNK_P,
+    })),
+    attnReduce: mkPipe(mlaAttnSplitReduceWgsl({ nHead: G.nHead, kvLora: G.kvLora, ctxMax, chunk: MLA_CHUNK_P })),
     voutVb: mkPipe(gemvQ8HeadsWgsl({ K: G.kvLora, rowsPerHead: G.headLenMla, nHead: G.nHead, xStride: G.kvLora, xOffset: 0 })),
     gemvO: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: G.nHead * G.headLenMla, N: G.dModel, hasBias: false })),
     // ffn denso blk.0
@@ -255,6 +272,10 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const qCkv = storage(G.nHead * G.kvLora * 4);
   const q576 = storage(G.nHead * G.keyLen * 4);
   const attnCkv = storage(G.nHead * G.kvLora * 4);
+  // partials dello split: [nHead × sMax × (kvLora+2)], condiviso fra i layer
+  // come attnCkv (il pass 2 lo consuma prima che il layer successivo lo riscriva)
+  const attnPartials = storage(mlaPartialsLen(G.nHead, G.kvLora, ctxMax) * 4);
+  const attnSMaxN = mlaSMax(ctxMax);
   const attnMla = storage(G.nHead * G.headLenMla * 4);
   const tmp = storage(G.dModel * 4);
   const fnB = storage(G.dModel * 4);
@@ -336,7 +357,8 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       step(pipes.absorbKb, [wKB.qs, wKB.scales, qB, qCkv], gemvGrid(G.nHead * G.kvLora)),
       step(pipes.copyCkv, [qCkv, q576], Math.ceil((G.nHead * G.kvLora) / 64)),
       step(pipes.copyQRope, [qB, q576], Math.ceil((G.nHead * G.ropeDims) / 64)),
-      step(pipes.attn, [q576, cache, attnCkv], G.nHead, true),
+      step(pipes.attnPart, [q576, cache, attnPartials], [attnSMaxN, 1], true),
+      step(pipes.attnReduce, [attnPartials, attnCkv], G.nHead, true),
       step(pipes.voutVb, [wVB.qs, wVB.scales, attnCkv, attnMla], gemvGrid(G.nHead * G.headLenMla)),
       step(pipes.gemvO, [wO.qs, wO.scales, attnMla, tmp], gemvGrid(G.dModel)),
       step(pipes.add, [x, tmp], Math.ceil(G.dModel / 64)),
@@ -440,7 +462,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     T.dispatches += steps.length;
   };
 
-  // Valore DERIVATO dal piano: attn 16/layer + denso 6 (solo blk.0) + per layer
+  // Valore DERIVATO dal piano: attn 17/layer (16 fino alla fase 4b; l'attention
+  // split ne aggiunge uno, part+reduce al posto del kernel monolitico) + denso
+  // 6 (solo blk.0) + per layer
   // MoE 2 preRouter + 4 shexp + 4 catene expert da 2 (fase 4b: gate+up+silu
   // fusi) + 1 add = 15.
   // NON include la testa (rms + lm_head = 2), che con readLogits gira a ogni
@@ -449,7 +473,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // nelle catene expert).
   const nMoe = layers.filter((l) => l.moe).length;
   const nDense = layers.filter((l) => l.dense).length;
-  const dispatchesPerTokenPlanned = 16 * nLayer + 6 * nDense + 15 * nMoe;
+  const dispatchesPerTokenPlanned = 17 * nLayer + 6 * nDense + 15 * nMoe;
 
   const mapLogits = async (): Promise<Float32Array> => {
     await logitsStaging.mapAsync(GPUMapMode.READ);
@@ -629,7 +653,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       };
     },
     destroy() {
-      for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnMla, tmp, fnB, gateD, upD, gateE, upE, moeOut, logitsB, ...wExp, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
+      for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnPartials, attnMla, tmp, fnB, gateD, upD, gateE, upE, moeOut, logitsB, ...wExp, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
       tsqResolve?.destroy();
       querySet?.destroy();
       cache.destroy();

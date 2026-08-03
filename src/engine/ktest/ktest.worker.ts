@@ -10,7 +10,9 @@ import {
   attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
   routerTopKWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl, gemvGrid,
+  mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,
 } from "../kernels/wgsl";
+import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen } from "../mlasplit";
 import { createGlmLayer0 } from "../glmforward";
 import {
   GlmDenseLayerRefF64, GlmMoeLayerRefF64, glmMoeFfnRefF64, type GlmMoeExpertWeights,
@@ -68,6 +70,33 @@ function compare(kernel: string, got: Float32Array, ref: Float32Array, relTol: n
     maxRel = Math.max(maxRel, d / denom);
   }
   return { kernel, pass: got.length === ref.length && (maxAbs <= absTol || maxRel <= relTol), maxAbs, maxRel };
+}
+
+// Riferimento f64 dell'attention MLA absorbed: score a 576 su tutta la cache,
+// softmax, out = Σ softmax(p)·c_kv[p, j] sulle prime 512 componenti. È il
+// riferimento CONDIVISO fra il kernel monolitico e lo split (fase 4c): i due
+// devono cadere sulla stessa risposta, non ognuno sulla propria.
+function mlaAttnRefF64(q: Float32Array, cache: Float32Array, nPast: number, scale: number): Float32Array {
+  const W = G.kvLora + G.ropeDims;
+  const ref = new Float32Array(G.nHead * G.kvLora);
+  for (let h = 0; h < G.nHead; h++) {
+    const sc = new Float64Array(nPast + 1);
+    for (let p = 0; p <= nPast; p++) {
+      let acc = 0;
+      for (let i = 0; i < W; i++) acc += q[h * W + i] * cache[p * W + i];
+      sc[p] = acc * scale;
+    }
+    let m = -Infinity;
+    for (const v of sc) m = Math.max(m, v);
+    let sum = 0;
+    for (let p = 0; p <= nPast; p++) { sc[p] = Math.exp(sc[p] - m); sum += sc[p]; }
+    for (let j = 0; j < G.kvLora; j++) {
+      let acc = 0;
+      for (let p = 0; p <= nPast; p++) acc += (sc[p] / sum) * cache[p * W + j];
+      ref[h * G.kvLora + j] = acc;
+    }
+  }
+  return ref;
 }
 
 class Gpu {
@@ -742,8 +771,10 @@ async function testGlmModel2Layer(g: Gpu): Promise<KResult> {
   // termini, non come numero: quando una fase cambia la catena, qui si vede
   // QUALE termine e' cambiato. Fase 4b: la catena expert e' passata da 4
   // dispatch (gate, up, silu, down) a 2 (gate+up+silu fusi, down) ⇒ il termine
-  // MoE scende da 23 a 15 e il totale da 61 a 53.
-  const PLANNED = 16 * 2 + 6 * 1 + (2 + 4 + G.nExpertUsed * 2 + 1) * 1, HEAD = 2;
+  // MoE scende da 23 a 15 e il totale da 61 a 53. Fase 4c: l'attention split
+  // spezza il kernel MLA in part+reduce ⇒ il termine attn sale da 16 a 17 per
+  // layer e il totale da 53 a 55.
+  const PLANNED = 17 * 2 + 6 * 1 + (2 + 4 + G.nExpertUsed * 2 + 1) * 1, HEAD = 2;
   const dispatchOk = model.dispatchesPerTokenPlanned === PLANNED && measuredPerToken === PLANNED + HEAD;
   if (!dispatchOk) {
     problems.push(`dispatch: piano ${model.dispatchesPerTokenPlanned} (atteso ${PLANNED}), ` +
@@ -1040,28 +1071,52 @@ async function main(): Promise<void> {
       const scale = 1 / Math.sqrt(G.headLenMla);
       const q = randF32(G.nHead * W576, 71, 0.5);
       const cache = randF32(ctxMax * W576, 72, 0.5);
-      const ref = new Float32Array(G.nHead * G.kvLora);
-      for (let h = 0; h < G.nHead; h++) {
-        const sc = new Float64Array(nPast + 1);
-        for (let p = 0; p <= nPast; p++) {
-          let acc = 0;
-          for (let i = 0; i < W576; i++) acc += q[h * W576 + i] * cache[p * W576 + i];
-          sc[p] = acc * scale;
-        }
-        let m = -Infinity;
-        for (const v of sc) m = Math.max(m, v);
-        let sum = 0;
-        for (let p = 0; p <= nPast; p++) { sc[p] = Math.exp(sc[p] - m); sum += sc[p]; }
-        for (let j = 0; j < G.kvLora; j++) {
-          let acc = 0;
-          for (let p = 0; p <= nPast; p++) acc += (sc[p] / sum) * cache[p * W576 + j];
-          ref[h * G.kvLora + j] = acc;
-        }
-      }
+      const ref = mlaAttnRefF64(q, cache, nPast, scale);
       const out = g.empty(G.nHead * G.kvLora * 4);
       await g.run(mlaAttnDecodeWgsl({ nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax, scale }),
         [g.buf(q), g.buf(cache), out, ], G.nHead, g.uniform(nPast, nPast));
       results.push(compare("mla-attn-decode", new Float32Array(await g.read(out, G.nHead * G.kvLora * 4)), ref, 5e-4, 1e-4));
+    }
+
+    { // attention MLA SPLIT sul contesto (fase 4c): part+reduce vs LO STESSO
+      // riferimento f64 del monolitico, sui casi di bordo del chunking
+      const ctxMax = 512;
+      const scale = 1 / Math.sqrt(G.headLenMla);
+      const q = randF32(G.nHead * W576, 71, 0.5);
+      const cache = randF32(ctxMax * W576, 72, 0.5);
+      const partCode = mlaAttnSplitPartWgsl({
+        nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax, scale, chunk: MLA_CHUNK_P,
+      });
+      const reduceCode = mlaAttnSplitReduceWgsl({ nHead: G.nHead, kvLora: G.kvLora, ctxMax, chunk: MLA_CHUNK_P });
+      const qBuf = g.buf(q), cBuf = g.buf(cache);
+      const runSplit = async (nPast: number): Promise<Float32Array> => {
+        // partials pre-sporcato: le partizioni oltre il contesto NON devono
+        // essere lette dal pass 2 (se lo fossero, questi NaN lo direbbero)
+        const dirty = new Float32Array(mlaPartialsLen(G.nHead, G.kvLora, ctxMax)).fill(NaN);
+        const partials = g.buf(dirty);
+        const out = g.empty(G.nHead * G.kvLora * 4);
+        const u = g.uniform(nPast, nPast);
+        await g.run(partCode, [qBuf, cBuf, partials], mlaSMax(ctxMax), u);
+        await g.run(reduceCode, [partials, out], G.nHead, u);
+        const got = new Float32Array(await g.read(out, G.nHead * G.kvLora * 4));
+        partials.destroy(); // 1,3 MB per invocazione: 6 invocazioni = 8 MB di VRAM
+        out.destroy();
+        return got;
+      };
+      // nPast < CHUNK; bordo esatto (CHUNK-1 e CHUNK); a cavallo di piu' chunk;
+      // contesto lungo (32 partizioni attive)
+      for (const nPast of [7, MLA_CHUNK_P - 1, MLA_CHUNK_P, 40, 200]) {
+        const ref = mlaAttnRefF64(q, cache, nPast, scale);
+        results.push(compare(`mla-attn-split-p${nPast}`, await runSplit(nPast), ref, 5e-4, 1e-4));
+      }
+      // identita' split vs monolitico sugli stessi input: entrambi f32, NON
+      // bit-identici (ordine delle somme diverso) ⇒ tolleranza stretta
+      const nPast = 200;
+      const mono = g.empty(G.nHead * G.kvLora * 4);
+      await g.run(mlaAttnDecodeWgsl({ nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax, scale }),
+        [qBuf, cBuf, mono], G.nHead, g.uniform(nPast, nPast));
+      results.push(compare("mla-attn-split-vs-mono", await runSplit(nPast),
+        new Float32Array(await g.read(mono, G.nHead * G.kvLora * 4)), 1e-4, 1e-5));
     }
 
     { // strided copy (assemblaggio q576 = [q_ckv | q_rope] per head): esatto

@@ -872,3 +872,66 @@ la colonna `passesPerToken` vale 1.0 per ogni categoria — contavo un pass per
 batch invece che per pass. Il bug è nel contatore, non nei ms (che sono sommati
 per pass e sono corretti); corretto in questo commit, il valore giusto comparirà
 col prossimo bench.
+
+## it.12 (2026-08-03) — fase 4b: flash-decoding sulla MLA
+
+Portato lo split sul contesto (pattern Qwen B2) sull'attention MLA, il 74.5%
+del tempo GPU secondo it.11. Due kernel nuovi in `kernels/wgsl.ts`:
+`mlaAttnSplitPartWgsl` — griglia (sMax,1), CHUNK=16 posizioni per workgroup da
+256 thread, un chunk di cache caricato in shared a tile (stride paddato 65
+anti bank-conflict) e riusato da TUTTE le 20 head: via il fattore 20 di
+riletture ridondanti del monolitico — e `mlaAttnSplitReduceWgsl` (log-sum-exp
+esatto, shared O(1): 8 byte, costanti in ctxMax). Wiring in `glmmodel.ts` (2
+step al posto di 1, buffer `attnPartials` condiviso fra i layer), sizing
+CPU-side in `mlasplit.ts` nuovo. Il monolitico resta: glmforward/glmroute e
+ktest lo usano ancora, ed è il riferimento del test di identità.
+
+### Processo (nuovo per questo goal)
+
+Implementazione delegata a subagent Opus su brief di design chiuso; doppia
+review avversaria indipendente (adversarial-reviewer Opus + Codex). Esito
+convergente: ZERO difetti numerici/di indicizzazione (Opus ha verificato con un
+simulatore thread-level su 11 valori di nPast: ogni cella scritta esattamente
+una volta, maxAbs ≤ 1.7e-16 vs riferimento f64); tre finding strutturali reali,
+tutti fixati nel secondo round: (1) il reduce memoizzava i pesi in shared
+O(ctxMax) — l'esatto difetto che lo split esiste per togliere, contraddiceva
+commenti e test (che scansionava solo il part: test vacuo); (2) fail-fast
+tautologico in glmmodel; (3) `attnPartials` assente dai candidates di
+`engineNeeds`. Dopo il fix l'output dello split è bit-identico al pre-fix.
+
+### Verifica
+
+- ktest 41/41 (6 casi nuovi: split vs cpuref-f64 su nPast 7/15/16/40/200,
+  identità split-vs-mono maxAbs 1.08e-7); `npm test` 261+2; `tsc` pulito.
+- Bench quiescente (due run, protocollo C2 invariato, host: GPU 210 MHz 0%
+  a riposo prima del lancio):
+  - `bench-glm-4090-b12-mlasplit-2026-08-03.json` (con attribuzione+bycat):
+    decode 4.946, **attn 51.21 → 27.49 ms/token (−46%)** nella replica bycat.
+  - `bench-glm-4090-b12-mlasplit2-2026-08-03.json` (headline): **decode 4.982
+    ≥ 4.967 (fused-2026-08-02): non-regressione PASS**; prefill 5.74 ≥ 5.50;
+    TTFT 80.4 s (da 88); dispatch/token 1497 misurati (1450+47: +1
+    reduce/layer); gpuBusy 64.4 (da 69.1), gate 4b ≤54.5 ancora FAIL.
+
+### L'attribuzione kernel-vs-clock (obbligo del done-when 4b)
+
+Clock SM campionati durante la run headline (nvidia-smi, 2 s, 195 campioni
+GPU-attivi): **media 948 MHz** (min 255, max 1455) contro i 1746 di it.1 —
+il cap è 3105. Il paradosso apparente della replica bycat (tutte le categorie
+non-attn ~raddoppiate: shexp 7.16→14.63, head 4.64→9.61, experts 3.95→8.06)
+è questo: meno lavoro GPU ⇒ più bolle relative ⇒ boost più basso ⇒ ms gonfiati
+UNIFORMEMENTE. Il −46% dell'attn è quindi un LOWER BOUND del guadagno kernel a
+iso-clock; il decode headline resta ~fermo perché il collo è fuori GPU
+(sync/CPU 121-178 ms/token con 46 drain). Conferma sperimentale del vincolo di
+it.10: la fase 4 non è opzionale.
+
+### Residui noti (dalle review, non bloccanti, per il ledger)
+
+- CHUNK=16 è tarato sull'occupancy a pos~525; a ctx lungo (6688+) CHUNK=64
+  dimezzerebbe il traffico partials (oggi ~59% del traffico cache risparmiato).
+- Il reduce serializza la scansione delle nParts su thread 0 (836 load
+  dipendenti a ctx 6688) e la fase A ha un imbalance 320/256 (~37% del tempo
+  score): margini piccoli, misurare prima di toccare.
+- gpulimits tiene il termine workgroup-storage del monolitico (consumatore
+  reale: glmforward/glmroute, ktest). Il tetto di contesto di GLMMODEL non è
+  più la shared: è la VRAM della KV. Decisione di rimozione/condizionamento →
+  docket item 13.

@@ -1,5 +1,17 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+13. **FINDING registrato, non una decisione PI** (2026-08-03, it.12, dalle due
+    review avversarie). Con lo split MLA in produzione, il termine
+    `mlaWorkgroupStorageBytes(ctxMax)` in `gpulimits.ts` ha come consumatori
+    REALI solo glmforward/glmroute e ktest (il monolitico), non più glmmodel:
+    il tetto di contesto del forward di produzione non è più la shared memory,
+    è la VRAM della KV. Rimuovere o condizionare quel termine è MECCANISMO
+    (ruling 2026-08-03 "decidere, non escalare": non si escala), ma cambia i
+    limiti negoziati ⇒ si fa quando un consumatore lo chiede davvero (C3b/ctx
+    lunghi), con ri-bench dichiarato, non come ritocco di passaggio. Nel
+    frattempo il comportamento resta identico al pre-it.12 (verificato: pin di
+    tests/gpulimits.test.ts invariati).
+
 12. ~~**RULING — la fase 4b parte subito, portando la famiglia fusa di Qwen**~~
     **RISOLTO in apertura (2026-08-02, PI: "porta su glm tutte le ottimizzazioni
     che ci hanno dato tante soddisfazioni su qwen")** — registrato qui perche'

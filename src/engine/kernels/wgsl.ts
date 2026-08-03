@@ -1690,6 +1690,208 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 }`;
 }
 
+// Attention MLA SPLIT sul contesto (C3a fase 4c, stile flash-decoding) —
+// sostituisce mlaAttnDecodeWgsl nel forward di produzione. Il monolitico gira su
+// nHead=20 workgroup da 64 thread (GPU quasi vuota) e ognuno riscorre TUTTA la
+// cache serialmente due volte: in MLA la cache è UNA sola (MQA sulla compressa),
+// quindi quelle 20 riletture sono lo stesso traffico moltiplicato per 20 — il
+// 74,5% del tempo GPU per token (51,2 ms, misura it.11).
+//
+// Qui il contesto è partizionato in blocchi da CHUNK posizioni: griglia FISSA
+// (sMax, 1), le partizioni oltre n escono subito (condizione UNIFORME per
+// workgroup, prima di ogni barrier). Ogni workgroup elabora il suo chunk per
+// TUTTE le head — è il punto dell'esercizio: la cache si legge una volta per
+// chunk invece di nHead volte. Pass 1 scrive per partizione {max locale m,
+// somma locale l, out parziale non normalizzato}; pass 2
+// (mlaAttnSplitReduceWgsl) combina in log-sum-exp esatto. Layout partials
+// identico alla convenzione Qwen: [head][part][kvLora out | m | l].
+export function mlaAttnSplitPartWgsl(opts: {
+  nHead: number; kvLora: number; ropeDims: number; ctxMax: number; scale: number; chunk: number;
+}): string {
+  const { nHead, kvLora, ropeDims, ctxMax, scale, chunk } = opts;
+  const width = kvLora + ropeDims;
+  const TW = 64;   // larghezza del tile, sia sui 576 dello score sia sui 512 dell'out
+  const TWP = TW + 1; // stride PADDATO in shared: rompe i conflitti di banco
+  const WG = 256;
+  if (width % TW !== 0 || kvLora % TW !== 0) {
+    throw new Error(`mlaAttnSplitPart: width ${width} e kvLora ${kvLora} devono essere multipli di ${TW}`);
+  }
+  const sMax = Math.ceil(ctxMax / chunk);
+  const nAcc = Math.ceil((nHead * chunk) / WG); // accumulatori privati per thread
+  return `${TOK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> q: array<f32>;
+@group(0) @binding(1) var<storage, read> cache: array<f32>;
+@group(0) @binding(2) var<storage, read_write> partials: array<f32>; // [head][part][${kvLora} out | m | l]
+@group(0) @binding(3) var<uniform> P: TokParams;
+const N_HEAD = ${nHead}u;
+const WIDTH = ${width}u;
+const KV_LORA = ${kvLora}u;
+const CHUNK = ${chunk}u;
+const S_MAX = ${sMax}u;
+const PART_STRIDE = ${kvLora + 2}u;
+const SCALE = ${scale};
+const TW = ${TW}u;
+const TWP = ${TWP}u;
+const WG = ${WG}u;
+const N_TILE_W = ${width / TW}u; // tile sulla larghezza dello score
+const N_TILE_J = ${kvLora / TW}u; // tile sulle dimensioni di out
+var<workgroup> cTile: array<f32, ${chunk * TWP}>;  // [CHUNK × TWP] di cache
+var<workgroup> qTile: array<f32, ${nHead * TWP}>;  // [N_HEAD × TWP] di q
+var<workgroup> sc: array<f32, ${nHead * chunk}>;   // score, poi exp (in place)
+var<workgroup> mS: array<f32, ${nHead}>;
+var<workgroup> lS: array<f32, ${nHead}>;
+@compute @workgroup_size(${WG})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let part = wid.x;
+  let t = lid.x;
+  let n = P.nPast + 1u;
+  let begin = part * CHUNK;
+  if (begin >= n) { return; } // uniforme per workgroup: PRECEDE ogni workgroupBarrier
+  let end = min(begin + CHUNK, n);
+  // A) score[h][p] = SCALE · Σ_i q[h][i]·cache[begin+p][i], a tile di TW sulla
+  // larghezza: il tile di cache si carica UNA volta e serve tutte le head.
+  var acc: array<f32, ${nAcc}>;
+  var d = 0.0; // dichiarato fuori dai loop: i var-in-loop non si ri-azzerano (landmine Tint)
+  var cv = 0.0;
+  var a = 0u;
+  for (var i = 0u; i < ${nAcc}u; i = i + 1u) { acc[i] = 0.0; }
+  for (var tile = 0u; tile < N_TILE_W; tile = tile + 1u) {
+    let off = tile * TW;
+    for (var i = t; i < CHUNK * TW; i = i + WG) {
+      let p = i / TW; let c = i % TW;
+      let pp = begin + p;
+      cv = 0.0; // chunk parziale: la coda oltre end non si legge nemmeno
+      if (pp < end) { cv = cache[pp * WIDTH + off + c]; }
+      cTile[p * TWP + c] = cv;
+    }
+    for (var i = t; i < N_HEAD * TW; i = i + WG) {
+      let h = i / TW; let c = i % TW;
+      qTile[h * TWP + c] = q[h * WIDTH + off + c];
+    }
+    workgroupBarrier();
+    a = 0u;
+    for (var idx = t; idx < N_HEAD * CHUNK; idx = idx + WG) {
+      let h = idx / CHUNK; let p = idx % CHUNK;
+      d = 0.0;
+      for (var c = 0u; c < TW; c = c + 1u) { d = d + qTile[h * TWP + c] * cTile[p * TWP + c]; }
+      acc[a] = acc[a] + d;
+      a = a + 1u;
+    }
+    workgroupBarrier(); // prima di riusare le shared del tile successivo
+  }
+  a = 0u;
+  for (var idx = t; idx < N_HEAD * CHUNK; idx = idx + WG) {
+    let p = idx % CHUNK;
+    // posizione fuori dal contesto (chunk parziale): sentinella, come nel Qwen
+    sc[idx] = select(-3.0e38, acc[a] * SCALE, begin + p < end);
+    a = a + 1u;
+  }
+  workgroupBarrier();
+  // B) softmax PARZIALE per head: riduzione seriale sulle sole CHUNK posizioni
+  // del blocco, una head per thread (N_HEAD thread attivi, ~CHUNK iterazioni)
+  if (t < N_HEAD) {
+    let b = t * CHUNK;
+    var m = -3.0e38;
+    for (var p = 0u; p < CHUNK; p = p + 1u) { m = max(m, sc[b + p]); }
+    var l = 0.0;
+    var e = 0.0;
+    for (var p = 0u; p < CHUNK; p = p + 1u) {
+      e = select(0.0, exp(sc[b + p] - m), begin + p < end);
+      sc[b + p] = e;
+      l = l + e;
+    }
+    mS[t] = m;
+    lS[t] = l;
+  }
+  workgroupBarrier();
+  // C) out parziale NON normalizzato: out[h][j] = Σ_p e[h][p]·cache[begin+p][j].
+  // La cache si rilegge una seconda volta dal global (come nel kernel Qwen): il
+  // traffico totale resta 2× la cache invece di 2×nHead×.
+  for (var tj = 0u; tj < N_TILE_J; tj = tj + 1u) {
+    let off = tj * TW;
+    for (var i = t; i < CHUNK * TW; i = i + WG) {
+      let p = i / TW; let c = i % TW;
+      let pp = begin + p;
+      cv = 0.0; // chunk parziale: la coda oltre end non si legge nemmeno
+      if (pp < end) { cv = cache[pp * WIDTH + off + c]; }
+      cTile[p * TWP + c] = cv;
+    }
+    workgroupBarrier();
+    for (var idx = t; idx < N_HEAD * TW; idx = idx + WG) {
+      let h = idx / TW; let j = idx % TW;
+      d = 0.0;
+      for (var p = 0u; p < CHUNK; p = p + 1u) { d = d + sc[h * CHUNK + p] * cTile[p * TWP + j]; }
+      partials[(h * S_MAX + part) * PART_STRIDE + off + j] = d;
+    }
+    workgroupBarrier();
+  }
+  if (t < N_HEAD) {
+    let b2 = (t * S_MAX + part) * PART_STRIDE;
+    partials[b2 + KV_LORA] = mS[t];
+    partials[b2 + KV_LORA + 1u] = lS[t];
+  }
+}`;
+}
+
+// Pass 2 dello split MLA: combina le partizioni in log-sum-exp esatto (M=max
+// m_p, L=Σ l_p·exp(m_p−M), out=Σ o_p·exp(m_p−M)/L — stessa matematica di
+// attnSplitReduceWgsl e del riferimento JS lseReduce). Griglia (nHead,1).
+// NON è attnSplitReduceWgsl riusato: quello assume headDim ≤ 64 (un thread per
+// dimensione), qui le dimensioni sono 512.
+export function mlaAttnSplitReduceWgsl(opts: {
+  nHead: number; kvLora: number; ctxMax: number; chunk: number;
+}): string {
+  const { kvLora, ctxMax, chunk } = opts; // nHead = griglia del dispatch
+  const sMax = Math.ceil(ctxMax / chunk);
+  const WG = 256;
+  return `${TOK_PARAMS_WGSL}
+@group(0) @binding(0) var<storage, read> partials: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+@group(0) @binding(2) var<uniform> P: TokParams;
+const KV_LORA = ${kvLora}u;
+const S_MAX = ${sMax}u;
+const CHUNK = ${chunk}u;
+const PART_STRIDE = ${kvLora + 2}u;
+const WG = ${WG}u;
+// shared O(1): SOLO i due scalari della riduzione. Memoizzare i pesi
+// exp(m_p − M) in un array [S_MAX] costerebbe 4·S_MAX B, cioè shared che
+// CRESCE col contesto — esattamente il difetto del kernel monolitico che lo
+// split esiste per togliere (a ctxMax 65536 sarebbero 16 388 B, sopra il
+// default di spec). Si ricalcola l'exp nel loop di output, come attnSplitReduce.
+var<workgroup> mAll: f32;
+var<workgroup> lAll: f32;
+@compute @workgroup_size(${WG})
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let h = wid.x;
+  let t = lid.x;
+  let nParts = P.nPast / CHUNK + 1u; // n = nPast+1 ⇒ ceil(n/CHUNK)
+  let base = h * S_MAX * PART_STRIDE;
+  // M e L su un solo thread (nParts ≤ ${sMax}: riduzione seriale più corta del
+  // costo di una parallela)
+  if (t == 0u) {
+    var m = -3.0e38;
+    for (var p = 0u; p < nParts; p = p + 1u) { m = max(m, partials[base + p * PART_STRIDE + KV_LORA]); }
+    var l = 0.0;
+    for (var p = 0u; p < nParts; p = p + 1u) {
+      let b2 = base + p * PART_STRIDE;
+      l = l + partials[b2 + KV_LORA + 1u] * exp(partials[b2 + KV_LORA] - m);
+    }
+    mAll = m;
+    lAll = l;
+  }
+  workgroupBarrier();
+  var acc = 0.0;
+  for (var j = t; j < KV_LORA; j = j + WG) {
+    acc = 0.0;
+    for (var p = 0u; p < nParts; p = p + 1u) {
+      let b2 = base + p * PART_STRIDE;
+      acc = acc + partials[b2 + j] * exp(partials[b2 + KV_LORA] - mAll);
+    }
+    out[h * KV_LORA + j] = acc / lAll;
+  }
+}`;
+}
+
 // Copy strided per-vettore: nVec segmenti di `len` f32 da src(srcStride, srcOff)
 // a dst(dstStride, dstOff). Serve all'assemblaggio MLA absorbed (C2 fase 4):
 // q576 per head = [q_ckv 512 (da gemvQ8Heads, stride 512) | q_rope 64 (da q
