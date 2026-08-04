@@ -1,0 +1,51 @@
+{
+ "kind": "q3k-roundtrip",
+ "schemaVersion": 1,
+ "date": "2026-08-04T07:46:35.462Z",
+ "tensor": "blk.5.ffn_gate_exps.weight",
+ "weights": 3145728,
+ "superblocks": 12288,
+ "vsLlamaQuantize": {
+  "run": true,
+  "tensor": "blk.5.ffn_gate_exps.weight",
+  "bytes": 1351680,
+  "diffBytes": 0,
+  "firstDiff": -1,
+  "rmsRel": 0,
+  "byteIdentical": true
+ },
+ "vsGgml": {
+  "sampleBlocks": 256,
+  "q3QuantDiffBytes": 0,
+  "q2QuantDiffBytes": 0,
+  "q3DequantDiffFloats": 0,
+  "q2DequantDiffFloats": 0
+ },
+ "doubleQuantization": {
+  "note": "Q4_0 → f32 → Q3_K/Q2_K: errore COMPOSTO, non confrontabile con le tabelle pubbliche (design R8)",
+  "rmsRelQ3": 0.16168461501486212,
+  "rmsRelQ2": 0.2981484143160742
+ },
+ "quantizeCost": {
+  "msPerTensorQ3K": 95.0076469999999,
+  "msPerTensorQ2K": 863.2572999999998,
+  "runsQ3K": [
+   94.6583069999997,
+   95.0076469999999,
+   124.31293899999997
+  ],
+  "runsQ2K": [
+   862.664548,
+   863.2572999999998,
+   885.4035469999999
+  ],
+  "weightsPerTensor": 3145728,
+  "projectionPmax1024": {
+   "tensorsPerExpert": 3,
+   "experts": 1024,
+   "secondsQ3K": 291.8634915839997,
+   "secondsQ2K": 2651.926425599999,
+   "note": "single-thread; l'import di §6 può usare un pool di worker (non cambia i byte)"
+  }
+ }
+}

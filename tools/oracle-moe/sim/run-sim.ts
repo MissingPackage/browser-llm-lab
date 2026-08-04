@@ -6,7 +6,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import {
-  simulate, usageCounts, topKeys, workingSet, skew, key,
+  simulate, usageCounts, topKeys, workingSet, skew,
   type TraceRow, type PolicyName, type SimResult,
 } from "./simulate.js";
 

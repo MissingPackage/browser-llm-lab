@@ -22,6 +22,30 @@
     kernel MLA validati), head Q5_K (6.2%, rischio sul tensore che
     amplifica 10³).
 
+    **AGGIORNAMENTO (2026-08-04, it.18 chiusa): LA LADDER HA RISPOSTO — la
+    degradazione NON passa il gate a nessun P.** Dati in
+    `results/engine/q3k-loss-ladder-2026-08-04.json` (validati da review
+    avversaria con ricomputazione integrale):
+    - danno strettamente unidirezionale (q3k-627: 5 posizioni perse, 0
+      guadagnate su 256 appaiato; IC95 esclude lo zero per TUTTE e 10 le
+      configurazioni); proiezione λ≈20 perdite nette su 1024 ⇒
+      **P(passare il gate) ≈ 2·10⁻⁹** nel caso migliore;
+    - il 98.83% è il valore MISURATO del motore in C2 (1012/1024): è un pin
+      di non-regressione — qualunque perdita netta lo rompe per costruzione;
+    - Q3_K domina Q2_K; il danno è dominato dal degradare in sé, non da P;
+      R8 (doppia quantizzazione) misurato al 16.2% RMS.
+    **Le opzioni ora sono tue**: (a) cambiare il gate di qualità per la
+    config a residenza totale (è la funzione obiettivo: si compra ~2× di
+    decode con ~2 punti di top-1 — la proiezione post-4c è sopra 13.43);
+    (b) abbandonare la residenza totale via degradazione e chiudere C3a col
+    meccanismo costruito ma il drain residuo (il gate 13.43 resta
+    irraggiungibile: proiezione batching 12.47 max) — si lega all'item 2;
+    (c) altre leve hardware/modello fuori dal perimetro attuale (VRAM
+    maggiore, modello più piccolo, quant del GGUF sorgente diversa =
+    must-docket direction §3). Il costo già speso per saperlo: un
+    quantizzatore byte-identico a ggml e una ladder riusabile — nessun
+    kernel, nessun import, nessuna qualità bruciata.
+
 14b. **Addendum all'item 14 (2026-08-03, it.16)** — secondo caso concreto,
     stavolta sul routing: il done-when di fase 4 chiede conformance "non
     peggiore" dell'artefatto 07-31, ma quell'artefatto è pre-it.12/13 (somme

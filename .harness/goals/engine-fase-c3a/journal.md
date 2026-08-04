@@ -1232,3 +1232,56 @@ eval di perdita OBBLIGATORIA (il ruling autorizza la spesa, non esonera dal
 misurarla; gate: top-1 ≥ 98.83% full-corpus, argmax ≡ cpuref sul campione)
 + preload asincrono + dimensionamento sul contesto scelto (0.67 GiB @525 /
 1.03 @4096, scelta da scrivere nel report).
+
+## it.18 (2026-08-04) — fase 4c slice A: il pilota dice di non spendere
+
+Design 4c (doc `2026-08-04-engine-fase4c-residenza-design.md`): la matrice
+usage DERIVATA dalla traccia C1 smentisce l'ipotesi "5-10% di expert freddi"
+— Q3_K libera il 23.6% di uno slab, servono 627 expert @ctx525 / 935 @ctx4096
+(21-32% del parco), il ranking generalizza male (2.4× ai P bassi, misurato e
+corretto in §1 dopo review). Ratifica a docket item 15.
+
+**Slice 4c-A eseguita (zero GPU, zero path caldo)**: quantizeQ3_K/Q2_K +
+dequant (PRIMO quantizzatore del repo, **byte-identico a llama-quantize
+--allow-requantize su tensori veri** — 12 288 + 72 superblocchi, 0 diff;
+f32ToF16 fuzzato su 1.09M valori, 0 mismatch), degrade set pinnato
+(anti-leakage: ranking senza p4+p7, sha 93ea3d3c...), e la LADDER DI PERDITA
+su 10 configurazioni (159 min, 11 worker, base che riproduce it.14 a 256/256
+con gli stessi identici fallimenti).
+
+### Il verdetto (nel dato committato: pairedAnalysis/gate/fullCorpusFeasibility)
+
+- **Nessuna configurazione passa il gate**: il meglio (q3k a 355-627) perde
+  5 posizioni su 256 appaiato, 0 guadagnate — danno strettamente
+  unidirezionale, IC95 appaiato esclude lo zero per TUTTE e 10 le config.
+  Proiezione: λ≈20 perdite nette su 1024 ⇒ P(passare) ≈ 2·10⁻⁹.
+- **Scoperta che riorganizza la lettura del gate**: 98.83% = 1012/1024
+  MISURATO dal motore in C2 — è un pin di non-regressione, non una soglia:
+  qualunque perdita netta lo rompe per costruzione.
+- Q3_K domina Q2_K a ogni P; "355→627 gratis" era compensazione nella banda
+  (il danno cresce monotono: KL +60%, test dei segni p=0.031) — corretto
+  dopo review, l'artefatto riporta l'analisi appaiata giusta.
+- R8 misurato: doppia quantizzazione Q4_0→f32→Q3_K = 16.2% RMS rel.
+- Full-corpus CPU NON lanciato: cammino critico ≥31 h (p5: 6 175 posizioni
+  di replay, attention O(L²) memory-bound) e non necessario — l'appaiato
+  chiude la domanda. In GPU costerebbe 4.9 h, ma solo DOPO aver costruito
+  kernel+import: esattamente la spesa che il pilota dice di non fare.
+
+### Review e fix (protocollo consueto)
+
+Opus: ladder "base decisionale affidabile" dopo ricomputazione integrale
+(secondo tensore, degrade set da zero, testa riprodotta, conteggi
+posizione-per-posizione). Quattro condizioni, tutte chiuse: provenienza
+(resume no-op bit-identico + producedBy con gli sha), fixture estesa a 2
+tensori (la mutazione is<=nstep ora FALLISCE — prima era cieca), design §1
+corretto (2.42×→1.60×, apples-to-apples), minori (dominio nearestInt,
+policy-id nel path dei blob, unione shard, costo dichiarato 105.9 ms/tensore,
+13 GB di scratch liberati).
+
+### Conseguenza sul goal
+
+**La 4c per degradazione dei pesi è morta a gate invariato** — la decisione
+è PI (item 15 aggiornato col verdetto; interagisce con item 2). Il loop NON
+si ferma: la **fase 5 (prefill batched M>1)** è sbloccata dal ruling item 6,
+indipendente dalla 4c, e il gate prefill 56.58 (+ TTFT 81 s vs 4) serve
+comunque, qualunque sia l'esito della 4c.

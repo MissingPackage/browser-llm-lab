@@ -4,3 +4,4 @@ dist/
 .playwright-mcp/
 public/models/
 tools/oracle-moe/golden
+tools/oracle-moe/kqref

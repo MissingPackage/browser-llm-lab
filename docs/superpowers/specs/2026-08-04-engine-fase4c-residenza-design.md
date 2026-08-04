@@ -31,11 +31,28 @@ dopo, scelta reversibile a costo di disco.
 - Massa dei coldest-N (ranking full, misurata su tutta la traccia):
   N=135 → 0.64% decode; 300 → 2.23%; 500 → 5.24%; 900 → 13.06%.
   Il rendimento marginale peggiora con N (ratio vs uniforme: 0.074 → 0.287).
-- **Generalizzazione (held-out, ranking su p0-3 misurato su p4-7, decode)**:
-  la massa esposta fuori campione è **1.36-1.78× quella in-sample**
-  (N=135: 0.64→1.14%; N=935: 13.9→18.9%). Il prompt 05-math-en è l'outlier
-  sistematico (2× la mediana). ⇒ ogni eval fatta sul corpus di derivazione
-  è ottimista ~1.5×: protocollo anti-leakage obbligatorio (§8.2).
+- **Generalizzazione (held-out) — CORRETTA in 4c-A, la prima stesura
+  SOTTOSTIMAVA.** La riga originale dichiarava «1.36-1.78×», ma confrontava
+  apples-to-oranges: numeratore da un ranking (p0-3) e denominatore da un
+  altro (traccia intera). Con lo split dichiarato e coerente — ranking e
+  massa in-sample su **p0,p1,p2,p3,p5,p6**, massa held-out su **p4,p7**,
+  denominatore = tutte le selezioni dei 46 layer — i numeri veri sono
+  (`results/engine/moe-degrade-set-2026-08-04.json`, campo `ladderRatio`):
+
+  | P | in-sample decode | held-out decode | **ratio** | ratio full |
+  |---|---|---|---|---|
+  | 355 | 2.58% | 6.25% | **2.42×** | 3.49× |
+  | 530 | 5.00% | 10.34% | **2.07×** | 2.82× |
+  | 627 | 6.44% | 12.47% | **1.94×** | 2.55× |
+  | 935 | 12.76% | 20.95% | **1.64×** | 2.12× |
+  | 1024 | 14.83% | 23.78% | **1.60×** | 2.06× |
+
+  Il fattore è **~2.4-2.6× ai P piccoli e scende a ~1.6× ai P grandi**: la
+  coda fredda è quella che generalizza PEGGIO, esattamente dove il design
+  sperava di risparmiare a buon mercato. Il prompt 05-math-en (p4) resta
+  l'outlier sistematico: a P=627 espone 16.09% contro l'8.85% di p7.
+  ⇒ ogni eval fatta sul corpus di derivazione è ottimista di 1.6-2.4×, non
+  di 1.5×: protocollo anti-leakage obbligatorio (§8.2).
 - Il set freddo è SPARSO (a N=500: 43/46 layer, max 23/64 in un layer).
 - **blk.1-4 (classe q4_1) FUORI dal pool degradabile**: compaiono solo a N
   alto, la ricetta upstream gli ha dato più bit sul down (sensibilità
@@ -263,8 +280,11 @@ baseline; suite+tsc.
 - **R3 top-1 < 98.83% al P scelto** (MEDIA-ALTA): la ladder lo proietta
   prima delle 4.9 h; regola di decisione pre-dichiarata (§3). Non è deroga:
   è il done-when.
-- **R4 il freddo non generalizza** (ALTA — già misurata: 1.4-1.8×):
-  anti-leakage §8.2; il report dichiara l'in-sample.
+- **R4 il freddo non generalizza** (ALTA — misurata in 4c-A: **2.4× a P=355,
+  1.9× a P=627, 1.6× a P=1024**, decode; il «1.4-1.8×» della prima stesura
+  era un confronto fra ranking diversi e SOTTOSTIMAVA — vedi §1, tabella
+  corretta): anti-leakage §8.2; il report dichiara l'in-sample. Il rischio
+  morde di più proprio ai P bassi, cioè dove si sperava di degradare poco.
 - **R5 import esplode** (media): misurato in slice A su un tensore; pool di
   worker.
 - **R6 ring stalla/OOM** (bassa-media): wall vs throughput OPFS; C

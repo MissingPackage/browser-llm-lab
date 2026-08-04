@@ -45,17 +45,27 @@ insieme**. **Item 2 RIPRESENTATO al PI nel docket** coi numeri per decidere
 (batching = max 12.47, sotto gate; eliminazione via 4c = sopra per
 aritmetica, incognite: clock e costo qualità).
 
-**PROSSIMO PEZZO: FASE 4c (residenza totale, emendamento 4 — authority
-concessa).** Quattro pezzi: (1) quant asimmetrica sui ~135 expert più freddi
-(matrice usage C1; deficit 0.67 GiB @ctx525 / 1.03 @4096 — la scelta del
-contesto va scritta nel report); (2) nuova versione di layout dello slab con
-invalidazione testata come in fase 3; (3) **eval di perdita OBBLIGATORIA**
-(gate: top-1 ≥ 98.83% full-corpus, argmax ≡ cpuref campione — sotto soglia
-si docketa, non si assorbe); (4) preload chunked/asincrono dal file slab
-(quello attuale è a scala ktest: 2944 read bloccanti sul modello vero =
-minuti di stallo, caveat §3-ter.1). Il done-when 4c: hit-rate 100%, 0
-miss/token, contesto dichiarato. Poi bench di produzione in `select:"gpu"`:
-è lì che si vede se il gate 13.43 cade.
+**FATTO (it.18): FASE 4c SLICE A — il pilota dice di NON spendere.**
+Quantizzatore Q3_K/Q2_K byte-identico a llama-quantize (primo del repo) +
+degrade set pinnato + LADDER DI PERDITA su 10 config. Verdetto (nel dato,
+`q3k-loss-ladder-2026-08-04.json`, validato da review con ricomputazione):
+**nessun P passa il gate** — danno unidirezionale (5-0 appaiato al meglio),
+IC95 escludono lo zero per tutte le config, P(pass)≈2e-9; e il 98.83% è un
+PIN di non-regressione (1012/1024 misurato in C2), non una soglia.
+**4c in stallo su decisione PI (docket item 15 aggiornato; interagisce con
+item 2)**: cambiare il gate di qualità, o abbandonare la residenza totale
+(⇒ gate 13.43 irraggiungibile, proiezione batching 12.47 max). Slice B/C/D
+NON partono senza ruling.
+
+**PROSSIMO PEZZO DECIDIBILE (nessun ruling richiesto): FASE 5 — prefill
+batched M>1** (sbloccata dal ruling item 6; indipendente dall'esito 4c; il
+gate prefill 56.58 e il TTFT 81 s vs 4 servono comunque). Spec §5: M=16
+iniziale, condizione di identità = argmax identico su tutte le posizioni
+M=1 vs M>1; owns: prefill path, prefillplan, moe batched, tests/. Nota di
+design: nel prefill gli insiemi di expert differiscono per token — il
+meccanismo arena+Sel della fase 4 (un dispatch = un expert) va esteso a
+M>1 (Sel per token o batching per expert con gather). Il done-when: test di
+identità M=1 vs M>1 verde + bench con prefill tok/s e TTFT su p6.
 
 **FATTO (it.12): flash-decoding sulla MLA.** `mlaAttnSplitPartWgsl` (chunk da
 16 posizioni, 256 thread/wg, cache in shared riusata da tutte le 20 head) +
