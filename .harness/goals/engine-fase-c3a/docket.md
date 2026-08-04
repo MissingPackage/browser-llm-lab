@@ -1,5 +1,27 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+15. **RATIFICA RICHIESTA — la 4c non è il 5-10% del parco: è il 21-32%**
+    (2026-08-04, it.18, design doc `2026-08-04-engine-fase4c-residenza-design.md`).
+    L'emendamento 4 autorizzava la quant asimmetrica «sugli expert più
+    freddi» sull'ipotesi di spec §3.0-ter (5-10%). L'aritmetica misurata dice
+    altro: Q3_K libera il 23.6% di uno slab, non il 100% ⇒ per chiudere il
+    deficit servono **627 expert (21.3% del parco) a ctx525, 935 (31.8%) a
+    ctx4096**, con massa di selezioni esposta (held-out, misurata sulla
+    traccia C1) del **12.5% / 21.0%** del decode. In più il ranking "freddo"
+    generalizza male (fuori campione 1.4-1.8× la massa promessa, misurato).
+    **La spesa autorizzata è materialmente diversa da quella immaginata:
+    chiedo ratifica, non la prendo.** Nel frattempo procede la slice 4c-A
+    (pilota CPU): misura pura, zero qualità spesa, produce la LADDER DI
+    PERDITA su P ∈ {355,530,627,935,1024} × {Q3_K,Q2_K} — quando arriva, la
+    decisione si prende sui numeri veri invece che sulle ipotesi. Proposta
+    del design (regola pre-dichiarata, §3): artefatto dimensionato a ctx
+    4096 (P parametro di load, niente re-import per C3b), produzione/gate a
+    ctx 525, si scende al P che passa l'eval, sotto P=627 si docketa col
+    fallback Q2_K già misurato. Alternative scartate con l'aritmetica: KV
+    quantizzata (5.3% del deficit al contesto del gate, blast radius sui
+    kernel MLA validati), head Q5_K (6.2%, rischio sul tensore che
+    amplifica 10³).
+
 14b. **Addendum all'item 14 (2026-08-03, it.16)** — secondo caso concreto,
     stavolta sul routing: il done-when di fase 4 chiede conformance "non
     peggiore" dell'artefatto 07-31, ma quell'artefatto è pre-it.12/13 (somme
