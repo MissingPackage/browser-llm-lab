@@ -1,6 +1,31 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-03, sessione 20 — C3a it.12-13: attention dimezzata, K-quant fast, gpuBusy sotto la soglia 4b)
+# HANDOFF — browser-llm-lab   (updated 2026-08-05, sessione 21 — ruling item 15 = opzione c, sblocco 4c senza degradazione + fase 4d risanamento base)
 
 ## 1. Next decidable
+
+**RULING (2026-08-05, sessione 21): lo stallo 4c è SCIOLTO — opzione (c),
+"trovare il GiB altrove".** La degradazione è FUORI a qualunque P/formato;
+la residenza totale resta l'obiettivo e il deficit (685 MiB @ctx525) si
+colma dal bilancio VRAM dell'host: nessuna iGPU (display su eDP della
+4090), processi desktop ≈347-763 MiB ⇒ per le run di gate la sessione si
+spegne (sessione minima o headless da TTY). **Caveat misurato**: il driver
+riserva 429 MiB e il "usabile 15.247 GiB" del design era aritmetico, mai
+verificato ⇒ **primo task = 4c-A′, probe del tetto allocabile vero da
+Chrome/Dawn nei 3 regimi host**. Regola pre-dichiarata: copre ⇒ residenza
+totale Q4_0 puro, eval di perdita decaduta (pesi immutati); gap ⇒ docket
+col numero, mai degradazione. Emendamento 5 in GOAL, riga 4c ri-sliceata
+(A′ probe / B′ preload+slotsExact+precondizione / C′ chiusura congiunta
+4+4c). Slab v2, kernel Q3_K e terza size-class NON si costruiscono;
+quantizzatore e ladder restano come strumenti di eval.
+
+**RULING (2026-08-05, sessione 21): FASE 4d — risanamento della base**
+(emendamento 6, docket item 16): unificare device/limiti/uncapturederror
+(chiude il residuo item 10a con ri-baseline dichiarata), telemetria a
+schema unico (ttftMs+hostState in ogni report, anche Qwen), dispatch
+Planned+Measured ovunque, glmsource sotto test, 256/256 come campo JSON,
+path non-fuso morto e artefatti orfani (i 2 prefill-sim-* load-bearing).
+NON incluso: ktest dei kernel fusi solo-Qwen (si riduce in fase 5).
+**Ordine corrente: 4c-A′ (probe, breve) → 4d → 5 (prefill M>1)**; la
+fase 6 ora è blocked-by-3,4,4b,4c,4d,5.
 
 **FATTO (it.13): famiglia fast sui K-quant.** shexp 14.6→5.5, head 9.6→3.8
 ms/token (bycat); decode **5.054** (nuovo massimo, medie 6-rep 4.972→5.024);
@@ -52,13 +77,11 @@ degrade set pinnato + LADDER DI PERDITA su 10 config. Verdetto (nel dato,
 **nessun P passa il gate** — danno unidirezionale (5-0 appaiato al meglio),
 IC95 escludono lo zero per tutte le config, P(pass)≈2e-9; e il 98.83% è un
 PIN di non-regressione (1012/1024 misurato in C2), non una soglia.
-**4c in stallo su decisione PI (docket item 15 aggiornato; interagisce con
-item 2)**: cambiare il gate di qualità, o abbandonare la residenza totale
-(⇒ gate 13.43 irraggiungibile, proiezione batching 12.47 max). Slice B/C/D
-NON partono senza ruling.
+~~4c in stallo su decisione PI~~ **RISOLTO 2026-08-05 (v. testa del §1):
+opzione (c), niente degradazione, GiB dal bilancio host.**
 
-**PROSSIMO PEZZO DECIDIBILE (nessun ruling richiesto): FASE 5 — prefill
-batched M>1** (sbloccata dal ruling item 6; indipendente dall'esito 4c; il
+**PROSSIMO PEZZO DECIDIBILE: 4c-A′ (probe tetto VRAM), poi 4d (risanamento
+base), poi FASE 5 — prefill batched M>1** (sbloccata dal ruling item 6; il
 gate prefill 56.58 e il TTFT 81 s vs 4 servono comunque). Spec §5: M=16
 iniziale, condizione di identità = argmax identico su tutte le posizioni
 M=1 vs M>1; owns: prefill path, prefillplan, moe batched, tests/. Nota di

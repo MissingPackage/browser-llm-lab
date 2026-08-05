@@ -1,5 +1,18 @@
 # FASE 4c — Residenza totale: design
 
+> **SUPERSEDED IN PARTE (2026-08-05, ruling PI docket item 15 = opzione c,
+> GOAL emendamento 5).** La ladder di slice A (q3k-loss-ladder-2026-08-04)
+> ha dimostrato che la degradazione non passa il gate a nessun P; il PI ha
+> scelto di colmare il deficit dal bilancio VRAM dell'host, senza toccare i
+> pesi. **Decadono**: §2.2-§2.4 (formati/opzioni di degrado), §4, §5 (terza
+> size-class), §6 (slab v2), §8 (eval di perdita), slice B/C/D di §9.
+> **Restano validi**: §1 (matrice usage — riusabile), §2.1 (bilancio VRAM,
+> con l'avvertenza che il "usabile 15.247 GiB" è aritmetico e va verificato
+> col probe contro i 429 MiB di memory.reserved), §7 (preload asincrono),
+> slice 4c-A di §9 (consegnata: quantizzatore+ladder come strumenti di
+> eval). Il ri-slicing corrente (A′ probe / B′ preload+slotsExact /
+> C′ residenza Q4_0) è nella riga 4c di PHASES.md.
+
 Goal engine-fase-c3a, emendamento 4 (ruling PI 2026-08-03, docket item 8).
 Prodotto in it.18 da agente Plan su file e dati veri; rivisto e approvato
 dall'orchestratore. La matrice usage è stata DERIVATA (non stimata) dalla

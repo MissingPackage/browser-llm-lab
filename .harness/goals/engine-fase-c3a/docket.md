@@ -1,6 +1,55 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
-15. **RATIFICA RICHIESTA — la 4c non è il 5-10% del parco: è il 21-32%**
+16. **RULING registrato (2026-08-05, PI in chat): RISANAMENTO DELLA BASE —
+    "risistemiamo la base di orchestrazione, telemetria, error handling, ecc.
+    non ha senso produrre questo casino".** Il debito delle due implementazioni
+    parallele (state-2026-08-02 §5: nessun modulo comune di orchestrazione,
+    telemetria, error handling, negoziazione limiti fra path Qwen e GLM) entra
+    nel goal come **fase 4d** (emendamento 6 in GOAL.md, riga in PHASES).
+    Ordine deciso dall'orchestratore (ruling "decidere, non escalare"):
+    4c-A′ (probe, breve) → 4d → 5 — la fase 5 costruisce il prefill GLM sulla
+    base risanata, non sul casino. NON incluso in 4d: ktest dei kernel fusi
+    solo-Qwen (debito §7.1 registrato; si riduce in fase 5 coprendo ogni
+    kernel che il lavoro prefill tocca). La ri-baseline dei bench richiesta
+    dalla negoziazione limiti unificata (residuo item 10a) è dentro la fase,
+    dichiarata, e sostituisce i riferimenti — registrazione qui a fase chiusa.
+
+15. ~~**RATIFICA RICHIESTA — la 4c non è il 5-10% del parco: è il 21-32%**~~
+    **RISOLTO (2026-08-05, PI in chat: "andiamo su opzione c: trovare il GiB
+    altrove").** La degradazione degli expert è FUORI — a qualunque P e
+    formato: la ladder l'ha uccisa nel dato e il PI non compra qualità per
+    velocità. La residenza totale resta l'obiettivo; il GiB si cerca nel
+    **bilancio VRAM dell'host**, non nei pesi del modello.
+
+    **Misura di apertura (2026-08-05, nvidia-smi + lspci)**: nessuna iGPU —
+    il display (eDP) sta sulla 4090, il desktop non si sposta, si spegne.
+    Processi desktop ≈347 MiB (plasmashell 139, kwin 85, kitty 40,
+    kscreenlocker 39, krunner 24, Xwayland+bridge 7, codex 13) su un deficit
+    di 685 MiB @ctx525. Il driver riserva 429 MiB (`memory.reserved`), e il
+    "VRAM usabile 15.247 GiB" del design è ARITMETICO (16376−763, dal design
+    spec 2026-08-01), mai verificato contro quel reserved: il tetto
+    allocabile vero da dentro Chrome/Dawn non è mai stato misurato.
+
+    **Conseguenze (emendamento 5)**:
+    - le slice 4c-B/C/D del design 2026-08-04 NON si costruiscono (terza
+      size-class, kernel Q3_K, slab v2 con regione degradata); il
+      quantizzatore Q3_K/Q2_K e la ladder restano come strumenti di eval;
+    - ri-slicing: **A′** = probe del tetto VRAM allocabile REALE nei tre
+      regimi host (sessione piena / minima / headless senza sessione
+      grafica); **B′** = preload asincrono + slotsExact + precondizione
+      (design §5 in parte + §7, invariati); **C′** = residenza totale in
+      Q4_0 puro e chiusura congiunta fase 4 + 4c;
+    - regola pre-dichiarata: se il tetto misurato copre parco 14.60 GiB +
+      non-expert 1.26 + KV(525) + riserva ⇒ si chiude senza toccare la
+      qualità e l'eval di perdita DECADE (pesi immutati = niente perdita da
+      misurare; il 98.83% torna non-regressione pura); se resta un gap ⇒ il
+      NUMERO torna a docket, non si degrada (unica micro-leva non-peso
+      quotata: KV misto 38.4 MiB @525; head Q5_K resta scartata);
+    - caveat dichiarato: "residenza totale a sessione spenta" è una config
+      da bench/gate sul dev-box 16 GiB, non il regime interattivo di questo
+      box (che resta a residenza parziale — materia C3b). La tesi che il
+      gate dimostra — qualità intatta a residenza totale — non dipende dal
+      regime host.
     (2026-08-04, it.18, design doc `2026-08-04-engine-fase4c-residenza-design.md`).
     L'emendamento 4 autorizzava la quant asimmetrica «sugli expert più
     freddi» sull'ipotesi di spec §3.0-ter (5-10%). L'aritmetica misurata dice

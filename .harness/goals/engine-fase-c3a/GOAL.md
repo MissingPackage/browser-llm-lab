@@ -3,6 +3,54 @@ CPU di C1 (decode >=13.43 tok/s) e possiede un percorso di prefill batched M>1,
 eliminando i tre costi strutturali attribuiti in C2 (pack CPU nel path caldo,
 46 sync router/token, forward sequenziale in prefill) a correttezza invariata.
 
+<!-- EMENDAMENTO 6 (ruling PI 2026-08-05, in chat + docket item 16): FASE 4d —
+     RISANAMENTO DELLA BASE. "Risistemiamo la base di orchestrazione,
+     telemetria, error handling, ecc. non ha senso produrre questo casino."
+     Motivo strutturale (state-2026-08-02 §5): i path Qwen e GLM non
+     condividono NESSUN modulo di orchestrazione, telemetria, error handling
+     o negoziazione limiti, e le divergenze si sono gia' pagate (dispatch
+     count sbagliato di 2 per tutto C2, `uncapturederror` assente sui worker
+     GLM = la classe di errore silenzioso che il progetto teme di piu').
+     Perche' serve un emendamento: il lavoro e' trasversale agli owns di fasi
+     chiuse (gpuforward = fase A, glmbench = fase 1) — senza una fase propria
+     sarebbe lavoro senza owner, come per l'emendamento 4.
+     Perimetro della 4d (riga in PHASES): helper unico di creazione device
+     (limiti negoziati + uncapturederror ovunque — chiude il residuo del
+     docket item 10 con ri-baseline dichiarata); schema di telemetria unico
+     (contatori cumulativi diffabili, default off, ttftMs e hostState in OGNI
+     report, anche Qwen); dispatch Planned+Measured su entrambi i path;
+     glmsource.ts sotto test; il gate 256/256 emesso come campo JSON; path
+     non-fuso Qwen morto e artefatti orfani risolti. NON incluso: ktest dei
+     kernel fusi solo-Qwen (debito registrato, si riduce in fase 5).
+     I gate di chiusura del goal restano INVARIATI. -->
+
+<!-- EMENDAMENTO 5 (ruling PI 2026-08-05, docket item 15: "andiamo su opzione
+     c: trovare il GiB altrove"): la 4c CAMBIA MEZZO, non fine. La ladder di
+     it.18 ha dimostrato che la degradazione non passa il gate a nessun P
+     (P(pass)≈2e-9, danno unidirezionale): la qualita' del modello NON si
+     spende. La residenza totale resta l'obiettivo; il deficit (0.67 GiB
+     @ctx525) si colma dal bilancio VRAM dell'host (processi desktop ~347-763
+     MiB su dGPU senza iGPU: si spegne la sessione per le run di gate) e la
+     prima azione e' misurare il tetto allocabile VERO da Chrome/Dawn (il
+     15.247 GiB del design era aritmetico, mai verificato contro i 429 MiB di
+     memory.reserved del driver).
+     Conseguenze sul contratto:
+     (1) l'authority dell'emendamento 4 (quant asimmetrica + layout slab v2
+         con regione degradata) DECADE inutilizzata: nessun kernel Q3_K,
+         nessuna terza size-class, nessun file v2. Quantizzatore e ladder
+         restano nel repo come strumenti di eval;
+     (2) la 4c si ri-slicea: A′ probe del tetto VRAM (3 regimi host), B′
+         preload asincrono + slotsExact + precondizione, C′ residenza totale
+         Q4_0 puro e chiusura congiunta fase 4 + 4c;
+     (3) regola pre-dichiarata: gap residuo dopo il recupero host ⇒ docket
+         col numero, MAI degradazione;
+     (4) l'eval di perdita della 4c decade (pesi immutati); i gate restano
+         invariati e il 98.83% torna a essere non-regressione pura;
+     (5) il protocollo di bench guadagna il REGIME HOST come parametro
+         dichiarato nel report (sessione piena/minima/headless): i gate di
+         chiusura si misurano nel regime dichiarato, a parita' di protocollo
+         per ogni confronto. -->
+
 <!-- EMENDAMENTO 4 (ruling PI 2026-08-03, docket item 8 + "fai l'emendamento"):
      la RESIDENZA TOTALE entra nel perimetro C3a come fase 4c.
      Motivo: il PI ha deciso di pagare ~0.67 GiB di qualita' per eliminare il
