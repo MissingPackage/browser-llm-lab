@@ -1822,3 +1822,38 @@ Il chunk M>1 e' quindi componibile con identita' garantita PER COSTRUZIONE
 a livello di kernel. Resta il WIRING: glmprefill path in glmmodel (router
 per riga → planMoeChunk → ensure unione → Sel/gather → submit per chunk),
 il test identita' argmax M=1 vs M>1 su p6, e il bench TTFT — il done-when.
+
+## it.31 — 2026-08-06 — fase 5 slice 4 prep: il piano di wiring è SU DISCO, il corredo è chiuso davvero
+
+### Perché un'iterazione di piano (pre-limit, protocollo #7)
+
+Il wiring è l'integrazione più grossa del goal e la sessione ha 10 iterazioni
+pesanti alle spalle: il rischio di perdere dettaglio fine di glmmodel in una
+compattazione di contesto a metà wiring era CONCRETO. Conversione: la
+ricognizione completa di forward() (glmmodel@5d9fd32, righe 839-999) è
+diventata `docs/engine/glmprefill-wiring-plan-2026-08-06.md` — ogni
+decisione presa, con razionale, eseguibile da contesto fresco.
+
+### Le decisioni fissate nel piano
+
+- API additiva `prefillChunk` (forward INTOCCATO);
+- router CPU per chunk: 1 readback M×64/layer ⇒ **2.9 sync/token a M=16**
+  (oggi 46) — il resolve GPU batched è ottimizzazione futura, non done-when;
+- pesi expert ai gather via bind group a SOTTO-RANGE per unione dopo gli
+  ensure (niente porting arena: il sync col router c'è comunque);
+- inventario buffer M× (~30 MB), sequenza per-chunk speculare al forward,
+  head sull'ultima riga riusando headSteps (bit-identici);
+- identità attesa ESATTA (argomento in §6 del piano);
+- 4 fette di verifica (a-d) con commit separati.
+
+### Più l'ultimo generatore
+
+`gemvF32Wgsl` (il router GEMM) + variante batch — l'unico kernel del forward
+che ne era privo. Byte-identità non-batch verificata; ktest
+`dense-batch-gemv-f32` **BIT-IDENTICO maxAbs 0**. ktest **65/65**; suite
+**337+7**; tsc pulito.
+
+### Prossimo
+
+Eseguire il piano: fetta (a) prefillChunk compilato + suite verde, poi (b)
+identità corta, (c) p6 intera, (d) bench TTFT.

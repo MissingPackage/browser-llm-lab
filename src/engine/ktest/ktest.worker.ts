@@ -1464,6 +1464,21 @@ async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
       out.push(bitCmp(`dense-batch-gemv-${kind}`, new Float32Array(await g.read(yM, M * N * 4)), refs, N));
     }
   }
+  { // gemvF32 (router GEMM): l'ultimo generatore del corredo
+    const K = 128, N = 64;
+    const wN = randF32(K * N, 30_700, 0.5);
+    const wB = g.buf(wN);
+    const xs = Array.from({ length: M }, (_, m) => randF32(K, 30_710 + m, 0.5));
+    const refs: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const y = g.empty(N * 4);
+      await g.run(gemvF32Wgsl({ K, N }), [wB, g.buf(xs[m]), y], N);
+      refs.push(new Float32Array(await g.read(y, N * 4)));
+    }
+    const yM = g.empty(M * N * 4);
+    await g.run(gemvF32Wgsl({ K, N, batch: true }), [wB, rowsBuf(xs), yM], [N, 1, M]);
+    out.push(bitCmp('dense-batch-gemv-f32', new Float32Array(await g.read(yM, M * N * 4)), refs, N));
+  }
   { // gemvQ8Heads (absorbKb/voutVb): x per head DENTRO la riga
     const K = 64, rowsPerHead = 8, nHead = 4, xStride = 80, xOffset = 16;
     const N = rowsPerHead * nHead;

@@ -134,8 +134,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 
 // GEMV f32 puro: il router MoE (ffn_gate_inp) è F32 nel GGUF (spec C2 §1).
 // Stessa griglia/riduzione dei gemv quant; w row-major [N righe × K].
-export function gemvF32Wgsl(opts: { K: number; N: number }): string {
-  const { K, N } = opts;
+export function gemvF32Wgsl(opts: { K: number; N: number; batch?: boolean }): string {
+  // batch (fase 5): wid.z = riga — testo non-batch invariato (idioma it.27-30)
+  const { K, N, batch } = opts;
+  const rowPre = batch ? `\n  let xRB = wid.z * ${K}u;\n  let yRB = wid.z * ${N}u;` : "";
+  const xRB = batch ? "xRB + " : "";
+  const yI = batch ? "y[yRB + r]" : "y[r]";
   return `
 @group(0) @binding(0) var<storage, read> w: array<f32>;
 @group(0) @binding(1) var<storage, read> x: array<f32>;
@@ -145,9 +149,9 @@ var<workgroup> partial: array<f32, 64>;
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
   let r = wid.x + wid.y * ${GEMV_GRID_X}u;
   if (r >= ${N}u) { return; }
-  let t = lid.x;
+  let t = lid.x;${rowPre}
   var acc = 0.0;
-  for (var i = t; i < ${K}u; i = i + 64u) { acc = acc + w[r * ${K}u + i] * x[i]; }
+  for (var i = t; i < ${K}u; i = i + 64u) { acc = acc + w[r * ${K}u + i] * x[${xRB}i]; }
   partial[t] = acc;
   workgroupBarrier();
   var stride = 32u;
@@ -156,7 +160,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     workgroupBarrier();
     stride = stride >> 1u;
   }
-  if (t == 0u) { y[r] = partial[0]; }
+  if (t == 0u) { ${yI} = partial[0]; }
 }`;
 }
 
