@@ -1,21 +1,28 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-28: 4d chiusa; fase 5 slice 1-2-3a done)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-29: 4d chiusa; fase 5 kernel COMPLETI)
 
 ## 1. Next decidable
 
-**FATTO (it.28): fase 5 slice 3a — shexp batch su M righe, BIT-IDENTICO.**
-Opzione `batch` sui generatori K-quant fast (wid.z = riga; corpo invariato,
-testo non-batch byte-identico a HEAD verificato con diff programmatico);
-ktest `shexp-batch-vs-per-row` maxAbs 0 a geometria reale. ktest **55/55**,
-suite **337+7**, tsc pulito. Con it.27 (catena expert batched bit-identica:
-gather+slot+combine, maxAbs 0) i kernel MoE del chunk sono COMPLETI.
+**FATTO (it.29): fase 5 slice 3b — l'attention MLA batched è BIT-IDENTICA.**
+Opzione `batch` su part+reduce dello split MLA: wid.z = riga, passato per
+riga da `rowPast` (storage al posto dell'uniform) ⇒ causalità intra-chunk
+n = rowPast[m]+1 **per costruzione**, non una maschera. ktest
+`mla-split-batch-vs-per-row` **maxAbs 0** su righe a passato crescente col
+bordo di partizione attraversato (nParts diverso per riga). ktest **56/56**,
+suite **337+7**, tsc pulito.
 
-**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 3b — il pezzo grosso rimasto):
-l'attention MLA batched del chunk** — rope+kvAppend su M righe, attention
-causale intra-chunk sulla rappresentazione absorbed (cache 576/token; il
-pattern chunked Qwen non si trasla 1:1), più il dense blk.0 chunk. Poi il
-wiring glmmodel (router per riga + planMoeChunk + ensure dell'unione +
-Sel/gather) e il test identità argmax M=1 vs M>1 su p6 — il done-when della
-fase (+ bench prefill tok/s e TTFT: oggi 5.66 tok/s, 81.4 s vs 4 s UX).
+**I KERNEL A RISCHIO DELLA FASE 5 SONO TUTTI FATTI (it.27-29), tutti
+bit-identici sul device**: catena expert su unione (gather+slot+combine,
+molteplicità 2.67), shexp batch, MLA split batch causale. L'idioma è
+consolidato: corpo aritmetico invariato + variante batch condizionale +
+diff programmatico che PROVA il testo non-batch byte-identico.
+
+**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 3c): le varianti meccaniche +
+il wiring** — rope/kvAppend/rms/GEMV densi del chunk su M righe (pattern
+wid.z, provato 3 volte), dense blk.0, poi il wiring in glmmodel (router per
+riga + planMoeChunk + ensure dell'unione + Sel/gather batched + submit per
+chunk) e il done-when della fase: test identità argmax M=1 vs M>1 su p6
+verde in npm test + bench con prefill tok/s e TTFT (oggi 5.66 tok/s, 81.4 s
+vs 4 s UX).
 
 **FATTO (it.26): fase 5 slice 1** — design MoE batched deciso coi numeri di
 fase 4 (unione per expert: ~40 dispatch/layer a M=16 vs 64, traffico pesi
