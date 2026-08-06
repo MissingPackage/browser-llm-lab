@@ -1963,3 +1963,19 @@ Registrata a docket item 20.
 
 ### FASE 5 DONE-WHEN: bench JSON con prefill tok/s e TTFT su p6 ✓ · identità
 ### (sostituzione dichiarata) ✓ · suite verde ✓ · tsc pulito ✓
+
+## it.35 — 2026-08-06 — FASE 6 in corso: Qwen PASS, catena full-corpus lanciata
+
+- **Pezzo 1 — bench Qwen**: 326.2 ± 2.0 ≥ ri-baseline 322.2 (PASS),
+  dispatchPlan PASS, quiescent, report committato.
+- **Pezzi 2-3 — catena notturna in background** (gap 20 s per la landmine
+  gara-di-profilo): (a) glmconf FULL-CORPUS (tutti i prompt, maxGen pieno,
+  gateGolden ≥97 sul run / il 98.83 e' il floor di non-regressione del
+  full-corpus, gateCpuref sul campione ratificato) — attesa ~35 min al passo
+  3.7 pos/s; (b) glmroute FULL (31 274 posizioni come il riferimento 07-31:
+  setMatch decode 88.51% da non peggiorare) — attesa ~2.5 h.
+- Il bench GLM coi gate di chiusura ESISTE gia' (prefillbatch 2026-08-06:
+  decode 5.211 / prefill 25.78, FAIL attesi dichiarati sotto clausola 17a,
+  campi gap presenti).
+- Conformance eseguita col path SEQUENZIALE (conservativo: il chunked e'
+  bit-identico provato, ma il gate di fase gira sul percorso storico).
