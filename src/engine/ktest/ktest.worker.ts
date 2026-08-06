@@ -1367,6 +1367,56 @@ async function testGemvAccumFast(g: Gpu, kind: "q4_0" | "q4_1"): Promise<KResult
 // declassa a maxRel <= 1e-6 — e il note lo DICE, non lo nasconde.
 const ARENA_R2_FALLBACK_REL = 1e-6;
 
+// shexp del chunk (fase 5, it.28): le varianti batch dei kernel K-quant contro
+// il per-riga — stesso modulo, stesso corpo, cambia solo l'indicizzazione di
+// riga ⇒ l'atteso e' BIT-IDENTICO senza fallback.
+async function testShexpBatchVsPerRow(g: Gpu): Promise<KResult> {
+  const name = "shexp-batch-vs-per-row";
+  const M = 3;
+  const K = G.dModel, N = G.dFfnExpert; // gate/up: K→N; down: N→K
+  const sbGU = (K / 256) * N, sbDn = (N / 256) * K;
+  const gSrc = randBytes(sbGU * Q5_K_BLOCK_BYTES, 28_001); fixScalesAt(gSrc, Q5_K_BLOCK_BYTES, [1, 3]);
+  const uSrc = randBytes(sbGU * Q5_K_BLOCK_BYTES, 28_002); fixScalesAt(uSrc, Q5_K_BLOCK_BYTES, [1, 3]);
+  const dSrc = randBytes(sbDn * Q6_K_BLOCK_BYTES, 28_003); fixScalesAt(dSrc, Q6_K_BLOCK_BYTES, [209]);
+  const gB = g.buf(repackKQuant(gSrc, 0, sbGU, Q5_K_BLOCK_BYTES));
+  const uB = g.buf(repackKQuant(uSrc, 0, sbGU, Q5_K_BLOCK_BYTES));
+  const dB = g.buf(repackKQuant(dSrc, 0, sbDn, Q6_K_BLOCK_BYTES));
+  const xs = Array.from({ length: M }, (_, m) => randF32(K, 28_010 + m, 0.5));
+
+  // per-riga (kernel di produzione, it.13)
+  const sRef: Float32Array[] = [];
+  for (let m = 0; m < M; m++) {
+    const gate = g.empty(N * 4);
+    await g.run(pairGemvSiluQ5KFastWgsl({ K, N }), [gB, uB, g.buf(xs[m]), gate], gemvGrid(N)[0]);
+    const y = g.empty(K * 4);
+    await g.run(gemvQ6KFastWgsl({ K: N, N: K }), [dB, gate, y], gemvGrid(K)[0]);
+    sRef.push(new Float32Array(await g.read(y, K * 4)));
+  }
+
+  // batch su M righe (wid.z = riga)
+  const xM = g.empty(M * K * 4);
+  for (let m = 0; m < M; m++) g.device.queue.writeBuffer(xM, m * K * 4, xs[m] as unknown as BufferSource);
+  const gateM = g.empty(M * N * 4);
+  const gGU = gemvGrid(N), gDn = gemvGrid(K);
+  await g.run(pairGemvSiluQ5KFastWgsl({ K, N, batch: true }), [gB, uB, xM, gateM], [gGU[0], gGU[1], M]);
+  const yM = g.empty(M * K * 4);
+  await g.run(gemvQ6KFastWgsl({ K: N, N: K, batch: true }), [dB, gateM, yM], [gDn[0], gDn[1], M]);
+  const got = new Float32Array(await g.read(yM, M * K * 4));
+
+  let maxAbs = 0, bitIdentical = true;
+  for (let m = 0; m < M; m++) {
+    for (let i = 0; i < K; i++) {
+      const a = got[m * K + i], b = sRef[m][i];
+      if (!Object.is(a, b)) bitIdentical = false;
+      maxAbs = Math.max(maxAbs, Math.abs(a - b));
+    }
+  }
+  return {
+    kernel: name, pass: bitIdentical, maxAbs, maxRel: maxAbs,
+    note: bitIdentical ? `BIT-IDENTICO su ${M} righe (stesso modulo, indicizzazione di riga)` : "divergenza inattesa: stesso modulo, va investigata subito",
+  };
+}
+
 // ============ PREFILL BATCHED M>1 (C3a fase 5, it.27) ============
 // Il gate della fase ridotto ai kernel: la catena batched (gather su unione +
 // slot y[m][k] + combine k-order) contro la catena DECODE vera (pairGemvSilu +
@@ -1907,6 +1957,7 @@ async function main(): Promise<void> {
 
     // --- prefill batched M>1 (C3a fase 5): catena su unione vs catena decode ---
     results.push(await testPrefillMoeBatchedChain(g));
+    results.push(await testShexpBatchVsPerRow(g));
 
     // --- router top-4 su GPU (C3a fase 4 strato 1): fedelta' f32 vs CPU f64 ---
     results.push(await testRouterTopK(g, 64));

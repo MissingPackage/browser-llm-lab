@@ -1740,3 +1740,28 @@ ktest **54/54**; suite **337+7**; tsc pulito; scan WGSL di gpulimits verde
 Il percorso denso del chunk: MLA prefill batched (pattern chunked Qwen
 adattato alla MLA absorbed) + shexp GEMM su M righe; poi wiring in glmmodel
 (prefill path con planMoeChunk + Sel/ensure per unione) e test identita' p6.
+
+## it.28 — 2026-08-06 — fase 5 slice 3a: shexp batch su M righe, bit-identico
+
+### Cosa
+
+Opzione `batch?: boolean` sui due generatori K-quant fast (`pairGemvSiluQ5K`,
+`gemvQ6K`): wid.z = riga, x da xM[riga], out per riga — corpo aritmetico
+INVARIATO (idioma arena: il testo non-batch e' byte-identico a HEAD,
+VERIFICATO con diff programmatico dei generatori). E' lo shexp del chunk:
+la base `s` della combine (it.27) calcolata su M righe in 2 dispatch invece
+di 2M.
+
+### Verifica
+
+ktest nuovo `shexp-batch-vs-per-row`: geometria reale shexp (2048→1536→2048),
+M=3, blocchi K-quant sintetici — **BIT-IDENTICO (maxAbs 0)** contro i kernel
+di produzione per-riga. ktest **55/55**; suite **337+7**; tsc pulito.
+
+### Prossimo (fase 5, slice 3b — il pezzo grosso rimasto)
+
+L'attention MLA batched del chunk (rope+kvAppend M righe, attention causale
+intra-chunk sulla rappresentazione absorbed — il pattern chunked Qwen non si
+trasla 1:1, la MLA ha la cache 576/token e le teste assorbite), il dense
+blk.0 chunk, poi il wiring glmmodel (router per riga + planMoeChunk + ensure
+unione + Sel/gather) e l'identita' argmax M=1 vs M>1 su p6.

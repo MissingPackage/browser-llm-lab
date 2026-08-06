@@ -2442,8 +2442,15 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 // [qh 32 B][qs 128 B]. Il sottogruppo g del superblocco e' la coppia
 // (gruppo j = g>>1, meta' g&1) della struttura a 4 gruppi da 64 — e l'indice di
 // scala `is` coincide con g, che e' esattamente 2j + meta'.
-export function pairGemvSiluQ5KFastWgsl(opts: { K: number; N: number }): string {
-  const { K, N } = opts;
+export function pairGemvSiluQ5KFastWgsl(opts: { K: number; N: number; batch?: boolean }): string {
+  // batch: M righe (wid.z = riga, x da xM[mB], out per riga) — fase 5, shexp
+  // del chunk. Senza `batch` il testo emesso e' IDENTICO a prima, byte per
+  // byte: il corpo aritmetico esiste una volta sola per i due regimi (idioma
+  // arena). Per riga il corpo e' lo stesso ⇒ dot bit-identici al per-riga.
+  const { K, N, batch } = opts;
+  const mB = batch ? "\n  let mB = wid.z * K;" : "";
+  const xSrc = batch ? "x[mB + i]" : "x[i]";
+  const outIdx = batch ? `out[wid.z * ${N}u + r]` : "out[r]";
   if (K % 256 !== 0) throw new Error("pairGemvSiluQ5KFast: K non multiplo di 256");
   const sbPerRow = K / 256;
   const nSub = K / 32; // sottogruppi da 32 pesi per riga
@@ -2461,8 +2468,8 @@ var<workgroup> xs: array<f32, ${K + K / 32}>; // x paddato: +1 f32 ogni 32
 fn scByte(sw: vec3<u32>, i: u32) -> u32 { return (sw[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu; }
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let t = lid.x;
-  for (var i = t; i < K; i = i + 64u) { xs[i + (i >> 5u)] = x[i]; }
+  let t = lid.x;${mB}
+  for (var i = t; i < K; i = i + 64u) { xs[i + (i >> 5u)] = ${xSrc}; }
   workgroupBarrier();
   let r = wid.x + wid.y * ${GEMV_GRID_X}u;
   var accG = 0.0;
@@ -2544,7 +2551,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   }
   if (t == 0u && r < ${N}u) {
     let gv = redG[0];
-    out[r] = (gv / (1.0 + exp(-gv))) * redU[0];
+    ${outIdx} = (gv / (1.0 + exp(-gv))) * redU[0];
   }
 }`;
 }
@@ -2554,8 +2561,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 // la pipeline. Superblocco = 53 word: [ql 128 B][qh 64 B][scales int8 16 B]
 // [d f16 in coda]. Il sottogruppo g e' la coppia (meta' n = g>>2, quarto
 // k = g&3) dei 4 termini q1..q4 del riferimento.
-export function gemvQ6KFastWgsl(opts: { K: number; N: number }): string {
-  const { K, N } = opts;
+export function gemvQ6KFastWgsl(opts: { K: number; N: number; batch?: boolean }): string {
+  // batch: v. pairGemvSiluQ5KFastWgsl — stesso regime, testo non-batch invariato
+  const { K, N, batch } = opts;
+  const mB = batch ? "\n  let mB = wid.z * K;" : "";
+  const xSrc = batch ? "x[mB + i]" : "x[i]";
+  const outIdx = batch ? `y[wid.z * ${N}u + r]` : "y[r]";
   if (K % 256 !== 0) throw new Error("gemvQ6KFast: K non multiplo di 256");
   const sbPerRow = K / 256;
   const nSub = K / 32;
@@ -2575,8 +2586,8 @@ fn s8(w0: u32, w1: u32, bi: u32) -> f32 {
 }
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let t = lid.x;
-  for (var i = t; i < K; i = i + 64u) { xs[i + (i >> 5u)] = x[i]; }
+  let t = lid.x;${mB}
+  for (var i = t; i < K; i = i + 64u) { xs[i + (i >> 5u)] = ${xSrc}; }
   workgroupBarrier();
   let r = wid.x + wid.y * ${GEMV_GRID_X}u;
   var acc = 0.0;
@@ -2627,7 +2638,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     workgroupBarrier();
     stride = stride >> 1u;
   }
-  if (t == 0u && r < ${N}u) { y[r] = partial[0]; }
+  if (t == 0u && r < ${N}u) { ${outIdx} = partial[0]; }
 }`;
 }
 
