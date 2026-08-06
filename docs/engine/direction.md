@@ -198,10 +198,24 @@ assi con due condizioni di chiusura, un goal unico ne perdeva una.
   **17.88 s** (da 88, gap UX 4.47×), gpuBusy 54.2 ≤ 54.5, pack 0.0, dispatch
   1405 (da 1816), correttezza: cpuref 256/256 e 512/512, golden 98.828%
   full-corpus, routing = firma item 14b. Su M4 48 GB il gate è aritmetica.
-- **C3b — paging (la residenza)**: budget slab ctx-aware, tier.h, AUTOPIN,
-  PILOT-real, modello di banda, WP banda fredda browser, e instant-on come TTFT
-  a freddo. Chartered, parte ORA (C3a chiusa); il primo pezzo è la spec del
-  **decode ottimistico + repair** dimensionata da WP-0 (journal c3a it.20).
+- **C3b — decode ottimistico (il drain, regime near-total)**: 1 submit/token nel
+  path pulito, flag di miss piggyback sul readback logits, replay esatto dal
+  primo layer sporco (checkpoint hidden 376 KB/token), inserimenti slotTable al
+  confine di token. Dimensionato da WP-0 (journal c3a it.20): è il meccanismo
+  del regime ≥ ~88% di residenza (dev-box: 95.7% osservata); in scarsità
+  collassa ⇒ la Pareto ha due segmenti. **Gate STRUTTURALE** (sync/token ≤ 2
+  nel bench di produzione, tassa di replay entro la proiezione WP-0 ±25%);
+  niente gate tok/s (WP-0 proietta 11.3 al tetto misurato coi kernel di oggi) —
+  il floor 13.43 è ereditato da C3c con clausola pre-negoziata. NIENTE predictor
+  GPU al confine di token (falsificato 3×) né repair batched.
+  **APERTO 2026-08-07** (contratto v2; split e decisioni di gate su delega PI,
+  docket c3b item 2).
+- **C3c — paging (la residenza in scarsità vera)**: budget slab ctx-aware,
+  tier.h, AUTOPIN, prefetch in-forward (non il predictor di confine), modello
+  di banda, WP banda fredda browser (primo pezzo, blocca la spec), instant-on
+  come TTFT a freddo (budget assoluto da ri-negoziare, docket c3c item 1), e il
+  **floor 13.43 con clausola pre-negoziata**. Chartered 2026-08-07
+  (.harness/goals/engine-fase-c3c/), parte a C3b chiuso.
 Hero-demo M4 resta PI-gated per hardware.
 
 **Fase D — moltiplicatori.** Spec-dec: prima la MTP nativa del modello (verificata,

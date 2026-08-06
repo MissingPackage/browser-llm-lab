@@ -1,8 +1,25 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-07, sessione 22 — IL GOAL ENGINE-FASE-C3A È CHIUSO, it.21-36)
+# HANDOFF — browser-llm-lab   (updated 2026-08-07, sessione 23 — GOAL ENGINE-FASE-C3B APERTO: decode ottimistico)
 
 ## 1. Next decidable
 
-**GOAL C3A CHIUSO (it.36, verifier finale: sostanza 100% riscontrata).**
+**GOAL C3B APERTO (2026-08-07, contratto v2).** Su delega PI in chat ("Scegli
+tu su questi punti e poi procedi con il loop") ho preso e REGISTRATO tre
+decisioni (docket c3b item 2): (a) split — C3b = decode ottimistico + repair
+(regime near-total, spec-ready da WP-0), **C3c = paging in scarsità**
+(contratto nuovo `.harness/goals/engine-fase-c3c/`, chartered, parte a C3b
+chiuso); (b) gate C3b = **STRUTTURALE** (sync/token ≤ 2 in produzione + tassa
+di replay entro proiezione WP-0 ±25%), niente gate tok/s — il floor 13.43
+passa a C3c **con clausola pre-negoziata scritta nel contratto**; (c) policy
+> LRU resta intera in C3c. In più: banda di rumore c3a item 14 applicata in
+via provvisoria nella non-regressione (docket c3b item 3, ratifica pendente).
+Non-regressione fissata da c3a item 21: decode 5.211 / prefill 25.78 / TTFT
+17.88 / Qwen 326.2 / golden 98.828% / firma 14b / ktest 65 / suite 337+7.
+Primo pezzo del loop: spec
+`docs/superpowers/specs/2026-08-07-engine-fase-c3b-decode-ottimistico.md`.
+Ratifiche c3a ancora pendenti (non bloccanti): item 14/14b, item 2 formale,
+item 19/20/21 prese d'atto.
+
+**CONTESTO — C3A CHIUSO (it.36, verifier finale: sostanza 100% riscontrata).**
 Checklist DONE WHEN 9/9 nel journal it.36: gate tok/s decode 5.211 / prefill
 25.78 **FAIL DICHIARATI sotto clausola item 17a** (hardware −415 MiB, non
 struttura); tutto il resto PASS — pack 0.0, gpuBusy 54.2 ≤ 54.5, cpuref
@@ -14,15 +31,13 @@ docketata, ratifica PENDENTE), Qwen 326.2, identità prefill BIT-EXACT p4+p6.
 ms/token, residenza 95.7% osservata, non-regressione lasciata, meccanismi
 pronti, landmine operative). Su M4 48 GB il gate è aritmetica.
 
-**PROSSIMO PEZZO — DECISIONE PI RICHIESTA (il loop si ferma by design):**
-1. **Aprire il goal C3B** (chartered, parte a C3a chiusa): primo pezzo = spec
-   del decode ottimistico + repair dimensionata da WP-0 (journal it.20) +
-   docket C3b item 1 (fissare la non-regressione che C3a lascia — proposta
-   già in item 21). Serve il tuo via a /goal-brief o direttamente al setup.
-2. **Ratifiche pendenti nel docket c3a**: item 14/14b (banda near-tie del
-   setMatch, la firma +151/−19), item 2 formale (assorbito dal 17a ma mai
-   chiuso), item 19/20/21 (registrazioni da prendere atto).
-3. Igiene fuori-goal segnalata: `npm run test:conformance` punta all'harness
+~~PROSSIMO PEZZO — DECISIONE PI RICHIESTA~~ **RISOLTO 2026-08-07 (v. testa
+del §1): C3b aperto su delega, C3c chartered.** Restano fuori-goal:
+1. **Ratifiche pendenti nel docket c3a**: item 14/14b (banda near-tie del
+   setMatch, la firma +151/−19 — la banda è APPLICATA in via provvisoria nel
+   contratto C3b), item 2 formale (assorbito dal 17a ma mai chiuso), item
+   19/20/21 (registrazioni da prendere atto).
+2. Igiene fuori-goal segnalata: `npm run test:conformance` punta all'harness
    della benchmark app (non del motore); BASE_URL :5173 in 2 script; goal
    stale fase-1b/fase-2 (weekly-maintenance).
 
