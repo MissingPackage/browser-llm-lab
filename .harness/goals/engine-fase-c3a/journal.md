@@ -1341,3 +1341,69 @@ resta la raccomandata: chiusura ordinata sotto gate con attribuzione
 "hardware, non struttura"). Il loop NON si ferma: prossimo pezzo
 decidibile = **fase 4d (risanamento base)**, poi fase 5 — entrambe
 indipendenti dall'esito 4c.
+
+## it.20 — 2026-08-06 — WP-0: la tassa di replay, simulata sulla traccia vera
+
+### Cosa
+
+`tools/oracle-moe/sim/wp0.ts` + `run-wp0.ts` (nuovi, logica pura + runner) +
+`tests/oracle-moe-wp0.test.ts` (7 unit sulla semantica). Semantica del decode
+ottimistico modellata onestamente: **inserimento differito al confine di
+token** (dopo il submit la slotTable è intoccabile ⇒ repair dei miss e
+prefetch di token t residenti solo a t+1); prefill sincrono; LOOKA = pr
+reali della traccia C1 (predictor vero, non sintetico). Belady per-accesso
+come ceiling assoluto; località cross-token misurata. Artefatto:
+`results/engine/moe-oracle/wp0-replay-sim-2026-08-06.json` (cost model
+dichiarato nel payload: tax = E[miss]·fetch + P(dirty)·E[replayFrac]·gpuBusy,
+wallClean = gpuBusy + 7.6 sync; PROIEZIONI, non misure).
+
+### I numeri (steady-state, warmup 32; fetch serial 3.74 ms/expert)
+
+| budget slot | regime | P(dirty) | miss/tok | tok/s @54.2 | @35 | @20 |
+|---|---|---|---|---|---|---|
+| 2866 | max ARITMETICO (falsificato da it.19) | 13.1% | 0.16 | 15.20 | 22.0 | 34.0 |
+| 2765 | proiezione no-session | 34.0% | 0.52 | **13.66** | 19.3 | 29.8 |
+| 2596 | **tetto MISURATO** (sessione minima) | 65.4% | 1.53 | **11.33** | 16.2 | 24.4 |
+| 2419 | slab 12 GiB attuale | 85.2% | 3.25 | 9.55 | 13.4 | 19.6 |
+| 1472 / 736 | telefono 50%/25% | 100% | 27-68 | collasso | | |
+
+- **LOOKA come prefetch di confine: neutro al meglio, dannoso a budget
+  bassi** (b=736: hit 63.2%→59.2% con K=8 — il finding WASTE dei 287 slot
+  replicato). Il predictor GPU NON si costruisce per il regime ottimistico.
+- **Località cross-token misurata**: W=1 32%, W=16 79%, W=64 95.4% — è il
+  motivo per cui la LRU regge; il riuso è reale (decode incrementale).
+- **Belady vs LRU**: gap 0.6pp a 2596 (≈ P(dirty) dimezzabile con policy
+  migliore: LFRU/pin di C1 valgono anche qui), 9-19pp in scarsità.
+- Ancora C1: lru@2208 = 0.9633 vs 0.9643 committato (0.1pp, codice e
+  traccia invariati in git — discrepanza NON spiegata nel timebox, annotata;
+  non tocca WP-0 che usa LruFast indipendente).
+
+### Il verdetto (item 18b: "la simulazione può cambiare cosa implementiamo" — l'ha fatto)
+
+1. **Il decode ottimistico è il meccanismo del regime near-total (≥~88%
+   residenza), non della scarsità**: a 50/25% ogni token è sporco e il
+   replay collassa — lì serve la macchina sync+overlap di C3b. La Pareto
+   ha DUE segmenti, e vanno costruiti entrambi.
+2. Al tetto misurato di OGGI (2596): 11.3 tok/s ai kernel attuali — sotto
+   il gate 13.43. Il gate torna raggiungibile con una qualsiasi tra: clock
+   recovery (16.2 @35ms — attesa rimuovendo le bolle, non misurata),
+   margine kernel residuo (24.4 @20ms), policy migliore di LRU (Belady
+   dice che P(dirty) può ~dimezzare), o il GiB no-session (13.7 @2765).
+   Nessuna singola assunzione porta il claim: ne bastano 1-2 su 4.
+3. **Design semplificato**: repair semplice (flag + replay dal primo layer
+   sporco), niente predictor GPU, niente repair batched. late-half 34-49%
+   ⇒ la variante a 2 segmenti (1 sync mid-token, entro il gate ≤2) resta
+   nel cassetto se la tassa andrà limata.
+
+### Verifica
+
+vitest wp0 7/7; suite piena **311 passed + 7 skipped**; `tsc --noEmit`
+pulito (2 errori di sintassi erasable corretti); artefatto rigenerato col
+codice committato; ancora C1 entro 0.1pp (annotata).
+
+### Conseguenza sul goal
+
+WP-0 CHIUSO: il meccanismo va costruito, il claim di gate è condizionato e
+quantificato, il design è più piccolo di quello proposto. Prossimo pezzo
+(ordine item 18b): **fase 4d a perimetro pieno**. Il meccanismo ottimistico
+si spec-a dopo la 4d, sulla base risanata, come apertura C3b.

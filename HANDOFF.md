@@ -1,6 +1,29 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 21 — it.19: probe VRAM, opzione c falsificata; prossimo: fase 4d)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 21 — it.20: WP-0 chiuso, decode ottimistico dimensionato; prossimo: fase 4d)
 
 ## 1. Next decidable
+
+**FATTO (it.20): WP-0 — la tassa di replay è simulata sulla traccia vera**
+(`wp0-replay-sim-2026-08-06.json`, semantica differita al confine di token,
+LOOKA = predizioni reali, Belady ceiling, 7 unit test; suite 311+7). Esito
+in 3 righe: (1) il decode ottimistico è il meccanismo del regime
+**near-total (≥~88% residenza)** — al tetto misurato 2596 slot: P(dirty)
+65%, tax 26 ms ⇒ 11.3 tok/s ai kernel di oggi; il gate 13.43 arriva con
+1-2 tra {clock recovery (16.2 @35ms), kernel margin (24.4 @20ms), policy
+> LRU (Belady: P(dirty) ~dimezzabile), GiB no-session (13.7 @2765)};
+(2) in scarsità (50/25%) il replay collassa (100% token sporchi) ⇒ la
+Pareto ha DUE segmenti: ottimistico per near-total, sync+overlap C3b per
+il telefono; (3) **design semplificato**: repair semplice, NIENTE predictor
+GPU (LOOKA al confine è neutro/dannoso — replica del finding WASTE),
+niente repair batched. Località cross-token misurata: W=16 79%, W=64 95%.
+Nota aperta: ancora C1 lru@2208 0.9633 vs 0.9643 committato (0.1pp non
+spiegato, codice+traccia invariati in git).
+
+**PROSSIMO PEZZO DECIDIBILE: FASE 4d a perimetro pieno** (em.6, item 18c)
+— helper device unico (limiti+uncapturederror), telemetria a schema unico
+(retention! — lezione kimi-k3-in-c), Planned+Measured ovunque, glmsource
+test, 256/256 come campo JSON, path non-fuso morto, artefatti orfani,
+ri-baseline dichiarata. Poi fase 5 (prefill M>1). Il meccanismo ottimistico
+si spec-a DOPO la 4d come apertura C3b, sulla base risanata.
 
 **FATTO (it.19): 4c slice A′ — IL GIB NON ESISTE SU QUESTO DEVICE.** Probe
 `scripts/vram-ceiling.mjs` (3 run committate): fabbisogno residenza totale
