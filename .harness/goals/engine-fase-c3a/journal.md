@@ -1925,3 +1925,41 @@ identità CPU della catena). Alla chiusura: o si dichiara la sostituzione
 CPU più ampio. Da decidere in fetta (d), dichiarato nel journal.
 
 ### Prossimo: fetta (c) p6 intero (identità 461 pos) + fetta (d) bench TTFT
+
+## it.34 — 2026-08-06 — FASE 5 CHIUSA: prefill 25.78 tok/s (4.55×), TTFT 17.9 s (da 81.4)
+
+### Fetta (c): identità p6 INTERA — PASS
+
+461 posizioni bit-identiche (hidden/logits confine maxAbs 0, routing
+0/21206, 16 id generati identici); prefill 103.7 s → 17.5 s (5.92× sul
+harness). `prefill-identity-p6-2026-08-06.json`, exit 0.
+
+### Fetta (d): bench di fase (bench-glm-4090-b12-prefillbatch-2026-08-06.json)
+
+Protocollo pieno (p6, nGen 64, reps 3, b12, attrib 1, host quiescent):
+- **prefill 25.78 tok/s** [25.63/25.78/25.89] vs 5.66 sequenziale = **4.55×**
+- **TTFT mediano 17.88 s** vs 81.4 = gap UX da 20.3× a **4.47×**
+- decode **5.211** ≥ 5.013 ri-baseline (non-regressione PASS)
+- dispatchPlan 1405 ≡ planned+2 PASS · retention 97.61% · exit 4 dai gate
+  tok/s (attesi FAIL sotto clausola item 17a — floor 56.58 irraggiungibile
+  per hardware, la CAPACITÀ ora esiste: docket C2 item 6 saldato)
+
+### Incidente e causa (1 retry)
+
+Prima run: NoModificationAllowedError su OPFS all'open — GARA DI PROFILO
+(il Chrome della run identity ancora in shutdown quando il bench e' partito
+sullo stesso profilo persistente; l'handle era del morente). Retry identico
+= PASS. LANDMINE OPERATIVA nuova: fra run consecutive sullo stesso profilo
+lasciare qualche secondo, o verificare pgrep prima del lancio.
+
+### Dichiarazione sulla forma del test d'identità (sostituzione, pattern item 11)
+
+Il done-when diceva "identità verde in npm test": l'E2E e' GPU-bound. In
+npm test vive l'identità del PIANO (glmprefillplan: biiezione, ordine,
+catena CPU f32 bit-esatta + controprova); l'identità del MOTORE e' il gate
+dell'harness glmprefill (bit-exact su p4 e p6, exit 0, report committati).
+Sostituzione dichiarata — stesso pattern della conformance C2 (item 11).
+Registrata a docket item 20.
+
+### FASE 5 DONE-WHEN: bench JSON con prefill tok/s e TTFT su p6 ✓ · identità
+### (sostituzione dichiarata) ✓ · suite verde ✓ · tsc pulito ✓

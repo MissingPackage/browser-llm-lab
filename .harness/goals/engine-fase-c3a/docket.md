@@ -1,5 +1,14 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+20. **REGISTRAZIONE (2026-08-06, it.34) — sostituzione della forma del test
+    d'identità della fase 5** (pattern item 11): il done-when chiedeva
+    "identità M=1 vs M>1 verde in npm test"; l'E2E è GPU-bound. Consegnato:
+    (a) in npm test l'identità del PIANO (glmprefillplan, catena CPU f32
+    bit-esatta + controprova di divergenza); (b) l'identità del MOTORE come
+    gate dell'harness glmprefill — BIT-EXACT su p4 (364 pos) e p6 (461 pos),
+    hidden/logits maxAbs 0, routing 0/21206, generazione identica, report
+    committati, exit 0. Se la sostituzione non ti va bene, riapri qui.
+
 19. **REGISTRAZIONE (2026-08-06, it.25) — ri-baseline dichiarata della fase
     4d** (pre-autorizzata da em.6/item 16: "la ri-baseline ... sostituisce i
     riferimenti — registrazione qui a fase chiusa"). I riferimenti di
