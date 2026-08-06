@@ -1,29 +1,29 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-25: FASE 4d CHIUSA; prossimo: fase 5 prefill M>1)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-26: 4d chiusa, fase 5 aperta)
 
 ## 1. Next decidable
 
-**FATTO (it.21-25): FASE 4d CHIUSA — la base è risanata.** It.21 `gpudevice.ts`
-punto unico device (8 siti, test strutturale, ktest 53/53). It.22
-`telemetry.ts` core unico + retention/hit-split + hostState nei runner. It.23
-Planned+Measured con gate sui due path, verificati su device (148 ≡ 148;
-1405 ≡ planned+2). It.24 debiti §7: glmsource sotto test, gateCpuref JSON
-(8/8 su device), path non-fuso RIMOSSO, censimento orfani (evidence-bearing
-pinnati, niente da rimuovere). It.25 **ri-baseline dichiarata** (docket item
-19): Qwen **322.2 ± 0.7** ≥ 321.9; GLM **5.013/5.661** — delta vs 08-03 =
-RUMORE (Welch t≈1.7 p≈0.16, 3v3), deviceLimits IDENTICI byte-a-byte (rischio
-item 10a escluso). Suite **331+7**, tsc pulito.
+**FATTO (it.26): FASE 5 slice 1 — design MoE batched deciso e piano sotto
+test.** Decisione (delegata 18b, criterio = numeri fase 4): **batching per
+expert sull'unione del chunk** — ~40 dispatch/layer attesi a M=16 contro 64
+(43 µs/dispatch, fase 1), pesi expert letti una volta per chunk (÷1.6-4× di
+traffico nel regime memory-bound). Struttura a SLOT y[m][k] + combine per
+token in ordine k = **blocco MoE bit-identico al decode per costruzione**
+(classe near-tie 9e-6 eliminata; controprova nel test: l'ordine-unione
+diverge davvero in f32). `glmprefillplan.ts` (GLM_PREFILL_M=16, planMoeChunk,
+combineMoeRow) + 6 test. Suite **337+7**, tsc pulito.
 
-**PROSSIMO PEZZO DECIDIBILE: FASE 5 — prefill batched M>1 per MoE**
-(sbloccata: ordine em.6 era 4c-A′ → 4d → 5). Spec §5 del design 08-01:
-M=16 iniziale, condizione di identità = argmax identico su tutte le
-posizioni M=1 vs M>1; owns: prefill path, prefillplan, moe batched, tests/.
-Done-when: test di identità verde in `npm test` + bench JSON con prefill
-tok/s e TTFT su p6 (oggi 5.66 tok/s, TTFT 81.4 s vs UX 4 s — è la leva del
-TTFT). Nota di design: nel prefill gli insiemi di expert DIFFERISCONO per
-token — il meccanismo arena+Sel della fase 4 (un dispatch = un expert) va
-esteso a M>1 (Sel per token o batching per expert con gather). Il ktest dei
-kernel fusi solo-Qwen (debito §7.1) si riduce qui coprendo ogni kernel che
-il lavoro prefill tocca.
+**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 2): i kernel** — GEMM per-expert
+con gather (rows) che scrive negli slot y[m][k]; combine WGSL in ordine k;
+percorso denso del chunk (MLA prefill batched: pattern chunked Qwen adattato
+alla MLA). Poi wiring glmmodel, ktest identità su modello sintetico, p6
+reale. Il ktest dei kernel fusi solo-Qwen (debito §7.1) si riduce coprendo
+ogni kernel che questo lavoro tocca.
+
+**FATTO (it.21-25): FASE 4d CHIUSA** — device unico, telemetria unica
+(retention), Planned+Measured con gate verificati su device, glmsource sotto
+test, gateCpuref JSON (8/8), path non-fuso rimosso, orfani censiti,
+ri-baseline dichiarata (docket item 19: Qwen 322.2 ≥ 321.9; GLM 5.013/5.661,
+delta = rumore, deviceLimits identici byte-a-byte).
 
 **FATTO (it.20): WP-0 — la tassa di replay è simulata sulla traccia vera**
 (`wp0-replay-sim-2026-08-06.json`, semantica differita al confine di token,
