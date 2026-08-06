@@ -11,6 +11,7 @@ import { chromium } from "playwright";
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { hostState } from "./lib/hoststate.mjs";
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -23,6 +24,9 @@ const budget = arg("budget-gib", "11");
 const attrib = arg("attrib", "1");
 const out = arg("out", null);
 const timeoutMin = Number(arg("timeout-min", "120"));
+// hostState (schema 4d): --host-state quiescent per le run di gate; il default
+// "undeclared" dice che nessuno ha controllato l'host (informazione, non errore)
+const host = hostState(arg("host-state", process.env.HOST_STATE ?? "undeclared"));
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const GOLDEN = join(ROOT, "results/engine/golden/glm47flash/golden-glm47flash-q4_0-2026-07-31.json");
@@ -61,6 +65,7 @@ for (;;) {
       console.error(`[glmbench] ${status} — nessun report`);
       process.exit(2);
     }
+    report.hostState = host.close(); // schema 4d: dichiarato + campioni smi before/after
     if (out) writeFileSync(join(ROOT, out), JSON.stringify(report, null, 1));
     const g = report.gates;
     console.log(
@@ -69,7 +74,7 @@ for (;;) {
     const d = report.telemetry.decode;
     console.log(
       `[glmbench] telemetria decode: ${report.telemetry.dispatchesPerTokenPlanned} dispatch/token (piano), ${report.telemetry.syncsPerTokenExpected} sync/token (atteso), ` +
-      `hit ${(100 * d.hitRate).toFixed(2)}%, stallo ${d.stallMsPerToken.toFixed(1)} ms/token ` +
+      `hit ${(100 * d.hitRate).toFixed(2)}% (retention ${d.retention == null ? "n/d" : (100 * d.retention).toFixed(2) + "%"}), stallo ${d.stallMsPerToken.toFixed(1)} ms/token ` +
       `(read ${d.readMsPerToken.toFixed(1)} + pack ${d.packMsPerToken.toFixed(1)} + upload ${d.uploadMsPerToken.toFixed(1)}), ` +
       `residuo ${d.residuoMsPerToken.toFixed(1)} ms/token`);
     // gap dalla funzione obiettivo: NON gate, ma obbligatorio nel report (C3a)

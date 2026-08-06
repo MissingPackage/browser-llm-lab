@@ -33,15 +33,22 @@ const progress = (msg: string) => post({ type: "progress", msg });
 // del componente, il bench ne prende le differenze per fase).
 interface PhaseResidency {
   hits: number; misses: number; evictions: number; hitRate: number | null;
+  // fonte dell'hit + retention SULLA FINESTRA (fase 4d, lezione kimi-k3-in-c:
+  // mai un hit rate da solo — solo la retention concorda coi byte letti)
+  hitsResident: number; hitsPrefetch: number; retention: number | null;
   readMs: number; packMs: number; uploadMs: number; stallMs: number;
   bytesRead: number; bytesUploaded: number;
 }
 const residencyDelta = (a: ExpertCacheStats, b: ExpertCacheStats): PhaseResidency => {
   const hits = b.hits - a.hits, misses = b.misses - a.misses;
+  const evictions = b.evictions - a.evictions;
   const readMs = b.readMs - a.readMs, packMs = b.packMs - a.packMs, uploadMs = b.uploadMs - a.uploadMs;
   return {
-    hits, misses, evictions: b.evictions - a.evictions,
+    hits, misses, evictions,
     hitRate: hits + misses > 0 ? hits / (hits + misses) : null,
+    hitsResident: b.hitsResident - a.hitsResident,
+    hitsPrefetch: b.hitsPrefetch - a.hitsPrefetch,
+    retention: hits + misses > 0 ? 1 - evictions / (hits + misses) : null,
     readMs, packMs, uploadMs, stallMs: readMs + packMs + uploadMs,
     bytesRead: b.bytesRead - a.bytesRead, bytesUploaded: b.bytesUploaded - a.bytesUploaded,
   };
@@ -293,6 +300,10 @@ async function main(cfg: Cfg): Promise<void> {
     syncsPerTokenExpected: nMoe + 1, // by design: 46 readback router + 1 logits/hidden
     decode: {
       hitRate: median(decRes.map((r) => r.hitRate ?? 0)),
+      // retention accanto all'hitRate, mai da sola ne' lui da solo (4d,
+      // lezione kimi-k3-in-c: e' l'unica delle tre definizioni di "hit rate"
+      // che concorda coi byte letti quando esiste un prefetch)
+      retention: median(decRes.map((r) => r.retention ?? 0)),
       missesPerToken: median(decRes.map((r) => r.misses / cfg.nGen)),
       stallMsPerToken: median(decRes.map((r) => r.stallMs / cfg.nGen)),
       readMsPerToken: median(decRes.map((r) => r.readMs / cfg.nGen)),

@@ -37,6 +37,7 @@ import {
 } from "./kquantfast";
 import { ExpertCache, expertKey, expertSlots, modelExpertPark, type ArenaGeometry, type ExpertClass, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
 import { expertArenaBindings } from "./gpulimits";
+import { type CoreCounters } from "./telemetry";
 import {
   addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ6KFastWgsl, gemvQ8HeadsWgsl,
   gemvQuantWgsl, kvAppendWgsl, mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,
@@ -136,15 +137,15 @@ export interface GlmRouting {
 //   wall = encodeCpuMs + ensureMs + routerWaitMs + tailWaitMs + residuo
 // dove `residuo` (= sync non attribuito) si ottiene per differenza dal wall
 // misurato fuori, e gpuBusyMs è la somma delle durate dei compute pass.
-export interface GlmTelemetry {
+// Estende il nucleo unico dei due path (telemetry.ts, fase 4d): forwards,
+// encodeCpuMs, submits, dispatches, gpuBusyMs, gpuPasses vengono da li' —
+// qui restano solo i campi specifici del path GLM.
+export interface GlmTelemetry extends CoreCounters {
   on: boolean;
-  forwards: number;
-  encodeCpuMs: number;    // tempo JS di encode/bind/writeBuffer, await esclusi
   ensureMs: number;       // tempo dentro ExpertCache.ensure (residenza)
   routerWaitMs: number;   // tempo negli await di readback del router (46/token)
   tailWaitMs: number;     // tempo nell'await finale (hidden + logits)
   routerSyncs: number;    // readback router EFFETTIVI (non una costante)
-  submits: number;        // submit effettivi
   /**
    * Entry di Sel di PRODUZIONE trovate col flag MISS al tail (R6 del design):
    * expert che i kernel hanno dovuto saltare perche' il resolve non ha trovato
@@ -154,8 +155,6 @@ export interface GlmTelemetry {
    * INVALIDO e il forward alza un errore invece di restituire numeri sbagliati.
    */
   selMiss: number;
-  gpuBusyMs: number | null; // somma delle durate dei pass (solo telemetryGpu)
-  gpuPasses: number;
   gpuPassOverflow: number;  // pass non strumentati per ring pieno (atteso 0)
   // Attribuzione di gpuBusyMs per CATEGORIA di kernel (spec §4, primo task
   // della fase 4b). Non nulla solo con setTelemetry(on, gpu, byCat=true), che
@@ -166,11 +165,8 @@ export interface GlmTelemetry {
   // le QUOTE, e il totale serve a dichiarare quanto costano i confini.
   gpuByCatMs: Record<string, number> | null;
   gpuByCatPasses: Record<string, number> | null;
-  // Dispatch CONTATI a runtime (non la formula del piano). Il contatore gira
-  // sempre, anche a telemetria spenta: un incremento intero ogni ~120 µs di
-  // lavoro GPU e' sotto il rumore, e avere il numero vero in ogni report vale
-  // piu' della purezza. Confronta con `dispatchesPerTokenPlanned`.
-  dispatches: number;
+  // NOTA su `dispatches` (dal core): CONTATI a runtime, non la formula del
+  // piano — confronta con `dispatchesPerTokenPlanned`.
 }
 
 export interface GlmModel {

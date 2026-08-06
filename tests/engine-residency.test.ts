@@ -266,6 +266,28 @@ describe("ExpertCache (LRU due size-class)", () => {
     expect(writes.length).toBe(6);
   });
 
+  it("retention e fonte dell'hit (4d): requests esplicito, 1 − evictions/requests, hit split", () => {
+    const { device } = mkDevice();
+    const c = new ExpertCache(device, { ...baseOpts, budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 } });
+    // cache vergine: retention null (mai NaN nel JSON), non 1.0
+    expect(c.stats().retention).toBeNull();
+    expect(c.stats().requests).toBe(0);
+    const rd = (l: number) => rawFor(l);
+    const L = 5;
+    for (const e of [0, 1, 2, 3]) c.ensure(L, e, rd); // 4 miss, 0 eviction
+    c.ensure(L, 0, rd); c.ensure(L, 1, rd);           // 2 hit residenti
+    c.ensure(L, 8, rd); c.ensure(L, 9, rd);           // 2 miss con eviction
+    const st = c.stats();
+    expect(st.requests).toBe(8);
+    expect(st.evictions).toBe(2);
+    expect(st.retention).toBeCloseTo(1 - 2 / 8, 12);
+    // la fonte dell'hit e' separata (lezione kimi-k3-in-c): oggi tutto
+    // residente, il contatore prefetch esiste per lo schema (C3b) e resta 0
+    expect(st.hitsResident).toBe(2);
+    expect(st.hitsPrefetch).toBe(0);
+    expect(st.hits).toBe(st.hitsResident + st.hitsPrefetch);
+  });
+
   it("pinned: i top-4 del token corrente non sono mai vittime", () => {
     const { device } = mkDevice();
     const c = new ExpertCache(device, { ...baseOpts, budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 } });

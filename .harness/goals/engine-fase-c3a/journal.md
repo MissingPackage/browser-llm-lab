@@ -1453,3 +1453,57 @@ Telemetria a schema unico (contatori cumulativi diffabili, retention,
 ttftMs+hostState anche Qwen) + dispatch Planned+Measured; poi debiti §7
 (glmsource test, 256/256 JSON, path non-fuso, artefatti orfani); ri-baseline
 per ultima (albero congelato).
+
+## it.22 — 2026-08-06 — fase 4d pezzo 2: telemetria a schema unico
+
+### Cosa
+
+`src/engine/telemetry.ts` nuovo: `CoreCounters` (forwards, encodeCpuMs,
+submits, dispatches, gpuBusyMs|null, gpuPasses — CUMULATIVI) + `diffCounters`
+con null contagioso (null = non misurato, mai 0; una finestra con un estremo
+non misurato non e' una misura). `GlmTelemetry` ed `EngineTelemetry` ora
+ESTENDONO il core — l'aderenza e' un fatto del build (test che le assegna a
+CoreCounters), non una convenzione.
+
+### I tre disallineamenti chiusi
+
+1. **Qwen era default-ON** (`?? true`, unico del repo) → default OFF come GLM;
+   runBench gestiva gia' setTelemetry esplicito, e le medie ON non sono piu'
+   diluite dal warmup (miglioramento dichiarato, non regressione).
+2. **Qwen non aveva cumulativi**: aggiunti nSubmits/nDispatches (contati
+   SEMPRE, 5+7 siti, razionale it.9) e gpuBusy/gpuPasses accumulati al
+   drenaggio; `gpuMsPerToken` conserva la semantica a drenaggio (load-bearing
+   in runSyncProbe, dichiarata nell'interfaccia).
+3. **Report Qwen senza ttftMs/deviceLimits** → engine-bench **v4**: ttftMs
+   (media+repliche OFF, definizione C3a: primo token DISPONIBILE — con k>1
+   atterra a fine primo batch, dichiarato) + grantedLimits.
+
+### Retention (lezione kimi-k3-in-c, item 18)
+
+ExpertCacheStats: `hitsResident`/`hitsPrefetch` (oggi 0 strutturale, lo
+schema non cambia quando arriva il prefetch C3b), `requests` esplicito,
+`retention = 1 − evictions/requests` (null a cache vergine, mai NaN).
+glmbench: retention nel PhaseResidency per finestra e nelle mediane decode
+del report, SEMPRE accanto all'hitRate; runner la stampa.
+
+### hostState (schema 4d)
+
+`scripts/lib/hoststate.mjs`: dichiarato (--host-state / HOST_STATE, default
+"undeclared" = nessuno ha controllato, informazione non errore) + campioni
+nvidia-smi before/after (temp, clock SM, power, mem, util, throttle bitmask).
+Wired in glm-bench-run.mjs e engine-bench.mjs — e' la firma che discrimina
+regressione da host contaminato (norma 2026-08-01, lezione it.11).
+
+### Verifica
+
+`npx tsc --noEmit` pulito; suite **324 passed + 7 skipped** (+5: telemetry 4,
+retention 1). Un test scritto male corretto in corsa (pretendeva zeroCounters
+neutro su gpuBusyMs: il contagio del null E' il contratto). NON verificato su
+GPU: i campi nuovi nei report bench (ttftMs Qwen, hostState, retention) si
+esercitano alla ri-baseline dichiarata di fine 4d.
+
+### Prossimo pezzo (4d)
+
+Dispatch Planned+Measured con gate su entrambi i path (Qwen ora HA il
+misurato: manca nel report e nel confronto); poi debiti §7 (glmsource test,
+256/256 JSON, path non-fuso, artefatti orfani); ri-baseline per ultima.

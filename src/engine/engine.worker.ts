@@ -3,6 +3,7 @@
 // logit per il Δ sui top-32 golden (riportato, non gated).
 import { createEngine, CTX_MAX, type EngineHandle } from "./gpuforward";
 import { createEngineDevice } from "./gpudevice";
+import { grantedLimits } from "./gpulimits";
 import { PREFILL_M, PREFILL_SUBMIT_TOKENS } from "./prefillplan";
 import { parseGguf } from "./gguf";
 import { dequantQ4_0Row } from "./quant";
@@ -107,7 +108,7 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   // per-token forwardToken (baseline/oracolo). Finestra di rate: dal termine del
   // PRIMO batch all'ultimo (esclude il boundary del prefill, come il tFirst di
   // fase A escludeva il primo token) — dichiarata nel report.
-  const runOnce = async (label: string, kRun = k): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number }> => {
+  const runOnce = async (label: string, kRun = k): Promise<{ decodeToksPerSec: number; prefillMs: number; msPerTokenDecode: number; ttftMs: number }> => {
     engine.reset(); // contratto kvLen (fase 4)
     const t0 = performance.now();
     await engine.prefillChunked(promptFix.tokens.slice(0, -1), 0);
@@ -140,6 +141,10 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
       decodeToksPerSec: (done / (tEnd - tFirst)) * 1000,
       prefillMs: tPrefill - t0,
       msPerTokenDecode: (tEnd - tFirst) / done,
+      // TTFT operativo (definizione C3a, stessa di glmbench): dall'inizio del
+      // prefill al primo token DISPONIBILE — con k>1 il primo token atterra
+      // alla fine del primo batch (il readback e' per batch), dichiarato.
+      ttftMs: tFirst - t0,
     };
   };
   // baseline sequenziale SAME-DAY (spec §Soglie: prefillMs.mean ≤ 1/3 di questa):
@@ -222,7 +227,8 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   post({
     type: "done",
     report: {
-      schemaVersion: 3, kind: "engine-bench", promptId: promptFix.promptId,
+      // v4 (fase 4d): + ttftMs (media + repliche OFF) e deviceLimits concessi
+      schemaVersion: 4, kind: "engine-bench", promptId: promptFix.promptId,
       promptTokens: promptFix.tokens.length, genTokens, replicates,
       // fase B2: percorso decode del bench (k>1 = decodeBatch multi-step; la
       // finestra di rate esclude il primo batch, dichiarato in runOnce)
@@ -235,6 +241,14 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
         overheadGatePct: 2,
         overheadGatePass: Math.abs(overheadPct) <= 2,
       },
+      // ttftMs: dalle repliche OFF (headline), media + repliche — schema 4d
+      ttftMs: {
+        mean: repsOff.reduce((a, r) => a + r.ttftMs, 0) / repsOff.length,
+        reps: repsOff.map((r) => r.ttftMs),
+      },
+      // limiti CONCESSI (schema 4d, stessa regola di glm-bench: una prestazione
+      // misurata su limiti diversi non e' confrontabile)
+      deviceLimits: grantedLimits(engine.device),
       warmup, reps: repsOff, decodeToksPerSec: off, // headline = telemetria spenta
       telemetryOn: { reps: repsOn, decodeToksPerSec: on },
       telemetry, telemetryOverheadPct: overheadPct,

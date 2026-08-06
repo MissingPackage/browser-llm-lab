@@ -21,6 +21,7 @@ import {
 import { planPrefill, PREFILL_M } from "./prefillplan";
 import { ATTN_CHUNK_P, attnSMax, attnPartialsLen } from "./attnsplit";
 import { createEngineDevice } from "./gpudevice";
+import { type CoreCounters } from "./telemetry";
 import { planDecodeBatch, DECODE_K_MAX, DECODE_SLOT_STRIDE } from "./decodebatch";
 import { createKvLen } from "./kvlen";
 import type { RepackedQuant } from "./quant";
@@ -31,9 +32,17 @@ const N_PARTIALS = Math.ceil(S.vocab / ARGMAX_CHUNK);
 
 interface QuantBufs { qs: GPUBuffer; scales: GPUBuffer }
 
-export interface EngineTelemetry {
-  forwards: number;
+// Estende il nucleo unico dei due path (telemetry.ts, fase 4d): i cumulativi
+// diffabili (forwards, encodeCpuMs, submits, dispatches, gpuBusyMs, gpuPasses)
+// vengono da li'. I due campi per-token restano per i consumatori esistenti,
+// con la loro semantica storica DICHIARATA qui sotto — non sono diffabili.
+export interface EngineTelemetry extends CoreCounters {
   encodeCpuMsPerToken: number;
+  /**
+   * Media dei campioni liv.2 drenati DA QUESTA chiamata (semantica a
+   * drenaggio, load-bearing in runSyncProbe: una lettura per replica).
+   * Il cumulativo di tutte le letture e' `gpuBusyMs`/`gpuPasses`.
+   */
   gpuMsPerToken: number | null; // null se timestamp-query assente o spenta
   timestampNote: string;
 }
@@ -219,9 +228,17 @@ export async function createEngine(
   const stagingId = device.createBuffer({ label: "staging-argmax-id", size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
   // --- telemetria ---
-  let telemetryOn = opts.telemetry ?? true;
+  // Default OFF (fase 4d: schema unico, stessa regola del path GLM — prima era
+  // `?? true`, l'unico default acceso del repo; runBench accende esplicitamente).
+  let telemetryOn = opts.telemetry === true;
   let tForwards = 0;
   let tEncodeCpuMs = 0;
+  // submits/dispatches: contati SEMPRE (regola del core, razionale it.9)
+  let nSubmits = 0;
+  let nDispatches = 0;
+  // cumulativi liv.2 (i campioni drenati da getTelemetry si accumulano qui)
+  let gpuBusyAccumMs = 0;
+  let gpuPassesAccum = 0;
   const TSQ_RING = 64; // token per batch di resolve (lazy, mai bloccante)
   // Livello 2 dietro opt-in (feature di misura: zero-overhead da spenta by design).
   // Il known-issue fase A (timestamp azzerati + corruzione compute) e' stato
@@ -445,7 +462,7 @@ export async function createEngine(
         }
         pass.setPipeline(s.pipe);
         pass.setBindGroup(0, s.bind);
-        pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
+        nDispatches++; pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
       }
       pass.end();
       enc.copyBufferToBuffer(amaxOut, 0, stagingId, 0, 4);
@@ -457,7 +474,7 @@ export async function createEngine(
           tsqIdx = 0;
         }
       }
-      device.queue.submit([enc.finish()]);
+      nSubmits++; device.queue.submit([enc.finish()]);
       if (tsqStaging) armTsq(tsqStaging, TSQ_RING); // mapAsync SOLO dopo il submit
       if (telemetryOn) { tEncodeCpuMs += performance.now() - tEnc0; tForwards++; }
       await stagingId.mapAsync(GPUMapMode.READ);
@@ -490,7 +507,7 @@ export async function createEngine(
         let pass = enc.beginComputePass(passDesc);
         pass.setPipeline(pipes.embedGather);
         pass.setBindGroup(0, bgEmbed);
-        pass.dispatchWorkgroups(Math.ceil(S.dModel / 64));
+        nDispatches++; pass.dispatchWorkgroups(Math.ceil(S.dModel / 64));
         for (const s of steps) {
           if (s.kind === "copy") {
             pass.end();
@@ -500,7 +517,7 @@ export async function createEngine(
           }
           pass.setPipeline(s.pipe);
           pass.setBindGroup(0, s.bind);
-          pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
+          nDispatches++; pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
         }
         pass.end();
         enc.copyBufferToBuffer(amaxOut, 0, idsBatch, i * 4, 4);
@@ -513,7 +530,7 @@ export async function createEngine(
         }
       }
       enc.copyBufferToBuffer(idsBatch, 0, stagingIds, 0, k * 4);
-      device.queue.submit([enc.finish()]);
+      nSubmits++; device.queue.submit([enc.finish()]);
       if (tsqStaging) armTsq(tsqStaging, TSQ_RING); // mapAsync SOLO dopo il submit
       if (telemetryOn) { tEncodeCpuMs += performance.now() - tEnc0; tForwards += k; }
       const errOom = await device.popErrorScope();
@@ -562,11 +579,11 @@ export async function createEngine(
           }
           pass.setPipeline(s.pipe);
           pass.setBindGroup(0, s.bind);
-          pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
+          nDispatches++; pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
         }
         pass.end();
         if (c.submitAfter && ci < plan.length - 1) {
-          device.queue.submit([enc.finish()]);
+          nSubmits++; device.queue.submit([enc.finish()]);
           enc = device.createCommandEncoder();
         }
       }
@@ -579,11 +596,11 @@ export async function createEngine(
         if (s.kind !== "compute") continue; // la coda non contiene copy
         pass.setPipeline(s.pipe);
         pass.setBindGroup(0, s.bind);
-        pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
+        nDispatches++; pass.dispatchWorkgroups(s.wgs[0], s.wgs[1]);
       }
       pass.end();
       enc.copyBufferToBuffer(amaxOut, 0, stagingId, 0, 4);
-      device.queue.submit([enc.finish()]);
+      nSubmits++; device.queue.submit([enc.finish()]);
       const errOom = await device.popErrorScope();
       const errVal = await device.popErrorScope();
       if (errOom || errVal) throw new Error(`prefill error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
@@ -607,7 +624,7 @@ export async function createEngine(
         enc.copyBufferToBuffer(L.kCache, 0, staging, (l * 2) * rowBytes, rowBytes);
         enc.copyBufferToBuffer(L.vCache, 0, staging, (l * 2 + 1) * rowBytes, rowBytes);
       });
-      device.queue.submit([enc.finish()]);
+      nSubmits++; device.queue.submit([enc.finish()]);
       await staging.mapAsync(GPUMapMode.READ);
       const out = new Float32Array(staging.getMappedRange().slice(0));
       staging.destroy();
@@ -640,8 +657,17 @@ export async function createEngine(
       // known-issue fase A, risolto (vedi armTsq).
       const gpuMs = batches.flat().filter((v) => v > 0);
       const mean = gpuMs.length ? gpuMs.reduce((a, b) => a + b, 0) / gpuMs.length : null;
+      // i campioni drenati confluiscono nei CUMULATIVI del core (diffabili);
+      // `mean` conserva la semantica storica a drenaggio (v. EngineTelemetry)
+      gpuBusyAccumMs += gpuMs.reduce((a, b) => a + b, 0);
+      gpuPassesAccum += gpuMs.length;
       return {
         forwards: tForwards,
+        encodeCpuMs: tEncodeCpuMs,
+        submits: nSubmits,
+        dispatches: nDispatches,
+        gpuBusyMs: querySet ? gpuBusyAccumMs : null,
+        gpuPasses: gpuPassesAccum,
         encodeCpuMsPerToken: tForwards ? tEncodeCpuMs / tForwards : 0,
         gpuMsPerToken: mean,
         timestampNote: querySet
@@ -655,7 +681,7 @@ export async function createEngine(
       const staging = device.createBuffer({ size: S.dModel * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       const enc = device.createCommandEncoder();
       enc.copyBufferToBuffer(src, 0, staging, 0, S.dModel * 4);
-      device.queue.submit([enc.finish()]);
+      nSubmits++; device.queue.submit([enc.finish()]);
       await staging.mapAsync(GPUMapMode.READ);
       const out = new Float32Array(staging.getMappedRange().slice(0));
       staging.destroy();
@@ -665,7 +691,7 @@ export async function createEngine(
       const staging = device.createBuffer({ size: S.vocab * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       const enc = device.createCommandEncoder();
       enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4);
-      device.queue.submit([enc.finish()]);
+      nSubmits++; device.queue.submit([enc.finish()]);
       await staging.mapAsync(GPUMapMode.READ);
       const out = new Float32Array(staging.getMappedRange().slice(0));
       staging.destroy();

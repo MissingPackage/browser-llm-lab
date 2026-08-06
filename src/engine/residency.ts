@@ -107,6 +107,18 @@ export interface ExpertCacheOpts {
 
 export interface ExpertCacheStats {
   hits: number; misses: number; evictions: number;
+  /**
+   * Fonte dell'hit, separata (fase 4d, lezione kimi-k3-in-c: "hit rate" ha
+   * tre definizioni e solo la retention concorda coi byte letti — il prefetch
+   * gonfia le altre). Oggi hitsPrefetch e' strutturalmente 0: il prefetch non
+   * esiste (e' C3b); il contatore c'e' perche' lo schema non cambi quando
+   * arriva. hits === hitsResident + hitsPrefetch, sempre.
+   */
+  hitsResident: number; hitsPrefetch: number;
+  /** hits + misses: il denominatore di retention, esplicito nel report. */
+  requests: number;
+  /** 1 − evictions/requests — null senza richieste (mai NaN nel JSON). */
+  retention: number | null;
   bytesRead: number; bytesUploaded: number;
   readMs: number; packMs: number; uploadMs: number;
   occupied: { q4_0: number; q4_1: number };
@@ -227,7 +239,7 @@ export class ExpertCache {
   private device: GPUDevice;
   private cls: Record<ExpertClass, ClassState>;
   private timing: boolean;
-  private s = { hits: 0, misses: 0, evictions: 0, bytesRead: 0, bytesUploaded: 0, readMs: 0, packMs: 0, uploadMs: 0 };
+  private s = { hits: 0, hitsResident: 0, hitsPrefetch: 0, misses: 0, evictions: 0, bytesRead: 0, bytesUploaded: 0, readMs: 0, packMs: 0, uploadMs: 0 };
   // slotTable (slice B): ombra CPU + intervallo sporco. La GPU la vede solo
   // quando il chiamante chiama `flushSlotTable`, cioe' una volta per layer.
   private table: { buf: GPUBuffer; shadow: Uint32Array; lo: number; hi: number } | null = null;
@@ -380,6 +392,7 @@ export class ExpertCache {
       c.lru.delete(key);
       c.lru.set(key, found); // touch: rientra in coda alla LRU
       this.s.hits++;
+      this.s.hitsResident++; // unica fonte oggi: il prefetch e' C3b
       return { slot: this.slotRef(c, cls, found), hit: true };
     }
     this.s.misses++;
@@ -436,15 +449,18 @@ export class ExpertCache {
   }
 
   stats(): ExpertCacheStats {
+    const requests = this.s.hits + this.s.misses;
     return {
       ...this.s,
+      requests,
+      retention: requests > 0 ? 1 - this.s.evictions / requests : null,
       occupied: { q4_0: this.cls.q4_0.lru.size, q4_1: this.cls.q4_1.lru.size },
       slots: { q4_0: this.cls.q4_0.nSlots, q4_1: this.cls.q4_1.nSlots },
     };
   }
 
   resetStats(): void {
-    this.s = { hits: 0, misses: 0, evictions: 0, bytesRead: 0, bytesUploaded: 0, readMs: 0, packMs: 0, uploadMs: 0 };
+    this.s = { hits: 0, hitsResident: 0, hitsPrefetch: 0, misses: 0, evictions: 0, bytesRead: 0, bytesUploaded: 0, readMs: 0, packMs: 0, uploadMs: 0 };
   }
 
   destroy(): void {
