@@ -2082,6 +2082,54 @@ async function main(): Promise<void> {
         new Float32Array(await g.read(mono, G.nHead * G.kvLora * 4)), 1e-4, 1e-5));
     }
 
+    { // MLA split BATCH (fase 5, it.29): M righe con passato CRESCENTE
+      // (causalita' intra-chunk: n = base+m+1) vs il per-riga — stesso corpo,
+      // cambia solo l'indicizzazione ⇒ atteso BIT-IDENTICO, incluso il caso
+      // in cui righe diverse attivano un numero DIVERSO di partizioni.
+      const ctxMax = 512, M = 3, basePast = MLA_CHUNK_P - 2; // riga 0 sotto il bordo, riga 2 sopra
+      const scale = 1 / Math.sqrt(G.headLenMla);
+      const cache = randF32(ctxMax * W576, 91, 0.5);
+      const qRows = Array.from({ length: M }, (_, m) => randF32(G.nHead * W576, 92 + m, 0.5));
+      const partCode = mlaAttnSplitPartWgsl({ nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax, scale, chunk: MLA_CHUNK_P });
+      const reduceCode = mlaAttnSplitReduceWgsl({ nHead: G.nHead, kvLora: G.kvLora, ctxMax, chunk: MLA_CHUNK_P });
+      const cBuf = g.buf(cache);
+      const perRow: Float32Array[] = [];
+      for (let m = 0; m < M; m++) {
+        const partials = g.buf(new Float32Array(mlaPartialsLen(G.nHead, G.kvLora, ctxMax)).fill(NaN));
+        const out = g.empty(G.nHead * G.kvLora * 4);
+        const u = g.uniform(basePast + m, basePast + m);
+        await g.run(partCode, [g.buf(qRows[m]), cBuf, partials], mlaSMax(ctxMax), u);
+        await g.run(reduceCode, [partials, out], G.nHead, u);
+        perRow.push(new Float32Array(await g.read(out, G.nHead * G.kvLora * 4)));
+        partials.destroy(); out.destroy();
+      }
+      const qM = g.empty(M * G.nHead * W576 * 4);
+      for (let m = 0; m < M; m++) g.device.queue.writeBuffer(qM, m * G.nHead * W576 * 4, qRows[m] as unknown as BufferSource);
+      const rowPast = g.buf(Uint32Array.from({ length: M }, (_, m) => basePast + m));
+      const partialsM = g.buf(new Float32Array(M * mlaPartialsLen(G.nHead, G.kvLora, ctxMax)).fill(NaN));
+      const outM = g.empty(M * G.nHead * G.kvLora * 4);
+      await g.run(mlaAttnSplitPartWgsl({ nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax, scale, chunk: MLA_CHUNK_P, batch: true }),
+        [qM, cBuf, partialsM, rowPast], [mlaSMax(ctxMax), 1, M]);
+      await g.run(mlaAttnSplitReduceWgsl({ nHead: G.nHead, kvLora: G.kvLora, ctxMax, chunk: MLA_CHUNK_P, batch: true }),
+        [partialsM, outM, rowPast], [G.nHead, 1, M]);
+      const gotM = new Float32Array(await g.read(outM, M * G.nHead * G.kvLora * 4));
+      let maxAbs = 0, bitIdentical = true;
+      for (let m = 0; m < M; m++) {
+        for (let i = 0; i < G.nHead * G.kvLora; i++) {
+          const a = gotM[m * G.nHead * G.kvLora + i], b = perRow[m][i];
+          if (!Object.is(a, b)) bitIdentical = false;
+          maxAbs = Math.max(maxAbs, Math.abs(a - b));
+        }
+      }
+      partialsM.destroy(); outM.destroy();
+      results.push({
+        kernel: "mla-split-batch-vs-per-row", pass: bitIdentical, maxAbs, maxRel: maxAbs,
+        note: bitIdentical
+          ? `BIT-IDENTICO su ${M} righe a passato crescente (${basePast}..${basePast + M - 1}, bordo di partizione attraversato)`
+          : "divergenza inattesa: stesso corpo, indicizzazione da investigare",
+      });
+    }
+
     { // strided copy (assemblaggio q576 = [q_ckv | q_rope] per head): esatto
       const src = randF32(G.nHead * HL, 81);
       const dst = randF32(G.nHead * W576, 82); // pre-riempito: la copy non deve toccare il resto

@@ -1765,3 +1765,31 @@ intra-chunk sulla rappresentazione absorbed — il pattern chunked Qwen non si
 trasla 1:1, la MLA ha la cache 576/token e le teste assorbite), il dense
 blk.0 chunk, poi il wiring glmmodel (router per riga + planMoeChunk + ensure
 unione + Sel/gather) e l'identita' argmax M=1 vs M>1 su p6.
+
+## it.29 — 2026-08-06 — fase 5 slice 3b: l'attention MLA batched, bit-identica
+
+### Cosa
+
+Opzione `batch` sui due kernel dello split MLA (part+reduce): wid.z = riga,
+q/partials/out a offset di riga, e il PASSATO per riga da `rowPast` (storage
+al posto dell'uniform P) — la causalita' intra-chunk e' n = rowPast[m]+1
+crescente PER COSTRUZIONE, non una maschera. Corpo aritmetico invariato
+(testo non-batch byte-identico a HEAD, verificato con diff programmatico —
+terzo uso dell'idioma it.27-28).
+
+### Verifica
+
+ktest nuovo `mla-split-batch-vs-per-row`: M=3 righe a passato crescente
+14..16 (MLA_CHUNK_P−2: la riga 0 sotto il bordo di partizione, la riga 2
+sopra ⇒ numero di partizioni DIVERSO per riga), geometria reale (20 head,
+576 wide, kvLora 512) — **BIT-IDENTICO, maxAbs 0**. ktest **56/56**; suite
+**337+7**; tsc pulito.
+
+### Stato kernel fase 5 (dopo it.27-29)
+
+FATTI e bit-identici sul device: catena expert su unione (gather+slot+
+combine), shexp batch, attention MLA split batch causale. RESTANO
+(meccanici, pattern wid.z provato 3 volte): rope/kvAppend/rms/GEMV densi
+del chunk su M righe + dense blk.0; poi il WIRING glmmodel (router per
+riga + planMoeChunk + ensure unione + Sel/gather batched) e il test
+identita' argmax M=1 vs M>1 su p6 — il done-when della fase.

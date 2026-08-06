@@ -1707,8 +1707,16 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 // identico alla convenzione Qwen: [head][part][kvLora out | m | l].
 export function mlaAttnSplitPartWgsl(opts: {
   nHead: number; kvLora: number; ropeDims: number; ctxMax: number; scale: number; chunk: number;
+  /**
+   * batch (fase 5): M righe di prefill nello stesso dispatch — wid.z = riga,
+   * q da qM[riga], partials a offset di riga, e il PASSATO per riga arriva da
+   * `rowPast` (storage al posto dell'uniform P): la causalita' intra-chunk e'
+   * n = rowPast[m]+1 crescente per costruzione. Senza `batch` il testo emesso
+   * e' IDENTICO a prima, byte per byte (idioma arena/batch di it.27-28).
+   */
+  batch?: boolean;
 }): string {
-  const { nHead, kvLora, ropeDims, ctxMax, scale, chunk } = opts;
+  const { nHead, kvLora, ropeDims, ctxMax, scale, chunk, batch } = opts;
   const width = kvLora + ropeDims;
   const TW = 64;   // larghezza del tile, sia sui 576 dello score sia sui 512 dell'out
   const TWP = TW + 1; // stride PADDATO in shared: rompe i conflitti di banco
@@ -1718,11 +1726,20 @@ export function mlaAttnSplitPartWgsl(opts: {
   }
   const sMax = Math.ceil(ctxMax / chunk);
   const nAcc = Math.ceil((nHead * chunk) / WG); // accumulatori privati per thread
+  const nBind = batch
+    ? "@group(0) @binding(3) var<storage, read> rowPast: array<u32>;"
+    : "@group(0) @binding(3) var<uniform> P: TokParams;";
+  const rowPre = batch
+    ? "\n  let qB = wid.z * N_HEAD * WIDTH;\n  let pB = wid.z * N_HEAD * S_MAX * PART_STRIDE;"
+    : "";
+  const nExpr = batch ? "rowPast[wid.z] + 1u" : "P.nPast + 1u";
+  const qB = batch ? "qB + " : "";
+  const pB = batch ? "pB + " : "";
   return `${TOK_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read> q: array<f32>;
 @group(0) @binding(1) var<storage, read> cache: array<f32>;
 @group(0) @binding(2) var<storage, read_write> partials: array<f32>; // [head][part][${kvLora} out | m | l]
-@group(0) @binding(3) var<uniform> P: TokParams;
+${nBind}
 const N_HEAD = ${nHead}u;
 const WIDTH = ${width}u;
 const KV_LORA = ${kvLora}u;
@@ -1743,8 +1760,8 @@ var<workgroup> lS: array<f32, ${nHead}>;
 @compute @workgroup_size(${WG})
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
   let part = wid.x;
-  let t = lid.x;
-  let n = P.nPast + 1u;
+  let t = lid.x;${rowPre}
+  let n = ${nExpr};
   let begin = part * CHUNK;
   if (begin >= n) { return; } // uniforme per workgroup: PRECEDE ogni workgroupBarrier
   let end = min(begin + CHUNK, n);
@@ -1766,7 +1783,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     }
     for (var i = t; i < N_HEAD * TW; i = i + WG) {
       let h = i / TW; let c = i % TW;
-      qTile[h * TWP + c] = q[h * WIDTH + off + c];
+      qTile[h * TWP + c] = q[${qB}h * WIDTH + off + c];
     }
     workgroupBarrier();
     a = 0u;
@@ -1821,12 +1838,12 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
       let h = idx / TW; let j = idx % TW;
       d = 0.0;
       for (var p = 0u; p < CHUNK; p = p + 1u) { d = d + sc[h * CHUNK + p] * cTile[p * TWP + j]; }
-      partials[(h * S_MAX + part) * PART_STRIDE + off + j] = d;
+      partials[${pB}(h * S_MAX + part) * PART_STRIDE + off + j] = d;
     }
     workgroupBarrier();
   }
   if (t < N_HEAD) {
-    let b2 = (t * S_MAX + part) * PART_STRIDE;
+    let b2 = ${pB}(t * S_MAX + part) * PART_STRIDE;
     partials[b2 + KV_LORA] = mS[t];
     partials[b2 + KV_LORA + 1u] = lS[t];
   }
@@ -1840,14 +1857,25 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 // dimensione), qui le dimensioni sono 512.
 export function mlaAttnSplitReduceWgsl(opts: {
   nHead: number; kvLora: number; ctxMax: number; chunk: number;
+  /** batch: v. mlaAttnSplitPartWgsl — wid.z = riga, nParts per riga da rowPast */
+  batch?: boolean;
 }): string {
-  const { kvLora, ctxMax, chunk } = opts; // nHead = griglia del dispatch
+  const { nHead, kvLora, ctxMax, chunk, batch } = opts; // nHead: griglia del dispatch (e stride di riga in batch)
   const sMax = Math.ceil(ctxMax / chunk);
   const WG = 256;
+  const nBind = batch
+    ? "@group(0) @binding(2) var<storage, read> rowPast: array<u32>;"
+    : "@group(0) @binding(2) var<uniform> P: TokParams;";
+  const rowPre = batch
+    ? `\n  let pB = wid.z * ${nHead}u * S_MAX * PART_STRIDE;\n  let oB = wid.z * ${nHead}u * KV_LORA;`
+    : "";
+  const nPartsExpr = batch ? "rowPast[wid.z] / CHUNK + 1u" : "P.nPast / CHUNK + 1u";
+  const pB = batch ? "pB + " : "";
+  const oB = batch ? "oB + " : "";
   return `${TOK_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read> partials: array<f32>;
 @group(0) @binding(1) var<storage, read_write> out: array<f32>;
-@group(0) @binding(2) var<uniform> P: TokParams;
+${nBind}
 const KV_LORA = ${kvLora}u;
 const S_MAX = ${sMax}u;
 const CHUNK = ${chunk}u;
@@ -1863,9 +1891,9 @@ var<workgroup> lAll: f32;
 @compute @workgroup_size(${WG})
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
   let h = wid.x;
-  let t = lid.x;
-  let nParts = P.nPast / CHUNK + 1u; // n = nPast+1 ⇒ ceil(n/CHUNK)
-  let base = h * S_MAX * PART_STRIDE;
+  let t = lid.x;${rowPre}
+  let nParts = ${nPartsExpr}; // n = nPast+1 ⇒ ceil(n/CHUNK)
+  let base = ${pB}h * S_MAX * PART_STRIDE;
   // M e L su un solo thread (nParts ≤ ${sMax}: riduzione seriale più corta del
   // costo di una parallela)
   if (t == 0u) {
@@ -1887,7 +1915,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
       let b2 = base + p * PART_STRIDE;
       acc = acc + partials[b2 + j] * exp(partials[b2 + KV_LORA] - mAll);
     }
-    out[h * KV_LORA + j] = acc / lAll;
+    out[${oB}h * KV_LORA + j] = acc / lAll;
   }
 }`;
 }
