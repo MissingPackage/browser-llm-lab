@@ -657,13 +657,17 @@ interface ModelTrace {
   experts: number[][]; weights: number[][];
 }
 
-async function testGlmModel2Layer(
-  g: Gpu, select: "cpu" | "shadow" | "gpu" = "cpu",
-  io?: { record?: ModelTrace; against?: ModelTrace },
-): Promise<KResult> {
-  const shadow = select === "shadow";
-  const gpuSel = select === "gpu";
-  const name = gpuSel ? "glm-model-2layer-gpu" : shadow ? "glm-model-2layer-shadow" : "glm-model-2layer";
+/**
+ * Kit del mini-modello 2 layer: sorgente sintetica deterministica (stessi seed
+ * ⇒ stessi byte a ogni chiamata) + costruttori dei riferimenti f64. Estratto
+ * da testGlmModel2Layer (C3b fase 2) perche' i casi del decode ottimistico
+ * hanno bisogno DELLO STESSO modello con riferimenti propri — in particolare
+ * `mkRef1({zeroExperts})`, il riferimento del degrado DEFINITO: un expert
+ * marcato MISS contribuisce ZERO (guardia `ok` dei kernel d'arena), e il
+ * riferimento lo modella azzerandone i pesi (gate 0 ⇒ silu(0)·up = 0 ⇒
+ * down·0 = 0), a router INVARIATO (i pesi del router sono non-expert).
+ */
+function mkMiniModelKit() {
   const exBlocks = (G.dModel / 32) * G.dFfnExpert;
   const b32 = (n: number) => (n / 32);
   const sizes: Record<string, [number, "f32" | "q4_0" | "q4_1" | "q8_0" | "q5_K" | "q6_K"]> = {
@@ -761,18 +765,53 @@ async function testGlmModel2Layer(
     wQB: dq(l, "attn_q_b.weight"), wKvA: dq(l, "attn_kv_a_mqa.weight"), kvANorm: dq(l, "attn_kv_a_norm.weight"),
     wKB: dq(l, "attn_k_b.weight"), wVB: dq(l, "attn_v_b.weight"), wO: dq(l, "attn_output.weight"),
   });
-  const ref0 = new GlmDenseLayerRefF64({
+  const mkRef0 = () => new GlmDenseLayerRefF64({
     ...attnW(0), ffnNorm: dq(0, "ffn_norm.weight"),
     wGate: dq(0, "ffn_gate.weight"), wUp: dq(0, "ffn_up.weight"), wDown: dq(0, "ffn_down.weight"),
   });
-  const ref1 = new GlmMoeLayerRefF64(attnW(1), dq(1, "ffn_norm.weight"), {
+  const mkRef1 = (zeroExperts?: Set<number>) => new GlmMoeLayerRefF64(attnW(1), dq(1, "ffn_norm.weight"), {
     routerW: dq(1, "ffn_gate_inp.weight"), routerBias: dq(1, "exp_probs_b.bias"),
     expert: (e: number): GlmMoeExpertWeights => {
       const r = expert(1, e);
-      return { gate: deqBy(r.gate, "q4_0"), up: deqBy(r.up, "q4_0"), down: deqBy(r.down, "q4_1") };
+      const w = { gate: deqBy(r.gate, "q4_0"), up: deqBy(r.up, "q4_0"), down: deqBy(r.down, "q4_1") };
+      // il degrado DEFINITO del MISS: contributo zero, selezione invariata
+      if (zeroExperts?.has(e)) {
+        return { gate: new Float32Array(w.gate.length), up: new Float32Array(w.up.length), down: new Float32Array(w.down.length) };
+      }
+      return w;
     },
     gateShexp: dq(1, "ffn_gate_shexp.weight"), upShexp: dq(1, "ffn_up_shexp.weight"), downShexp: dq(1, "ffn_down_shexp.weight"),
   });
+  // ref f64 dell'head: rms(output_norm) + matvec Q6_K dequant
+  const outNormF = deqBy(nonExpert("output_norm.weight"), "f32");
+  const outWF = deqBy(nonExpert("output.weight"), "q6_K");
+  const headRefF64 = (h: Float64Array): Float64Array => {
+    let ss = 0;
+    for (let i = 0; i < G.dModel; i++) ss += h[i] * h[i];
+    const sc = 1 / Math.sqrt(ss / G.dModel + G.rmsEps);
+    const out = new Float64Array(VOCAB_T);
+    for (let r = 0; r < VOCAB_T; r++) {
+      let acc = 0;
+      const base = r * G.dModel;
+      for (let i = 0; i < G.dModel; i++) acc += outWF[base + i] * (h[i] * sc * outNormF[i]);
+      out[r] = acc;
+    }
+    return out;
+  };
+  return { srcMock, VOCAB_T, mkRef0, mkRef1, headRefF64 };
+}
+
+async function testGlmModel2Layer(
+  g: Gpu, select: "cpu" | "shadow" | "gpu" = "cpu",
+  io?: { record?: ModelTrace; against?: ModelTrace },
+): Promise<KResult> {
+  const shadow = select === "shadow";
+  const gpuSel = select === "gpu";
+  const name = gpuSel ? "glm-model-2layer-gpu" : shadow ? "glm-model-2layer-shadow" : "glm-model-2layer";
+  const kit = mkMiniModelKit();
+  const { srcMock, VOCAB_T, headRefF64 } = kit;
+  const ref0 = kit.mkRef0();
+  const ref1 = kit.mkRef1();
 
   // Finestra d'arena tagliata a 3 slab (KTEST_ARENA_WINDOW): con 7 slot la
   // classe q4_1 — l'unica che blk.1 usa — sta su 3 buffer, quindi lo switch di
@@ -794,22 +833,7 @@ async function testGlmModel2Layer(
   // non cambiano" — non era testata da nessuno: un submit aggiunto nel ramo
   // shadow sarebbe passato sotto ogni gate.
   model.setTelemetry(true, false);
-  // ref f64 dell'head: rms(output_norm) + matvec Q6_K dequant
-  const outNormF = deqBy(nonExpert("output_norm.weight"), "f32");
-  const outWF = deqBy(nonExpert("output.weight"), "q6_K");
-  const headRefF64 = (h: Float64Array): Float64Array => {
-    let ss = 0;
-    for (let i = 0; i < G.dModel; i++) ss += h[i] * h[i];
-    const sc = 1 / Math.sqrt(ss / G.dModel + G.rmsEps);
-    const out = new Float64Array(VOCAB_T);
-    for (let r = 0; r < VOCAB_T; r++) {
-      let acc = 0;
-      const base = r * G.dModel;
-      for (let i = 0; i < G.dModel; i++) acc += outWF[base + i] * (h[i] * sc * outNormF[i]);
-      out[r] = acc;
-    }
-    return out;
-  };
+  // (ref f64 dell'head: ora nel kit — headRefF64)
   const NPOS = 6;
   let l2e = 0, l2r = 0, maxAbs = 0, maxRel = 0, wMaxRel = 0, logitMaxRel = 0;
   let argmaxOk = 0;
@@ -1243,6 +1267,219 @@ async function testGlmGpuPartialResidency(g: Gpu): Promise<KResult> {
     note: modello === null
       ? `errore atteso: "${msg.slice(0, 160)}…"` + (mancanti.length ? `; MANCANO ${mancanti.join(" | ")}` : "")
       : "il modo gpu e' partito a residenza parziale (7 slot per 64 expert)",
+  };
+}
+
+// ============ C3B FASE 2 — decode ottimistico: flag di miss + checkpoint ====
+// Spec: docs/superpowers/specs/2026-08-07-engine-fase-c3b-decode-ottimistico.md
+// Qui si misura il MECCANISMO, non il repair (fase 3): (a) il resolve marca
+// ESATTAMENTE i miss forzati e mai altro (0 falsi positivi); (b) il degrado e'
+// quello DEFINITO (contributo zero, selezione invariata) — confronto col
+// riferimento f64 a expert azzerati; (c) il checkpoint hidden e' bit-identico
+// fra "gpu" e "optimistic" e ancorato ai contenuti (riga 0 = xIn del token).
+
+async function testGlmOptimisticForcedMiss(g: Gpu): Promise<KResult> {
+  const name = "glm-optimistic-forced-miss";
+  const problems: string[] = [];
+  const arenaCfg = ktestArena(true); // 64 slot: la precondizione 0.88 passa, i MISS li inietta l'harness
+  const mkModel = () => createGlmModel(g.device, mkMiniModelKit().srcMock, {
+    nLayer: 2, ctxMax: 16, head: true, vocab: 2048, select: "optimistic",
+    cache: {
+      budgetBytes: 0, slotsOverride: arenaCfg.slotsOverride,
+      maxBindingBytes: arenaCfg.window, maxBufferBytes: arenaCfg.window, timing: true,
+    },
+  });
+  const x0 = randF32(G.dModel, 61_000, 0.5);
+  // riferimento pieno: selezione + hidden del token PULITO
+  const kitF = mkMiniModelKit();
+  const refF0 = kitF.mkRef0(), refF1 = kitF.mkRef1();
+  const refHF = refF1.forward(refF0.forward(x0));
+  const refSel = refF1.lastRouting!;
+
+  // ---- scenario 1: run PULITA — dirty presente, vuoto, zero falsi positivi ----
+  const m1 = mkModel();
+  m1.setTelemetry(true, false);
+  const r1 = await m1.forward(x0, 0, true);
+  const tel1 = await m1.telemetry();
+  const planned1 = m1.dispatchesPerTokenPlanned;
+  m1.destroy();
+  if (!r1.dirty) problems.push("run pulita senza campo dirty (modo optimistic deve riportarlo sempre)");
+  else if (r1.dirty.missCount !== 0 || r1.dirty.firstDirtyLayer !== -1 || r1.dirty.misses.length !== 0) {
+    problems.push(`falsi positivi: missCount=${r1.dirty.missCount} first=${r1.dirty.firstDirtyLayer} misses=${r1.dirty.misses.length}`);
+  }
+  // identita' del token pulito col riferimento pieno (stessi gate del caso modello)
+  let l2e = 0, l2r = 0;
+  for (let i = 0; i < G.dModel; i++) { const d = r1.hidden[i] - refHF[i]; l2e += d * d; l2r += refHF[i] * refHF[i]; }
+  const l2Clean = Math.sqrt(l2e / Math.max(l2r, 1e-30));
+  if (l2Clean > 1e-3) problems.push(`run pulita: L2rel=${l2Clean.toExponential(2)} > 1e-3 vs ref pieno`);
+  // l'interruttore vale anche qui: 1 submit / 0 sync per token
+  if (tel1.submits !== 1 || tel1.routerSyncs !== 0) {
+    problems.push(`contatori: ${tel1.submits} submit / ${tel1.routerSyncs} sync (attesi 1/0)`);
+  }
+  if (tel1.dispatches !== planned1 + 2) {
+    problems.push(`dispatch ${tel1.dispatches} != piano ${planned1} + testa 2`);
+  }
+
+  // ---- scenario 2: MISS FORZATI su 2 dei 4 selezionati + 1 controllo non selezionato ----
+  const selIds = Array.from(refSel.experts);
+  const c1 = selIds[1], c2 = selIds[3];
+  let ctrl = 0; while (selIds.includes(ctrl)) ctrl++; // il controllo NON deve comparire nei miss
+  const m2 = mkModel();
+  m2.setTelemetry(true, false);
+  m2.debugMarkMiss([{ layer: 1, id: c1 }, { layer: 1, id: c2 }, { layer: 1, id: ctrl }]);
+  const r2 = await m2.forward(x0, 0, true);
+  m2.destroy();
+  // selezione INVARIATA dal marking (il router non guarda la slotTable)
+  const gotIds = Array.from(r2.routing[0].experts);
+  if (!gotIds.every((e, k) => e === selIds[k])) {
+    problems.push(`selezione cambiata dal marking: {${gotIds}} != {${selIds}}`);
+  }
+  // il flag: esattamente i due forzati, sui k giusti, controllo assente
+  const wantMiss = [{ layer: 1, id: c1, k: 1 }, { layer: 1, id: c2, k: 3 }];
+  const gotMiss = r2.dirty?.misses ?? [];
+  const missOk = r2.dirty !== undefined && r2.dirty.missCount === 2 && r2.dirty.firstDirtyLayer === 1
+    && gotMiss.length === 2 && wantMiss.every((w, i) =>
+      gotMiss[i].layer === w.layer && gotMiss[i].id === w.id && gotMiss[i].k === w.k);
+  if (!missOk) {
+    problems.push(`miss attesi ${JSON.stringify(wantMiss)}, riportati ${JSON.stringify(gotMiss)} ` +
+      `(missCount=${r2.dirty?.missCount}, first=${r2.dirty?.firstDirtyLayer})`);
+  }
+  // i flag nella Sel di produzione riletta: bit 0 esattamente dove deve
+  const vram = r2.routing[0].vram;
+  if (!vram) problems.push("Sel di produzione non riletta");
+  else {
+    for (let k = 0; k < G.nExpertUsed; k++) {
+      const wantFlag = vram.experts[k] === c1 || vram.experts[k] === c2 ? 1 : 0;
+      if ((vram.flags[k] & 1) !== wantFlag) {
+        problems.push(`k${k}: flag ${vram.flags[k]} per expert ${vram.experts[k]} (atteso bit0=${wantFlag})`);
+      }
+    }
+  }
+  // il degrado DEFINITO: hidden e logits del token sporco == riferimento f64
+  // con i DUE expert azzerati (contributo zero, guardia `ok` dei kernel)
+  const kitZ = mkMiniModelKit();
+  const refZ0 = kitZ.mkRef0(), refZ1 = kitZ.mkRef1(new Set([c1, c2]));
+  const refHZ = refZ1.forward(refZ0.forward(x0));
+  const refLZ = kitZ.headRefF64(refHZ);
+  let l2ze = 0, l2zr = 0, logitZMaxRel = 0;
+  for (let i = 0; i < G.dModel; i++) { const d = r2.hidden[i] - refHZ[i]; l2ze += d * d; l2zr += refHZ[i] * refHZ[i]; }
+  const l2Dirty = Math.sqrt(l2ze / Math.max(l2zr, 1e-30));
+  if (l2Dirty > 1e-3) problems.push(`token sporco: L2rel=${l2Dirty.toExponential(2)} > 1e-3 vs ref a expert azzerati`);
+  let aGot = 0, aRef = 0;
+  for (let r = 0; r < 2048; r++) {
+    logitZMaxRel = Math.max(logitZMaxRel, Math.abs(r2.logits![r] - refLZ[r]) / Math.max(Math.abs(refLZ[r]), 1e-3));
+    if (r2.logits![r] > r2.logits![aGot]) aGot = r;
+    if (refLZ[r] > refLZ[aRef]) aRef = r;
+  }
+  if (aGot !== aRef || logitZMaxRel > 5e-3) {
+    problems.push(`head del token sporco: argmax ${aGot} vs ${aRef}, logitMaxRel=${logitZMaxRel.toExponential(2)}`);
+  }
+  return {
+    kernel: name, pass: problems.length === 0, maxAbs: 0, maxRel: Math.max(l2Clean, l2Dirty),
+    note: `pulito: L2rel=${l2Clean.toExponential(2)}, 1 submit/0 sync, dispatch ok; ` +
+      `forzati {${c1},${c2}} (+controllo ${ctrl}): missCount=${r2.dirty?.missCount}, ` +
+      `first=${r2.dirty?.firstDirtyLayer}, degrado vs ref-azzerato L2rel=${l2Dirty.toExponential(2)}, ` +
+      `logitMaxRel=${logitZMaxRel.toExponential(2)}` +
+      (problems.length ? `; ${problems.join("; ")}` : ""),
+  };
+}
+
+async function testGlmCheckpointHidden(g: Gpu): Promise<KResult> {
+  const name = "glm-hidden-checkpoint";
+  const problems: string[] = [];
+  const arenaCfg = ktestArena(true);
+  const mk = (select: "gpu" | "optimistic") => createGlmModel(g.device, mkMiniModelKit().srcMock, {
+    nLayer: 2, ctxMax: 16, head: true, vocab: 2048, select, checkpointHidden: true,
+    cache: {
+      budgetBytes: 0, slotsOverride: arenaCfg.slotsOverride,
+      maxBindingBytes: arenaCfg.window, maxBufferBytes: arenaCfg.window, timing: true,
+    },
+  });
+  const mG = mk("gpu"), mO = mk("optimistic");
+  mG.setTelemetry(true, false);
+  const NPOS = 3;
+  const xs = Array.from({ length: NPOS }, (_, p) => randF32(G.dModel, 62_000 + p, 0.5));
+  for (let p = 0; p < NPOS; p++) {
+    await mG.forward(xs[p], p, true);
+    await mO.forward(xs[p], p, true);
+  }
+  const ckptG = await mG.readHiddenCkpt();
+  const ckptO = await mO.readHiddenCkpt();
+  const telG = await mG.telemetry();
+  const plannedG = mG.dispatchesPerTokenPlanned;
+  mG.destroy(); mO.destroy();
+  if (ckptG.length !== 2 * G.dModel) problems.push(`checkpoint di ${ckptG.length} f32 (attesi ${2 * G.dModel})`);
+  // (1) bit-identita' fra i due modi: stessa sequenza, stessi kernel, stesse copy
+  let bitEq = 0;
+  for (let i = 0; i < ckptG.length; i++) if (Object.is(ckptG[i], ckptO[i])) bitEq++;
+  if (bitEq !== ckptG.length) problems.push(`gpu vs optimistic: ${bitEq}/${ckptG.length} bit-identici`);
+  // (2) ancora di contenuto, riga 0: l'input del layer 0 all'ULTIMO token e'
+  // xIn cosi' com'e' (writeBuffer di x, copy prima di ogni dispatch del token)
+  let row0Eq = 0;
+  const xLast = xs[NPOS - 1];
+  for (let i = 0; i < G.dModel; i++) if (Object.is(ckptG[i], xLast[i])) row0Eq++;
+  if (row0Eq !== G.dModel) problems.push(`riga 0: ${row0Eq}/${G.dModel} bit-identici a xIn dell'ultimo token`);
+  // (3) ancora di contenuto, riga 1: l'input del layer 1 all'ultimo token vs
+  // riferimento f64 (ref0 STATEFUL: si fanno passare le stesse 3 posizioni)
+  const kit = mkMiniModelKit();
+  const ref0 = kit.mkRef0(), ref1 = kit.mkRef1();
+  let h1inLast: Float64Array | null = null;
+  for (let p = 0; p < NPOS; p++) {
+    const h1 = ref0.forward(xs[p]);
+    ref1.forward(h1); // tiene coerente la KV del layer 1 (non serve l'uscita)
+    if (p === NPOS - 1) h1inLast = h1;
+  }
+  let l2e = 0, l2r = 0;
+  for (let i = 0; i < G.dModel; i++) {
+    const d = ckptG[G.dModel + i] - h1inLast![i];
+    l2e += d * d; l2r += h1inLast![i] * h1inLast![i];
+  }
+  const l2Row1 = Math.sqrt(l2e / Math.max(l2r, 1e-30));
+  if (l2Row1 > 1e-3) problems.push(`riga 1: L2rel=${l2Row1.toExponential(2)} > 1e-3 vs input f64 del layer 1`);
+  // (4) le copy non sono dispatch: il conteggio non si muove
+  if (telG.dispatches / NPOS !== plannedG + 2) {
+    problems.push(`dispatch/token ${telG.dispatches / NPOS} != piano ${plannedG} + testa 2 (le copy contano?)`);
+  }
+  return {
+    kernel: name, pass: problems.length === 0, maxAbs: 0, maxRel: l2Row1,
+    note: `${NPOS} pos: gpu==optimistic ${bitEq}/${ckptG.length} bit, riga0==xIn ${row0Eq}/${G.dModel} bit, ` +
+      `riga1 vs f64 L2rel=${l2Row1.toExponential(2)}, dispatch/token invariati` +
+      (problems.length ? `; ${problems.join("; ")}` : ""),
+  };
+}
+
+async function testGlmOptimisticPrecondition(g: Gpu): Promise<KResult> {
+  const name = "glm-optimistic-precondizione";
+  const srcNever: GlmWeightSource = {
+    nonExpert: (n: string) => { throw new Error(`mock: precondizione tardiva, letto ${n}`); },
+    expert: () => { throw new Error("mock: precondizione tardiva, letto un expert"); },
+  };
+  let msg = "";
+  let modello: ReturnType<typeof createGlmModel> | null = null;
+  try {
+    modello = createGlmModel(g.device, srcNever, {
+      nLayer: 2, ctxMax: 16, select: "optimistic",
+      cache: {
+        budgetBytes: 0, slotsOverride: KTEST_SLOTS, // 7 slot q4_1 per 64 expert = 11% < 88%
+        maxBindingBytes: KTEST_ARENA_WINDOW, maxBufferBytes: KTEST_ARENA_WINDOW,
+      },
+    });
+  } catch (e) {
+    msg = e instanceof Error ? e.message : String(e);
+  }
+  modello?.destroy();
+  const want = [
+    "residenza NEAR-TOTAL",
+    `classe q4_1: ${KTEST_SLOTS.q4_1} slot per ${G.nExpert} expert`,
+    "C3c",
+  ];
+  const mancanti = want.filter((w) => !msg.includes(w));
+  const pass = modello === null && mancanti.length === 0;
+  return {
+    kernel: name, pass, maxAbs: 0, maxRel: 0,
+    note: modello === null
+      ? `errore atteso: "${msg.slice(0, 160)}…"` + (mancanti.length ? `; MANCANO ${mancanti.join(" | ")}` : "")
+      : "il modo optimistic e' partito sotto la precondizione (7 slot per 64 expert)",
   };
 }
 
@@ -2422,6 +2659,11 @@ async function main(): Promise<void> {
     // metriche; poi il caso negativo, che e' l'altra meta' del gate.
     results.push(await testGlmModel2Layer(g, "gpu", { against: cpuTrace }));
     results.push(await testGlmGpuPartialResidency(g));
+
+    // decode ottimistico (C3b fase 2): flag di miss, degrado definito, checkpoint
+    results.push(await testGlmOptimisticForcedMiss(g));
+    results.push(await testGlmCheckpointHidden(g));
+    results.push(await testGlmOptimisticPrecondition(g));
 
     // conformance layer-level con pesi reali (fase 4 slice 3) — il test lungo in coda
     results.push(await testGlmLayer0Real(g));

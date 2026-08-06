@@ -14,14 +14,19 @@ passa a C3c **con clausola pre-negoziata scritta nel contratto**; (c) policy
 via provvisoria nella non-regressione (docket c3b item 3, ratifica pendente).
 Non-regressione fissata da c3a item 21: decode 5.211 / prefill 25.78 / TTFT
 17.88 / Qwen 326.2 / golden 98.828% / firma 14b / ktest 65 / suite 337+7.
-**FATTO (it.1): fase 1 DONE** — spec
+**FATTO (it.1-2): fasi 1-2 DONE.** It.1: spec
 `docs/superpowers/specs/2026-08-07-engine-fase-c3b-decode-ottimistico.md`
-depositata (docket c3b item 5) e verificata dal loop-verifier (7/7 punti del
-contratto, riferimenti codice accurati, numeri = JSON WP-0). Meccanismo:
-`select:"optimistic"` nuovo (it.17 intatto), dirtyB piggyback sulla mapAsync
-di coda, checkpoint hidden 376 KiB, pin-for-replay ⇒ replay pulito per
-costruzione (max 1/token). **Next decidable: fase 2** — guard MISS nei kernel
-arena + dirtyB + checkpoint hidden, misurati in ktest su GPU reale.
+depositata (docket c3b item 5) e verificata (7/7 punti). It.2: **il
+meccanismo del miss è misurato su GPU reale — ktest 68/68** (+3):
+`select:"optimistic"` (precondizione 0.88, 1 submit/0 sync sul token pulito),
+dirtyB piggyback (binding 7 opt-in, WGSL shadow/gpu byte-invariati), miss
+forzati marcati esatti con 0 falsi positivi, degrado ≡ ref f64 a expert
+azzerati, checkpoint hidden bit-identico gpu↔optimistic 4096/4096. Suite
+337+7, tsc pulito, verifier PASS. Landmine annotata: preload in ordine
+(layer,expert) ⇒ se P(dirty) fuori proiezione in fase 4, guardare lì prima
+della LRU. **Next decidable: fase 3** — repair al confine (fetch mancanti,
+pin-for-replay, flush unico, replay da hiddenCkpt, assert I1/I3) + test di
+identità ottimistico-vs-sincrono con miss forzato + caso di rifiuto.
 Ratifiche c3a ancora pendenti (non bloccanti): item 14/14b, item 2 formale,
 item 19/20/21 prese d'atto.
 

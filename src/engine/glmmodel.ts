@@ -99,8 +99,32 @@ export interface GlmModelOpts {
    *   al tail dalla copia di Sel che gia' si faceva.
    *   AMMESSO SOLO A RESIDENZA TOTALE: senza, e' un errore esplicito in
    *   createGlmModel, mai una degradazione silenziosa (vedi la precondizione).
+   * - "optimistic" (C3b, spec 2026-08-07): la struttura di "gpu" (un submit,
+   *   zero readback del router) a residenza PARZIALE nel regime near-total.
+   *   Il resolve puo' trovare MISS: i kernel expert saltano (guardia `ok`,
+   *   degrado DEFINITO), il resolve marca `dirtyB` (piggyback sul tail, zero
+   *   sync in piu') e il forward riporta `dirty` invece di alzare — il token
+   *   sporco NON va campionato (invariante I2: repair+replay in fase 3).
+   *   Precondizione build-time: slots/parco >= optimisticMinResidency per
+   *   classe, altrimenti errore esplicito (il regime di scarsita' e' C3c).
    */
-  select?: "cpu" | "gpu" | "shadow";
+  select?: "cpu" | "gpu" | "shadow" | "optimistic";
+  /**
+   * Soglia della precondizione del modo "optimistic" (default 0.88 = regime
+   * near-total di WP-0). Override PER I TEST: in produzione non si abbassa
+   * senza docket (contratto C3b).
+   */
+  optimisticMinResidency?: number;
+  /**
+   * Checkpoint dell'hidden di INGRESSO di ogni layer (C3b spec §3c): una
+   * copyBufferToBuffer per layer (x → hiddenCkpt[l]) nell'encoder del token —
+   * zero dispatch in piu', l'input del replay dal primo layer sporco.
+   * Solo nei modi a submit unico ("gpu"/"optimistic"): nel path sync il
+   * confine di encoder per layer lo renderebbe ambiguo. Aggiunge un confine
+   * di pass per layer: con telemetryGpu i pass aumentano (stessa avvertenza
+   * del byCat — le quote restano confrontabili, il totale va dichiarato).
+   */
+  checkpointHidden?: boolean;
   // Telemetria di attribuzione (goal C3a fase 1). Zero-overhead da spenta
   // (contratto CONSTRAINTS): senza `telemetry` non si chiama nemmeno
   // performance.now(). `telemetryGpu` aggiunge timestampWrites a ogni compute
@@ -133,6 +157,19 @@ export interface GlmRouting {
    * copia era gia' dell'intera Sel.
    */
   vram?: { experts: Int32Array; weights: Float64Array; slots: Uint32Array; flags: Uint32Array };
+}
+
+/**
+ * Esito di sporcizia di UN token in modo "optimistic" (C3b spec §3b/§4).
+ * `firstDirtyLayer` e' il layer ASSOLUTO (−1 = token pulito); `misses` viene
+ * dal readback Sel (id con flag MISS), `missCount`/`firstDirtyLayer` sono
+ * CROSS-VERIFICATI col buffer dirtyB scritto dal kernel — una divergenza fra
+ * i due e' un bug strutturale e alza, non si sceglie un lato.
+ */
+export interface GlmDirtyInfo {
+  firstDirtyLayer: number;
+  missCount: number;
+  misses: { layer: number; id: number; k: number }[];
 }
 
 // Scomposizione del wall per token (contatori CUMULATIVI: il chiamante prende
@@ -176,7 +213,18 @@ export interface GlmModel {
   // hidden = stato post-ultimo-layer (readback: harness di conformance, non
   // bench). readLogits richiede opts.head: aggiunge final norm + lm_head e
   // ritorna i logits interi (154.880 × f32 = 620 KB/readback).
-  forward(x: Float32Array, pos: number, readLogits?: boolean): Promise<{ hidden: Float32Array; logits?: Float32Array; routing: GlmRouting[] }>;
+  forward(x: Float32Array, pos: number, readLogits?: boolean): Promise<{ hidden: Float32Array; logits?: Float32Array; routing: GlmRouting[]; dirty?: GlmDirtyInfo }>;
+  /**
+   * Readback dell'intero buffer di checkpoint (nLayer × dModel f32) — SOLO
+   * harness/ktest (un sync dedicato). Richiede opts.checkpointHidden.
+   */
+  readHiddenCkpt(): Promise<Float32Array>;
+  /**
+   * SOLO HARNESS (ktest C3b): forza MISS deterministici marcando le coppie
+   * (layer assoluto, expert id) nella slotTable. Richiede un modo col router
+   * GPU. Da chiamare FRA i token, mai con un submit in volo.
+   */
+  debugMarkMiss(misses: { layer: number; id: number }[]): void;
   // ATTENZIONE alla semantica: questo e' il valore DERIVATO dal piano statico
   // (formula sui conteggi di layer), non un conteggio. Il numero misurato sta
   // in `telemetry().dispatches`. I due divergono: la formula non contiene la
@@ -336,13 +384,21 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // ammesso solo se il parco expert del modello e' GIA' tutto in VRAM.
   const shadow = opts.select === "shadow";
   const gpuSel = opts.select === "gpu";
-  if (opts.select !== undefined && opts.select !== "cpu" && !shadow && !gpuSel) {
-    throw new Error(`glmmodel: select "${opts.select}" non esiste — "cpu", "shadow" o "gpu"`);
+  const optSel = opts.select === "optimistic";
+  if (opts.select !== undefined && opts.select !== "cpu" && !shadow && !gpuSel && !optSel) {
+    throw new Error(`glmmodel: select "${opts.select}" non esiste — "cpu", "shadow", "gpu" o "optimistic"`);
   }
-  // Il router GPU (routerTopK + resolve) gira in shadow e in gpu: cambia dove
-  // scrive, non se gira. In shadow va nella regione ombra e non decide niente;
-  // in gpu scrive la regione di produzione ed e' l'unico a decidere.
-  const routerGpu = shadow || gpuSel;
+  // Il router GPU (routerTopK + resolve) gira in shadow, gpu e optimistic:
+  // cambia dove scrive, non se gira. In shadow va nella regione ombra e non
+  // decide niente; in gpu/optimistic scrive la produzione ed e' l'unico a
+  // decidere. `oneSubmit` = la struttura a UN submit per token dello slice C:
+  // optimistic la eredita per intero, cambia solo cosa e' ammesso trovare
+  // nella slotTable (MISS) e cosa se ne fa il tail (dirty, non throw).
+  const routerGpu = shadow || gpuSel || optSel;
+  const oneSubmit = gpuSel || optSel;
+  if (opts.checkpointHidden === true && !oneSubmit) {
+    throw new Error('glmmodel: checkpointHidden richiede select "gpu" o "optimistic" (submit unico)');
+  }
   // PRECONDIZIONE DI RESIDENZA TOTALE (design §4 slice C, R6). Si verifica PRIMA
   // di costruire la cache: un errore dopo lascerebbe in giro i buffer d'arena
   // (GB di VRAM) di un modello che non nascera' mai.
@@ -359,6 +415,23 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         "risoluzione, nello stesso token (seam evict-post-resolve), e i kernel expert leggerebbero " +
         "lo slab di un altro expert senza che nessun contatore lo dica. Allargare gli slot " +
         '(residenza totale, fase 4c) oppure usare select "cpu".');
+    }
+  }
+  // PRECONDIZIONE DEL REGIME OTTIMISTICO (C3b spec §2): residenza near-total
+  // per classe. Sotto la soglia il replay collassa (WP-0: a budget 50/25% ogni
+  // token e' sporco) — quello e' il segmento di C3c, non di questo modo.
+  const optMinRes = opts.optimisticMinResidency ?? 0.88;
+  if (optSel) {
+    const slots = expertSlots(opts.cache);
+    const park = modelExpertPark(nLayer);
+    const corte = (["q4_0", "q4_1"] as const).filter((c) => park[c] > 0 && slots[c] < Math.ceil(optMinRes * park[c]));
+    if (corte.length > 0) {
+      throw new Error(
+        'glmmodel: select "optimistic" esige la residenza NEAR-TOTAL — ' +
+        corte.map((c) => `classe ${c}: ${slots[c]} slot per ${park[c]} expert (< ${optMinRes})`).join("; ") +
+        ". Sotto questa soglia il decode ottimistico collassa (WP-0: ogni token e' sporco e il " +
+        "replay costa piu' del sync). Il regime di scarsita' e' materia della fase C3c " +
+        '(sync+overlap): usare select "cpu" oppure allargare gli slot.');
     }
   }
   const cache = new ExpertCache(device, { ...opts.cache, arena: true, slotTable: routerGpu });
@@ -712,15 +785,26 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // (`expertSlab`, che salta il pack CPU) con preload chunked/asincrono e la
   // pubblicazione della slotTable per blocchi. Qui il meccanismo e' il piu'
   // semplice che garantisca zero evict, non il piu' veloce.
-  if (gpuSel) {
+  if (gpuSel || optSel) {
+    // In optimistic il parco puo' eccedere gli slot: si riempie FINO ALLA
+    // CAPACITA' e mai oltre — zero evict resta la precondizione del preload
+    // (un evict qui scombinerebbe la LRU prima ancora del primo token). Gli
+    // expert oltre capacita' restano MISS nella slotTable: e' il regime del
+    // modo, non un difetto. L'ordine di riempimento (layer, expert crescenti)
+    // e' arbitrario finche' il repair di fase 3 non porta una policy.
     for (const l of moeLayerAbs) {
-      for (let e = 0; e < G.nExpert; e++) cache.ensure(l, e, expertReader);
+      const cls = ExpertCache.classOf(l);
+      const cap = cache.arenaGeometry(cls).nSlots;
+      for (let e = 0; e < G.nExpert; e++) {
+        if (optSel && cache.stats().occupied[cls] >= cap) break;
+        cache.ensure(l, e, expertReader);
+      }
     }
     cache.flushSlotTable();
     const ev = cache.stats().evictions;
     if (ev !== 0) {
       throw new Error(
-        `glmmodel: preload a residenza totale con ${ev} evizioni — la precondizione sugli slot ` +
+        `glmmodel: preload con ${ev} evizioni — la precondizione sugli slot ` +
         "e' passata ma la cache ha comunque evinto (riparto degli slot per classe incoerente col parco)");
     }
   }
@@ -808,6 +892,25 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // totale — dove la tabella e' completa dal load e ogni risoluzione e' un hit.
   const routerIds = routerGpu ? storage(G.nExpertUsed * 4) : null;
   const routerWts = routerGpu ? storage(G.nExpertUsed * 4) : null;
+  // dirtyB (solo optimistic, spec §3b): [0] = primo layer MoE sporco
+  // (atomicMin, sentinel 0xffffffff), [1] = conteggio miss. 16 B per
+  // allineamento; ri-inizializzato dalla CPU a ogni token (writeBuffer in
+  // coda PRIMA del submit — l'ordine di coda garantisce che il reset preceda
+  // i resolve del token). La staging viaggia nel tail insieme a Sel/hidden.
+  const dirtyB = optSel
+    ? device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC })
+    : null;
+  const dirtyStaging = optSel
+    ? device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ })
+    : null;
+  const dirtyInit = new Uint32Array([0xffffffff, 0, 0, 0]);
+  // hiddenCkpt (spec §3c): nLayer righe da dModel f32 — l'hidden di INGRESSO
+  // di ogni layer, copiato nell'encoder del token. 47×2048×4 = 376 KiB sul
+  // modello vero. COPY_SRC per il readback dell'harness (readHiddenCkpt) e,
+  // in fase 3, per la copy di rientro del replay.
+  const hiddenCkpt = opts.checkpointHidden === true
+    ? device.createBuffer({ size: nLayer * G.dModel * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC })
+    : null;
   let routerGpuPipe: GPUComputePipeline | null = null;
   if (routerGpu) {
     const bglRouter = device.createBindGroupLayout({
@@ -822,12 +925,16 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           binding: 6, visibility: GPUShaderStage.COMPUTE,
           buffer: { type: "uniform", hasDynamicOffset: true, minBindingSize: MOE_IDX_BYTES },
         },
+        ...(optSel ? [{
+          binding: 7, visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "storage" as const },
+        }] : []),
       ],
     });
     routerGpuPipe = mkPipe(routerTopKWgsl({
       nExpert: G.nExpert, nUsed: G.nExpertUsed,
       weightsScale: G.weightsScale, clampMin: WEIGHTS_SUM_CLAMP_MIN,
-      resolve: { nExpert: G.nExpert, nUsed: G.nExpertUsed },
+      resolve: { nExpert: G.nExpert, nUsed: G.nExpertUsed, dirty: optSel },
     }), bglRouter);
     const slotTable = cache.slotTableBuffer();
     for (const L of layers) {
@@ -842,6 +949,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           { binding: 4, resource: { buffer: selBuf } },
           { binding: 5, resource: { buffer: slotTable } },
           { binding: 6, resource: { buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES } },
+          ...(optSel ? [{ binding: 7, resource: { buffer: dirtyB! } }] : []),
         ],
       });
     }
@@ -1145,6 +1253,10 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       if (readLogits && !opts.head) throw new Error("glmmodel: head non abilitata");
       device.queue.writeBuffer(x, 0, xIn as unknown as BufferSource);
       device.queue.writeBuffer(P, 0, new Uint32Array([pos, pos, 0, 0]));
+      // reset di dirtyB per token: in coda PRIMA del submit, quindi eseguito
+      // prima di ogni resolve del token (ordine di coda). Sentinel 0xffffffff
+      // in [0] perche' il kernel fa atomicMin sul layer MoE.
+      if (dirtyB) device.queue.writeBuffer(dirtyB, 0, dirtyInit);
       device.pushErrorScope("validation");
       device.pushErrorScope("out-of-memory");
 
@@ -1179,6 +1291,13 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       const endPass = () => { if (pass) { pass.end(); pass = null; } };
 
       for (const [l, L] of layers.entries()) {
+        // checkpoint dell'hidden di INGRESSO del layer (spec §3c): la copy va
+        // fuori dal pass — endPass garantisce anche l'ordine (i dispatch che
+        // hanno prodotto questo x vengono prima della copy nel command buffer).
+        if (hiddenCkpt) {
+          endPass();
+          enc.copyBufferToBuffer(x, 0, hiddenCkpt, l * G.dModel * 4, G.dModel * 4);
+        }
         // attention (con la copy k_pe dopo rmsKvA: indice 8 = kvApp)
         ensurePass("attn");
         runSteps(pass!, L.attn.slice(0, 8));
@@ -1202,11 +1321,11 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           // all'ombra; in gpu la entry (layer, k=0), che punta alla produzione.
           // Il WGSL e il bind group sono gli stessi.
           pass!.setPipeline(routerGpuPipe!);
-          pass!.setBindGroup(0, m.routerBind!, [(gpuSel ? m.selBase : nSel + m.moeIdx) * MOE_IDX_STRIDE]);
+          pass!.setBindGroup(0, m.routerBind!, [(oneSubmit ? m.selBase : nSel + m.moeIdx) * MOE_IDX_STRIDE]);
           pass!.dispatchWorkgroups(1);
           T.dispatches++;
         }
-        if (!gpuSel) {
+        if (!oneSubmit) {
           endPass();
           enc.copyBufferToBuffer(logitsB, 0, logitsStaging, 0, G.nExpert * 4);
           device.queue.submit([enc.finish()]);
@@ -1291,6 +1410,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       // Sel intera (produzione, piu' l'ombra in shadow) nel submit finale: e' il
       // solo momento in cui le regioni sono complete per tutti i layer del token.
       if (selStaging) enc.copyBufferToBuffer(selBuf, 0, selStaging, 0, nSelTot * SEL_BYTES);
+      if (dirtyStaging) enc.copyBufferToBuffer(dirtyB!, 0, dirtyStaging, 0, 16);
       // resolve dei timestamp del token DENTRO il submit finale; la mapAsync
       // (armTsq) parte dopo — mai prima, altrimenti Dawn droppa il command
       // buffer (known-issue fase A, root-cause in tsq-diag-2026-07-29).
@@ -1319,6 +1439,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       const maps: Promise<undefined>[] = [hiddenStaging.mapAsync(GPUMapMode.READ)];
       if (readLogits) maps.push(vocabStaging!.mapAsync(GPUMapMode.READ));
       if (selStaging) maps.push(selStaging.mapAsync(GPUMapMode.READ));
+      if (dirtyStaging) maps.push(dirtyStaging.mapAsync(GPUMapMode.READ));
       await Promise.all(maps);
       const hidden = new Float32Array(hiddenStaging.getMappedRange().slice(0));
       hiddenStaging.unmap();
@@ -1328,6 +1449,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         vocabStaging!.unmap();
       }
       let selMissTok = 0;
+      const selMisses: { layer: number; id: number; k: number }[] = [];
       if (selStaging) {
         const raw = selStaging.getMappedRange().slice(0);
         selStaging.unmap();
@@ -1353,14 +1475,22 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         const countMiss = (flags: Uint32Array) => {
           for (const fl of flags) if ((fl & 1) !== 0) selMissTok++;
         };
-        if (gpuSel) {
-          // Qui `routing` e' ancora VUOTO: in modo gpu nessuno sulla CPU ha visto
-          // la selezione mentre il token girava. Si ricostruisce ORA, dalla stessa
-          // copia di Sel che serviva gia' al confronto — la regione e' una sola,
-          // ed e' insieme la decisione del router e cio' che i kernel hanno letto.
+        if (oneSubmit) {
+          // Qui `routing` e' ancora VUOTO: in modo gpu/optimistic nessuno sulla
+          // CPU ha visto la selezione mentre il token girava. Si ricostruisce ORA,
+          // dalla stessa copia di Sel che serviva gia' al confronto — la regione
+          // e' una sola, ed e' insieme la decisione del router e cio' che i
+          // kernel hanno letto. In optimistic gli stessi flag alimentano la
+          // lista dei miss (spec §4: la lista viene da Sel, il flag aggregato
+          // da dirtyB — e i due si incrociano piu' sotto).
           for (let mi = 0; mi < nMoeLayer; mi++) {
             const r = readSel(mi * G.nExpertUsed * 4);
             countMiss(r.flags);
+            if (optSel) {
+              for (let k = 0; k < G.nExpertUsed; k++) {
+                if ((r.flags[k] & 1) !== 0) selMisses.push({ layer: moeLayerAbs[mi], id: r.experts[k], k });
+              }
+            }
             routing.push({ layer: moeLayerAbs[mi], experts: r.experts, weights: r.weights, vram: r });
           }
         } else {
@@ -1389,7 +1519,28 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           "non puo' accadere; a residenza parziale e' il seam evict-post-resolve — uno slot risolto " +
           "evinto DOPO la risoluzione, nello stesso token.");
       }
-      return { hidden, logits, routing };
+      // In optimistic il MISS e' il regime, non un errore: si riporta `dirty`
+      // e chi chiama NON campiona questo token (I2 — repair+replay in fase 3).
+      // Il flag aggregato del kernel (dirtyB) e la derivazione da Sel devono
+      // COINCIDERE: sono due strade indipendenti verso lo stesso fatto, e una
+      // divergenza e' un bug strutturale (resolve che scrive Sel e dirtyB in
+      // disaccordo), mai un dato da interpretare.
+      let dirty: GlmDirtyInfo | undefined;
+      if (optSel) {
+        const du = new Uint32Array(dirtyStaging!.getMappedRange().slice(0));
+        dirtyStaging!.unmap();
+        const kFirstMoe = du[0], kCount = du[1];
+        const derivedFirst = selMisses.length > 0 ? selMisses[0].layer : -1;
+        const kernelFirst = kFirstMoe === 0xffffffff ? -1 : moeLayerAbs[kFirstMoe];
+        if (kCount !== selMissTok || kernelFirst !== derivedFirst) {
+          throw new Error(
+            `glmmodel select "optimistic": dirtyB (${kCount} miss, primo layer ${kernelFirst}) ` +
+            `!= derivazione da Sel (${selMissTok} miss, primo layer ${derivedFirst}) — ` +
+            "il resolve ha scritto Sel e dirtyB in disaccordo: bug strutturale, token non interpretabile");
+        }
+        dirty = { firstDirtyLayer: derivedFirst, missCount: selMissTok, misses: selMisses };
+      }
+      return { hidden, logits, routing, dirty };
     },
     setTelemetry(on: boolean, gpu = true, byCat = false) {
       telemOn = on;
@@ -1416,9 +1567,24 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         gpuByCatPasses: catPasses.size ? Object.fromEntries(catPasses) : null,
       };
     },
+    debugMarkMiss(misses: { layer: number; id: number }[]) {
+      if (!routerGpu) throw new Error("glmmodel: debugMarkMiss richiede un modo col router GPU");
+      cache.debugMarkMiss(misses.map((m) => expertKey(m.layer, m.id)));
+    },
+    async readHiddenCkpt() {
+      if (!hiddenCkpt) throw new Error("glmmodel: readHiddenCkpt richiede opts.checkpointHidden");
+      const staging = device.createBuffer({ size: nLayer * G.dModel * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      const enc2 = device.createCommandEncoder();
+      enc2.copyBufferToBuffer(hiddenCkpt, 0, staging, 0, nLayer * G.dModel * 4);
+      device.queue.submit([enc2.finish()]);
+      await staging.mapAsync(GPUMapMode.READ);
+      const out = new Float32Array(staging.getMappedRange().slice(0));
+      staging.destroy();
+      return out;
+    },
     destroy() {
       for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnPartials, attnMla, tmp, fnB, gateD, upD, gateE, moeOut, logitsB, selBuf, moeIdxUni, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
-      for (const b of [routerIds, routerWts, selStaging]) b?.destroy();
+      for (const b of [routerIds, routerWts, selStaging, dirtyB, dirtyStaging, hiddenCkpt]) b?.destroy();
       tsqResolve?.destroy();
       querySet?.destroy();
       cache.destroy();

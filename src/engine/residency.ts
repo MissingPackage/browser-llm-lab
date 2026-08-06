@@ -341,6 +341,18 @@ export class ExpertCache {
     t.hi = -1;
   }
 
+  /**
+   * SOLO HARNESS (C3b fase 2, ktest): marca MISS le chiavi date nella
+   * slotTable (ombra + flush immediato) SENZA toccare slot ne' LRU — serve a
+   * forzare miss DETERMINISTICI nel resolve del modo "optimistic". Mai nel
+   * path di produzione: li' i MISS nascono dalla capacita', non si iniettano.
+   */
+  debugMarkMiss(keys: number[]): void {
+    if (!this.table) throw new Error("residency: debugMarkMiss senza slotTable (ExpertCacheOpts.slotTable)");
+    for (const k of keys) this.tableSet(k, SLOT_TABLE_MISS);
+    this.flushSlotTable();
+  }
+
   static classOf(layer: number): ExpertClass {
     return downIsQ4_1(layer) ? "q4_1" : "q4_0";
   }

@@ -2746,12 +2746,19 @@ export function routerTopKWgsl(opts: {
    * come PASSI di indicizzazione (stride della slotTable per layer, stride di
    * Sel per layer MoE) e non come dimensioni del router: si asserta che
    * coincidano, cosi' la ripetizione non puo' diventare una seconda verita'.
+   *
+   * `dirty` (C3b decode ottimistico, spec §3b): aggiunge il binding 7
+   * `dirtyB` — [0] = primo layer MoE con miss (atomicMin), [1] = conteggio
+   * miss (atomicAdd) — scritto SOLO quando il resolve trova almeno un MISS.
+   * Opt-in: senza, il WGSL emesso e' byte-identico a prima (shadow/gpu non
+   * cambiano). Il sentinel di [0] e' 0xffffffff: lo azzera la CPU per token.
    */
-  resolve?: { nExpert: number; nUsed: number };
+  resolve?: { nExpert: number; nUsed: number; dirty?: boolean };
 }): string {
   const { nExpert, nUsed, weightsScale, clampMin } = opts;
   const WG = 64;
   const res = opts.resolve;
+  const dirty = res?.dirty === true;
   if (res && (res.nExpert !== nExpert || res.nUsed !== nUsed)) {
     throw new Error(
       `routerTopK resolve: (${res.nExpert}, ${res.nUsed}) != (${nExpert}, ${nUsed}) — ` +
@@ -2763,7 +2770,8 @@ export function routerTopKWgsl(opts: {
     ? `
 @group(0) @binding(4) var<storage, read_write> selBuf: array<Sel>;
 @group(0) @binding(5) var<storage, read> slotTable: array<u32>;
-@group(0) @binding(6) var<uniform> moeIdx: MoeIdx;`
+@group(0) @binding(6) var<uniform> moeIdx: MoeIdx;${dirty ? `
+@group(0) @binding(7) var<storage, read_write> dirtyB: array<atomic<u32>>;` : ""}`
     : "";
   // le STESSE struct dei kernel d'arena, dalla stessa costante
   const resStruct = res ? `\n${SEL_STRUCT_WGSL}\n${MOE_IDX_STRUCT_WGSL}` : "";
@@ -2773,8 +2781,12 @@ export function routerTopKWgsl(opts: {
   // Il binding si chiama `selBuf` e non `sel` perche' in questo kernel `sel` e'
   // gia' l'array workgroup dei punteggi di selezione (probs+bias); `selBuf` e'
   // anche il nome che la stessa struttura ha nei kernel d'arena.
+  // Con `dirty` la coda cambia in 3 punti (var, conteggio, atomiche); senza,
+  // il testo emesso resta BYTE-IDENTICO a prima — shadow e gpu non cambiano.
   const resTail = res
-    ? `
+    ? (dirty
+      ? `
+  var nMiss = 0u;
   for (var k = 0u; k < NU; k = k + 1u) {
     let e = ids[k];
     let slot = slotTable[moeIdx.tableBase + e];
@@ -2783,7 +2795,22 @@ export function routerTopKWgsl(opts: {
     selBuf[o].slot = slot;
     selBuf[o].w = wts[k];
     selBuf[o].flags = select(0u, 1u, slot == 0xffffffffu); // bit 0 = miss risolto
+    nMiss = nMiss + select(0u, 1u, slot == 0xffffffffu);
+  }
+  if (nMiss > 0u) {
+    atomicMin(&dirtyB[0], moeIdx.moeLayer);
+    atomicAdd(&dirtyB[1], nMiss);
   }`
+      : `
+  for (var k = 0u; k < NU; k = k + 1u) {
+    let e = ids[k];
+    let slot = slotTable[moeIdx.tableBase + e];
+    let o = moeIdx.selIdx + k;
+    selBuf[o].id = e;
+    selBuf[o].slot = slot;
+    selBuf[o].w = wts[k];
+    selBuf[o].flags = select(0u, 1u, slot == 0xffffffffu); // bit 0 = miss risolto
+  }`)
     : "";
   return `${resStruct}
 @group(0) @binding(0) var<storage, read> logits: array<f32>;

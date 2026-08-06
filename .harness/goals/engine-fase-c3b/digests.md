@@ -26,3 +26,16 @@
   coerenti col JSON WP-0; 2 note recepite (184 slot; confronto fase 5 su
   tutte le quantita'). Nessun gate/soglia toccato => nessun ruling richiesto.
 - **Prossimo**: fase 2 — guard MISS + dirtyB + checkpoint in ktest, GPU reale.
+
+## it.2 (2026-08-07) — fase 2 DONE: il meccanismo del miss e' misurato
+
+- **ktest 68/68 su GPU reale** (+3): miss forzati marcati ESATTI (0 falsi
+  positivi, controllo non-selezionato assente), degrado == riferimento f64 a
+  expert azzerati (5.15e-8), checkpoint bit-identico gpu<->optimistic
+  4096/4096 e riga0==xIn bit-exact; precondizione 0.88 con throw esplicito.
+- La guardia MISS nei kernel ESISTEVA gia' (it.15, degrado definito): la fase
+  si e' ridotta a dirtyB (binding 7 opt-in, WGSL esistenti byte-invariati),
+  modo `select:"optimistic"`, checkpoint, hook harness.
+- **1 submit/0 sync anche in optimistic** sul token pulito; dispatch/token
+  invariati. Suite 337+7, tsc pulito, verifier PASS su 7/7 punti.
+- **Prossimo**: fase 3 — repair + replay + identita' ottimistico-vs-sincrono.

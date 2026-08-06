@@ -46,3 +46,63 @@ del contratto intoccati.
 
 Fase 2 (blocked-by-1 sciolto): guard MISS nei kernel arena + dirtyB +
 checkpoint hidden, misurati in ktest su GPU reale.
+
+## it.2 — 2026-08-07 — fase 2: flag di miss + checkpoint hidden, misurati in ktest
+
+### Cosa
+
+La scoperta che restringe la fase: la guardia MISS (spec 3a) ESISTEVA GIA'
+(`arenaSlotWgsl`: `ok` propagato alle guardie, degrado definito, it.15) e il
+resolve scriveva gia' `Sel.flags` bit 0. Costruito il resto:
+- `routerTopKWgsl` opzione `resolve.dirty` -> binding 7 `dirtyB` (atomicMin
+  del primo layer MoE sporco + atomicAdd dei miss); senza l'opzione il WGSL
+  emesso resta BYTE-IDENTICO (shadow/gpu invariati, verificato dal verifier
+  con un diff HEAD-vs-tree sul testo emesso).
+- glmmodel `select:"optimistic"`: struttura a 1 submit di it.17 con
+  precondizione near-total (slots/park >= 0.88 default, override solo test),
+  preload a capacita' SENZA evict, reset dirtyB per token via writeBuffer
+  (sentinel 0xffffffff — clearBuffer renderebbe ambiguo il layer 0; spec 3b
+  allineata), staging dirty nella STESSA Promise.all di coda, `dirty` nel
+  ritorno del forward con CROSS-CHECK kernel-vs-Sel (divergenza = throw).
+- checkpoint hidden (`opts.checkpointHidden`): copyBufferToBuffer x ->
+  hiddenCkpt[l] per layer nell'encoder (zero dispatch in piu'),
+  `readHiddenCkpt()` per l'harness. `debugMarkMiss` (glmmodel+residency,
+  SOLO harness) per miss deterministici.
+- ktest: kit `mkMiniModelKit` estratto da testGlmModel2Layer (pura
+  estrazione, +`zeroExperts` nel ref MoE = il degrado definito) + 3 casi.
+
+### Verifica (GPU reale, /tmp/ktest-c3b-it2.log)
+
+**ktest 68/68 PASS** (65 esistenti invariati +3):
+- `glm-optimistic-forced-miss`: run pulita L2rel 5.98e-8 vs ref pieno,
+  **1 submit/0 sync**, dispatch = piano+testa, **0 falsi positivi**; forzati
+  {3,2} + controllo 4 marcato-ma-non-selezionato: missCount=2, first=1, miss
+  esatti sui k giusti, controllo ASSENTE, flags per-k nella Sel di produzione;
+  degrado == ref f64 a expert azzerati (L2rel 5.15e-8, argmax e logit in banda).
+  Selezione attesa dal riferimento f64 INDIPENDENTE (no tautologia).
+- `glm-hidden-checkpoint`: gpu==optimistic **4096/4096 bit**, riga0==xIn
+  **2048/2048 bit**, riga1 vs input f64 del layer 1 L2rel 3.17e-7,
+  dispatch/token invariati (le copy non sono dispatch).
+- `glm-optimistic-precondizione`: throw con frammenti asseriti (7/64 slot).
+`npm test` **337+7** invariata; `tsc --noEmit` pulito. Verifier (a2991b813):
+PASS su tutti i 7 punti, incluse byte-identita' WGSL e assenza di regressioni
+cpu/shadow/gpu (metriche identiche a c3a).
+
+### Note di merito (dal verifier, recepite)
+
+- Done-when (b) "bit-identico al forward sincrono": l'hidden intermedio NON e'
+  bit-confrontabile fra path diversi (gia' in c3a gpu-vs-cpu 8309/12288). Il
+  test usa gli ancoraggi piu' forti disponibili — gpu==optimistic bit-exact
+  (il checkpoint del giro sincrono E' quello), riga0==xIn esatta, riga1 vs f64
+  — che sono quelli che servono a I4 (replay = stesso input bit-identico).
+  DICHIARATO QUI perche' il verifier di fase 7 non lo riapra.
+- Landmine per la fase 4: il preload optimistic riempie in ordine (layer,
+  expert) crescente — sul modello vero a ~88% lascia MISS sistematici gli
+  expert alti degli ultimi layer. Se P(dirty) esce dalla proiezione WP-0,
+  guardare PRIMA l'ordine di preload, poi la LRU.
+
+### Prossimo pezzo
+
+Fase 3: repair al confine (fetch dei mancanti, pin-for-replay, flush unico,
+replay da hiddenCkpt[firstDirty], assert I1/I3) + test di identita'
+ottimistico-vs-sincrono con miss forzato e caso di rifiuto.

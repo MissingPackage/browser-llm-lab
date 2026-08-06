@@ -67,8 +67,11 @@ routing[] dal readback Sel di coda) con tre aggiunte:
   comunque spazzatura CONTROLLATA che il replay butta (I2). Costo nel path
   pulito: un confronto u32 per workgroup.
 - **3b — Flag di miss piggyback.** Buffer `dirtyB` (2 × u32: `firstDirtyLayer`
-  via atomicMin, `missCount` via atomicAdd), azzerato via `clearBuffer`
-  nell'encoder del token (non writeBuffer: I1 non c'entra ma l'ordine si').
+  via atomicMin, `missCount` via atomicAdd), ri-inizializzato per token via
+  `queue.writeBuffer` col sentinel 0xffffffff in [0] (accodato PRIMA del
+  submit: l'ordine di coda lo garantisce; `clearBuffer` azzererebbe e "nessun
+  miss" diventerebbe indistinguibile da "miss al primo layer MoE" — corretto
+  in it.2 rispetto alla prima stesura).
   Lo scrive il **resolve** (che gia' vede slot e layer): slot == MISS ⇒
   atomicMin(firstDirtyLayer, layerIdx), atomicAdd(missCount, 1). Copiato nello
   staging di coda INSIEME a Sel/hidden/logits: **stessa mapAsync, zero sync in
