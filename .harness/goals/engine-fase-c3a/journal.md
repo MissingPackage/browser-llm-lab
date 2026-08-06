@@ -1979,3 +1979,18 @@ Registrata a docket item 20.
   campi gap presenti).
 - Conformance eseguita col path SEQUENZIALE (conservativo: il chunked e'
   bit-identico provato, ma il gate di fase gira sul percorso storico).
+
+### it.35 — incidenti della catena full-corpus (2 root-cause, entrambe risolte)
+
+1. **OOM al build di glmroute/glmconf** = i buffer M× del prefill (it.32)
+   allocati EAGER: ~275 MB di attnPartialsM a ctx 6688 su sessioni gia' a
+   14 GiB. FIX committato (7ae03a1): initPrefill() LAZY al primo
+   prefillChunk — chi non prefilla non paga.
+2. **Catena 2 ancora rossa** per DUE interferenze fra run consecutive:
+   (a) OPFS handle del Chrome morente (gara di profilo, gia' vista al bench);
+   (b) VRAM del Chrome d'errore non ancora rilasciata dopo 20 s ⇒ il route
+   OOMava all'avvio. E il MIO comando usava --budget-gib 12 per la conf full,
+   ma il protocollo storico (08-01, ctxMax 6176) e' **b11**.
+   FIX operativo: catena 3 con budget storici (conf b11, route b12) e gap
+   60 s fra le run. LANDMINE aggiornata: fra run GPU consecutive sullo stesso
+   profilo servono ~60 s, di piu' dopo un errore.
