@@ -1507,3 +1507,48 @@ esercitano alla ri-baseline dichiarata di fine 4d.
 Dispatch Planned+Measured con gate su entrambi i path (Qwen ora HA il
 misurato: manca nel report e nel confronto); poi debiti §7 (glmsource test,
 256/256 JSON, path non-fuso, artefatti orfani); ri-baseline per ultima.
+
+## it.23 — 2026-08-06 — fase 4d pezzo 3: Planned+Measured con gate, sui due path
+
+### Cosa
+
+Il piano statico e il path eseguito non possono piu' divergere in silenzio:
+- **Qwen** (engine-bench v4, `gates.dispatchPlan`): finestra DEDICATA non
+  temporizzata sul path della run (k=8), contatori sempre-attivi diffati con
+  `diffCounters` (il core it.22 usato davvero). Planned DERIVATO: per-token =
+  step compute + 1 embedGather (solo multi-step: feedback on-GPU); submit =
+  1/batch. Gate a UGUAGLIANZA ESATTA (interi su piano statico: ogni scarto e'
+  drift, non rumore).
+- **GLM** (glmbench `gates.dispatchPlan`, cablato nell'exit code in page.ts):
+  atteso = planned + 2 (testa rms+lm_head a ogni token con readLogits, nota
+  it.8), confronto con `dispatchesPerTokenMeasured` dell'attribuzione; null ad
+  attribuzione spenta = non valutato, neutro.
+
+### Verifica — ENTRAMBI i gate esercitati sul device vero
+
+- GLM (run corta --ngen 8 --reps 1 --attrib 1): **planned 1403 + 2 = 1405 ≡
+  misurato 1405 — PASS esatto**. Retention nel log (93.34%). Exit 4 dai gate
+  tok/s, atteso by design (2.98 tok/s non confrontabile: nGen=8, cache
+  fredda — run di aritmetica, non di performance).
+- Qwen (bench completo): **planned 148 ≡ misurato 148, submit 0.125 ≡ 0.125 —
+  PASS**; decode 329.6 ± 6.5 ≥ baseline 321.9 (non-regressione informale, la
+  formale e' la ri-baseline); ttftMs 624 ms nel report, deviceLimits 7 chiavi,
+  hostState quiescent con rampa clock 210→2250 MHz e throttle bitmask —
+  TUTTI i campi it.22 vivi nel JSON
+  (`bench-4090-2026-08-06T15-04-48-235Z.json`, committato).
+- Suite **324+7**, tsc pulito. hoststate.mjs smoke-testato standalone.
+
+### Ricognizione §7 fatta (per it.24, nessun edit)
+
+- `fused: false`: ZERO consumatori nel repo (solo default `?? true` e il
+  ramo) — candidato alla rimozione col git-log check;
+- il 256/256 cpuref: glmconf oggi emette solo gateGolden; i dump
+  `logits-cpuref-p{4,7}-2026-08-01.json` esistono in results/engine/ — il
+  campo JSON si costruisce servendoli come il golden e confrontando per
+  posizione (gateCpuref {agree,total,pass});
+- artefatti orfani: censimento da fare su results/engine/.
+
+### Prossimo pezzo (4d)
+
+Debiti §7: glmsource sotto test, gateCpuref come campo JSON, decisione path
+non-fuso nel journal, censimento orfani. Poi ri-baseline (ultima).

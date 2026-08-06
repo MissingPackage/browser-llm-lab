@@ -19,7 +19,7 @@ const log = (line: string): void => {
 worker.onmessage = (e: MessageEvent) => {
   const m = e.data as {
     type: string; msg?: string; message?: string;
-    report?: { gates?: { decodePass?: boolean; prefillPass?: boolean } };
+    report?: { gates?: { decodePass?: boolean; prefillPass?: boolean; dispatchPlan?: { pass: boolean } | null } };
   };
   if (m.type === "progress" || m.type === "tick") {
     $("live").textContent = m.msg ?? "";
@@ -27,7 +27,9 @@ worker.onmessage = (e: MessageEvent) => {
   } else if (m.type === "done") {
     (window as unknown as { __report?: unknown }).__report = m.report;
     const g = m.report?.gates;
-    $("status").textContent = g?.decodePass && g?.prefillPass ? "done" : "done-gate-fail";
+    // dispatchPlan null (attrib spenta) = non valutato, neutro; false = drift piano/path
+    const planOk = g?.dispatchPlan == null || g.dispatchPlan.pass === true;
+    $("status").textContent = g?.decodePass && g?.prefillPass && planOk ? "done" : "done-gate-fail";
   } else if (m.type === "error") {
     $("status").textContent = `ERROR: ${m.message?.slice(0, 400)}`;
   }

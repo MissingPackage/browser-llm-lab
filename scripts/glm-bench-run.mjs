@@ -71,6 +71,11 @@ for (;;) {
     console.log(
       `[glmbench] ${status} — decode ${g.decodeMedian.toFixed(2)} tok/s (gate ${g.decodeGateToksPerSec}: ${g.decodePass ? "PASS" : "FAIL"}) ` +
       `— prefill ${g.prefillMedian.toFixed(2)} tok/s (gate ${g.prefillGateToksPerSec}: ${g.prefillPass ? "PASS" : "FAIL"})`);
+    const dp = g.dispatchPlan;
+    if (dp) {
+      console.log(
+        `[glmbench] piano dispatch: planned ${dp.planned} (+2 testa = ${dp.expectedWithHead}) vs misurato ${dp.measured} — ${dp.pass ? "PASS" : "DRIFT (FAIL)"}`);
+    }
     const d = report.telemetry.decode;
     console.log(
       `[glmbench] telemetria decode: ${report.telemetry.dispatchesPerTokenPlanned} dispatch/token (piano), ${report.telemetry.syncsPerTokenExpected} sync/token (atteso), ` +

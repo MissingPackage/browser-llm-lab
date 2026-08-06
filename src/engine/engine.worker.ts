@@ -4,6 +4,7 @@
 import { createEngine, CTX_MAX, type EngineHandle } from "./gpuforward";
 import { createEngineDevice } from "./gpudevice";
 import { grantedLimits } from "./gpulimits";
+import { diffCounters } from "./telemetry";
 import { PREFILL_M, PREFILL_SUBMIT_TOKENS } from "./prefillplan";
 import { parseGguf } from "./gguf";
 import { dequantQ4_0Row } from "./quant";
@@ -174,6 +175,42 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
   const on = stats(repsOn);
   const off = stats(repsOff);
   const overheadPct = ((1 / on.mean - 1 / off.mean) / (1 / off.mean)) * 100;
+  // Planned+Measured dei dispatch (fase 4d): finestra DEDICATA, non temporizzata,
+  // sul path del bench (k della run), contatori sempre-attivi diffati col core.
+  // Planned DERIVATO dal piano statico: per-token = step compute (forwardToken);
+  // il multi-step aggiunge 1 embedGather/token (feedback on-GPU — il per-token
+  // dequantizza l'embedding CPU-side). Submit: 1 per batch. Il gate pretende
+  // l'UGUAGLIANZA ESATTA: i contatori sono interi e il piano e' statico, ogni
+  // scarto e' drift piano/path, non rumore.
+  progress("finestra Planned+Measured…", 0.88);
+  engine.reset();
+  await engine.prefillChunked(promptFix.tokens.slice(0, -1), 0);
+  const dpm0 = await engine.getTelemetry();
+  {
+    let prev = promptFix.tokens[promptFix.tokens.length - 1];
+    if (k === 1) {
+      let pos = engine.kvLen;
+      for (let i = 0; i < genTokens; i++) prev = await engine.forwardToken(prev, pos++);
+    } else {
+      let generated = 0;
+      while (generated < genTokens) {
+        const got = await engine.decodeBatch(prev, engine.kvLen, Math.min(k, genTokens - generated));
+        prev = got[got.length - 1];
+        generated += got.length;
+      }
+    }
+  }
+  const dpmWin = diffCounters(await engine.getTelemetry(), dpm0);
+  const dispatchPlan = {
+    dispatchesPerTokenPlanned: k === 1 ? engine.dispatchesPerToken : engine.dispatchesPerToken + 1,
+    dispatchesPerTokenMeasured: dpmWin.dispatches / genTokens,
+    submitsPerTokenPlanned: (k === 1 ? genTokens : Math.ceil(genTokens / k)) / genTokens,
+    submitsPerTokenMeasured: dpmWin.submits / genTokens,
+    windowTokens: genTokens,
+  };
+  const dispatchPlanPass =
+    dispatchPlan.dispatchesPerTokenMeasured === dispatchPlan.dispatchesPerTokenPlanned &&
+    dispatchPlan.submitsPerTokenMeasured === dispatchPlan.submitsPerTokenPlanned;
   // baseline same-day K=1 (per-token, l'oracolo — spec B2 §Soglie: headline con
   // baseline nello stesso report; solo per k>1)
   let baselineK1: { decodeToksPerSec: { mean: number; stdev: number }; reps: { decodeToksPerSec: number }[] } | null = null;
@@ -240,6 +277,8 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
         decodeGatePass: off.mean >= DECODE_GATE_TOKS,
         overheadGatePct: 2,
         overheadGatePass: Math.abs(overheadPct) <= 2,
+        // fase 4d: il piano statico e il path eseguito NON possono divergere
+        dispatchPlan: { ...dispatchPlan, pass: dispatchPlanPass },
       },
       // ttftMs: dalle repliche OFF (headline), media + repliche — schema 4d
       ttftMs: {

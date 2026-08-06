@@ -471,6 +471,17 @@ async function main(cfg: Cfg): Promise<void> {
         decodePass: decodeTps.median >= GATE_DECODE,
         prefillGateToksPerSec: GATE_PREFILL, prefillMedian: prefillTps.median,
         prefillPass: prefillTps.median >= GATE_PREFILL,
+        // fase 4d — Planned vs Measured: il piano statico non contiene la testa
+        // (rms + lm_head = 2 dispatch/token, eseguita a ogni token del decode
+        // con readLogits — nota it.8): l'atteso e' planned+2 ESATTO, contatori
+        // interi su piano statico. Uno scarto = drift piano/path. null (attrib
+        // spenta) = gate non valutato, neutro per l'exit (page.ts).
+        dispatchPlan: attribution2 ? {
+          planned: model.dispatchesPerTokenPlanned,
+          expectedWithHead: model.dispatchesPerTokenPlanned + 2,
+          measured: attribution2.dispatchesPerTokenMeasured,
+          pass: attribution2.dispatchesPerTokenMeasured === model.dispatchesPerTokenPlanned + 2,
+        } : null,
         floorSource: "results/engine/moe-oracle/llama-bench-glm47flash-q4_0-2026-07-30.json (llama.cpp 5f55650, CPU i9-14900HX 16 thread, n_prompt 512 / n_gen 64)",
       },
       decodeToksPerSec: decodeTps, prefillToksPerSec: prefillTps,
