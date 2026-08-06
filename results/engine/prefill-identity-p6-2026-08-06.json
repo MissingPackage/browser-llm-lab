@@ -1,0 +1,99 @@
+{
+ "kind": "glm-prefill-identity",
+ "schemaVersion": 1,
+ "date": "2026-08-06T17:19:29.028Z",
+ "ggufSha256": "d0bbdfcde6e323ebf90a8b9e95da57100e972be1ec6f0bfa0fad0feaa426557e",
+ "config": {
+  "prompt": 6,
+  "promptId": "p6",
+  "promptTokens": 461,
+  "nGen": 16,
+  "chunkM": 16,
+  "budgetGiB": 12,
+  "ctxMax": 477
+ },
+ "gate": {
+  "pass": true,
+  "hiddenBitEqual": true,
+  "hiddenMaxAbs": 0,
+  "hiddenDiffs": 0,
+  "logitsBitEqual": true,
+  "logitsMaxAbs": 0,
+  "logitsDiffs": 0,
+  "boundaryArgmaxEqual": true,
+  "generatedIdsEqual": true,
+  "idsA": [
+   73022,
+   2236,
+   198,
+   9636,
+   220,
+   341,
+   262,
+   330,
+   8511,
+   788,
+   330,
+   2911,
+   654,
+   76,
+   25788,
+   756
+  ],
+  "idsB": [
+   73022,
+   2236,
+   198,
+   9636,
+   220,
+   341,
+   262,
+   330,
+   8511,
+   788,
+   330,
+   2911,
+   654,
+   76,
+   25788,
+   756
+  ],
+  "routingMismatch": 0,
+  "routingTot": 21206
+ },
+ "prefillMs": {
+  "sequential": 103710.49500000477,
+  "chunked": 17527.47000002861,
+  "speedup": 5.9170259598125385
+ },
+ "deviceLimits": {
+  "maxBufferSize": 4294967292,
+  "maxStorageBufferBindingSize": 2144600064,
+  "maxStorageBuffersPerShaderStage": 9,
+  "maxComputeWorkgroupStorageSize": 30848,
+  "maxComputeInvocationsPerWorkgroup": 256,
+  "maxComputeWorkgroupSizeX": 256,
+  "maxComputeWorkgroupsPerDimension": 65535
+ },
+ "wallMs": 132101.92499995232,
+ "importMs": 0,
+ "hostState": {
+  "declared": "quiescent",
+  "before": {
+   "temperatureC": 54,
+   "smClockMHz": 210,
+   "powerW": 8.04,
+   "memUsedMiB": 1478,
+   "utilizationPct": 0,
+   "throttleReasons": "0x0000000000000001"
+  },
+  "after": {
+   "temperatureC": 61,
+   "smClockMHz": 1050,
+   "powerW": 34.03,
+   "memUsedMiB": 1486,
+   "utilizationPct": 13,
+   "throttleReasons": "0x0000000000000001"
+  }
+ }
+}
