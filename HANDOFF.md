@@ -1,24 +1,21 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-27: 4d chiusa, fase 5 slice 1-2 done)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-28: 4d chiusa; fase 5 slice 1-2-3a done)
 
 ## 1. Next decidable
 
-**FATTO (it.27): fase 5 slice 2 — i kernel della catena expert batched sono
-BIT-IDENTICI al decode, sul device.** Tre kernel nuovi (corpo aritmetico dei
-gemelli decode, gather via wid.z, slot y[m][k] non pesati, combine k-order):
-ktest `prefill-moe-batched-vs-decode-chain` **maxAbs 0 maxRel 0** a
-geometria reale (M=4, unione 6, molteplicità 2.67) — il fallback R2
-dichiarato non è servito. Correzione emersa scrivendo il contratto: la
-catena vera parte dallo SHEXP (`moeOut = s; += w·y k-order; x += moeOut`) —
-referenza CPU it.26 riscritta, errore morto nel piano. ktest **54/54**,
-suite **337+7**, tsc pulito.
+**FATTO (it.28): fase 5 slice 3a — shexp batch su M righe, BIT-IDENTICO.**
+Opzione `batch` sui generatori K-quant fast (wid.z = riga; corpo invariato,
+testo non-batch byte-identico a HEAD verificato con diff programmatico);
+ktest `shexp-batch-vs-per-row` maxAbs 0 a geometria reale. ktest **55/55**,
+suite **337+7**, tsc pulito. Con it.27 (catena expert batched bit-identica:
+gather+slot+combine, maxAbs 0) i kernel MoE del chunk sono COMPLETI.
 
-**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 3): il percorso denso del chunk**
-— MLA prefill batched (pattern chunked del path Qwen adattato alla MLA
-absorbed: rmsQkv/rope/kvAppend/attention causale intra-chunk su M righe),
-shexp GEMM su M righe, poi wiring glmmodel (prefill path: router per riga,
-planMoeChunk, ensure dell'unione, Sel/gather) e test identità argmax M=1 vs
-M>1 su p6 reale. Il done-when di fase: identità verde in npm test + bench
-con prefill tok/s e TTFT su p6 (oggi 5.66 tok/s, 81.4 s vs 4 s UX).
+**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 3b — il pezzo grosso rimasto):
+l'attention MLA batched del chunk** — rope+kvAppend su M righe, attention
+causale intra-chunk sulla rappresentazione absorbed (cache 576/token; il
+pattern chunked Qwen non si trasla 1:1), più il dense blk.0 chunk. Poi il
+wiring glmmodel (router per riga + planMoeChunk + ensure dell'unione +
+Sel/gather) e il test identità argmax M=1 vs M>1 su p6 — il done-when della
+fase (+ bench prefill tok/s e TTFT: oggi 5.66 tok/s, 81.4 s vs 4 s UX).
 
 **FATTO (it.26): fase 5 slice 1** — design MoE batched deciso coi numeri di
 fase 4 (unione per expert: ~40 dispatch/layer a M=16 vs 64, traffico pesi
