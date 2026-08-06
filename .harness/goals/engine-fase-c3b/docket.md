@@ -49,3 +49,17 @@
    di setup: 7 fasi sequenziali, authority delta = none ovunque, nessuna
    docket-born. Se vuoi rivederla prima dell'implementazione, il punto giusto
    e' PRIMA della fase 2 (la fase 1 produce solo la spec, reversibile).
+
+5. **REGISTRAZIONE (2026-08-07, it.1) — spec fase 1 depositata** (pattern
+   plan-check pre-autorizzato, contratto DONE WHEN punto 1):
+   `docs/superpowers/specs/2026-08-07-engine-fase-c3b-decode-ottimistico.md`.
+   NON tocca gate ne' soglie del contratto (il gate strutturale <= 2 e la
+   tolleranza +/-25% sono ereditati tali e quali) ⇒ nessun ruling bloccante.
+   Scelte di meccanismo fissate dalla spec, sindacabili con un edit:
+   (a) modo NUOVO `select:"optimistic"` — `select:"gpu"` it.17 resta intatto
+   (riferimento e caso M4); (b) soglia precondizione [ASSUMED 0.88 = regime
+   WP-0], mai abbassabile in produzione senza docket; (c) pin-for-replay
+   (eviction del repair mai sugli slot Sel dei layer >= firstDirtyLayer) ⇒
+   replay pulito per costruzione, max 1 replay/token, replay sporco = throw;
+   (d) niente fallback dinamico a sync (warning strutturato oltre soglia,
+   lo switch e' materia C3c).

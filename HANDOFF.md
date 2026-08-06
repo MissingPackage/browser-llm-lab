@@ -14,8 +14,14 @@ passa a C3c **con clausola pre-negoziata scritta nel contratto**; (c) policy
 via provvisoria nella non-regressione (docket c3b item 3, ratifica pendente).
 Non-regressione fissata da c3a item 21: decode 5.211 / prefill 25.78 / TTFT
 17.88 / Qwen 326.2 / golden 98.828% / firma 14b / ktest 65 / suite 337+7.
-Primo pezzo del loop: spec
-`docs/superpowers/specs/2026-08-07-engine-fase-c3b-decode-ottimistico.md`.
+**FATTO (it.1): fase 1 DONE** — spec
+`docs/superpowers/specs/2026-08-07-engine-fase-c3b-decode-ottimistico.md`
+depositata (docket c3b item 5) e verificata dal loop-verifier (7/7 punti del
+contratto, riferimenti codice accurati, numeri = JSON WP-0). Meccanismo:
+`select:"optimistic"` nuovo (it.17 intatto), dirtyB piggyback sulla mapAsync
+di coda, checkpoint hidden 376 KiB, pin-for-replay ⇒ replay pulito per
+costruzione (max 1/token). **Next decidable: fase 2** — guard MISS nei kernel
+arena + dirtyB + checkpoint hidden, misurati in ktest su GPU reale.
 Ratifiche c3a ancora pendenti (non bloccanti): item 14/14b, item 2 formale,
 item 19/20/21 prese d'atto.
 
