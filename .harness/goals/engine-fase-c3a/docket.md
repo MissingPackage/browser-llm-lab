@@ -1,6 +1,22 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
-17. **RULING RICHIESTO — l'opzione c è FALSIFICATA dalla misura: la
+17. ~~**RULING RICHIESTO — l'opzione c è FALSIFICATA dalla misura**~~
+    **RISOLTO (2026-08-06, PI in chat: "allora per me va bene")** — opzione
+    (a): fase 4 e 4c chiudono con meccanismo costruito + misura ktest; il
+    gate 13.43 si dichiara irraggiungibile su questo device per hardware
+    (−415 MiB fisici), non per struttura. Nello stesso ruling il PI ha
+    dettato il RAZIONALE DI SVILUPPO (registrato in direction.md §2-bis):
+    best engine sulla dev machine, 1-2 modelli target, la scarsità di VRAM
+    è la CONDIZIONE DI PROGETTO (browser/smartphone 12-16 GB non tutti
+    usabili) — streaming da disco, quant asimmetriche, expert on-demand
+    alla ds4/colibri; "usabile" prima di "massimo teorico"; da analizzare
+    il repo GitHub che fa girare Kimi K3 (2.8T) su CPU con 8 GB come
+    catalogo di strategie (esperimento estremo, da adattare). Conseguenza
+    operativa: la chiusura di C3a procede (4d → 5 → 6 coi gate sotto
+    clausola), e la residenza parziale VELOCE torna a essere la tesi — non
+    il ripiego. Testo originale:
+
+    **RULING RICHIESTO — l'opzione c è FALSIFICATA dalla misura: la
     residenza totale non sta in questo device** (2026-08-06, it.19, probe
     `vram-ceiling-{full,minimal,minimal-overflow}-2026-08-06.json`).
     Fabbisogno @ctx525 con riserva = 16 362 MiB; tetto fisico delle

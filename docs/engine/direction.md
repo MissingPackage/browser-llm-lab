@@ -35,6 +35,30 @@ intelligenza per byte (specializzazione via LoRA). È ricerca/tecnologia/benchma
 prodotto (§F ledger): i moonshot sono capitoli legittimi, le evals di perdita
 d'intelligenza sono parte del progetto.
 
+**§2-bis — Razionale di sviluppo (ruling PI 2026-08-06, in chat, dopo il probe
+VRAM di C3a it.19).** Quattro principi che ordinano tutte le scelte:
+1. **Best engine sulla dev machine, poi si allarga.** Data una macchina di
+   sviluppo (oggi: 4090 Laptop 16 GiB; poi M4 48 GB; S22 dichiarato-e-dopo),
+   il motore si ottimizza al massimo LÌ, su 1-2 modelli scelti — non per tutti
+   i modelli a priori. Kernel per altri modelli e altri hardware vengono dopo,
+   quando il motore giusto esiste.
+2. **La scarsità di VRAM è la condizione di progetto, non un incidente.** Sul
+   browser degli smartphone la VRAM utile è una frazione di 12-16 GB; il
+   valore del motore sta nei meccanismi che rendono VELOCE la residenza
+   parziale: streaming da disco, quantizzazione asimmetrica, expert caricati
+   a necessità (lineage ds4/colibri). Cambiare modello per farlo stare in
+   VRAM è ammesso ma NON è il trucco principale.
+3. **"Usabile" batte "massimo teorico"**: non 1-3 tok/s (né tok/minuto) — la
+   soglia UX di §2 resta il criterio. Gli esperimenti estremi (es. il repo
+   GitHub 2026 che esegue Kimi K3, 2.8T parametri, su CPU con 8 GB di RAM —
+   da analizzare come catalogo di strategie [VERIFY]) si studiano e si
+   ADATTANO, non si imitano.
+4. Conseguenza sulla scala dei modelli (§6): il modello-tesi resta un modello
+   che NON sta comodo nella memoria del dev-box — il regime "quasi ci sta"
+   (GLM su 4090M) e quello "non ci sta per 2-4×" (slab budget ridotto ad
+   arte) sono entrambi emulabili qui; l'abbondanza (M4 48 GB) no. È la
+   macchina giusta per la tesi, e la residenza parziale veloce È la tesi.
+
 ## 3. Rulings vincolanti (non ridiscutere senza PI)
 
 | # | Ruling | Data |
