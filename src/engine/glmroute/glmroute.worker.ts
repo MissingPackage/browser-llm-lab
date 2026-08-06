@@ -10,7 +10,8 @@ import { GLM47_FLASH as G, GLM47_FLASH_SHA256 } from "../shape";
 import { dequantQ4_0Row } from "../quant";
 import { createGlmModel } from "../glmmodel";
 import { GlmOpfsSource } from "../glmsource";
-import { negotiateLimits, slabBufferCap, grantedLimits } from "../gpulimits";
+import { slabBufferCap, grantedLimits } from "../gpulimits";
+import { createEngineDevice } from "../gpudevice";
 import { arenaNeeds } from "../residency";
 
 interface TraceRow { p: number; i: number; tok: number; ph: "p" | "d"; e: number[] }
@@ -41,9 +42,6 @@ const GPU_WEIGHT_REL_TOL = 1e-5;
 
 async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
-  const adapter = await navigator.gpu?.requestAdapter();
-  if (!adapter) throw new Error("niente adapter WebGPU");
-
   const source = await GlmOpfsSource.open("/models/GLM-4.7-Flash-Q4_0.gguf", progress);
   const trace = (await (await fetch("/models/glm-route-trace.json")).json()) as TraceFile;
   if (trace.header.ggufSha256 !== GLM47_FLASH_SHA256) throw new Error("trace: SHA GGUF diverso dal canonico");
@@ -64,8 +62,9 @@ async function main(cfg: Cfg): Promise<void> {
   // Device creato DOPO ctxMax: mlaAttnDecode tiene scores[ctxMax] in workgroup
   // memory (4*ctxMax+256 B) e il corpus arriva a 6688 pos — il requisito si
   // DERIVA dal contesto invece di chiedere il massimo (C3a it.6).
-  const device = await adapter.requestDevice({
-    requiredLimits: negotiateLimits(adapter, {
+  const { adapter, device } = await createEngineDevice({
+    label: "glmroute",
+    needs: (adapter) => ({
       ctxMax, head: { vocab: G.vocab, dModel: G.dModel },
       slabClassBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
       // arena expert (C3a fase 4 strato 1): binding d'arena e finestra

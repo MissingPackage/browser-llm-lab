@@ -8,7 +8,8 @@ import { GLM47_FLASH as G, GLM47_FLASH_SHA256 } from "../shape";
 import { dequantQ4_0Row } from "../quant";
 import { createGlmModel } from "../glmmodel";
 import { GlmOpfsSource } from "../glmsource";
-import { negotiateLimits, slabBufferCap, grantedLimits } from "../gpulimits";
+import { slabBufferCap, grantedLimits } from "../gpulimits";
+import { createEngineDevice } from "../gpudevice";
 import { arenaNeeds } from "../residency";
 
 interface GoldenPos { argmax: number; top: Array<[number, number]> }
@@ -24,8 +25,6 @@ const progress = (msg: string) => post({ type: "progress", msg });
 
 async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
-  const adapter = await navigator.gpu?.requestAdapter();
-  if (!adapter) throw new Error("niente adapter WebGPU");
   const source = await GlmOpfsSource.open("/models/GLM-4.7-Flash-Q4_0.gguf", progress);
   const golden = (await (await fetch("/models/glm-conf-golden.json")).json()) as Golden;
   if (golden.modelSha256 !== GLM47_FLASH_SHA256) throw new Error("golden: SHA GGUF diverso dal canonico");
@@ -35,8 +34,9 @@ async function main(cfg: Cfg): Promise<void> {
   const ctxMax = Math.max(...prompts.map((p) => p.promptTokens.length + Math.min(p.generated.length, maxGen)));
 
   // Device creato DOPO ctxMax: i limiti sono DERIVATI dai consumatori (C3a it.6)
-  const device = await adapter.requestDevice({
-    requiredLimits: negotiateLimits(adapter, {
+  const { device } = await createEngineDevice({
+    label: "glmconf",
+    needs: (adapter) => ({
       ctxMax, head: { vocab: G.vocab, dModel: G.dModel },
       slabClassBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
       // arena expert (C3a fase 4 strato 1): binding d'arena e finestra

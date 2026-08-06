@@ -1407,3 +1407,49 @@ WP-0 CHIUSO: il meccanismo va costruito, il claim di gate è condizionato e
 quantificato, il design è più piccolo di quello proposto. Prossimo pezzo
 (ordine item 18b): **fase 4d a perimetro pieno**. Il meccanismo ottimistico
 si spec-a dopo la 4d, sulla base risanata, come apertura C3b.
+
+## it.21 — 2026-08-06 — fase 4d pezzo 1: il punto unico di creazione device
+
+### Cosa
+
+`src/engine/gpudevice.ts` nuovo: `createEngineDevice({label, needs,
+optionalFeatures})` = adapter + `negotiateLimits` (gpulimits, invariato) +
+listener `uncapturederror` che urla con la label dell'harness. Migrati TUTTI
+gli 8 siti: gpuforward (Qwen), engine.worker ×2 (diag GEMV + attn bench),
+glmroute, glmconf, glmbench, ktest, microbench. `needs` accetta una funzione
+dell'adapter (serve ad `arenaNeeds`, che legge maxBufferSize/binding).
+
+### La deriva che chiude (residuo item 10a)
+
+Tre famiglie prima della 4d: negoziato+listener (solo gpuforward);
+negoziato SENZA listener (glmroute/glmconf/glmbench/ktest — 4 harness dove
+un errore di validazione era un no-op silenzioso, la landmine del bring-up);
+ad-hoc (engine.worker `min(adapter, 32768)`, microbench al massimo
+dell'adapter — il difetto che gpulimits documenta "nell'altra direzione").
+I due diag ora dichiarano i binding veri come consumatori; microbench deriva
+il requisito dalla cella massima di DEFAULT_SIZES (16384² f32 = 1 GiB), non
+dal tetto adapter. Comportamento invariato per ogni consumatore esistente.
+
+### Il test che lo tiene chiuso
+
+`tests/gpudevice.test.ts` (8 test): scansione di TUTTO src/ — `requestAdapter`
+/`requestDevice` fuori dal helper = test rosso (allowlist con razionale:
+probe.ts adapter-only, verificato; scripts/ probe del device grezzo fuori
+scansione, di proposito). Più unit del helper su fake GPU: negoziazione
+passata davvero (spot-check 30 848), needs-funzione riceve l'adapter,
+optionalFeatures filtrate, listener agganciato e urlante con label.
+
+### Verifica
+
+`npx tsc --noEmit` pulito; `npm test` **319 passed + 7 skipped** (+8);
+**ktest 53/53 PASS sul device vero** attraverso il helper (arena needs
+incluse, /tmp/ktest-it21.log). NON verificati su GPU in questa iterazione:
+glmroute/glmconf/glmbench/microbench/diag (stessa struttura del path ktest;
+li esercita la ri-baseline dichiarata a fine 4d, a macchina quiescente).
+
+### Prossimo pezzo (4d)
+
+Telemetria a schema unico (contatori cumulativi diffabili, retention,
+ttftMs+hostState anche Qwen) + dispatch Planned+Measured; poi debiti §7
+(glmsource test, 256/256 JSON, path non-fuso, artefatti orfani); ri-baseline
+per ultima (albero congelato).

@@ -2,6 +2,7 @@
 // forcing sul golden (confronto per-posizione pulito), campionamento periodico dei
 // logit per il Δ sui top-32 golden (riportato, non gated).
 import { createEngine, CTX_MAX, type EngineHandle } from "./gpuforward";
+import { createEngineDevice } from "./gpudevice";
 import { PREFILL_M, PREFILL_SUBMIT_TOKENS } from "./prefillplan";
 import { parseGguf } from "./gguf";
 import { dequantQ4_0Row } from "./quant";
@@ -508,15 +509,21 @@ async function runKernelDiag(modelUrl: string): Promise<void> {
   const gguf = await fetchBuf(modelUrl);
   const f = parseGguf(gguf);
   const bytes = new Uint8Array(gguf);
-  const adapter = await navigator.gpu?.requestAdapter();
-  if (!adapter) throw new Error("no webgpu");
-  const device = await adapter.requestDevice({
-    requiredLimits: { maxComputeWorkgroupStorageSize: Math.min(adapter.limits.maxComputeWorkgroupStorageSize, 32768) },
-  });
-  device.addEventListener("uncapturederror", (e) => {
-    throw new Error(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message.slice(0, 200)}`);
-  });
   const M = 8;
+  // Limiti derivati (fase 4d): niente KV né attention in questo diag — i
+  // binding sono i pesi Q4_0 di blk.0 (il piu' grande: ffn_down qs) e le
+  // attivazioni M×K. Il workgroup storage lo copre il termine Qwen di
+  // engineNeeds (30 848 B, garantito dalla scansione WGSL in gpulimits.test).
+  const { device } = await createEngineDevice({
+    label: "engine-diag",
+    needs: {
+      ctxMax: 1, mlaAttention: false, kvBytesPerLayer: 0,
+      extraBindings: [
+        { bytes: ((4864 * 896) / 32) * 16, consumer: "diag: blk.0 ffn_down q4_0 qs (K=4864, N=896)" },
+        { bytes: M * 4864 * 4, consumer: "diag: attivazioni M×K f32" },
+      ],
+    },
+  });
   // LCG deterministico per l'input
   let seed = 42;
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
@@ -699,17 +706,16 @@ async function runAttrib(modelUrl: string, promptUrl: string, genTokens: number,
 async function runAttnBench(): Promise<void> {
   const S = QWEN25_05B;
   const { attnFusedWgsl: genFused, attnSplitPartWgsl: genPart, attnSplitReduceWgsl: genReduce } = await import("./kernels/wgsl");
-  const adapter = await navigator.gpu?.requestAdapter();
-  if (!adapter) throw new Error("no webgpu");
-  const device = await adapter.requestDevice({
-    requiredLimits: { maxComputeWorkgroupStorageSize: Math.min(adapter.limits.maxComputeWorkgroupStorageSize, 32768) },
-  });
-  device.addEventListener("uncapturederror", (e) => {
-    throw new Error(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message.slice(0, 200)}`);
-  });
   const CTX_CAP = 1024, CHUNK = 64;
   const S_MAX = Math.ceil(CTX_CAP / CHUNK);
   const KVD = S.nKvHead * S.headDim;
+  // Limiti derivati (fase 4d): il binding piu' grande e' la K/V sintetica a
+  // CTX_CAP — e' esattamente `kvBytesPerLayer`. Workgroup storage: termine
+  // Qwen di engineNeeds (copre attnFused/Split, scansione WGSL in gpulimits.test).
+  const { device } = await createEngineDevice({
+    label: "engine-attnbench",
+    needs: { ctxMax: CTX_CAP, mlaAttention: false, kvBytesPerLayer: CTX_CAP * KVD * 4 },
+  });
   const QKV_LEN = S.nHead * S.headDim + 2 * KVD;
   const HALF = S.headDim / 2;
   const REPS = 480; // ≈ 24 layer × 20 token

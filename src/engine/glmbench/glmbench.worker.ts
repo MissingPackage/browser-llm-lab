@@ -11,7 +11,8 @@ import { GLM47_FLASH as G, GLM47_FLASH_SHA256 } from "../shape";
 import { dequantQ4_0Row } from "../quant";
 import { createGlmModel } from "../glmmodel";
 import { GlmOpfsSource } from "../glmsource";
-import { negotiateLimits, grantedLimits, slabBufferCap } from "../gpulimits";
+import { grantedLimits, slabBufferCap } from "../gpulimits";
+import { createEngineDevice } from "../gpudevice";
 import type { GlmTelemetry } from "../glmmodel";
 import { arenaNeeds, type ExpertCacheStats } from "../residency";
 
@@ -105,12 +106,6 @@ const stats = (v: number[]) => {
 
 async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
-  const adapter = await navigator.gpu?.requestAdapter();
-  if (!adapter) throw new Error("niente adapter WebGPU");
-  // timestamp-query: livello 2 dell'attribuzione (gpuBusy). Se l'adapter non la
-  // espone il bench gira lo stesso e il report lo dichiara (gpuBusyMs null).
-  const hasTsq = adapter.features.has("timestamp-query");
-
   const source = await GlmOpfsSource.open("/models/GLM-4.7-Flash-Q4_0.gguf", progress);
   const golden = (await (await fetch("/models/glm-conf-golden.json")).json()) as Golden;
   if (golden.modelSha256 !== GLM47_FLASH_SHA256) throw new Error("golden: SHA GGUF diverso dal canonico");
@@ -124,9 +119,12 @@ async function main(cfg: Cfg): Promise<void> {
   // Il device si crea DOPO aver saputo ctxMax e budget: i limiti sono DERIVATI
   // dai consumatori (C3a it.6), non chiesti al massimo dell'adapter.
   const budgetBytes = Math.floor(cfg.budgetGiB * (1 << 30));
-  const device = await adapter.requestDevice({
-    requiredFeatures: hasTsq ? ["timestamp-query"] : [],
-    requiredLimits: negotiateLimits(adapter, {
+  const { adapter, device, has } = await createEngineDevice({
+    label: "glmbench",
+    // timestamp-query: livello 2 dell'attribuzione (gpuBusy). Se l'adapter non
+    // la espone il bench gira lo stesso e il report lo dichiara (gpuBusyMs null).
+    optionalFeatures: ["timestamp-query"],
+    needs: (adapter) => ({
       ctxMax, head: { vocab: G.vocab, dModel: G.dModel },
       slabClassBytes: budgetBytes, // packing ExpertCache: soft, si tronca al disponibile
       // arena expert (C3a fase 4 strato 1): quanti buffer di classe e quanto
@@ -138,6 +136,7 @@ async function main(cfg: Cfg): Promise<void> {
       }),
     }),
   });
+  const hasTsq = has("timestamp-query");
   const limits = grantedLimits(device);
   const { maxBindingBytes: maxBind, maxBufferBytes: maxBuf } = slabBufferCap(device);
 

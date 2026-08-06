@@ -20,7 +20,7 @@ import {
 } from "./kernels/wgsl";
 import { planPrefill, PREFILL_M } from "./prefillplan";
 import { ATTN_CHUNK_P, attnSMax, attnPartialsLen } from "./attnsplit";
-import { negotiateLimits } from "./gpulimits";
+import { createEngineDevice } from "./gpudevice";
 import { planDecodeBatch, DECODE_K_MAX, DECODE_SLOT_STRIDE } from "./decodebatch";
 import { createKvLen } from "./kvlen";
 import type { RepackedQuant } from "./quant";
@@ -89,8 +89,6 @@ export async function createEngine(
     taps?: number[]; fused?: boolean; telemetry?: boolean; telemetryGpu?: boolean;
   } = {},
 ): Promise<EngineHandle> {
-  const adapter = await navigator.gpu?.requestAdapter();
-  if (!adapter) throw new Error("WebGPU non disponibile");
   // Limiti DERIVATI dai consumatori (C3a it.8): prima qui c'era
   // `const need = 256 * 1024 * 1024`, l'ultima costante difensiva senza
   // consumatore dichiarato rimasta nel repo — lo stesso difetto che
@@ -99,10 +97,10 @@ export async function createEngine(
   // 136.134.656 B — il default di spec da 128 MiB NON basta, era la landmine)
   // e `rmsPairGemmSiluChunkFast` (30.848 B di workgroup storage; il commento
   // storico citava 19,7 KB del down-proj, che NON e' il massimo).
-  const hasTsq = adapter.features.has("timestamp-query");
-  const device = await adapter.requestDevice({
-    requiredFeatures: hasTsq ? (["timestamp-query"] as GPUFeatureName[]) : [],
-    requiredLimits: negotiateLimits(adapter, {
+  const { device, has } = await createEngineDevice({
+    label: "engine",
+    optionalFeatures: ["timestamp-query"],
+    needs: {
       ctxMax: CTX_MAX,
       mlaAttention: false,                 // Qwen non ha l'attention MLA
       kvBytesPerLayer: CTX_MAX * KV_DIM * 4,
@@ -110,16 +108,9 @@ export async function createEngine(
         bytes: Math.ceil((S.vocab * S.dModel) / 32) * 32, // qs Q8_0 = 1 B/peso
         consumer: "Qwen output.weight Q8_0 qs (lm_head)",
       }],
-    }),
+    },
   });
-  // Gli errori di validazione WebGPU sono silenziosi by default e trasformano ogni
-  // submit in un no-op (visto in fase di bring-up: grid > 65535 ⇒ top-1 0.2% muto).
-  // Qui urlano.
-  device.addEventListener("uncapturederror", (e) => {
-    const msg = (e as GPUUncapturedErrorEvent).error.message;
-    console.error("[engine][gpu-error]", msg.slice(0, 400));
-    throw new Error(`GPU error: ${msg.slice(0, 200)}`);
-  });
+  const hasTsq = has("timestamp-query");
 
   const f = parseGguf(gguf);
   const byName = validateQwen25_05B(f);

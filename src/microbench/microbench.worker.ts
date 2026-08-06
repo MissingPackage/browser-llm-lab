@@ -1,6 +1,7 @@
 import { probeWebGPU } from "../probe";
 import { MICROBENCH_SCHEMA_VERSION, type MicrobenchRunFile } from "./mbSchema";
-import { runMicrobench } from "./runner";
+import { runMicrobench, DEFAULT_SIZES } from "./runner";
+import { createEngineDevice } from "../engine/gpudevice";
 
 // Protocollo minimale pagina<->worker, sullo stile di bench.worker.ts.
 export type MicrobenchWorkerIn = { type: "run"; deviceLabel: string };
@@ -17,22 +18,21 @@ self.onmessage = async (ev: MessageEvent<MicrobenchWorkerIn>) => {
     const probe = await probeWebGPU(navigator.gpu, navigator as { userAgent: string; deviceMemory?: number });
     if (!probe.webgpu) throw new Error("WebGPU non disponibile nel worker");
 
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) throw new Error("requestAdapter ha restituito null");
-    // Chiediamo le feature che servono alla misura, SOLO se l'adapter le espone
-    // (a differenza di WebLLM non serve girare ovunque: è uno strumento di misura).
-    const requiredFeatures: GPUFeatureName[] = [];
-    if (adapter.features.has("timestamp-query")) requiredFeatures.push("timestamp-query");
-    if (adapter.features.has("shader-f16")) requiredFeatures.push("shader-f16");
-    // Limiti al massimo dell'adapter: senza requiredLimits il device nasce coi default
-    // WebGPU (binding 128 MiB) e le taglie grandi falliscono la validazione in silenzio
-    // — osservato dal vivo al primo run 4090 (cella f32 8192² garbage). Stesso errore
-    // concettuale del cap hardcoded documentato in buffer-limit-2gb.md.
-    const device = await adapter.requestDevice({
-      requiredFeatures,
-      requiredLimits: {
-        maxBufferSize: adapter.limits.maxBufferSize,
-        maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+    // Limiti DERIVATI dal consumatore (fase 4d): il binding più grande dello
+    // sweep è la matrice f32 della cella massima di DEFAULT_SIZES (16384² =
+    // 1 GiB). Prima si chiedeva il massimo dell'adapter — il difetto che
+    // gpulimits.ts documenta "nell'altra direzione"; senza requiredLimits il
+    // device nasce coi default (binding 128 MiB) e le taglie grandi falliscono
+    // la validazione in silenzio (osservato: primo run 4090, f32 8192² garbage).
+    // Le celle oltre i limiti CONCESSI restano skip espliciti nel runner.
+    const maxCellBytes = Math.max(...DEFAULT_SIZES.map((s) => s.rowsN * s.colsK * 4));
+    const { device } = await createEngineDevice({
+      label: "microbench",
+      // feature SOLO se l'adapter le espone (strumento di misura, non serve girare ovunque)
+      optionalFeatures: ["timestamp-query", "shader-f16"],
+      needs: {
+        ctxMax: 1, mlaAttention: false, kvBytesPerLayer: 0,
+        extraBindings: [{ bytes: maxCellBytes, consumer: "microbench: matrice f32 della cella massima del sweep" }],
       },
     });
 

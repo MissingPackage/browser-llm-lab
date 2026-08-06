@@ -31,7 +31,7 @@ import {
   Q4_1_BLOCK_BYTES, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES,
 } from "../quant";
 import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
-import { negotiateLimits } from "../gpulimits";
+import { createEngineDevice } from "../gpudevice";
 
 interface KResult {
   kernel: string; pass: boolean; maxAbs: number; maxRel: number; note?: string;
@@ -151,14 +151,13 @@ function ktestArenaNeeds(): { arenaBuffers: number; arenaWindowBytes: number } {
 class Gpu {
   device!: GPUDevice;
   async init(): Promise<string> {
-    const adapter = await navigator.gpu?.requestAdapter();
-    if (!adapter) throw new Error("niente adapter WebGPU");
     // ktest gira mini-modelli sintetici (ctxMax <= 64, vocab ridotto) ma binda
     // i pesi DENSI VERI di blk.0: il tensore piu' grande e' ffn_gate/up q4_0
     // [2048 -> 10240] = 10.485.760 B di qs. E' quello a determinare il
     // requisito, dichiarato come consumatore invece che come cap inventato.
-    this.device = await adapter.requestDevice({
-      requiredLimits: negotiateLimits(adapter, {
+    const { adapter, device } = await createEngineDevice({
+      label: "ktest",
+      needs: {
         ctxMax: 64,
         extraBindings: [{ bytes: 10_485_760, consumer: "ktest: blk.0 ffn_gate/up q4_0 qs (pesi reali)" }],
         // i due requisiti dell'arena, calcolati dalla stessa aritmetica della
@@ -167,8 +166,9 @@ class Gpu {
         // device e' uno: si chiede il massimo dei due requisiti, come farebbe
         // `limitsFor` fra due need sullo stesso limite.
         ...ktestArenaNeeds(),
-      }),
+      },
     });
+    this.device = device;
     const info = adapter.info;
     return `${info?.vendor ?? "?"} ${info?.architecture ?? ""}`;
   }

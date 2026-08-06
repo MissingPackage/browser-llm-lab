@@ -1,6 +1,24 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 21 — it.20: WP-0 chiuso, decode ottimistico dimensionato; prossimo: fase 4d)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21: 4d pezzo 1, device unico; prossimo: 4d telemetria)
 
 ## 1. Next decidable
+
+**FATTO (it.21): FASE 4d pezzo 1 — punto unico di creazione device.**
+`src/engine/gpudevice.ts` (`createEngineDevice`: adapter + negotiateLimits +
+`uncapturederror` con label), 8 siti migrati (gpuforward, engine.worker ×2,
+glmroute, glmconf, glmbench, ktest, microbench — 4 erano SENZA listener, 2
+con limiti ad-hoc ora derivati dai consumatori veri), test strutturale a
+scansione di src/ che vieta creatori fuori dal helper. Chiude il residuo
+item 10a lato codice; la ri-baseline dichiarata resta in coda alla 4d.
+Verifica: suite **319+7**, tsc pulito, **ktest 53/53 sul device vero via
+helper**. GLM/microbench/diag non ri-eseguiti su GPU (stessa struttura; li
+esercita la ri-baseline a macchina quiescente).
+
+**PROSSIMO PEZZO DECIDIBILE (4d, pezzo 2): telemetria a schema unico** —
+contatori cumulativi diffabili, default off, zero-overhead spenta,
+**retention** (lezione kimi-k3-in-c), `ttftMs`+`hostState` in ogni report
+anche Qwen; poi dispatch Planned+Measured, debiti §7 (glmsource test,
+256/256 come campo JSON, path non-fuso morto, artefatti orfani), e la
+ri-baseline per ULTIMA (albero congelato + GPU esclusiva, lezione it.16).
 
 **FATTO (it.20): WP-0 — la tassa di replay è simulata sulla traccia vera**
 (`wp0-replay-sim-2026-08-06.json`, semantica differita al confine di token,
