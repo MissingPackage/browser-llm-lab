@@ -1,26 +1,29 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-24: 4d pezzi 1-4; resta solo la ri-baseline)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-25: FASE 4d CHIUSA; prossimo: fase 5 prefill M>1)
 
 ## 1. Next decidable
 
-**FATTO (it.21-24): FASE 4d pezzi 1-4 — il risanamento è quasi chiuso.**
-It.21 `gpudevice.ts` punto unico (8 siti, test strutturale, ktest 53/53).
-It.22 `telemetry.ts` core unico + retention/hit-split + hostState nei runner.
-It.23 dispatch Planned+Measured con gate sui due path, verificati su device
-(Qwen 148 ≡ 148 esatto; GLM 1405 ≡ planned+2, nell'exit di glmbench).
-It.24 debiti §7 TUTTI chiusi: glmsource sotto test (7 unit, seam iniettabile);
-**gateCpuref** (il 256/256 come campo JSON di glmconf, verificato 8/8 PASS su
-device); **path non-fuso Qwen RIMOSSO** (zero consumatori, git-log check;
-post-rimozione decode 324.5 ≥ baseline 321.9, planned 148 invariato);
-censimento orfani per kind — prefill-sim ×2 e tsq-diag ×3 evidence-bearing
-PINNATI (prefillplan.ts / doc tsq-diag), insieme da-rimuovere VUOTO
-(engine-prof e prefix-cache hanno produttori vivi). Suite **331+7**, tsc
-pulito.
+**FATTO (it.21-25): FASE 4d CHIUSA — la base è risanata.** It.21 `gpudevice.ts`
+punto unico device (8 siti, test strutturale, ktest 53/53). It.22
+`telemetry.ts` core unico + retention/hit-split + hostState nei runner. It.23
+Planned+Measured con gate sui due path, verificati su device (148 ≡ 148;
+1405 ≡ planned+2). It.24 debiti §7: glmsource sotto test, gateCpuref JSON
+(8/8 su device), path non-fuso RIMOSSO, censimento orfani (evidence-bearing
+pinnati, niente da rimuovere). It.25 **ri-baseline dichiarata** (docket item
+19): Qwen **322.2 ± 0.7** ≥ 321.9; GLM **5.013/5.661** — delta vs 08-03 =
+RUMORE (Welch t≈1.7 p≈0.16, 3v3), deviceLimits IDENTICI byte-a-byte (rischio
+item 10a escluso). Suite **331+7**, tsc pulito.
 
-**PROSSIMO PEZZO DECIDIBILE (4d, ULTIMO): ri-baseline dichiarata** — 2 run
-quiescenti nuove Qwen+GLM con `deviceLimits` nel payload, sostituzione dei
-riferimenti registrata a docket (item 10 opzione a / em.6). Vincoli: albero
-CONGELATO + GPU esclusiva (lezione it.16), hostState quiescent dichiarato.
-Poi la 4d chiude e parte la **fase 5** (prefill M>1).
+**PROSSIMO PEZZO DECIDIBILE: FASE 5 — prefill batched M>1 per MoE**
+(sbloccata: ordine em.6 era 4c-A′ → 4d → 5). Spec §5 del design 08-01:
+M=16 iniziale, condizione di identità = argmax identico su tutte le
+posizioni M=1 vs M>1; owns: prefill path, prefillplan, moe batched, tests/.
+Done-when: test di identità verde in `npm test` + bench JSON con prefill
+tok/s e TTFT su p6 (oggi 5.66 tok/s, TTFT 81.4 s vs UX 4 s — è la leva del
+TTFT). Nota di design: nel prefill gli insiemi di expert DIFFERISCONO per
+token — il meccanismo arena+Sel della fase 4 (un dispatch = un expert) va
+esteso a M>1 (Sel per token o batching per expert con gather). Il ktest dei
+kernel fusi solo-Qwen (debito §7.1) si riduce qui coprendo ogni kernel che
+il lavoro prefill tocca.
 
 **FATTO (it.20): WP-0 — la tassa di replay è simulata sulla traccia vera**
 (`wp0-replay-sim-2026-08-06.json`, semantica differita al confine di token,

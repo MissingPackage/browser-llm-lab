@@ -1,5 +1,24 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+19. **REGISTRAZIONE (2026-08-06, it.25) — ri-baseline dichiarata della fase
+    4d** (pre-autorizzata da em.6/item 16: "la ri-baseline ... sostituisce i
+    riferimenti — registrazione qui a fase chiusa"). I riferimenti di
+    non-regressione diventano:
+    - **Qwen**: `bench-4090-2026-08-06T15-42-19-755Z.json` — decode
+      **322.2 ± 0.7** (≥ vecchio 321.9), ttftMs 624, dispatchPlan PASS
+      (148 ≡ 148), hostState quiescent campionato, deviceLimits nel payload.
+    - **GLM**: `bench-glm-4090-b12-rebaseline4d-2026-08-06.json` — decode
+      mediana **5.013** (reps 4.907/5.013/5.061), prefill **5.661**, TTFT
+      81.4 s, dispatchPlan PASS (1405 ≡ planned+2), retention 97.57%,
+      hostState quiescent, deviceLimits nel payload.
+    **Delta dichiarato vs 08-03** (shadow, 5.163): −0.15 tok/s, Welch
+    t≈1.7 p≈0.16 su 3v3 — NON significativo alla banda di rumore ratificata
+    (item 14); la peggior replica del riferimento (5.005) ≈ la mediana
+    nuova. deviceLimits IDENTICI byte-a-byte al riferimento: la negoziazione
+    unificata (it.21) non ha alterato i limiti concessi. Nessuna deroga
+    richiesta: la metrica non è misurabilmente peggiorata. Se vuoi
+    contestare l'adozione, questo è l'item da riaprire.
+
 18. **RULING registrato (2026-08-06, PI in chat, seconda parte)** — tre
     ratifiche sulla proposta "decode ottimistico + riparazione esatta" e
     sull'ordine dei lavori:

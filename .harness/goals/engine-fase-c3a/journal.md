@@ -1613,3 +1613,46 @@ quiescent).
 2 run quiescenti nuove Qwen+GLM con deviceLimits nel payload, sostituzione
 registrata a docket (item 10 opzione a / em.6). Albero congelato + GPU
 esclusiva (lezione it.16). Poi la 4d CHIUDE e parte la fase 5.
+
+## it.25 — 2026-08-06 — fase 4d pezzo 5/ULTIMO: ri-baseline dichiarata — LA 4d CHIUDE
+
+### Le due run (albero congelato a 1a639df, host quiescente verificato: 0%,
+### 210 MHz, load 0.32, solo compositor)
+
+- **Qwen** `bench-4090-2026-08-06T15-42-19-755Z.json`: decode **322.2 ± 0.7**
+  ≥ baseline 321.9 (non-regressione PASS), ttftMs 624, dispatchPlan 148 ≡ 148,
+  hostState quiescent con campioni smi, deviceLimits nel payload. Exit 0.
+- **GLM** `bench-glm-4090-b12-rebaseline4d-2026-08-06.json` (protocollo
+  identico al riferimento: p6, nGen 64, reps 3, b12, attrib 1): decode
+  mediana **5.013** [4.907/5.013/5.061], prefill **5.661**, TTFT 81.4 s,
+  dispatchPlan 1405 ≡ planned+2 PASS, retention 97.57%, stallo 24.0 ms/token,
+  floor sync 6.0. Exit 4 (gate tok/s FAIL, atteso sotto clausola item 17a).
+
+### Il delta GLM: rumore, non regressione
+
+−0.15 tok/s vs il riferimento 08-03 (5.163, run SHADOW): Welch t≈1.7,
+p≈0.16 su 3v3 — non significativo; la peggior replica del riferimento
+(5.005) ≈ la mediana nuova; **deviceLimits identici byte-a-byte** ⇒ la
+negoziazione unificata di it.21 non ha cambiato i limiti concessi (che era
+il rischio da escludere: item 10a). Nessuna deroga: sostituzione registrata
+a **docket item 19** (pre-autorizzata em.6/item 16), coi numeri per
+un'eventuale contestazione PI.
+
+### FASE 4d: DONE-WHEN COMPLETO (it.21-25)
+
+test strutturale device ✓ (it.21) · schema report ttftMs+hostState anche
+Qwen ✓ (it.22-23) · Planned+Measured con gate sui due path ✓ (it.23,
+verificati su device) · glmsource sotto test ✓ (it.24) · 256/256 campo JSON
+✓ (it.24, gateCpuref 8/8 su device) · path non-fuso rimosso con decisione
+nel journal ✓ (it.24) · artefatti orfani censiti ✓ (it.24) · ri-baseline
+dichiarata ✓ (it.25, item 19) · suite verde (331+7) · tsc pulito · ktest
+invariato (53/53 a it.21).
+
+### Prossimo: FASE 5 — prefill batched M>1
+
+Sbloccata (ordine em.6: 4c-A′ → 4d → 5). Spec §5 del design 08-01: M=16
+iniziale, identità = argmax identico su tutte le posizioni M=1 vs M>1,
+owns prefill path/prefillplan/moe batched/tests. Il gate: prefill tok/s e
+TTFT su p6 (oggi 5.66 tok/s e 81 s vs UX 4 s). Nota design: gli insiemi di
+expert differiscono per token ⇒ arena+Sel va esteso (Sel per token o
+batching per expert con gather).
