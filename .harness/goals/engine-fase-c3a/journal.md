@@ -2034,3 +2034,14 @@ pronto e il gate è aritmetica.
 (conformance.html, WebLLM/wllama), NON al motore: quello vero è
 `scripts/conformance-engine.mjs` (BASE_URL + HEADED=1 per GPU reale). Da
 sistemare in un goal di igiene, non qui (scope chiuso).
+
+### it.36 — verifier finale: PASS (dopo 3 correzioni di stato)
+
+Primo giro: FAIL su 3 artefatti di stato (PHASES 4/4c stantie, HANDOFF non
+refreshato, "ratificata" sovradichiarata per item 14b) — sostanza tecnica
+100% riscontrata (ogni numero letto dagli artefatti JSON, suite+tsc su
+HEAD). Correzioni applicate (682b4f1), ri-verifica: **PASS, zero blocker
+per la chiusura**. Restano al PI (HANDOFF §1): via libera C3b, ratifica
+14/14b, chiusura formale item 2.
+
+## IL GOAL ENGINE-FASE-C3A È CHIUSO E VERIFICATO. Il loop si ferma by design.
