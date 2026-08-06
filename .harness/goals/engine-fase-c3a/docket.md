@@ -1,5 +1,37 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+17. **RULING RICHIESTO — l'opzione c è FALSIFICATA dalla misura: la
+    residenza totale non sta in questo device** (2026-08-06, it.19, probe
+    `vram-ceiling-{full,minimal,minimal-overflow}-2026-08-06.json`).
+    Fabbisogno @ctx525 con riserva = 16 362 MiB; tetto fisico delle
+    allocazioni = **15 947 MiB** (total 16 376 − memory.reserved 429,
+    confermato da OOM Vulkan con smi a 15 948) ⇒ **gap minimo 415 MiB a
+    host PERFETTO** — nessun regime host può chiudere. Misurato: 14.00 GiB
+    residenti a sessione piena, 14.25 a sessione minima; oversubscription
+    driver 128-224 MiB, post-OOM zero, e instabile (LRU del driver: dopo
+    5 s aveva retrocesso 1.25 GiB dei buffer allocati per primi a 8 GB/s)
+    ⇒ anche il tier freddo host-backed è morto (serve ≥415 MiB stabili).
+    La regola pre-dichiarata dell'em.5 dice: il numero torna a te, mai
+    degradazione. **Le opzioni rimaste**:
+    (a) [RACCOMANDATA] invocare la clausola dell'item 2(a): fase 4 e 4c
+        chiudono con meccanismo costruito + misura (select:"gpu" dimostrato
+        1 submit/0 sync nel ktest a residenza totale sintetica); il gate
+        13.43 si dichiara irraggiungibile SU QUESTO DEVICE per −415 MiB di
+        VRAM fisica — attribuzione "hardware, non struttura del motore" —
+        e C3a chiude sul resto (4d, fase 5, bench finale con gap
+        dichiarati). La tesi non muore: su M4 48 GB la residenza totale è
+        gratis e il meccanismo è pronto; su questo box la produzione resta
+        select:"cpu"+shadow con batching (proiezione 12.47 max, misurata).
+    (b) ridurre il fabbisogno cambiando modello/quant sorgente/hardware —
+        tutte must-docket (direction §3) e fuori C3a.
+    (c) tenere aperta la 4c in attesa di un device con più VRAM: C3a resta
+        aperto a tempo indeterminato — sconsigliata (il goal perde la
+        completion condition).
+    Interagisce con item 2 (stessa clausola) e con la nota it.17: il gate
+    formale ≤2 sync/token nel bench di produzione era misurabile solo a
+    residenza totale — con la (a) il done-when della fase 4 si soddisfa
+    con la misura ktest + la dichiarazione, via ruling qui.
+
 16. **RULING registrato (2026-08-05, PI in chat): RISANAMENTO DELLA BASE —
     "risistemiamo la base di orchestrazione, telemetria, error handling, ecc.
     non ha senso produrre questo casino".** Il debito delle due implementazioni

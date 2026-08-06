@@ -1,6 +1,23 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-05, sessione 21 — ruling item 15 = opzione c, sblocco 4c senza degradazione + fase 4d risanamento base)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 21 — it.19: probe VRAM, opzione c falsificata; prossimo: fase 4d)
 
 ## 1. Next decidable
+
+**FATTO (it.19): 4c slice A′ — IL GIB NON ESISTE SU QUESTO DEVICE.** Probe
+`scripts/vram-ceiling.mjs` (3 run committate): fabbisogno residenza totale
+@ctx525 = 16 362 MiB vs tetto fisico allocazioni = **15 947 MiB** (total
+16 376 − memory.reserved 429, OOM Vulkan verificato) ⇒ **gap minimo 415
+MiB a host perfetto** — l'opzione c non chiude a nessun regime host.
+Misurato: 14.00/14.25 GiB residenti (sessione piena/minima);
+oversubscription driver 128-224 MiB, post-OOM 0, instabile (LRU del
+driver, non pinnabile); Chrome headless senza adapter WebGPU. **Docket
+item 17 (RULING RICHIESTO)**: raccomandata la clausola item 2(a) —
+fase 4+4c chiudono con meccanismo costruito e misura, gate 13.43
+dichiarato irraggiungibile per hardware (−415 MiB), non per struttura;
+su M4 48 GB il meccanismo è pronto e la residenza è gratis.
+
+**PROSSIMO PEZZO DECIDIBILE (nessun ruling richiesto): FASE 4d —
+risanamento base** (em.6, item 16), poi FASE 5 (prefill M>1). Entrambe
+indipendenti dall'esito 4c/item 17.
 
 **RULING (2026-08-05, sessione 21): lo stallo 4c è SCIOLTO — opzione (c),
 "trovare il GiB altrove".** La degradazione è FUORI a qualunque P/formato;

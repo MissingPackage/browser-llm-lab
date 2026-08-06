@@ -1285,3 +1285,59 @@ policy-id nel path dei blob, unione shard, costo dichiarato 105.9 ms/tensore,
 si ferma: la **fase 5 (prefill batched M>1)** è sbloccata dal ruling item 6,
 indipendente dalla 4c, e il gate prefill 56.58 (+ TTFT 81 s vs 4) serve
 comunque, qualunque sia l'esito della 4c.
+
+## it.19 — 2026-08-06 — fase 4c slice A′: il probe dice che il GiB NON esiste
+
+### Cosa
+
+`scripts/vram-ceiling.mjs` (nuovo) + `public/vramprobe.html`: probe del
+tetto VRAM allocabile REALE da Chrome/Dawn — alloca storage buffer a chunk
+(256 MiB coarse, 32 fine) fino all'OOM di Dawn, banda di copia per buffer
+per discriminare residente (~88-116 GB/s a clock idle) da host-backed
+(8-13 GB/s ≈ PCIe), curva nvidia-smi affiancata, guardia anti-SwiftShader,
+verdetto meccanico contro il fabbisogno della residenza totale. Tre run
+committate: `vram-ceiling-{full,minimal,minimal-overflow}-2026-08-06.json`.
+
+### I numeri (regola pre-dichiarata em.5: gap ⇒ docket, mai degradazione)
+
+- Fabbisogno @ctx525 con riserva 64 MiB: **16 362 MiB** (design §2.1).
+- Tetto FISICO delle allocazioni: **15 947 MiB** = total 16 376 −
+  `memory.reserved` 429 (confermato indisponibile: OOM
+  `VK_ERROR_OUT_OF_DEVICE_MEMORY` con smi a 15 948).
+- **Gap aritmetico minimo a host PERFETTO (desktop=0, Chrome=0): 415 MiB.**
+  L'opzione c non può chiudere per costruzione su questo device.
+- Misurato: residenti 14.00 GiB @sessione-piena, 14.25 @minimal
+  (plasmashell/krunner/greeter/bridge fermati: −177 MiB desktop).
+- Oversubscription driver: pool host-backed GPU-indirizzabile **128-224
+  MiB**, post-OOM **0** su 24 retry, e **INSTABILE**: dopo 5 s il driver
+  aveva retrocesso i PRIMI 5 buffer allocati (1.25 GiB a 8 GB/s) — LRU
+  suo, non pinnabile. Il tier freddo host-backed "gratis" non è affidabile
+  né capiente (serve ≥415, meglio ~700 MiB).
+- Chrome headless: niente adapter WebGPU (2 config, incl.
+  `--disable-vulkan-surface`) — regime no-session non misurabile da qui e
+  comunque insufficiente per aritmetica.
+
+### Errori del probe pagati (3, tutti a costo zero sul motore)
+
+vite dep-optimization che rinavigava la pagina (fix: pagina in `public/`,
+servita senza vite client); `networkidle` mai raggiunto col websocket HMR;
+headless su SwiftShader che "allocava" 14 GiB di RAM host (fix: guardia
+sull'adapter info — senza, il numero sarebbe stato uno degno del docket).
+E una violazione della landmine "niente pipe sull'output dei runner"
+(exit code mascherato da `| head` su una run headless).
+
+### Verifica
+
+`npm test` 304 passed + 7 skipped; `npx tsc --noEmit` pulito; desktop
+ripristinato (plasmashell active, used 1258 MiB). Nessun file di
+src/engine/** toccato.
+
+### Conseguenza sul goal
+
+**Opzione c FALSIFICATA dalla misura: la residenza totale non sta in
+questo device a nessun regime host** (−415 MiB fisici). Docket item 15
+aggiornato con le opzioni rimaste (si lega a item 2, la cui clausola (a)
+resta la raccomandata: chiusura ordinata sotto gate con attribuzione
+"hardware, non struttura"). Il loop NON si ferma: prossimo pezzo
+decidibile = **fase 4d (risanamento base)**, poi fase 5 — entrambe
+indipendenti dall'esito 4c.

@@ -1,0 +1,748 @@
+{
+  "schema": "vram-ceiling-v1",
+  "date": "2026-08-06T07:55:38.860Z",
+  "label": "full",
+  "headlessChrome": false,
+  "chunkBytes": 268435456,
+  "fineBytes": 33554432,
+  "deviceLimits": {
+    "maxBufferSize": 4294967292,
+    "maxStorageBufferBindingSize": 2147483644
+  },
+  "hostBefore": {
+    "gpu": "16376, 1244, 429, 53, 210, 7.78",
+    "procs": [
+      "|    0   N/A  N/A            3984    C+G   /usr/bin/kwin_wayland                    85MiB |",
+      "|    0   N/A  N/A            4346      G   /usr/bin/Xwayland                         4MiB |",
+      "|    0   N/A  N/A            4440      G   /usr/bin/plasmashell                    139MiB |",
+      "|    0   N/A  N/A            4805      G   /usr/bin/xwaylandvideobridge              3MiB |",
+      "|    0   N/A  N/A            6836      G   /usr/bin/krunner                         24MiB |",
+      "|    0   N/A  N/A            8702      G   /usr/bin/kitty                           40MiB |",
+      "|    0   N/A  N/A          219973    C+G   ...rack-uuid=3190708988185955192         13MiB |",
+      "|    0   N/A  N/A         1117491      G   /usr/libexec/kscreenlocker_greet         39MiB |"
+    ],
+    "computeApps": "3984, /usr/bin/kwin_wayland, 85 MiB\n219973, /opt/codex-desktop/electron --type=gpu-process --disable-gpu-sandbox --no-sandbox --ozone-platform=wayland --render-node-override=/dev/dri/renderD128 --crashpad-handler-pid=219953 --enable-crash-reporter=6093052d-403a-4210-a890-b312ad5680d4?no_channel --user-data-dir=/home/neuromancer/.config/Codex --gpu-preferences=UAAAAAAAAAAgAQAEAAAAAAAAAAAAAGAAAQAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAYAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAA --shared-files --field-trial-handle=3?i?16745649973417369997?3748254542128846015?262144 --enable-features=DocumentPolicyIncludeJSCallStacksInCrashReports?OwlAuth?OwlAutofillAndPasswords?OwlDownloads?OwlPermissions?OwlPrinting?OwlWebViewEnhancements?PdfUseShowSaveFilePicker --disable-features=DropInputEventsWhilePaintHolding?LocalNetworkAccessChecks?OwlExtensions?OwlHistory?OwlOpenAIGoLinks?ScreenAIOCREnabled?SpareRendererForSitePerProcess?TraceSiteInstanceGetProcessCreation --variations-seed-version --pseudonymization-salt-handle=7?i?3364041170793189780?9486411029929837812?4 --trace-process-track-uuid=3190708988185955192, 13 MiB"
+  },
+  "hostAfter": {
+    "gpu": "16376, 1252, 429, 55, 2265, 45.21",
+    "procs": [
+      "|    0   N/A  N/A            3984    C+G   /usr/bin/kwin_wayland                    85MiB |",
+      "|    0   N/A  N/A            4346      G   /usr/bin/Xwayland                         4MiB |",
+      "|    0   N/A  N/A            4440      G   /usr/bin/plasmashell                    139MiB |",
+      "|    0   N/A  N/A            4805      G   /usr/bin/xwaylandvideobridge              3MiB |",
+      "|    0   N/A  N/A            6836      G   /usr/bin/krunner                         24MiB |",
+      "|    0   N/A  N/A            8702      G   /usr/bin/kitty                           40MiB |",
+      "|    0   N/A  N/A          219973    C+G   ...rack-uuid=3190708988185955192         13MiB |",
+      "|    0   N/A  N/A         1117491      G   /usr/libexec/kscreenlocker_greet         39MiB |"
+    ],
+    "computeApps": "3984, /usr/bin/kwin_wayland, 85 MiB\n219973, /opt/codex-desktop/electron --type=gpu-process --disable-gpu-sandbox --no-sandbox --ozone-platform=wayland --render-node-override=/dev/dri/renderD128 --crashpad-handler-pid=219953 --enable-crash-reporter=6093052d-403a-4210-a890-b312ad5680d4?no_channel --user-data-dir=/home/neuromancer/.config/Codex --gpu-preferences=UAAAAAAAAAAgAQAEAAAAAAAAAAAAAGAAAQAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAYAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAA --shared-files --field-trial-handle=3?i?16745649973417369997?3748254542128846015?262144 --enable-features=DocumentPolicyIncludeJSCallStacksInCrashReports?OwlAuth?OwlAutofillAndPasswords?OwlDownloads?OwlPermissions?OwlPrinting?OwlWebViewEnhancements?PdfUseShowSaveFilePicker --disable-features=DropInputEventsWhilePaintHolding?LocalNetworkAccessChecks?OwlExtensions?OwlHistory?OwlOpenAIGoLinks?ScreenAIOCREnabled?SpareRendererForSitePerProcess?TraceSiteInstanceGetProcessCreation --variations-seed-version --pseudonymization-salt-handle=7?i?3364041170793189780?9486411029929837812?4 --trace-process-track-uuid=3190708988185955192, 13 MiB"
+  },
+  "allocatedBytes": 15267266560,
+  "residentBytes": 15032385536,
+  "spilledBytes": 234881024,
+  "residentGbpsMin": 60,
+  "oomMessage": "vkAllocateMemory failed with VK_ERROR_OUT_OF_DEVICE_MEMORY\n - While calling [Device].CreateBuffer([BufferDescriptor]).\n    at CheckVkOOMThenSuccessImpl (../../third_party/dawn/src/dawn/native/vulkan/VulkanError.cpp:119)\n",
+  "deviceLost": null,
+  "uncapturedErrors": [],
+  "bandwidthPerBuffer": [
+    {
+      "i": 0,
+      "sizeMiB": 256,
+      "gbps": 91.3
+    },
+    {
+      "i": 1,
+      "sizeMiB": 256,
+      "gbps": 86.9
+    },
+    {
+      "i": 2,
+      "sizeMiB": 256,
+      "gbps": 88.6
+    },
+    {
+      "i": 3,
+      "sizeMiB": 256,
+      "gbps": 82.9
+    },
+    {
+      "i": 4,
+      "sizeMiB": 256,
+      "gbps": 89.3
+    },
+    {
+      "i": 5,
+      "sizeMiB": 256,
+      "gbps": 95.7
+    },
+    {
+      "i": 6,
+      "sizeMiB": 256,
+      "gbps": 92.6
+    },
+    {
+      "i": 7,
+      "sizeMiB": 256,
+      "gbps": 84
+    },
+    {
+      "i": 8,
+      "sizeMiB": 256,
+      "gbps": 87.3
+    },
+    {
+      "i": 9,
+      "sizeMiB": 256,
+      "gbps": 86.6
+    },
+    {
+      "i": 10,
+      "sizeMiB": 256,
+      "gbps": 83.2
+    },
+    {
+      "i": 11,
+      "sizeMiB": 256,
+      "gbps": 86.7
+    },
+    {
+      "i": 12,
+      "sizeMiB": 256,
+      "gbps": 89.8
+    },
+    {
+      "i": 13,
+      "sizeMiB": 256,
+      "gbps": 90.2
+    },
+    {
+      "i": 14,
+      "sizeMiB": 256,
+      "gbps": 88.4
+    },
+    {
+      "i": 15,
+      "sizeMiB": 256,
+      "gbps": 83.5
+    },
+    {
+      "i": 16,
+      "sizeMiB": 256,
+      "gbps": 93
+    },
+    {
+      "i": 17,
+      "sizeMiB": 256,
+      "gbps": 94.4
+    },
+    {
+      "i": 18,
+      "sizeMiB": 256,
+      "gbps": 97.4
+    },
+    {
+      "i": 19,
+      "sizeMiB": 256,
+      "gbps": 105.5
+    },
+    {
+      "i": 20,
+      "sizeMiB": 256,
+      "gbps": 98.5
+    },
+    {
+      "i": 21,
+      "sizeMiB": 256,
+      "gbps": 97.4
+    },
+    {
+      "i": 22,
+      "sizeMiB": 256,
+      "gbps": 100
+    },
+    {
+      "i": 23,
+      "sizeMiB": 256,
+      "gbps": 96.6
+    },
+    {
+      "i": 24,
+      "sizeMiB": 256,
+      "gbps": 97.3
+    },
+    {
+      "i": 25,
+      "sizeMiB": 256,
+      "gbps": 97.3
+    },
+    {
+      "i": 26,
+      "sizeMiB": 256,
+      "gbps": 96.9
+    },
+    {
+      "i": 27,
+      "sizeMiB": 256,
+      "gbps": 94.4
+    },
+    {
+      "i": 28,
+      "sizeMiB": 256,
+      "gbps": 99.6
+    },
+    {
+      "i": 29,
+      "sizeMiB": 256,
+      "gbps": 98.7
+    },
+    {
+      "i": 30,
+      "sizeMiB": 256,
+      "gbps": 99.4
+    },
+    {
+      "i": 31,
+      "sizeMiB": 256,
+      "gbps": 95.5
+    },
+    {
+      "i": 32,
+      "sizeMiB": 256,
+      "gbps": 100.9
+    },
+    {
+      "i": 33,
+      "sizeMiB": 256,
+      "gbps": 101.1
+    },
+    {
+      "i": 34,
+      "sizeMiB": 256,
+      "gbps": 109.8
+    },
+    {
+      "i": 35,
+      "sizeMiB": 256,
+      "gbps": 110.2
+    },
+    {
+      "i": 36,
+      "sizeMiB": 256,
+      "gbps": 106.5
+    },
+    {
+      "i": 37,
+      "sizeMiB": 256,
+      "gbps": 106.9
+    },
+    {
+      "i": 38,
+      "sizeMiB": 256,
+      "gbps": 107.2
+    },
+    {
+      "i": 39,
+      "sizeMiB": 256,
+      "gbps": 100
+    },
+    {
+      "i": 40,
+      "sizeMiB": 256,
+      "gbps": 96.9
+    },
+    {
+      "i": 41,
+      "sizeMiB": 256,
+      "gbps": 97.3
+    },
+    {
+      "i": 42,
+      "sizeMiB": 256,
+      "gbps": 99.8
+    },
+    {
+      "i": 43,
+      "sizeMiB": 256,
+      "gbps": 95.4
+    },
+    {
+      "i": 44,
+      "sizeMiB": 256,
+      "gbps": 110
+    },
+    {
+      "i": 45,
+      "sizeMiB": 256,
+      "gbps": 112.8
+    },
+    {
+      "i": 46,
+      "sizeMiB": 256,
+      "gbps": 106.3
+    },
+    {
+      "i": 47,
+      "sizeMiB": 256,
+      "gbps": 106.1
+    },
+    {
+      "i": 48,
+      "sizeMiB": 256,
+      "gbps": 104.9
+    },
+    {
+      "i": 49,
+      "sizeMiB": 256,
+      "gbps": 106.9
+    },
+    {
+      "i": 50,
+      "sizeMiB": 256,
+      "gbps": 106.1
+    },
+    {
+      "i": 51,
+      "sizeMiB": 256,
+      "gbps": 108.9
+    },
+    {
+      "i": 52,
+      "sizeMiB": 256,
+      "gbps": 106.1
+    },
+    {
+      "i": 53,
+      "sizeMiB": 256,
+      "gbps": 110.9
+    },
+    {
+      "i": 54,
+      "sizeMiB": 256,
+      "gbps": 107.2
+    },
+    {
+      "i": 55,
+      "sizeMiB": 32,
+      "gbps": 13.2
+    },
+    {
+      "i": 56,
+      "sizeMiB": 32,
+      "gbps": 13.5
+    },
+    {
+      "i": 57,
+      "sizeMiB": 32,
+      "gbps": 13.1
+    },
+    {
+      "i": 58,
+      "sizeMiB": 32,
+      "gbps": 13.1
+    },
+    {
+      "i": 59,
+      "sizeMiB": 32,
+      "gbps": 13.6
+    },
+    {
+      "i": 60,
+      "sizeMiB": 32,
+      "gbps": 13.5
+    },
+    {
+      "i": 61,
+      "sizeMiB": 32,
+      "gbps": 13.8
+    }
+  ],
+  "timeline": [
+    {
+      "phase": "coarse",
+      "allocatedMiB": 512,
+      "smiUsedMiB": 1948,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 768,
+      "smiUsedMiB": 2204,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 1024,
+      "smiUsedMiB": 2460,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 1280,
+      "smiUsedMiB": 2716,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 1536,
+      "smiUsedMiB": 2972,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 1792,
+      "smiUsedMiB": 3228,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 2048,
+      "smiUsedMiB": 3484,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 2304,
+      "smiUsedMiB": 3740,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 2560,
+      "smiUsedMiB": 3996,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 2816,
+      "smiUsedMiB": 4252,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 3072,
+      "smiUsedMiB": 4508,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 3328,
+      "smiUsedMiB": 4764,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 3584,
+      "smiUsedMiB": 5020,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 3840,
+      "smiUsedMiB": 5276,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 4096,
+      "smiUsedMiB": 5532,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 4352,
+      "smiUsedMiB": 5788,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 4608,
+      "smiUsedMiB": 6044,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 4864,
+      "smiUsedMiB": 6300,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 5120,
+      "smiUsedMiB": 6556,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 5376,
+      "smiUsedMiB": 6812,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 5632,
+      "smiUsedMiB": 7068,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 5888,
+      "smiUsedMiB": 7324,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 6144,
+      "smiUsedMiB": 7580,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 6400,
+      "smiUsedMiB": 7836,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 6656,
+      "smiUsedMiB": 8092,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 6912,
+      "smiUsedMiB": 8348,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 7168,
+      "smiUsedMiB": 8604,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 7424,
+      "smiUsedMiB": 8860,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 7680,
+      "smiUsedMiB": 9116,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 7936,
+      "smiUsedMiB": 9372,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 8192,
+      "smiUsedMiB": 9628,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 8448,
+      "smiUsedMiB": 9884,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 8704,
+      "smiUsedMiB": 10140,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 8960,
+      "smiUsedMiB": 10396,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 9216,
+      "smiUsedMiB": 10652,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 9472,
+      "smiUsedMiB": 10908,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 9728,
+      "smiUsedMiB": 11164,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 9984,
+      "smiUsedMiB": 11420,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 10240,
+      "smiUsedMiB": 11676,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 10496,
+      "smiUsedMiB": 11932,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 10752,
+      "smiUsedMiB": 12188,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 11008,
+      "smiUsedMiB": 12444,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 11264,
+      "smiUsedMiB": 12700,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 11520,
+      "smiUsedMiB": 12956,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 11776,
+      "smiUsedMiB": 13212,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 12032,
+      "smiUsedMiB": 13468,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 12288,
+      "smiUsedMiB": 13724,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 12544,
+      "smiUsedMiB": 13980,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 12800,
+      "smiUsedMiB": 14236,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 13056,
+      "smiUsedMiB": 14492,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 13312,
+      "smiUsedMiB": 14748,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 13568,
+      "smiUsedMiB": 15004,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 13824,
+      "smiUsedMiB": 15260,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 14080,
+      "smiUsedMiB": 15467,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "coarse",
+      "allocatedMiB": 14336,
+      "smiUsedMiB": 15724,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "fine",
+      "allocatedMiB": 14368,
+      "smiUsedMiB": 15756,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "fine",
+      "allocatedMiB": 14400,
+      "smiUsedMiB": 15788,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "fine",
+      "allocatedMiB": 14432,
+      "smiUsedMiB": 15820,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "fine",
+      "allocatedMiB": 14464,
+      "smiUsedMiB": 15852,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "fine",
+      "allocatedMiB": 14496,
+      "smiUsedMiB": 15884,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "fine",
+      "allocatedMiB": 14528,
+      "smiUsedMiB": 15916,
+      "smiReservedMiB": 429
+    },
+    {
+      "phase": "fine",
+      "allocatedMiB": 14560,
+      "smiUsedMiB": 15948,
+      "smiReservedMiB": 429
+    }
+  ],
+  "required": {
+    "parkBytes": 15678308352,
+    "nonExpertBytes": 1354078720,
+    "kvBytes": 56851200,
+    "reserveBytes": 67108864,
+    "totalBytes": 17156347136,
+    "ctx": 525
+  },
+  "verdict": {
+    "covers": false,
+    "gapBytes": 2123961600,
+    "gapMiB": 2026,
+    "gapSlabsQ4_0": 401,
+    "rule": "emendamento 5: copre => residenza totale Q4_0 puro; gap => docket, mai degradazione"
+  }
+}
