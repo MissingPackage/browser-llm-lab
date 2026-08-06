@@ -1656,3 +1656,49 @@ owns prefill path/prefillplan/moe batched/tests. Il gate: prefill tok/s e
 TTFT su p6 (oggi 5.66 tok/s e 81 s vs UX 4 s). Nota design: gli insiemi di
 expert differiscono per token ⇒ arena+Sel va esteso (Sel per token o
 batching per expert con gather).
+
+## it.26 — 2026-08-06 — FASE 5 aperta: design MoE batched + piano sotto test
+
+### La decisione di design (delegata dall'ordine 18b, criterio = numeri fase 4)
+
+Fra "Sel per token" (catena decode ripetuta per riga: 4M dispatch/layer) e
+"batching per expert con gather" (unione del chunk, un GEMM per expert),
+vince la seconda, quantificata:
+- **dispatch/layer**: |unione| ≈ 40 attesi a M=16 contro 64 (costo per
+  dispatch misurato in fase 1: ~43 µs — la voce che la 4b ha dovuto
+  abbattere);
+- **traffico pesi**: ogni expert dell'unione letto UNA volta per chunk ⇒
+  ÷ molteplicità media (≈1.6× a M=16, ≈4× a M=64) — il regime memory-bound
+  che fase 1 misurò 20× sopra il floor. Coerente con la prescrizione di
+  spec §5 ("per unione ... con maschera per token").
+
+### La struttura che compra l'identità BIT-A-BIT
+
+Il decode accumula i 4 expert in ordine k. Il path batched esegue gli expert
+in ordine di UNIONE ⇒ se accumulasse direttamente, somme f32 riordinate =
+argmax near-tie flippabili (classe slice B, rate 9e-6). Design: i kernel
+scrivono y[m][k] in SLOT separati, una combine per token somma in ordine k
+crescente — lo stesso ordine del decode. La classe di rischio e' eliminata
+per costruzione. **Controprova nel test**: l'accumulo in ordine-unione
+DIVERGE davvero (il test fallirebbe se la struttura a slot fosse inutile).
+
+### Consegnato (slice 1)
+
+`src/engine/glmprefillplan.ts`: `GLM_PREFILL_M = 16` (spec §5 [ASSUMED]),
+`planMoeChunk` (biiezione (riga,k) → unione, ordine deterministico, pesi
+selF32), `combineMoeRow` (referenza CPU f32 della combine, fround per op).
+`tests/engine-glmprefillplan.test.ts` (6): biiezione, ordine, raggruppamento,
+validazione hard, **identita' bit-identica** M>1 vs per-token su expert finto
+non banale, controprova di divergenza.
+
+### Verifica
+
+Suite **337 passed + 7 skipped** (+6), tsc pulito. Niente GPU in questo
+slice (piano puro CPU, convenzione fase A).
+
+### Prossimo (fase 5, slice 2)
+
+I kernel: GEMM per-expert con gather (rows) che scrive negli slot y[m][k],
+combine WGSL in ordine k, e il percorso denso del chunk (MLA prefill batched
+— pattern chunked del path Qwen adattato all'attention MLA). Poi wiring in
+glmmodel + test identita' su modello sintetico (ktest) + p6 reale.
