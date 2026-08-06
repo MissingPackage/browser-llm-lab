@@ -1888,3 +1888,40 @@ prefill sequenziale — ogni riga KV corrotta propagherebbe su tutti i logit
 successivi, quindi il decode-continuation copre tutte le righe. Stesso
 modello, due run dalla pos 0 (le righe si sovrascrivono per posizione e
 l'attention legge solo n=pos+1: il "crop implicito" del path Qwen).
+
+## it.33 — 2026-08-06 — fase 5 fetta (b): IL WIRING PASSA AL PRIMO COLPO, BIT-IDENTICO, 5.55×
+
+### La run (prefill-identity-p4-2026-08-06.json, exit 0)
+
+Harness nuovo glmprefill (worker+page+runner, additivo): stesso modello, due
+run dalla pos 0 (crop implicito), gate = confine bit-uguale + generazione
+identica + routing identico. Esito su p4 (364 pos, N=8):
+- **hidden bit-eq: maxAbs 0, 0 diff** · **logits bit-eq: maxAbs 0, 0 diff**
+- **id generati: identici** · **routing: 0/16744 difformi** (364×46)
+- **prefill: 97 944 ms sequenziale → 17 659 ms chunked = 5.55×**
+  (3.7 → 20.6 tok/s di prefill, con GLI STESSI kernel)
+
+### Perché è passato al primo colpo
+
+La strategia della fase: ogni kernel batch provato BIT-IDENTICO in
+isolamento (it.27-31, ktest 65/65) + piano di wiring su disco con ogni
+decisione presa (it.31) + referenza CPU della catena (it.26-27). Il rischio
+residuo era solo il cablaggio — e il cablaggio era speculare al forward,
+riga per riga. L'identità non è stata "verificata alla fine": era garantita
+per costruzione e la run l'ha CONFERMATA.
+
+### Proiezione TTFT (da verificare in fetta d)
+
+p6 = 461 pos: 81.4 s → ~15 s attesi a parità. Il budget UX è 4 s: il resto
+verra' da M>16 (taratura), submit al confine di chunk piu' larghi, e dalle
+leve future — ma la CAPACITA' mancante (docket C2 item 6) ora esiste.
+
+### Nota per la chiusura di fase (checklist)
+
+Il done-when dice "test identità verde in npm test": l'E2E è GPU-bound (non
+può stare in CI); in npm test ci sono i test del PIANO (glmprefillplan,
+identità CPU della catena). Alla chiusura: o si dichiara la sostituzione
+(harness gate = il test, come conformance C2) o si aggiunge un identity-test
+CPU più ampio. Da decidere in fetta (d), dichiarato nel journal.
+
+### Prossimo: fetta (c) p6 intero (identità 461 pos) + fetta (d) bench TTFT
