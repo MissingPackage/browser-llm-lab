@@ -165,14 +165,17 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 }
 
 // RMSNorm: out = x * (1/sqrt(mean(x^2)+eps)) * w. Un solo workgroup da 256.
-export function rmsnormWgsl(D: number, eps: number, batch?: boolean): string {
-  // batch (fase 5): un workgroup per riga (wid.x = riga) — testo non-batch invariato
+export function rmsnormWgsl(D: number, eps: number, batch?: boolean, strides?: { x: number; out: number }): string {
+  // batch (fase 5): un workgroup per riga (wid.x = riga) — testo non-batch invariato.
+  // strides: larghezza di RIGA dei buffer quando ≠ D (rmsKvA norma i primi 512
+  // f32 di righe larghe 576) — solo batch.
   const sig = batch
     ? "fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {"
     : "fn main(@builtin(local_invocation_id) lid: vec3<u32>) {";
-  const rowPre = batch ? "\n  let rB = wid.x * D;" : "";
+  const sx = strides?.x ?? D, so = strides?.out ?? D;
+  const rowPre = batch ? `\n  let rB = wid.x * ${sx}u;\n  let oB = wid.x * ${so}u;` : "";
   const xI = batch ? "x[rB + i]" : "x[i]";
-  const outI = batch ? "out[rB + i]" : "out[i]";
+  const outI = batch ? "out[oB + i]" : "out[i]";
   return `
 @group(0) @binding(0) var<storage, read> x: array<f32>;
 @group(0) @binding(1) var<storage, read> w: array<f32>;

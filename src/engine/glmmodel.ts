@@ -30,20 +30,23 @@
 // l'encode del blocco expert dietro al sync per layer.
 import { GLM47_FLASH as G } from "./shape";
 import { repackQ4_0, repackQ4_1, repackQ8_0, repackKQuant, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
-import { routerSelect, WEIGHTS_SUM_CLAMP_MIN } from "./moe";
+import { routerSelect, WEIGHTS_SUM_CLAMP_MIN, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, type SlabLayout } from "./moe";
 import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen, mlaSplitWorkgroupStorageBytes } from "./mlasplit";
 import {
   pairGemvSiluQ5KFastWorkgroupStorageBytes, gemvQ6KFastWorkgroupStorageBytes,
 } from "./kquantfast";
+import { downIsQ4_1 } from "./expertstore";
 import { ExpertCache, expertKey, expertSlots, modelExpertPark, type ArenaGeometry, type ExpertClass, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
 import { expertArenaBindings } from "./gpulimits";
 import { type CoreCounters } from "./telemetry";
+import { planMoeChunk, GLM_PREFILL_M } from "./glmprefillplan";
 import {
   addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ6KFastWgsl, gemvQ8HeadsWgsl,
   gemvQuantWgsl, kvAppendWgsl, mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,
   ropeMlaNormWgsl, rmsnormWgsl,
   siluMulWgsl, stridedCopyWgsl, pairGemvSiluFastWgsl, pairGemvSiluQ5KFastWgsl,
   gemvAccumFastWgsl, routerTopKWgsl, type ArenaOpts,
+  pairGemvSiluGatherWgsl, gemvDownSlotsWgsl, moeCombineWgsl,
 } from "./kernels/wgsl";
 
 const HL = G.qkNope + G.ropeDims; // 256
@@ -181,6 +184,16 @@ export interface GlmModel {
   // con readLogits. Tenuti entrambi e nominati per quello che sono.
   dispatchesPerTokenPlanned: number;
   cacheStats(): ReturnType<ExpertCache["stats"]>;
+  /**
+   * Prefill batched M>1 (fase 5): un chunk di M righe gia' embeddate
+   * (M·dModel f32) alle posizioni posStart..posStart+M-1. Path ADDITIVO:
+   * forward() e' intoccato. Ritorna il routing per riga e, sull'ULTIMA riga,
+   * hidden e (opzionale) logits — riusando i passi head del decode.
+   * Identita' col per-token garantita per costruzione (kernel bit-identici,
+   * router CPU, combine k-order): v. docs/engine/glmprefill-wiring-plan.
+   */
+  prefillChunk(xRows: Float32Array, posStart: number, readLogitsLast?: boolean):
+    Promise<{ hidden: Float32Array; logits?: Float32Array; routing: GlmRouting[][] }>;
   // Drena i batch di timestamp in volo e ritorna i contatori cumulativi.
   telemetry(): Promise<GlmTelemetry>;
   // Accende/spegne la REGISTRAZIONE (la capacità è fissata da opts). Da spenta
@@ -447,6 +460,46 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     add: mkPipe(addInPlaceWgsl(G.dModel)),
   };
 
+  // ---- pipeline BATCH del prefill (fase 5, piano glmprefill-wiring-plan) ----
+  // Ogni variante e' bit-identica al per-riga (ktest it.27-31, 65/65). M e' il
+  // tetto del chunk; i chunk parziali dispatchano rows<M (mai righe garbage:
+  // kvApp scriverebbe la cache a posizioni stantie).
+  const MPF = GLM_PREFILL_M;
+  const pipesB = {
+    rmsD: mkPipe(rmsnormWgsl(G.dModel, G.rmsEps, true)),
+    rmsQA: mkPipe(rmsnormWgsl(G.qLora, G.rmsEps, true)),
+    rmsKvA: mkPipe(rmsnormWgsl(G.kvLora, G.rmsEps, true, { x: G.keyLen, out: G.keyLen })),
+    gemvQA: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: G.dModel, N: G.qLora, hasBias: false, batch: true })),
+    gemvQB: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: G.qLora, N: G.nHead * HL, hasBias: false, batch: true })),
+    gemvKvA: mkPipe(gemvQuantWgsl({ kind: "q8_0", K: G.dModel, N: G.keyLen, hasBias: false, batch: true })),
+    ropeQ: mkPipe(ropeMlaNormWgsl({ nVec: G.nHead, stride: HL, offset: G.qkNope, ropeDims: G.ropeDims, freqBase: G.ropeFreqBase, batch: true })),
+    ropeKPe: mkPipe(ropeMlaNormWgsl({ nVec: 1, stride: G.keyLen, offset: G.kvLora, ropeDims: G.ropeDims, freqBase: G.ropeFreqBase, batch: true })),
+    kvApp: mkPipe(kvAppendWgsl(G.keyLen, true)),
+    // la copy k_pe (rope→row576) diventa una strided copy batch: 1 dispatch, non M copy
+    kpeCopy: mkPipe(stridedCopyWgsl({ nVec: 1, len: G.ropeDims, srcStride: G.keyLen, srcOffset: G.kvLora, dstStride: G.keyLen, dstOffset: G.kvLora, batch: true })),
+    absorbKb: mkPipe(gemvQ8HeadsWgsl({ K: G.qkNope, rowsPerHead: G.kvLora, nHead: G.nHead, xStride: HL, xOffset: 0, batch: true })),
+    copyCkv: mkPipe(stridedCopyWgsl({ nVec: G.nHead, len: G.kvLora, srcStride: G.kvLora, srcOffset: 0, dstStride: G.keyLen, dstOffset: 0, batch: true })),
+    copyQRope: mkPipe(stridedCopyWgsl({ nVec: G.nHead, len: G.ropeDims, srcStride: HL, srcOffset: G.qkNope, dstStride: G.keyLen, dstOffset: G.kvLora, batch: true })),
+    attnPart: mkPipe(mlaAttnSplitPartWgsl({
+      nHead: G.nHead, kvLora: G.kvLora, ropeDims: G.ropeDims, ctxMax,
+      scale: 1 / Math.sqrt(G.headLenMla), chunk: MLA_CHUNK_P, batch: true,
+    })),
+    attnReduce: mkPipe(mlaAttnSplitReduceWgsl({ nHead: G.nHead, kvLora: G.kvLora, ctxMax, chunk: MLA_CHUNK_P, batch: true })),
+    voutVb: mkPipe(gemvQ8HeadsWgsl({ K: G.kvLora, rowsPerHead: G.headLenMla, nHead: G.nHead, xStride: G.kvLora, xOffset: 0, batch: true })),
+    gemvO: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: G.nHead * G.headLenMla, N: G.dModel, hasBias: false, batch: true })),
+    gemvDenseGU: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: G.dModel, N: G.dFfnDense, hasBias: false, batch: true })),
+    gemvDenseDown: mkPipe(gemvQuantWgsl({ kind: "q4_1", K: G.dFfnDense, N: G.dModel, hasBias: false, batch: true })),
+    siluDenseM: mkPipe(siluMulWgsl(MPF * G.dFfnDense)),  // elementwise: griglia tagliata a m righe
+    router: mkPipe(gemvF32Wgsl({ K: G.dModel, N: G.nExpert, batch: true })),
+    pairSiluShexp: mkPipe(pairGemvSiluQ5KFastWgsl({ K: G.dModel, N: G.dFfnExpert, batch: true })),
+    gemvShexpDown: mkPipe(gemvQ6KFastWgsl({ K: G.dFfnExpert, N: G.dModel, batch: true })),
+    addM: mkPipe(addInPlaceWgsl(MPF * G.dModel)),
+    pairGather: mkPipe(pairGemvSiluGatherWgsl({ K: G.dModel, N: G.dFfnExpert })),
+    downSlots40: mkPipe(gemvDownSlotsWgsl({ kind: "q4_0", K: G.dFfnExpert, N: G.dModel })),
+    downSlots41: mkPipe(gemvDownSlotsWgsl({ kind: "q4_1", K: G.dFfnExpert, N: G.dModel })),
+    combine: mkPipe(moeCombineWgsl({ D: G.dModel })),
+  };
+
   // ---- attivazioni condivise ----
   const x = storage(G.dModel * 4);
   const hn = storage(G.dModel * 4);
@@ -472,6 +525,34 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const gateE = storage(G.dFfnExpert * 4);
   const moeOut = storage(G.dModel * 4);
   const logitsB = storage(G.nExpert * 4);
+  // ---- attivazioni BATCH del prefill (fase 5, ~30 MB a M=16) ----
+  const xM = storage(MPF * G.dModel * 4);
+  const hnM = storage(MPF * G.dModel * 4);
+  const fnBM = storage(MPF * G.dModel * 4);
+  const qaBM = storage(MPF * G.qLora * 4);
+  const qanBM = storage(MPF * G.qLora * 4);
+  const qBM = storage(MPF * G.nHead * HL * 4);
+  const kvBM = storage(MPF * G.keyLen * 4);
+  const row576M = storage(MPF * G.keyLen * 4);
+  const qCkvM = storage(MPF * G.nHead * G.kvLora * 4);
+  const q576M = storage(MPF * G.nHead * G.keyLen * 4);
+  const attnPartialsM = storage(MPF * mlaPartialsLen(G.nHead, G.kvLora, ctxMax) * 4);
+  const attnCkvM = storage(MPF * G.nHead * G.kvLora * 4);
+  const attnMlaM = storage(MPF * G.nHead * G.headLenMla * 4);
+  const tmpM = storage(MPF * G.dModel * 4);
+  const gateDM = storage(MPF * G.dFfnDense * 4);
+  const upDM = storage(MPF * G.dFfnDense * 4);
+  const gateEM = storage(MPF * G.dFfnExpert * 4);
+  const hSlotsM = storage(MPF * G.nExpertUsed * G.dFfnExpert * 4);
+  const ySlotsM = storage(MPF * G.nExpertUsed * G.dModel * 4);
+  const sM = storage(MPF * G.dModel * 4);
+  const wBufM = storage(MPF * G.nExpertUsed * 4);
+  const logitsBM = storage(MPF * G.nExpert * 4);
+  const logitsMStaging = device.createBuffer({ size: MPF * G.nExpert * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const rowPosB = storage(MPF * 4);
+  // regioni gather per expert dell'unione: allineate a 256 B (minStorageBufferOffsetAlignment)
+  const GATHER_REGION = 256;
+  const gatherM = storage(G.nExpert * GATHER_REGION);
   // niente piu' `wExp`: il peso di mixing e' il campo `w` di Sel (§2.1 del
   // design) — la stessa indirezione che porta lo slot porta anche il peso.
   const P = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -491,6 +572,14 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   interface Step { pipe: GPUComputePipeline; bind: GPUBindGroup; wgs: [number, number] }
   const step = (pipe: GPUComputePipeline, bufs: Array<GPUBuffer | BindRange>, wgs: number | [number, number], uni?: boolean): Step =>
     ({ pipe, bind: bg(pipe, bufs, uni ? P : undefined), wgs: typeof wgs === "number" ? [wgs, 1] : wgs });
+  const stepB = (pipe: GPUComputePipeline, bufs: Array<GPUBuffer | BindRange>, wgs: number | [number, number], rowsDim: "x" | "y" | "z"): BStep =>
+    ({ pipe, bind: bg(pipe, bufs), wgs: typeof wgs === "number" ? [wgs, 1] : wgs, rowsDim });
+  // bind statici dei dispatch inline del prefill (griglie dipendenti da m)
+  const bgAddM = bg(pipesB.addM, [xM, tmpM]);
+  const bgSiluDenseM = bg(pipesB.siluDenseM, [gateDM, upDM]);
+  const bgCombineM = bg(pipesB.combine, [xM, sM, ySlotsM, wBufM]);
+
+  interface BStep { pipe: GPUComputePipeline; bind: GPUBindGroup; wgs: [number, number]; rowsDim: "x" | "y" | "z" }
 
   interface MoeLayerGpu {
     bias: Float32Array;
@@ -502,6 +591,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     preRouter: Step[];       // ffn_norm + router (dopo l'attention)
     shexp: Step[];           // scrive moeOut
     addMoe: Step;            // x += moeOut
+    preRouterB: BStep[];     // prefill batch (fase 5)
+    shexpB: BStep[];         // prefill batch: scrive sM per riga
+    downLayout: SlabLayout;  // layout slab della classe (sub-range dei gather)
   }
   interface LayerGpu {
     attn: Step[];            // attention completa (residuo incluso), con 1 copy k_pe
@@ -509,6 +601,8 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     dense?: Step[];          // blk.0
     moe?: MoeLayerGpu;
     cache: GPUBuffer;        // kv cache 576/token
+    attnB: BStep[];          // prefill batch (fase 5): attention su M righe
+    denseB?: BStep[];        // prefill batch: ffn denso blk.0 (senza silu/add, encodati a parte)
   }
 
   const layers: LayerGpu[] = [];
@@ -562,13 +656,35 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       step(pipes.add, [x, tmp], Math.ceil(G.dModel / 64)),
     ];
     const kpeCopy = { srcOff: G.kvLora * 4, dstOff: G.kvLora * 4, bytes: G.ropeDims * 4 };
+    // Attention BATCH (fase 5): speculare ad `attn`, la kpeCopy diventa una
+    // strided copy in-pass, la posizione per riga viene da rowPosB.
+    const attnB: BStep[] = [
+      stepB(pipesB.rmsD, [xM, attnNorm, hnM], 1, "x"),
+      stepB(pipesB.gemvQA, [wQA.qs, wQA.scales, hnM, qaBM], gemvGrid(G.qLora), "z"),
+      stepB(pipesB.rmsQA, [qaBM, qANorm, qanBM], 1, "x"),
+      stepB(pipesB.gemvQB, [wQB.qs, wQB.scales, qanBM, qBM], gemvGrid(G.nHead * HL), "z"),
+      stepB(pipesB.ropeQ, [qBM, rowPosB], Math.ceil((G.nHead * G.ropeDims / 2) / 64), "y"),
+      stepB(pipesB.gemvKvA, [wKvA.qs, wKvA.scales, hnM, kvBM], gemvGrid(G.keyLen), "z"),
+      stepB(pipesB.ropeKPe, [kvBM, rowPosB], Math.ceil((G.ropeDims / 2) / 64), "y"),
+      stepB(pipesB.rmsKvA, [kvBM, kvANorm, row576M], 1, "x"),
+      stepB(pipesB.kpeCopy, [kvBM, row576M], Math.ceil(G.ropeDims / 64), "y"),
+      stepB(pipesB.kvApp, [row576M, cache, rowPosB], Math.ceil(G.keyLen / 64), "y"),
+      stepB(pipesB.absorbKb, [wKB.qs, wKB.scales, qBM, qCkvM], gemvGrid(G.nHead * G.kvLora), "z"),
+      stepB(pipesB.copyCkv, [qCkvM, q576M], Math.ceil((G.nHead * G.kvLora) / 64), "y"),
+      stepB(pipesB.copyQRope, [qBM, q576M], Math.ceil((G.nHead * G.ropeDims) / 64), "y"),
+      stepB(pipesB.attnPart, [q576M, cache, attnPartialsM, rowPosB], [attnSMaxN, 1], "z"),
+      stepB(pipesB.attnReduce, [attnPartialsM, attnCkvM, rowPosB], G.nHead, "z"),
+      stepB(pipesB.voutVb, [wVB.qs, wVB.scales, attnCkvM, attnMlaM], gemvGrid(G.nHead * G.headLenMla), "z"),
+      stepB(pipesB.gemvO, [wO.qs, wO.scales, attnMlaM, tmpM], gemvGrid(G.dModel), "z"),
+      // xM += tmpM: addM inline nel prefill (griglia dipende da m)
+    ];
 
     if (l < G.denseLead) {
       const wGate = w("ffn_gate", "q4_0");
       const wUp = w("ffn_up", "q4_0");
       const wDown = w("ffn_down", "q4_1");
       layers.push({
-        attn, kpeCopy, cache,
+        attn, kpeCopy, cache, attnB,
         dense: [
           step(pipes.rmsD, [x, ffnNorm, fnB], 1),
           step(pipes.gemvDenseGU, [wGate.qs, wGate.scales, fnB, gateD], gemvGrid(G.dFfnDense)),
@@ -576,6 +692,13 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           step(pipes.siluDense, [gateD, upD], Math.ceil(G.dFfnDense / 64)),
           step(pipes.gemvDenseDown, [wDown.qs, wDown.scales, gateD, tmp], gemvGrid(G.dModel)),
           step(pipes.add, [x, tmp], Math.ceil(G.dModel / 64)),
+        ],
+        denseB: [
+          stepB(pipesB.rmsD, [xM, ffnNorm, fnBM], 1, "x"),
+          stepB(pipesB.gemvDenseGU, [wGate.qs, wGate.scales, fnBM, gateDM], gemvGrid(G.dFfnDense), "z"),
+          stepB(pipesB.gemvDenseGU, [wUp.qs, wUp.scales, fnBM, upDM], gemvGrid(G.dFfnDense), "z"),
+          // silu + down + add: inline nel prefill (griglie per-chunk)
+          stepB(pipesB.gemvDenseDown, [wDown.qs, wDown.scales, gateDM, tmpM], gemvGrid(G.dModel), "z"),
         ],
       });
     } else {
@@ -586,7 +709,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       const downShexp = track(kquantBuf(src.nonExpert(nm("ffn_down_shexp")), Q6_K_BLOCK_BYTES));
       moeLayerAbs.push(l);
       layers.push({
-        attn, kpeCopy, cache,
+        attn, kpeCopy, cache, attnB,
         moe: {
           bias,
           biasBuf: routerGpu ? track(upload(bias)) : null,
@@ -602,6 +725,15 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
             step(pipes.pairSiluShexp, [gateShexp, upShexp, fnB, gateE], gemvGrid(G.dFfnExpert)),
             step(pipes.gemvShexpDown, [downShexp, gateE, moeOut], gemvGrid(G.dModel)),
           ],
+          preRouterB: [
+            stepB(pipesB.rmsD, [xM, ffnNorm, fnBM], 1, "x"),
+            stepB(pipesB.router, [routerW, fnBM, logitsBM], G.nExpert, "z"),
+          ],
+          shexpB: [
+            stepB(pipesB.pairSiluShexp, [gateShexp, upShexp, fnBM, gateEM], gemvGrid(G.dFfnExpert), "z"),
+            stepB(pipesB.gemvShexpDown, [downShexp, gateEM, sM], gemvGrid(G.dModel), "z"),
+          ],
+          downLayout: downIsQ4_1(l) ? SLAB_DOWN_Q4_1 : SLAB_DOWN_Q4_0,
           addMoe: step(pipes.add, [x, moeOut], Math.ceil(G.dModel / 64)),
         },
       });
@@ -809,6 +941,20 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     T.dispatches += steps.length;
   };
 
+  // Runner dei passi BATCH del prefill (fase 5): le righe del chunk vanno
+  // nella dimensione che la variante del kernel usa — "y" per gli elementwise
+  // a gid (rope/kvAppend/stridedCopy), "z" per i gemv/rms/MLA a wid.
+  const runStepsB = (pass: GPUComputePassEncoder, steps: BStep[], rows: number): void => {
+    for (const s of steps) {
+      pass.setPipeline(s.pipe);
+      pass.setBindGroup(0, s.bind);
+      if (s.rowsDim === "x") pass.dispatchWorkgroups(rows);
+      else if (s.rowsDim === "y") pass.dispatchWorkgroups(s.wgs[0], rows);
+      else pass.dispatchWorkgroups(s.wgs[0], s.wgs[1], rows);
+    }
+    T.dispatches += steps.length;
+  };
+
   // Valore DERIVATO dal piano: attn 17/layer (16 fino alla fase 4b; l'attention
   // split ne aggiunge uno, part+reduce al posto del kernel monolitico) + denso
   // 6 (solo blk.0) + per layer
@@ -836,6 +982,133 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   return {
     dispatchesPerTokenPlanned,
     cacheStats: () => cache.stats(),
+
+    async prefillChunk(xRows: Float32Array, posStart: number, readLogitsLast = false) {
+      // Piano: docs/engine/glmprefill-wiring-plan-2026-08-06.md. Telemetria:
+      // contatori sempre-on (dispatches/submits/routerSyncs); il dettaglio ms
+      // liv.1 del prefill si aggiunge quando servira' all'attribuzione.
+      const m = xRows.length / G.dModel;
+      if (!Number.isInteger(m) || m < 1 || m > MPF) throw new Error(`prefillChunk: righe ${m} (ammesse 1..${MPF})`);
+      if (posStart + m > ctxMax) throw new Error("glmmodel: contesto pieno (chunk)");
+      if (readLogitsLast && !opts.head) throw new Error("glmmodel: head non abilitata");
+      device.queue.writeBuffer(xM, 0, xRows as unknown as BufferSource);
+      device.queue.writeBuffer(rowPosB, 0, Uint32Array.from({ length: m }, (_, i) => posStart + i) as unknown as BufferSource);
+      device.pushErrorScope("validation");
+      device.pushErrorScope("out-of-memory");
+      const routing: GlmRouting[][] = Array.from({ length: m }, () => []);
+      let enc = device.createCommandEncoder();
+      let pass: GPUComputePassEncoder | null = null;
+      const ensureP = (): GPUComputePassEncoder => { if (!pass) pass = enc.beginComputePass(); return pass; };
+      const endP = () => { if (pass) { pass.end(); pass = null; } };
+      // add elementwise su m righe (il kernel e' dimensionato a M·D; la
+      // griglia tagliata copre esattamente m·D — D multiplo di 64)
+      const inline = (pipe: GPUComputePipeline, bind: GPUBindGroup, elems: number) => {
+        const p2 = ensureP();
+        p2.setPipeline(pipe); p2.setBindGroup(0, bind);
+        p2.dispatchWorkgroups(Math.ceil(elems / 64));
+        T.dispatches++;
+      };
+
+      for (const [l, L] of layers.entries()) {
+        runStepsB(ensureP(), L.attnB, m);
+        inline(pipesB.addM, bgAddM, m * G.dModel); // xM += tmpM (residuo attention)
+        if (L.denseB) {
+          runStepsB(ensureP(), L.denseB.slice(0, 3), m);
+          inline(pipesB.siluDenseM, bgSiluDenseM, m * G.dFfnDense);
+          runStepsB(ensureP(), L.denseB.slice(3), m); // down → tmpM
+          inline(pipesB.addM, bgAddM, m * G.dModel);
+          continue;
+        }
+        const mo = L.moe!;
+        runStepsB(ensureP(), mo.preRouterB, m);
+        endP();
+        enc.copyBufferToBuffer(logitsBM, 0, logitsMStaging, 0, m * G.nExpert * 4);
+        device.queue.submit([enc.finish()]);
+        if (telemOn) { T.submits++; T.routerSyncs++; }
+        // ---- IL sync del chunk: M×64 logit in una mapAsync (46/chunk ≈ 46/m per token) ----
+        await logitsMStaging.mapAsync(GPUMapMode.READ);
+        const lg = new Float32Array(logitsMStaging.getMappedRange().slice(0));
+        logitsMStaging.unmap();
+        const sels = [];
+        for (let r = 0; r < m; r++) {
+          const sel = routerSelect(lg.subarray(r * G.nExpert, (r + 1) * G.nExpert), mo.bias);
+          routing[r].push({ layer: l, experts: sel.experts, weights: sel.weights });
+          sels.push(sel);
+        }
+        const plan = planMoeChunk(sels, MPF);
+        // ensure dell'UNIONE, tutte le chiavi pinnate (nessuna vittima interna al chunk)
+        const pinned = new Set<number>();
+        for (const b of plan.experts) pinned.add(expertKey(l, b.expert));
+        const slotOf = new Map<number, SlotRef>();
+        for (const b of plan.experts) slotOf.set(b.expert, cache.ensure(l, b.expert, expertReader, pinned).slot);
+        cache.flushSlotTable();
+        device.queue.writeBuffer(wBufM, 0, plan.weights as unknown as BufferSource);
+        plan.experts.forEach((b, i) => {
+          device.queue.writeBuffer(gatherM, i * GATHER_REGION,
+            Uint32Array.from(b.rows, (row, j) => row | (b.slots[j] << 16)) as unknown as BufferSource);
+        });
+        enc = device.createCommandEncoder();
+        const p2 = ensureP();
+        runStepsB(p2, mo.shexpB, m); // sM = shexp per riga (la base della combine)
+        // catena expert sull'unione: bind group a SOTTO-RANGE dello slot
+        // (la CPU conosce lo slot: il sync col router c'e' comunque)
+        const layout = mo.downLayout;
+        const dp = mo.cls === "q4_0" ? pipesB.downSlots40 : pipesB.downSlots41;
+        const [gx, gy] = gemvGrid(G.dFfnExpert / 4);
+        const [dx, dy] = gemvGrid(G.dModel / 4);
+        for (const [i, b] of plan.experts.entries()) {
+          const slot = slotOf.get(b.expert)!;
+          const sub = (off: number, size: number): BindRange => ({ buffer: slot.buffer, offset: slot.offset + off, size });
+          const gsub: BindRange = { buffer: gatherM, offset: i * GATHER_REGION, size: Math.max(4, b.rows.length * 4) };
+          p2.setPipeline(pipesB.pairGather);
+          p2.setBindGroup(0, bg(pipesB.pairGather, [
+            sub(layout.gateQs, layout.qsBytes), sub(layout.gateScales, layout.gateScalesBytes),
+            sub(layout.upQs, layout.qsBytes), sub(layout.upScales, layout.gateScalesBytes),
+            fnBM, gsub, hSlotsM,
+          ]));
+          p2.dispatchWorkgroups(gx, gy, b.rows.length);
+          p2.setPipeline(dp);
+          p2.setBindGroup(0, bg(dp, [
+            sub(layout.downQs, layout.qsBytes), sub(layout.downScales, layout.downScalesBytes),
+            hSlotsM, gsub, ySlotsM,
+          ]));
+          p2.dispatchWorkgroups(dx, dy, b.rows.length);
+          T.dispatches += 2;
+        }
+        // combine k-order: xM += sM + Σ w·y — la catena esatta del decode
+        p2.setPipeline(pipesB.combine);
+        p2.setBindGroup(0, bgCombineM);
+        p2.dispatchWorkgroups(Math.ceil(G.dModel / 64), m);
+        T.dispatches++;
+      }
+      // head/hidden sull'ULTIMA riga: copia in `x` e riusa i passi del decode
+      endP();
+      enc.copyBufferToBuffer(xM, (m - 1) * G.dModel * 4, x, 0, G.dModel * 4);
+      if (readLogitsLast) {
+        const p3 = enc.beginComputePass();
+        runSteps(p3, headSteps);
+        p3.end();
+      }
+      enc.copyBufferToBuffer(x, 0, hiddenStaging, 0, G.dModel * 4);
+      if (readLogitsLast) enc.copyBufferToBuffer(logitsVocab!, 0, vocabStaging!, 0, vocab * 4);
+      device.queue.submit([enc.finish()]);
+      if (telemOn) T.submits++;
+      const errOom = await device.popErrorScope();
+      const errVal = await device.popErrorScope();
+      if (errOom || errVal) throw new Error(`prefillChunk error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
+      await hiddenStaging.mapAsync(GPUMapMode.READ);
+      const hidden = new Float32Array(hiddenStaging.getMappedRange().slice(0));
+      hiddenStaging.unmap();
+      let logits: Float32Array | undefined;
+      if (readLogitsLast) {
+        await vocabStaging!.mapAsync(GPUMapMode.READ);
+        logits = new Float32Array(vocabStaging!.getMappedRange().slice(0));
+        vocabStaging!.unmap();
+      }
+      if (telemOn) T.forwards += m;
+      return { hidden, logits, routing };
+    },
+
     async forward(xIn: Float32Array, pos: number, readLogits = false) {
       if (pos >= ctxMax) throw new Error("glmmodel: contesto pieno");
       if (readLogits && !opts.head) throw new Error("glmmodel: head non abilitata");
