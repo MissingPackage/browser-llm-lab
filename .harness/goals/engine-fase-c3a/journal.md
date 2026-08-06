@@ -1994,3 +1994,42 @@ Registrata a docket item 20.
    FIX operativo: catena 3 con budget storici (conf b11, route b12) e gap
    60 s fra le run. LANDMINE aggiornata: fra run GPU consecutive sullo stesso
    profilo servono ~60 s, di piu' dopo un errore.
+
+## it.36 — 2026-08-07 — FASI 6 e 7 CHIUSE: IL GOAL C3A È COMPLETO
+
+### Checklist DONE WHEN del goal, punto per punto
+
+1. **Spec + ruling** ✓ (it.2, ruling item 6).
+2. **Repack, pack < 1.0** ✓ (it.7: 42.5 → 0.0 ms/token).
+3. **Sync router ≤2/token** — meccanismo COMPLETO e misurato (it.17: 1
+   submit / 0 sync a residenza totale, ktest con observer); nel bench di
+   produzione i 46 restano perché la residenza totale NON sta nel device
+   (−415 MiB fisici, probe it.19) ⇒ **clausola item 17a ratificata dal PI**:
+   attribuzione hardware, non struttura.
+4. **gpuBusy ≤ 54.5** ✓ (it.14: 54.2, kernel-vs-clock attribuiti).
+5. **Gate decode 13.43**: 5.211 — FAIL DICHIARATO sotto clausola 17a.
+6. **Prefill**: (i) percorso M>1 ✓ con identità BIT-EXACT (p4+p6, sostituzione
+   item 20); (ii) gate 56.58: 25.78 — FAIL DICHIARATO sotto clausola.
+7. **Gap UX riportati** ✓ in ogni report (decode 5.76×/11.51×, TTFT 4.47×).
+8. **Correttezza invariata** ✓: argmax ≡ cpuref-f64 256/256 (gateCpuref campo
+   JSON) e 512/512 fase A; top-1 golden **98.828% full-corpus** (1012/1024 —
+   il pin C2 alla cifra); routing 31 274 pos: prefill 87.0667 ≥ rif, decode
+   88.5025 = firma esatta item 14b (+151/−19, near-tie it.12/13 già
+   docketata e ratificata come banda).
+9. **Non-regressione pregresso** ✓: fase A GATE DOPPIO PASS (98.05/100%),
+   Qwen 326.2 ≥ 322.2 (e ≥ 321.88 del baseline permanente).
+
+### Cosa lascia il goal (docket item 21, direction §7 aggiornata)
+
+Il motore ha: arena+Sel col router GPU pronto, prefill batched bit-identico
+(TTFT 88 → 17.9 s), base risanata (4d), e il design del decode ottimistico
+dimensionato da WP-0 per l'apertura C3b. I gate tok/s del floor restano
+irraggiungibili SU QUESTO DEVICE per −415 MiB: su M4 48 GB il meccanismo è
+pronto e il gate è aritmetica.
+
+### Trappola trovata chiudendo (annotata in item 21)
+
+`npm run test:conformance` punta all'harness della BENCHMARK APP
+(conformance.html, WebLLM/wllama), NON al motore: quello vero è
+`scripts/conformance-engine.mjs` (BASE_URL + HEADED=1 per GPU reale). Da
+sistemare in un goal di igiene, non qui (scope chiuso).

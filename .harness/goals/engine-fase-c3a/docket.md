@@ -1,5 +1,31 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+21. **INPUT PER C3B (2026-08-06/07, it.35 — chiusura fase 7, nessuna decisione
+    richiesta: è il passaggio di consegne che la fase 7 deve produrre).**
+    - **Profilo ms/token di chiusura (decode, prefillbatch bench)**: wall 191.9
+      = gpuBusy ~54 + stallo residenza 24.0 (read 6.6 + upload 17.4, pack 0)
+      + sync/CPU residuo ~114 (46 sync/token restano: la residenza totale non
+      sta nel device, −415 MiB). Il decode ottimistico di WP-0 è il meccanismo
+      che li elimina nel regime near-total (≥88% residenza).
+    - **Residenza osservata (full runs)**: hit 95.7% sul full-corpus routing
+      (244 448 miss, 1 221 GiB letti da OPFS), retention 97.6% nel bench
+      (= hitRate: prefetch assente). Capacità misurata: 2 596 slot al tetto.
+    - **Prefill batched**: 25.78 tok/s a M=16 (kernel di oggi); TTFT 17.88 s.
+      La leva successiva del TTFT è C3b (prefetch/overlap) + taratura M.
+    - **Non-regressione che C3a lascia** (docket C3b item 1): decode 5.211 /
+      prefill 25.78 / TTFT 17.88 (bench prefillbatch 2026-08-06), Qwen 326.2,
+      conformance 256/256+512/512, golden 98.828%, routing firma item 14b,
+      ktest 65/65, suite 337+7.
+    - **Meccanismi pronti**: arena+Sel (select:"gpu" 1 submit/0 sync in ktest),
+      prefillChunk bit-identico, slot y[m][k]+combine, LOOKA validato 3×
+      (NON usarlo al confine di token: neutro/dannoso, WP-0), Belady dice
+      P(dirty) ~dimezzabile con policy > LRU.
+    - **Landmine operative nuove**: ~60 s fra run GPU consecutive sullo stesso
+      profilo (OPFS handle + rilascio VRAM, di più dopo un errore); conf full
+      = b11 (protocollo storico); npm run test:conformance punta all'harness
+      della BENCHMARK APP, quello del motore è scripts/conformance-engine.mjs
+      (BASE_URL, HEADED per GPU reale).
+
 20. **REGISTRAZIONE (2026-08-06, it.34) — sostituzione della forma del test
     d'identità della fase 5** (pattern item 11): il done-when chiedeva
     "identità M=1 vs M>1 verde in npm test"; l'E2E è GPU-bound. Consegnato:

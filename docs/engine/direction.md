@@ -190,9 +190,18 @@ assi con due condizioni di chiusura, un goal unico ne perdeva una.
   sync router, prefill batched M>1. **Gate di chiusura = floor C1 (13.43/56.58)**;
   ogni bench riporta anche il gap dalla soglia UX (30 tok/s, TTFT 4 s), che è
   l'obiettivo vero — il floor prefill 56.58 su 461 token vale 8.15 s di TTFT.
+  **CHIUSO 2026-08-06 (it.35) sotto clausola item 17a**: meccanismo completo
+  (1 submit/0 sync a residenza totale in ktest; arena+Sel; prefillChunk M=16
+  bit-identico), gate tok/s dichiarati irraggiungibili su questo device per
+  hardware (−415 MiB fisici, probe it.19), non per struttura. Numeri di
+  chiusura: decode 5.211 (da 4.64), prefill **25.78** (da 5.24, 4.9×), TTFT
+  **17.88 s** (da 88, gap UX 4.47×), gpuBusy 54.2 ≤ 54.5, pack 0.0, dispatch
+  1405 (da 1816), correttezza: cpuref 256/256 e 512/512, golden 98.828%
+  full-corpus, routing = firma item 14b. Su M4 48 GB il gate è aritmetica.
 - **C3b — paging (la residenza)**: budget slab ctx-aware, tier.h, AUTOPIN,
   PILOT-real, modello di banda, WP banda fredda browser, e instant-on come TTFT
-  a freddo. Chartered, parte a C3a chiusa.
+  a freddo. Chartered, parte ORA (C3a chiusa); il primo pezzo è la spec del
+  **decode ottimistico + repair** dimensionata da WP-0 (journal c3a it.20).
 Hero-demo M4 resta PI-gated per hardware.
 
 **Fase D — moltiplicatori.** Spec-dec: prima la MTP nativa del modello (verificata,
