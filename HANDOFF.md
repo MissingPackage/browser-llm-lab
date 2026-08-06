@@ -1,26 +1,30 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-34: 4d e FASE 5 CHIUSE)
+# HANDOFF — browser-llm-lab   (updated 2026-08-07, sessione 22 — IL GOAL ENGINE-FASE-C3A È CHIUSO, it.21-36)
 
 ## 1. Next decidable
 
-**FATTO (it.34): FASE 5 CHIUSA.** Identità p6 intera BIT-EXACT (461 pos,
-hidden/logits maxAbs 0, routing 0/21206, generazione identica; sostituzione
-della forma npm-test dichiarata a docket item 20, pattern item 11). Bench di
-fase (`bench-glm-4090-b12-prefillbatch-2026-08-06.json`, protocollo pieno,
-host quiescent): **prefill 25.78 tok/s** (4.55× vs 5.66), **TTFT 17.88 s**
-(da 81.4 — gap UX da 20.3× a 4.47×), **decode 5.211 ≥ 5.013** ri-baseline,
-dispatchPlan PASS, retention 97.61%. La capacità mancante di docket C2
-item 6 ESISTE. Landmine operativa nuova (journal): gara di profilo OPFS fra
-run consecutive sullo stesso profilo (1 retry risolutivo).
+**GOAL C3A CHIUSO (it.36, verifier finale: sostanza 100% riscontrata).**
+Checklist DONE WHEN 9/9 nel journal it.36: gate tok/s decode 5.211 / prefill
+25.78 **FAIL DICHIARATI sotto clausola item 17a** (hardware −415 MiB, non
+struttura); tutto il resto PASS — pack 0.0, gpuBusy 54.2 ≤ 54.5, cpuref
+256/256 (gateCpuref JSON) + 512/512 fase A, golden **98.828% full-corpus**
+(pin C2 alla cifra), routing 31 274 pos (decode −19 = firma item 14b,
+docketata, ratifica PENDENTE), Qwen 326.2, identità prefill BIT-EXACT p4+p6.
+**TTFT 88 → 17.88 s** (prefill 4.9×), decode 4.64 → 5.211, dispatch
+1816 → 1405. Direction §7 aggiornata; **docket item 21 = INPUT C3b** (profilo
+ms/token, residenza 95.7% osservata, non-regressione lasciata, meccanismi
+pronti, landmine operative). Su M4 48 GB il gate è aritmetica.
 
-**PROSSIMO PEZZO DECIDIBILE: FASE 6 — E2E & GATE sotto clausola 17a** —
-bench quiescente coi due gate di chiusura (decode ≥13.43 / prefill ≥56.58:
-FAIL ATTESI, dichiarati irraggiungibili per hardware −415 MiB, non per
-struttura), i campi di gap obbligatori, conformance logits (argmax ≡
-cpuref-f64 256/256 via gateCpuref; top-1 golden ≥98.83% FULL-CORPUS — item
-11: è QUESTO il momento del full-corpus, ~ore di run), routing ≥ C2, bench
-Qwen ≥ ri-baseline (322.2), suite verde. Poi FASE 7 (chiusura: docket input
-C3b, direction/ledger, HANDOFF, merge+push). Il full-corpus va lanciato a
-macchina scarica con albero congelato — pianificare la finestra.
+**PROSSIMO PEZZO — DECISIONE PI RICHIESTA (il loop si ferma by design):**
+1. **Aprire il goal C3B** (chartered, parte a C3a chiusa): primo pezzo = spec
+   del decode ottimistico + repair dimensionata da WP-0 (journal it.20) +
+   docket C3b item 1 (fissare la non-regressione che C3a lascia — proposta
+   già in item 21). Serve il tuo via a /goal-brief o direttamente al setup.
+2. **Ratifiche pendenti nel docket c3a**: item 14/14b (banda near-tie del
+   setMatch, la firma +151/−19), item 2 formale (assorbito dal 17a ma mai
+   chiuso), item 19/20/21 (registrazioni da prendere atto).
+3. Igiene fuori-goal segnalata: `npm run test:conformance` punta all'harness
+   della benchmark app (non del motore); BASE_URL :5173 in 2 script; goal
+   stale fase-1b/fase-2 (weekly-maintenance).
 
 **FATTO (it.26): fase 5 slice 1** — design MoE batched deciso coi numeri di
 fase 4 (unione per expert: ~40 dispatch/layer a M=16 vs 64, traffico pesi

@@ -2014,8 +2014,9 @@ Registrata a docket item 20.
 8. **Correttezza invariata** ✓: argmax ≡ cpuref-f64 256/256 (gateCpuref campo
    JSON) e 512/512 fase A; top-1 golden **98.828% full-corpus** (1012/1024 —
    il pin C2 alla cifra); routing 31 274 pos: prefill 87.0667 ≥ rif, decode
-   88.5025 = firma esatta item 14b (+151/−19, near-tie it.12/13 già
-   docketata e ratificata come banda).
+   88.5025 = firma esatta item 14b (+151/−19, near-tie it.12/13 —
+   DOCKETATA, ratifica PI PENDENTE su item 14/14b: correzione da verifier
+   it.36, la parola "ratificata" era una sovradichiarazione).
 9. **Non-regressione pregresso** ✓: fase A GATE DOPPIO PASS (98.05/100%),
    Qwen 326.2 ≥ 322.2 (e ≥ 321.88 del baseline permanente).
 
