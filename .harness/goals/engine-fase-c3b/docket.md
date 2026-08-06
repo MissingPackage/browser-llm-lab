@@ -43,3 +43,9 @@
    statistico, caso concreto in c3a item 14). La ratifica formale resta da
    dare su c3a item 14; se la respingi, il contratto torna al confronto secco
    e ogni commit gia' passato sotto la banda viene ri-dichiarato.
+
+4. **PLAN-CHECK — PRE-AUTORIZZATO (2026-08-07, dalla stessa delega di item 2:
+   "procedi con il loop"; pattern c3a item 3).** PHASES.md e' su disco al tag
+   di setup: 7 fasi sequenziali, authority delta = none ovunque, nessuna
+   docket-born. Se vuoi rivederla prima dell'implementazione, il punto giusto
+   e' PRIMA della fase 2 (la fase 1 produce solo la spec, reversibile).
