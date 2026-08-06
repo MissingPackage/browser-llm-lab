@@ -1,23 +1,23 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-32: 4d chiusa; prefillChunk WIRED)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-33: prefillChunk FUNZIONA, bit-identico, 5.55×)
 
 ## 1. Next decidable
 
-**FATTO (it.32): fetta (a) — `prefillChunk` è wired in glmmodel, compila,
-suite verde.** Path additivo (forward intoccato); piano it.31 eseguito alla
-lettera (pipesB ×24, buffer M=16, BStep x/y/z, router CPU per chunk, unione
-pinnata, sotto-range + gather 256B-aligned, combine k-order, head su ultima
-riga coi passi del decode). tsc pulito al primo colpo. NON ancora eseguito
-su GPU.
+**FATTO (it.33): l'identità E2E del prefillChunk PASSA AL PRIMO COLPO.**
+Harness glmprefill (additivo) su p4 (364 pos, N=8): hidden e logits del
+confine **BIT-UGUALI (maxAbs 0)**, id generati identici, routing **0/16744**
+difformi. E il numero: **prefill 97.9 s → 17.7 s = 5.55×** con gli stessi
+kernel (3.7 → 20.6 tok/s). Zero debug sul device: la strategia per-kernel
+bit-identity (it.27-31) + piano su disco (it.31) ha pagato per intero.
+Report: `prefill-identity-p4-2026-08-06.json`, exit 0.
 
-**PROSSIMO PEZZO DECIDIBILE: fetta (b) — identità E2E su GPU.** Gate
-operativo (nota di design nel journal it.32): stesso modello, due run dalla
-pos 0 (sovrascrittura per posizione + attention bounded = crop implicito):
-(A) prefill sequenziale (forward per token) + generazione N; (B)
-prefillChunk a chunk di 16 + generazione N — confronto: hidden/logits del
-confine BIT-uguali + id generati identici (ogni riga KV corrotta
-propagherebbe: il decode-continuation copre tutte le righe). Harness: param
-`prefill=1` su glmconf o pagina dedicata; prima corta (p4, N=8), poi p6
-intera + bench TTFT (fette c-d).
+**PROSSIMO PEZZO DECIDIBILE: fetta (c) identità p6 intera (461 pos)** —
+stessa run con --prompt 6 e N più lungo; poi **fetta (d)**: glmbench in
+modalità prefill batched → prefill tok/s e TTFT nel report (proiezione:
+81.4 s → ~15 s; budget UX 4 s — il resto da taratura M e leve future, ma la
+CAPACITÀ mancante di docket C2 item 6 ora ESISTE). Alla chiusura di fase:
+decidere/dichiarare la forma del "test identità in npm test" (l'E2E è
+GPU-bound: sostituzione dichiarata come conformance C2, o identity-test CPU
+ampliato) — nota nel journal it.33.
 
 **FATTO (it.26): fase 5 slice 1** — design MoE batched deciso coi numeri di
 fase 4 (unione per expert: ~40 dispatch/layer a M=16 vs 64, traffico pesi
