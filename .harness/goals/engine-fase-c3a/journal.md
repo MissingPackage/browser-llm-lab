@@ -1857,3 +1857,34 @@ che ne era privo. Byte-identità non-batch verificata; ktest
 
 Eseguire il piano: fetta (a) prefillChunk compilato + suite verde, poi (b)
 identità corta, (c) p6 intera, (d) bench TTFT.
+
+## it.32 — 2026-08-06 — fase 5 fetta (a): prefillChunk WIRED, compila, suite verde
+
+### Cosa
+
+Il piano it.31 eseguito alla lettera: `prefillChunk(xRows, posStart,
+readLogitsLast)` in glmmodel — path ADDITIVO (forward intoccato). Dentro:
+24 pipeline batch (pipesB), buffer M=16 (~30 MB), `BStep` con TRE
+convenzioni di riga (x=rms, y=elementwise a gid, z=gemv/MLA) + runStepsB,
+liste per-layer attnB/denseB/preRouterB/shexpB costruite accanto alle
+esistenti, router CPU per chunk (1 mapAsync M×64/layer), ensure dell'unione
+con TUTTE le chiavi pinnate, catena expert a sotto-range dello slot (gather
+regions allineate 256 B in un buffer condiviso), combine k-order, head e
+hidden sull'ultima riga RIUSANDO i passi del decode (bit-identici). Emerso
+dal dettaglio: rmsnorm batch esteso con stride di riga (kvA norma i primi
+512 f32 di righe larghe 576).
+
+### Verifica (fetta a = compilazione + non-regressione CPU)
+
+`npx tsc --noEmit` pulito AL PRIMO COLPO dopo l'inserzione; suite piena
+verde. NON ancora eseguito su GPU: e' la fetta (b).
+
+### Nota di design per la fetta (b) — come si testa "identita' su tutte le posizioni"
+
+prefillChunk emette logits SOLO sull'ultima riga (e' il punto del prefill).
+Il gate operativo: (1) hidden/logits del confine bit-uguali al sequenziale;
+(2) la GENERAZIONE dopo prefill chunked identica alla generazione dopo
+prefill sequenziale — ogni riga KV corrotta propagherebbe su tutti i logit
+successivi, quindi il decode-continuation copre tutte le righe. Stesso
+modello, due run dalla pos 0 (le righe si sovrascrivono per posizione e
+l'attention legge solo n=pos+1: il "crop implicito" del path Qwen).

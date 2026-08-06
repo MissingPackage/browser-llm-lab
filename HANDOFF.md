@@ -1,24 +1,23 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-31: 4d chiusa; fase 5 pronta al wiring col piano su disco)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-32: 4d chiusa; prefillChunk WIRED)
 
 ## 1. Next decidable
 
-**FATTO (it.31): il piano di wiring `prefillChunk` è SU DISCO**
-(`docs/engine/glmprefill-wiring-plan-2026-08-06.md`) — ogni decisione presa
-con razionale, eseguibile da contesto fresco: API additiva (forward
-intoccato), router CPU per chunk (**2.9 sync/token a M=16**, oggi 46), bind
-group a sotto-range per l'unione dopo gli ensure (niente porting arena),
-inventario buffer M× (~30 MB), sequenza per-chunk speculare al forward, head
-sull'ultima riga con headSteps riusati, identità attesa ESATTA (argomento in
-§6), 4 fette di verifica (a-d) con commit separati. Più `gemvF32` batch
-(l'ultimo generatore che ne era privo): ktest **65/65**, tutti i kernel del
-forward GLM hanno la variante batch bit-identica. Suite **337+7**, tsc pulito.
+**FATTO (it.32): fetta (a) — `prefillChunk` è wired in glmmodel, compila,
+suite verde.** Path additivo (forward intoccato); piano it.31 eseguito alla
+lettera (pipesB ×24, buffer M=16, BStep x/y/z, router CPU per chunk, unione
+pinnata, sotto-range + gather 256B-aligned, combine k-order, head su ultima
+riga coi passi del decode). tsc pulito al primo colpo. NON ancora eseguito
+su GPU.
 
-**PROSSIMO PEZZO DECIDIBILE: ESEGUIRE IL PIANO** — fetta (a) `prefillChunk`
-in glmmodel compilato + suite verde (path additivo, commit); poi (b)
-identità E2E corta su p4 (glmconf param prefill), (c) identità p6 intera
-461 posizioni + gateCpuref/gateGolden in modalità prefill, (d) bench
-glmbench con prefill batched → prefill tok/s e TTFT nel report (attesi
-~5-6 s vs 81.4 oggi, spec §5) = il done-when della fase 5.
+**PROSSIMO PEZZO DECIDIBILE: fetta (b) — identità E2E su GPU.** Gate
+operativo (nota di design nel journal it.32): stesso modello, due run dalla
+pos 0 (sovrascrittura per posizione + attention bounded = crop implicito):
+(A) prefill sequenziale (forward per token) + generazione N; (B)
+prefillChunk a chunk di 16 + generazione N — confronto: hidden/logits del
+confine BIT-uguali + id generati identici (ogni riga KV corrotta
+propagherebbe: il decode-continuation copre tutte le righe). Harness: param
+`prefill=1` su glmconf o pagina dedicata; prima corta (p4, N=8), poi p6
+intera + bench TTFT (fette c-d).
 
 **FATTO (it.26): fase 5 slice 1** — design MoE batched deciso coi numeri di
 fase 4 (unione per expert: ~40 dispatch/layer a M=16 vs 64, traffico pesi
