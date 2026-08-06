@@ -21,13 +21,15 @@ export function gemvGrid(N: number): [number, number] {
 // 64 thread per riga di output; riduzione in shared memory.
 export function gemvQuantWgsl(opts: {
   kind: "q4_0" | "q4_1" | "q8_0"; K: number; N: number; hasBias: boolean;
+  /** batch (fase 5): wid.z = riga, x/y a offset di riga — testo non-batch invariato */
+  batch?: boolean;
   // MoE (C2 fase 5): y[r] += accScale[0]·dot — il down per-expert accumula il
   // contributo pesato direttamente su moe_out (pesatura DOPO il down, come
   // ffn_moe_weighted in build_moe_ffn; l'ordine delle somme sui 4 expert
   // differisce dall'oracolo solo al rounding f32).
   scaledAccum?: boolean;
 }): string {
-  const { kind, K, N, hasBias, scaledAccum } = opts;
+  const { kind, K, N, hasBias, scaledAccum, batch } = opts;
   if (K % 32 !== 0) throw new Error("gemv: K non multiplo di 32");
   const blocksPerRow = K / 32;
   const wordsPerBlock = kind === "q8_0" ? 8 : 4;
@@ -36,7 +38,10 @@ export function gemvQuantWgsl(opts: {
   const accBinding = scaledAccum
     ? `@group(0) @binding(${hasBias ? 5 : 4}) var<storage, read> accScale: array<f32>;` : "";
   const biasAdd = hasBias ? "accFinal = accFinal + bias[r];" : "";
-  const writeY = scaledAccum ? "y[r] = y[r] + accScale[0] * accFinal;" : "y[r] = accFinal;";
+  const rowPre = batch ? `\n  let xRB = wid.z * ${K}u;\n  let yRB = wid.z * ${N}u;` : "";
+  const xRB = batch ? "xRB + " : "";
+  const yI = batch ? "y[yRB + r]" : "y[r]";
+  const writeY = scaledAccum ? `${yI} = ${yI} + accScale[0] * accFinal;` : `${yI} = accFinal;`;
   // corpo del dot per blocco: q4_0 = 16 byte con due nibble; q8_0 = 32 int8
   const blockDot = kind === "q4_0"
     ? `
@@ -80,13 +85,13 @@ export function gemvQuantWgsl(opts: {
   const scaleAcc = kind === "q4_1"
     ? `
     let dm = unpack2x16float(scales[gb]);
-    let xBase = b * 32u;
+    let xBase = ${xRB}b * 32u;
     ${blockDot}
     acc = acc + dm.x * dot_q + dm.y * sum_x;`
     : `
     let sWord = scales[gb >> 1u];
     let sc = unpack2x16float(sWord)[gb & 1u];
-    let xBase = b * 32u;
+    let xBase = ${xRB}b * 32u;
     ${blockDot}
     acc = acc + sc * blockDot;`;
   return `${TOK_PARAMS_WGSL}
@@ -105,7 +110,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   // dimensione (l'lm_head ha 151936 righe): r = x + y*GRID_X.
   let r = wid.x + wid.y * ${GEMV_GRID_X}u;
   if (r >= ${N}u) { return; }
-  let t = lid.x;
+  let t = lid.x;${rowPre}
   var acc = 0.0;
   for (var b = t; b < BLOCKS_PER_ROW; b = b + 64u) {
     let gb = r * BLOCKS_PER_ROW + b; // blocco globale nel tensore
@@ -156,7 +161,14 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 }
 
 // RMSNorm: out = x * (1/sqrt(mean(x^2)+eps)) * w. Un solo workgroup da 256.
-export function rmsnormWgsl(D: number, eps: number): string {
+export function rmsnormWgsl(D: number, eps: number, batch?: boolean): string {
+  // batch (fase 5): un workgroup per riga (wid.x = riga) — testo non-batch invariato
+  const sig = batch
+    ? "fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {"
+    : "fn main(@builtin(local_invocation_id) lid: vec3<u32>) {";
+  const rowPre = batch ? "\n  let rB = wid.x * D;" : "";
+  const xI = batch ? "x[rB + i]" : "x[i]";
+  const outI = batch ? "out[rB + i]" : "out[i]";
   return `
 @group(0) @binding(0) var<storage, read> x: array<f32>;
 @group(0) @binding(1) var<storage, read> w: array<f32>;
@@ -165,10 +177,10 @@ const D = ${D}u;
 const EPS = ${eps};
 var<workgroup> partial: array<f32, 256>;
 @compute @workgroup_size(256)
-fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
-  let t = lid.x;
+${sig}
+  let t = lid.x;${rowPre}
   var ss = 0.0;
-  for (var i = t; i < D; i = i + 256u) { ss = ss + x[i] * x[i]; }
+  for (var i = t; i < D; i = i + 256u) { ss = ss + ${xI} * ${xI}; }
   partial[t] = ss;
   workgroupBarrier();
   var stride = 128u;
@@ -178,7 +190,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
     stride = stride >> 1u;
   }
   let rms = 1.0 / sqrt(partial[0] / f32(D) + EPS);
-  for (var i = t; i < D; i = i + 256u) { out[i] = x[i] * rms * w[i]; }
+  for (var i = t; i < D; i = i + 256u) { ${outI} = ${xI} * rms * w[i]; }
 }`;
 }
 
@@ -209,17 +221,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // Append di k/v correnti nella cache alla posizione pos (layout [ctx, kvDim] row-major).
-export function kvAppendWgsl(kvDim: number): string {
+export function kvAppendWgsl(kvDim: number, batch?: boolean): string {
+  // batch (fase 5): gid.y = riga, posizione per riga da rowPos — testo non-batch invariato
+  const nBind = batch
+    ? "@group(0) @binding(2) var<storage, read> rowPos: array<u32>;"
+    : "@group(0) @binding(2) var<uniform> P: TokParams;";
+  const posE = batch ? "rowPos[gid.y]" : "P.pos";
+  const srcI = batch ? "src[gid.y * KV_DIM + i]" : "src[i]";
   return `${TOK_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read> src: array<f32>;
 @group(0) @binding(1) var<storage, read_write> cache: array<f32>;
-@group(0) @binding(2) var<uniform> P: TokParams;
+${nBind}
 const KV_DIM = ${kvDim}u;
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= KV_DIM) { return; }
-  cache[P.pos * KV_DIM + i] = src[i];
+  cache[${posE} * KV_DIM + i] = ${srcI};
 }`;
 }
 
@@ -1541,24 +1559,32 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 // prime 512 componenti).
 export function ropeMlaNormWgsl(opts: {
   nVec: number; stride: number; offset: number; ropeDims: number; freqBase: number;
+  /** batch (fase 5): gid.y = riga, pos per riga da rowPos (storage al posto di P) */
+  batch?: boolean;
 }): string {
-  const { nVec, stride, offset, ropeDims, freqBase } = opts;
+  const { nVec, stride, offset, ropeDims, freqBase, batch } = opts;
   const half = ropeDims / 2;
+  const nBind = batch
+    ? "@group(0) @binding(1) var<storage, read> rowPos: array<u32>;"
+    : "@group(0) @binding(1) var<uniform> P: TokParams;";
+  const rowPre = batch ? `\n  let vRB = gid.y * ${nVec * stride}u;` : "";
+  const posE = batch ? "rowPos[gid.y]" : "P.pos";
+  const vRB = batch ? "vRB + " : "";
   return `${TOK_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read_write> v: array<f32>;
-@group(0) @binding(1) var<uniform> P: TokParams;
+${nBind}
 const HALF = ${half}u;
 const N_PAIRS = ${nVec * half}u;
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
-  if (i >= N_PAIRS) { return; }
+  if (i >= N_PAIRS) { return; }${rowPre}
   let h = i / HALF;
   let j = i % HALF;
-  let theta = f32(P.pos) * pow(${freqBase}.0, -f32(2u * j) / ${ropeDims}.0);
+  let theta = f32(${posE}) * pow(${freqBase}.0, -f32(2u * j) / ${ropeDims}.0);
   let c = cos(theta);
   let s = sin(theta);
-  let base = h * ${stride}u + ${offset}u + 2u * j;
+  let base = ${vRB}h * ${stride}u + ${offset}u + 2u * j;
   let a = v[base];
   let b = v[base + 1u];
   v[base] = a * c - b * s;
@@ -1572,8 +1598,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // wv_b uscita (K=512, rows=256, x=attn·c_kv della head).
 export function gemvQ8HeadsWgsl(opts: {
   K: number; rowsPerHead: number; nHead: number; xStride: number; xOffset: number;
+  /** batch (fase 5): wid.z = riga; x per riga (stride nHead·xStride), y per riga */
+  batch?: boolean;
 }): string {
-  const { K, rowsPerHead, nHead, xStride, xOffset } = opts;
+  const { K, rowsPerHead, nHead, xStride, xOffset, batch } = opts;
+  const rowPre = batch ? `\n  let xRB = wid.z * ${nHead * xStride}u;\n  let yRB = wid.z * ${rowsPerHead * nHead}u;` : "";
+  const xRB = batch ? "xRB + " : "";
+  const yI = batch ? "y[yRB + r]" : "y[r]";
   if (K % 32 !== 0) throw new Error("gemvQ8Heads: K non multiplo di 32");
   const blocksPerRow = K / 32;
   const N = rowsPerHead * nHead;
@@ -1588,8 +1619,8 @@ var<workgroup> partial: array<f32, 64>;
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
   let r = wid.x + wid.y * ${GEMV_GRID_X}u;
   if (r >= ${N}u) { return; }
-  let head = r / ${rowsPerHead}u;
-  let xBaseHead = head * ${xStride}u + ${xOffset}u;
+  let head = r / ${rowsPerHead}u;${rowPre}
+  let xBaseHead = ${xRB}head * ${xStride}u + ${xOffset}u;
   let t = lid.x;
   var acc = 0.0;
   for (var b = t; b < BLOCKS_PER_ROW; b = b + 64u) {
@@ -1615,7 +1646,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     workgroupBarrier();
     stride = stride >> 1u;
   }
-  if (t == 0u) { y[r] = partial[0]; }
+  if (t == 0u) { ${yI} = partial[0]; }
 }`;
 }
 
@@ -1927,19 +1958,24 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 export function stridedCopyWgsl(opts: {
   nVec: number; len: number; srcStride: number; srcOffset: number;
   dstStride: number; dstOffset: number;
+  /** batch (fase 5): gid.y = riga, src/dst a offset di riga (stride nVec·) */
+  batch?: boolean;
 }): string {
-  const { nVec, len, srcStride, srcOffset, dstStride, dstOffset } = opts;
+  const { nVec, len, srcStride, srcOffset, dstStride, dstOffset, batch } = opts;
   const total = nVec * len;
+  const rowPre = batch ? `\n  let sRB = gid.y * ${nVec * srcStride}u;\n  let dRB = gid.y * ${nVec * dstStride}u;` : "";
+  const sRB = batch ? "sRB + " : "";
+  const dRB = batch ? "dRB + " : "";
   return `
 @group(0) @binding(0) var<storage, read> src: array<f32>;
 @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
-  if (i >= ${total}u) { return; }
+  if (i >= ${total}u) { return; }${rowPre}
   let v = i / ${len}u;
   let j = i % ${len}u;
-  dst[v * ${dstStride}u + ${dstOffset}u + j] = src[v * ${srcStride}u + ${srcOffset}u + j];
+  dst[${dRB}v * ${dstStride}u + ${dstOffset}u + j] = src[${sRB}v * ${srcStride}u + ${srcOffset}u + j];
 }`;
 }
 

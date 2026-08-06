@@ -1417,6 +1417,145 @@ async function testShexpBatchVsPerRow(g: Gpu): Promise<KResult> {
   };
 }
 
+// Sweep delle varianti batch MECCANICHE dei kernel densi (fase 5, it.30):
+// ognuna vs il per-riga sullo stesso dato — stesso corpo, cambia solo
+// l'indicizzazione di riga ⇒ atteso BIT-IDENTICO per tutte, senza fallback.
+async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
+  const M = 3;
+  const out: KResult[] = [];
+  const bitCmp = (name: string, got: Float32Array, refs: Float32Array[], perLen: number): KResult => {
+    let maxAbs = 0, ok = true;
+    for (let m = 0; m < M; m++) {
+      for (let i = 0; i < perLen; i++) {
+        const a = got[m * perLen + i], b = refs[m][i];
+        if (!Object.is(a, b)) ok = false;
+        maxAbs = Math.max(maxAbs, Math.abs(a - b));
+      }
+    }
+    return { kernel: name, pass: ok, maxAbs, maxRel: maxAbs, note: ok ? `BIT-IDENTICO su ${M} righe` : "divergenza inattesa" };
+  };
+  const rowsBuf = (rows: Float32Array[]): GPUBuffer => {
+    const b = g.empty(M * rows[0].length * 4);
+    rows.forEach((r, m) => g.device.queue.writeBuffer(b, m * r.length * 4, r as unknown as BufferSource));
+    return b;
+  };
+
+  { // gemvQuant nei tre kind (QA/QB/O = q4_0, KvA = q8_0, dense down = q4_1)
+    for (const kind of ["q4_0", "q4_1", "q8_0"] as const) {
+      const K = 256, N = 128;
+      const blockBytes = kind === "q4_0" ? 18 : kind === "q4_1" ? Q4_1_BLOCK_BYTES : 34;
+      const nBlocks = (K / 32) * N;
+      const src = randBytes(nBlocks * blockBytes, 30_100 + blockBytes);
+      if (kind === "q4_0") fixScales(src, blockBytes);
+      else if (kind === "q4_1") fixScalesAt(src, blockBytes, [1, 3]);
+      else fixScales(src, blockBytes);
+      const rp = (kind === "q4_0" ? repackQ4_0 : kind === "q4_1" ? repackQ4_1 : repackQ8_0)(src, 0, nBlocks);
+      const qsB = g.buf(rp.qs), scB = g.buf(rp.scales);
+      const xs = Array.from({ length: M }, (_, m) => randF32(K, 30_110 + m, 0.5));
+      const refs: Float32Array[] = [];
+      for (let m = 0; m < M; m++) {
+        const y = g.empty(N * 4);
+        await g.run(gemvQuantWgsl({ kind, K, N, hasBias: false }), [qsB, scB, g.buf(xs[m]), y], gemvGrid(N)[0]);
+        refs.push(new Float32Array(await g.read(y, N * 4)));
+      }
+      const yM = g.empty(M * N * 4);
+      await g.run(gemvQuantWgsl({ kind, K, N, hasBias: false, batch: true }),
+        [qsB, scB, rowsBuf(xs), yM], [gemvGrid(N)[0], gemvGrid(N)[1], M]);
+      out.push(bitCmp(`dense-batch-gemv-${kind}`, new Float32Array(await g.read(yM, M * N * 4)), refs, N));
+    }
+  }
+  { // gemvQ8Heads (absorbKb/voutVb): x per head DENTRO la riga
+    const K = 64, rowsPerHead = 8, nHead = 4, xStride = 80, xOffset = 16;
+    const N = rowsPerHead * nHead;
+    const nBlocks = (K / 32) * N;
+    const src = randBytes(nBlocks * 34, 30_200); fixScales(src, 34);
+    const rp = repackQ8_0(src, 0, nBlocks);
+    const qsB = g.buf(rp.qs), scB = g.buf(rp.scales);
+    const xs = Array.from({ length: M }, (_, m) => randF32(nHead * xStride, 30_210 + m, 0.5));
+    const refs: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const y = g.empty(N * 4);
+      await g.run(gemvQ8HeadsWgsl({ K, rowsPerHead, nHead, xStride, xOffset }), [qsB, scB, g.buf(xs[m]), y], N);
+      refs.push(new Float32Array(await g.read(y, N * 4)));
+    }
+    const yM = g.empty(M * N * 4);
+    await g.run(gemvQ8HeadsWgsl({ K, rowsPerHead, nHead, xStride, xOffset, batch: true }),
+      [qsB, scB, rowsBuf(xs), yM], [N, 1, M]);
+    out.push(bitCmp("dense-batch-gemv-q8heads", new Float32Array(await g.read(yM, M * N * 4)), refs, N));
+  }
+  { // rmsnorm (rmsD/rmsQA/rmsKvA)
+    const D = 512;
+    const wN = randF32(D, 30_300, 1);
+    const wB = g.buf(wN);
+    const xs = Array.from({ length: M }, (_, m) => randF32(D, 30_310 + m, 0.5));
+    const refs: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const o = g.empty(D * 4);
+      await g.run(rmsnormWgsl(D, 1e-5), [g.buf(xs[m]), wB, o], 1);
+      refs.push(new Float32Array(await g.read(o, D * 4)));
+    }
+    const oM = g.empty(M * D * 4);
+    await g.run(rmsnormWgsl(D, 1e-5, true), [rowsBuf(xs), wB, oM], M);
+    out.push(bitCmp("dense-batch-rmsnorm", new Float32Array(await g.read(oM, M * D * 4)), refs, D));
+  }
+  { // ropeMlaNorm (ropeQ/ropeKPe): posizioni per riga CRESCENTI
+    const nVec = 4, stride = 80, offset = 16, ropeDims = 32;
+    const len = nVec * stride;
+    const basePos = 37;
+    const vs = Array.from({ length: M }, (_, m) => randF32(len, 30_410 + m, 0.5));
+    const refs: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const v = g.buf(vs[m]);
+      await g.run(ropeMlaNormWgsl({ nVec, stride, offset, ropeDims, freqBase: 10000 }),
+        [v], Math.ceil((nVec * ropeDims / 2) / 64), g.uniform(basePos + m, basePos + m));
+      refs.push(new Float32Array(await g.read(v, len * 4)));
+    }
+    const vM = rowsBuf(vs);
+    const rowPos = g.buf(Uint32Array.from({ length: M }, (_, m) => basePos + m));
+    await g.run(ropeMlaNormWgsl({ nVec, stride, offset, ropeDims, freqBase: 10000, batch: true }),
+      [vM, rowPos], [Math.ceil((nVec * ropeDims / 2) / 64), M, 1]);
+    out.push(bitCmp("dense-batch-rope-mla", new Float32Array(await g.read(vM, M * len * 4)), refs, len));
+  }
+  { // kvAppend: M righe a posizioni consecutive nella STESSA cache
+    const W = 96, ctx = 32, basePos = 7;
+    const rows = Array.from({ length: M }, (_, m) => randF32(W, 30_510 + m, 0.5));
+    const cacheRef = g.buf(randF32(ctx * W, 30_500, 0.5));
+    const pre = new Float32Array(await g.read(cacheRef, ctx * W * 4));
+    for (let m = 0; m < M; m++) {
+      await g.run(kvAppendWgsl(W), [g.buf(rows[m]), cacheRef], Math.ceil(W / 64), g.uniform(basePos + m, basePos + m));
+    }
+    const refAll = new Float32Array(await g.read(cacheRef, ctx * W * 4));
+    const cacheB = g.buf(pre);
+    const rowPos = g.buf(Uint32Array.from({ length: M }, (_, m) => basePos + m));
+    await g.run(kvAppendWgsl(W, true), [rowsBuf(rows), cacheB, rowPos], [Math.ceil(W / 64), M, 1]);
+    const gotAll = new Float32Array(await g.read(cacheB, ctx * W * 4));
+    let ok = true, maxAbs = 0;
+    for (let i = 0; i < ctx * W; i++) {
+      if (!Object.is(gotAll[i], refAll[i])) ok = false;
+      maxAbs = Math.max(maxAbs, Math.abs(gotAll[i] - refAll[i]));
+    }
+    out.push({ kernel: "dense-batch-kvappend", pass: ok, maxAbs, maxRel: maxAbs, note: ok ? `BIT-IDENTICA l'intera cache (righe ${basePos}..${basePos + M - 1} scritte, il resto intatto)` : "divergenza inattesa" });
+  }
+  { // stridedCopy (copyCkv/copyQRope): dst pre-riempito, solo la finestra si muove
+    const nVec = 4, len = 16, srcStride = 80, srcOffset = 48, dstStride = 96, dstOffset = 64;
+    const sLen = nVec * srcStride, dLen = nVec * dstStride;
+    const srcs = Array.from({ length: M }, (_, m) => randF32(sLen, 30_610 + m, 0.5));
+    const dst0 = Array.from({ length: M }, (_, m) => randF32(dLen, 30_620 + m, 0.5));
+    const refs: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const d = g.buf(dst0[m]);
+      await g.run(stridedCopyWgsl({ nVec, len, srcStride, srcOffset, dstStride, dstOffset }),
+        [g.buf(srcs[m]), d], Math.ceil((nVec * len) / 64));
+      refs.push(new Float32Array(await g.read(d, dLen * 4)));
+    }
+    const dM = rowsBuf(dst0);
+    await g.run(stridedCopyWgsl({ nVec, len, srcStride, srcOffset, dstStride, dstOffset, batch: true }),
+      [rowsBuf(srcs), dM], [Math.ceil((nVec * len) / 64), M, 1]);
+    out.push(bitCmp("dense-batch-strided-copy", new Float32Array(await g.read(dM, M * dLen * 4)), refs, dLen));
+  }
+  return out;
+}
+
 // ============ PREFILL BATCHED M>1 (C3a fase 5, it.27) ============
 // Il gate della fase ridotto ai kernel: la catena batched (gather su unione +
 // slot y[m][k] + combine k-order) contro la catena DECODE vera (pairGemvSilu +
@@ -1958,6 +2097,7 @@ async function main(): Promise<void> {
     // --- prefill batched M>1 (C3a fase 5): catena su unione vs catena decode ---
     results.push(await testPrefillMoeBatchedChain(g));
     results.push(await testShexpBatchVsPerRow(g));
+    results.push(...await testDenseBatchSweep(g));
 
     // --- router top-4 su GPU (C3a fase 4 strato 1): fedelta' f32 vs CPU f64 ---
     results.push(await testRouterTopK(g, 64));

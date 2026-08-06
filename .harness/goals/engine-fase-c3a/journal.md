@@ -1793,3 +1793,32 @@ combine), shexp batch, attention MLA split batch causale. RESTANO
 del chunk su M righe + dense blk.0; poi il WIRING glmmodel (router per
 riga + planMoeChunk + ensure unione + Sel/gather batched) e il test
 identita' argmax M=1 vs M>1 su p6 — il done-when della fase.
+
+## it.30 — 2026-08-06 — fase 5 slice 3c: le varianti dense, tutte bit-identiche — IL CORREDO KERNEL È COMPLETO
+
+### Cosa
+
+Opzione `batch` su SEI generatori (gemvQuant nei tre kind, gemvQ8Heads,
+rmsnorm, ropeMlaNorm, kvAppend, stridedCopy) — wid.z/gid.y = riga; i
+position-dependent (rope, kvAppend) prendono la posizione per riga da
+`rowPos` storage (stesso pattern di rowPast it.29). `addInPlace` NON ha
+bisogno di variante (elementwise su buffer contiguo: basta la griglia M·D).
+Testo non-batch byte-identico a HEAD per TUTTE le 8 configurazioni
+(diff programmatico, incluse bias/scaledAccum di gemvQuant).
+
+### Verifica
+
+ktest sweep `dense-batch-*` (8 casi): ogni variante vs il per-riga sullo
+stesso dato — **tutti BIT-IDENTICI, maxAbs 0**; il caso kvappend verifica
+l'INTERA cache (righe scritte + resto intatto), la rope usa posizioni per
+riga crescenti. ktest **64/64**; suite **337+7**; tsc pulito.
+
+### Stato fase 5 dopo it.26-30
+
+Piano sotto test (26) + catena expert su unione (27) + shexp batch (28) +
+MLA causale batch (29) + dense sweep (30): **ogni kernel del forward GLM ha
+la variante batch, e ogni variante e' bit-identica al per-riga sul device.**
+Il chunk M>1 e' quindi componibile con identita' garantita PER COSTRUZIONE
+a livello di kernel. Resta il WIRING: glmprefill path in glmmodel (router
+per riga → planMoeChunk → ensure unione → Sel/gather → submit per chunk),
+il test identita' argmax M=1 vs M>1 su p6, e il bench TTFT — il done-when.
