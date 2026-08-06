@@ -9,6 +9,7 @@ const cfg = {
   budgetGiB: q.has("budget") ? Number(q.get("budget")) : 11,
   // repliche dedicate di attribuzione (telemetria liv.1+2): 0 le disabilita
   attribReplicates: q.has("attrib") ? Number(q.get("attrib")) : 1,
+  prefillBatch: q.get("prefillbatch") === "1", // fase 5: prefillChunk M=16
 };
 const worker = new Worker(new URL("./glmbench.worker.ts", import.meta.url), { type: "module" });
 const log = (line: string): void => {

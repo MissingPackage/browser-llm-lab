@@ -10,6 +10,7 @@
 import { GLM47_FLASH as G, GLM47_FLASH_SHA256 } from "../shape";
 import { dequantQ4_0Row } from "../quant";
 import { createGlmModel } from "../glmmodel";
+import { GLM_PREFILL_M } from "../glmprefillplan";
 import { GlmOpfsSource } from "../glmsource";
 import { grantedLimits, slabBufferCap } from "../gpulimits";
 import { createEngineDevice } from "../gpudevice";
@@ -18,7 +19,7 @@ import { arenaNeeds, type ExpertCacheStats } from "../residency";
 
 interface GoldenPrompt { id: string; promptTokens: number[]; generated: number[] }
 interface Golden { modelSha256: string; prompts: GoldenPrompt[] }
-interface Cfg { prompt: number; nGen: number; replicates: number; budgetGiB: number; attribReplicates?: number }
+interface Cfg { prompt: number; nGen: number; replicates: number; budgetGiB: number; attribReplicates?: number; prefillBatch?: boolean }
 
 // Funzione obiettivo (direction §2, ruling PI 2026-08-01): NON sono gate — il
 // report li stampa perché il floor CPU non venga scambiato per l'obiettivo.
@@ -182,6 +183,23 @@ async function main(cfg: Cfg): Promise<void> {
     let last = 0;
     let ttftMs = 0;
     const preTok: number[] = [];
+    if (cfg.prefillBatch) {
+      // fase 5: prefill batched (prefillChunk M=16, identita' bit-provata —
+      // prefill-identity-p{4,6}-2026-08-06.json). Il per-token di preTok e' il
+      // costo medio del chunk: l'attribuzione fine per-riga non esiste qui.
+      for (let base = 0; base < nPrompt; base += GLM_PREFILL_M) {
+        const m = Math.min(GLM_PREFILL_M, nPrompt - base);
+        const rows = new Float32Array(m * G.dModel);
+        for (let r = 0; r < m; r++) rows.set(embed(promptTokens[base + r]), r * G.dModel);
+        const isLast = base + m >= nPrompt;
+        const tTok = performance.now();
+        const res = await model.prefillChunk(rows, base, isLast);
+        const ms = performance.now() - tTok;
+        for (let r = 0; r < m; r++) preTok.push(ms / m);
+        if (isLast) { last = argmax(res.logits!); ttftMs = performance.now() - tPre0; }
+        post({ type: "tick", msg: `${label}: prefill ${Math.min(base + m, nPrompt)}/${nPrompt} (${(1000 * Math.min(base + m, nPrompt) / (performance.now() - tPre0)).toFixed(2)} tok/s)` });
+      }
+    } else {
     for (let i = 0; i < nPrompt; i++) {
       const tTok = performance.now();
       const wantLogits = i === nPrompt - 1;
@@ -191,6 +209,7 @@ async function main(cfg: Cfg): Promise<void> {
       if (i % 32 === 0) {
         post({ type: "tick", msg: `${label}: prefill ${i}/${nPrompt} (${(1000 * (i + 1) / (performance.now() - tPre0)).toFixed(2)} tok/s)` });
       }
+    }
     }
     const preMs = performance.now() - tPre0;
     const rPre1 = model.cacheStats();
@@ -461,7 +480,7 @@ async function main(cfg: Cfg): Promise<void> {
       config: {
         promptIdx: cfg.prompt, promptId: pr.id, promptTokens: nPrompt, nGen: cfg.nGen,
         replicates: cfg.replicates, budgetGiB: cfg.budgetGiB, ctxMax,
-        prefillPath: "decode-only (nessun percorso batch M>1 nel motore GLM)",
+        prefillPath: cfg.prefillBatch ? `chunked M=${GLM_PREFILL_M} (prefillChunk, fase 5)` : "decode-only (forward per posizione)",
         decodePath: "single-step greedy (argmax dai logits del motore)",
         rateWindow: "intera fase (prefill: nPrompt posizioni; decode: nGen token)",
         protocol: "B2: warmup scartato + N repliche, mediana come headline",

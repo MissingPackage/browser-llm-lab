@@ -37,7 +37,8 @@ const BASE_URL = process.env.BASE_URL ?? "http://localhost:5199";
 if (!existsSync(GOLDEN_PUB)) copyFileSync(GOLDEN, GOLDEN_PUB);
 mkdirSync(PROFILE, { recursive: true });
 
-const qs = new URLSearchParams({ prompt, ngen: nGen, reps, budget, attrib });
+const prefillBatch = arg("prefill-batch", "0");
+const qs = new URLSearchParams({ prompt, ngen: nGen, reps, budget, attrib, prefillbatch: prefillBatch });
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
