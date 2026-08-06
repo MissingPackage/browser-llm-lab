@@ -1,23 +1,28 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-26: 4d chiusa, fase 5 aperta)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-27: 4d chiusa, fase 5 slice 1-2 done)
 
 ## 1. Next decidable
 
-**FATTO (it.26): FASE 5 slice 1 — design MoE batched deciso e piano sotto
-test.** Decisione (delegata 18b, criterio = numeri fase 4): **batching per
-expert sull'unione del chunk** — ~40 dispatch/layer attesi a M=16 contro 64
-(43 µs/dispatch, fase 1), pesi expert letti una volta per chunk (÷1.6-4× di
-traffico nel regime memory-bound). Struttura a SLOT y[m][k] + combine per
-token in ordine k = **blocco MoE bit-identico al decode per costruzione**
-(classe near-tie 9e-6 eliminata; controprova nel test: l'ordine-unione
-diverge davvero in f32). `glmprefillplan.ts` (GLM_PREFILL_M=16, planMoeChunk,
-combineMoeRow) + 6 test. Suite **337+7**, tsc pulito.
+**FATTO (it.27): fase 5 slice 2 — i kernel della catena expert batched sono
+BIT-IDENTICI al decode, sul device.** Tre kernel nuovi (corpo aritmetico dei
+gemelli decode, gather via wid.z, slot y[m][k] non pesati, combine k-order):
+ktest `prefill-moe-batched-vs-decode-chain` **maxAbs 0 maxRel 0** a
+geometria reale (M=4, unione 6, molteplicità 2.67) — il fallback R2
+dichiarato non è servito. Correzione emersa scrivendo il contratto: la
+catena vera parte dallo SHEXP (`moeOut = s; += w·y k-order; x += moeOut`) —
+referenza CPU it.26 riscritta, errore morto nel piano. ktest **54/54**,
+suite **337+7**, tsc pulito.
 
-**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 2): i kernel** — GEMM per-expert
-con gather (rows) che scrive negli slot y[m][k]; combine WGSL in ordine k;
-percorso denso del chunk (MLA prefill batched: pattern chunked Qwen adattato
-alla MLA). Poi wiring glmmodel, ktest identità su modello sintetico, p6
-reale. Il ktest dei kernel fusi solo-Qwen (debito §7.1) si riduce coprendo
-ogni kernel che questo lavoro tocca.
+**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 3): il percorso denso del chunk**
+— MLA prefill batched (pattern chunked del path Qwen adattato alla MLA
+absorbed: rmsQkv/rope/kvAppend/attention causale intra-chunk su M righe),
+shexp GEMM su M righe, poi wiring glmmodel (prefill path: router per riga,
+planMoeChunk, ensure dell'unione, Sel/gather) e test identità argmax M=1 vs
+M>1 su p6 reale. Il done-when di fase: identità verde in npm test + bench
+con prefill tok/s e TTFT su p6 (oggi 5.66 tok/s, 81.4 s vs 4 s UX).
+
+**FATTO (it.26): fase 5 slice 1** — design MoE batched deciso coi numeri di
+fase 4 (unione per expert: ~40 dispatch/layer a M=16 vs 64, traffico pesi
+÷1.6-4×), `glmprefillplan.ts` sotto test con controprova di divergenza.
 
 **FATTO (it.21-25): FASE 4d CHIUSA** — device unico, telemetria unica
 (retention), Planned+Measured con gate verificati su device, glmsource sotto
