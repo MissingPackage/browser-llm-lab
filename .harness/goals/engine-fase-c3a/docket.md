@@ -1,5 +1,26 @@
 # Docket — engine-fase-c3a (decisioni PI pendenti)
 
+18. **RULING registrato (2026-08-06, PI in chat, seconda parte)** — tre
+    ratifiche sulla proposta "decode ottimistico + riparazione esatta" e
+    sull'ordine dei lavori:
+    (a) il tradeoff del replay ("un token ogni tanto col doppio della
+        latenza") è ACCETTATO come prezzo del meccanismo — "strada facendo
+        capiremo se ci sono problemi veri";
+    (b) l'ordine è delegato all'orchestratore: deciso **WP-0 (simulazione
+        trace-driven della tassa di replay) PRIMA della 4d** — l'esito può
+        cambiare il design (K prefetch, repair batched vs semplice), la 4d
+        non dipende dal verdetto e parte subito dopo;
+    (c) fase 4d a PERIMETRO PIENO ("unificare e ripulire il più
+        possibile"): path morto rimosso e telemetria unica come vincolo
+        hard, non best-effort.
+    Studio dei due repo indicati dal PI (sqliteai/waste,
+    FareedKhan-dev/kimi-k3-in-c) consegnato:
+    `docs/engine/study/2026-08-06-waste-kimik3-streaming.md` — LOOKA
+    replicato in modo indipendente (terza conferma), la nostra ladder
+    Q3_K confermata dal loro esperimento gemello ("non riaprire"), e
+    requisiti nuovi per telemetria 4d (retention) e WP-0 (Belady ceiling,
+    ramo budget 25-50%).
+
 17. ~~**RULING RICHIESTO — l'opzione c è FALSIFICATA dalla misura**~~
     **RISOLTO (2026-08-06, PI in chat: "allora per me va bene")** — opzione
     (a): fase 4 e 4c chiudono con meccanismo costruito + misura ktest; il

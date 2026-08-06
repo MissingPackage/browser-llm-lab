@@ -15,9 +15,23 @@ fase 4+4c chiudono con meccanismo costruito e misura, gate 13.43
 dichiarato irraggiungibile per hardware (−415 MiB), non per struttura;
 su M4 48 GB il meccanismo è pronto e la residenza è gratis.
 
-**PROSSIMO PEZZO DECIDIBILE (nessun ruling richiesto): FASE 4d —
-risanamento base** (em.6, item 16), poi FASE 5 (prefill M>1). Entrambe
-indipendenti dall'esito 4c/item 17.
+**FATTO (2026-08-06, chat): item 17 = clausola (a) RATIFICATA + razionale
+di sviluppo in direction §2-bis** (scarsità VRAM = condizione di progetto,
+residenza parziale veloce = tesi). Proposta "decode ottimistico +
+riparazione esatta" accettata nel tradeoff (docket item 18a): 1 submit/
+token, miss marcato dal kernel, flag piggyback sul readback logits,
+replay dal primo layer sporco (checkpoint hidden 376 KB/token) — la
+qualità non si tocca mai, il costo è latenza rara. Studio WASTE +
+kimi-k3-in-c consegnato (`docs/engine/study/2026-08-06-waste-kimik3-
+streaming.md`): LOOKA validato per la terza volta (81.4% top-6 su K3),
+ladder Q3_K confermata dal loro esperimento gemello, "volatile memory is
+memory you have given away" = il nostro probe it.19 su un altro stack.
+
+**PROSSIMO PEZZO DECIDIBILE (ordine deciso, item 18b): WP-0 — simulazione
+trace-driven della tassa di replay** (traccia C1, LRU+LOOKA vs Belady
+ceiling, budget 97%/50%/25%, ramo decode steady-state) → poi FASE 4d a
+perimetro pieno (item 18c) → fase 5. Il verdetto WP-0 dimensiona il
+design del decode ottimistico prima di scrivere kernel.
 
 **RULING (2026-08-05, sessione 21): lo stallo 4c è SCIOLTO — opzione (c),
 "trovare il GiB altrove".** La degradazione è FUORI a qualunque P/formato;
