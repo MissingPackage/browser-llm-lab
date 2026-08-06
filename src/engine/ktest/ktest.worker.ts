@@ -10,6 +10,7 @@ import {
   attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
   routerTopKWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl, gemvGrid, type ArenaOpts,
+  pairGemvSiluGatherWgsl, gemvDownSlotsWgsl, moeCombineWgsl,
   mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,
   pairGemvSiluQ5KFastWgsl, gemvQ6KFastWgsl,
 } from "../kernels/wgsl";
@@ -32,6 +33,7 @@ import {
 } from "../quant";
 import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 import { createEngineDevice } from "../gpudevice";
+import { planMoeChunk } from "../glmprefillplan";
 
 interface KResult {
   kernel: string; pass: boolean; maxAbs: number; maxRel: number; note?: string;
@@ -185,7 +187,9 @@ class Gpu {
     });
   }
   // binding con {offset, size}: sotto-range di un buffer di classe slab (MoE C2)
-  async run(code: string, bindings: Array<GPUBuffer | { buffer: GPUBuffer; offset: number; size: number }>, workgroups: number, uniform?: GPUBuffer): Promise<void> {
+  // workgroups: 1D (storico) o [x,y,z] — i kernel gather della fase 5 usano
+  // wid.z come indice di riga raccolta
+  async run(code: string, bindings: Array<GPUBuffer | { buffer: GPUBuffer; offset: number; size: number }>, workgroups: number | [number, number, number], uniform?: GPUBuffer): Promise<void> {
     const module = this.device.createShaderModule({ code });
     const info = await module.getCompilationInfo();
     const errs = info.messages.filter((m) => m.type === "error");
@@ -198,7 +202,8 @@ class Gpu {
     const pass = enc.beginComputePass();
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bg);
-    pass.dispatchWorkgroups(workgroups);
+    if (typeof workgroups === "number") pass.dispatchWorkgroups(workgroups);
+    else pass.dispatchWorkgroups(workgroups[0], workgroups[1], workgroups[2]);
     pass.end();
     this.device.queue.submit([enc.finish()]);
   }
@@ -1362,6 +1367,112 @@ async function testGemvAccumFast(g: Gpu, kind: "q4_0" | "q4_1"): Promise<KResult
 // declassa a maxRel <= 1e-6 — e il note lo DICE, non lo nasconde.
 const ARENA_R2_FALLBACK_REL = 1e-6;
 
+// ============ PREFILL BATCHED M>1 (C3a fase 5, it.27) ============
+// Il gate della fase ridotto ai kernel: la catena batched (gather su unione +
+// slot y[m][k] + combine k-order) contro la catena DECODE vera (pairGemvSilu +
+// gemvAccum in ordine k + addInPlace), stesse selezioni, stessi pesi sintetici
+// a geometria reale. L'atteso e' l'identita' BIT-A-BIT (il piano e' costruito
+// per questo — glmprefillplan); fallback dichiarato come R2: se la contrazione
+// FMA cade in modo diverso fra i moduli, il gate si declassa a maxRel ≤ 1e-6
+// e il note lo dice.
+async function testPrefillMoeBatchedChain(g: Gpu): Promise<KResult> {
+  const name = "prefill-moe-batched-vs-decode-chain";
+  const dev = g.device;
+  const layout = SLAB_DOWN_Q4_0;
+  const K = G.dModel, N = G.dFfnExpert; // gate/up: K→N; down: N→K
+  const M = 4, NE = 6;                  // 4 righe su un pool di 6 expert ⇒ molteplicita' reale
+  const seed = 27_100;
+  const exBlocks = (K / 32) * N;
+
+  // NE expert sintetici nello stesso formato slab del caso arena
+  const one: GPUBuffer[] = [];
+  for (let e = 0; e < NE; e++) {
+    const gateRaw = randBytes(exBlocks * 18, seed + e * 10); fixScales(gateRaw, 18);
+    const upRaw = randBytes(exBlocks * 18, seed + e * 10 + 1); fixScales(upRaw, 18);
+    const downRaw = randBytes(exBlocks * 18, seed + e * 10 + 2); fixScales(downRaw, 18);
+    const slab = packExpertSlab(gateRaw, upRaw, downRaw, layout);
+    const b = g.empty(layout.bytes);
+    dev.queue.writeBuffer(b, 0, slab as unknown as BufferSource);
+    one.push(b);
+  }
+  const sub = (e: number, off: number, size: number) => ({ buffer: one[e], offset: off, size });
+  const gu4 = (e: number): Array<{ buffer: GPUBuffer; offset: number; size: number }> => [
+    sub(e, layout.gateQs, layout.qsBytes), sub(e, layout.gateScales, layout.gateScalesBytes),
+    sub(e, layout.upQs, layout.qsBytes), sub(e, layout.upScales, layout.gateScalesBytes),
+  ];
+  const dn2 = (e: number): Array<{ buffer: GPUBuffer; offset: number; size: number }> => [
+    sub(e, layout.downQs, layout.qsBytes), sub(e, layout.downScales, layout.downScalesBytes),
+  ];
+
+  // selezioni deterministiche con condivisione fra righe (unione < 4M)
+  const wsRaw = randF32(M * 4, seed + 90, 1.8);
+  const sels = Array.from({ length: M }, (_, m) => ({
+    experts: Int32Array.from([m % NE, (m + 1) % NE, (m + 2) % NE, (m + 3) % NE]),
+    weights: Float64Array.from(wsRaw.subarray(m * 4, m * 4 + 4)),
+  }));
+  const plan = planMoeChunk(sels, 16);
+  const xs = Array.from({ length: M }, (_, m) => randF32(K, seed + 50 + m, 0.5));
+  const sms = Array.from({ length: M }, (_, m) => randF32(K, seed + 70 + m, 0.5)); // shexp finto
+
+  // --- riferimento: catena DECODE per riga, k crescente, poi addInPlace ---
+  const xRef: Float32Array[] = [];
+  for (let m = 0; m < M; m++) {
+    const xB = g.buf(xs[m]);
+    const moeOut = g.buf(sms[m]); // moeOut parte dallo shexp (catena di glmmodel)
+    for (let k = 0; k < 4; k++) {
+      const e = sels[m].experts[k];
+      const gu = g.empty(N * 4);
+      await g.run(pairGemvSiluFastWgsl({ K, N }), [...gu4(e), xB, gu], gemvGrid(N / 4)[0]);
+      const wB = g.buf(new Float32Array([plan.weights[m * 4 + k]]));
+      await g.run(gemvAccumFastWgsl({ kind: "q4_0", K: N, N: K }), [...dn2(e), gu, moeOut, wB], gemvGrid(K / 4)[0]);
+    }
+    await g.run(addInPlaceWgsl(K), [xB, moeOut], Math.ceil(K / 64));
+    xRef.push(new Float32Array(await g.read(xB, K * 4)));
+  }
+
+  // --- batched: per expert dell'unione (ordine di unione), poi combine ---
+  const xMB = g.empty(M * K * 4);
+  const xMInit = new Float32Array(M * K);
+  for (let m = 0; m < M; m++) xMInit.set(xs[m], m * K);
+  dev.queue.writeBuffer(xMB, 0, xMInit as unknown as BufferSource);
+  const sMB = g.empty(M * K * 4);
+  const sMInit = new Float32Array(M * K);
+  for (let m = 0; m < M; m++) sMInit.set(sms[m], m * K);
+  dev.queue.writeBuffer(sMB, 0, sMInit as unknown as BufferSource);
+  const hSlots = g.empty(M * 4 * N * 4);
+  const ySlots = g.empty(M * 4 * K * 4);
+  const wBuf = g.buf(plan.weights);
+  const gN = gemvGrid(N / 4), gK = gemvGrid(K / 4);
+  for (const b of plan.experts) {
+    const gatherB = g.buf(Uint32Array.from(b.rows, (row: number, i: number) => row | (b.slots[i] << 16)));
+    await g.run(pairGemvSiluGatherWgsl({ K, N }),
+      [...gu4(b.expert), xMB, gatherB, hSlots], [gN[0], gN[1], b.rows.length]);
+    await g.run(gemvDownSlotsWgsl({ kind: "q4_0", K: N, N: K }),
+      [...dn2(b.expert), hSlots, gatherB, ySlots], [gK[0], gK[1], b.rows.length]);
+  }
+  await g.run(moeCombineWgsl({ D: K }), [xMB, sMB, ySlots, wBuf], [Math.ceil(K / 64), M, 1]);
+  const got = new Float32Array(await g.read(xMB, M * K * 4));
+
+  // --- confronto: bit-identita', con fallback R2 dichiarato ---
+  let maxAbs = 0, maxRel = 0, bitIdentical = true;
+  for (let m = 0; m < M; m++) {
+    for (let i = 0; i < K; i++) {
+      const a = got[m * K + i], b = xRef[m][i];
+      if (!Object.is(a, b)) bitIdentical = false;
+      const d = Math.abs(a - b);
+      maxAbs = Math.max(maxAbs, d);
+      maxRel = Math.max(maxRel, d / Math.max(1e-12, Math.abs(b)));
+    }
+  }
+  const pass = bitIdentical || maxRel <= ARENA_R2_FALLBACK_REL;
+  return {
+    kernel: name, pass, maxAbs, maxRel,
+    note: bitIdentical
+      ? `BIT-IDENTICO: M=${M}, unione ${plan.experts.length} expert su ${M * 4} selezioni (molteplicita' ${(M * 4 / plan.experts.length).toFixed(2)})`
+      : `NON bit-identico (fallback R2 ${pass ? "entro" : "OLTRE"} ${ARENA_R2_FALLBACK_REL}): contrazione FMA diversa fra moduli — da investigare prima del wiring`,
+  };
+}
+
 async function testExpertArenaVsSlotRange(g: Gpu, cls: "q4_0" | "q4_1"): Promise<KResult[]> {
   const name = `expert-arena-vs-slotrange-${cls}`;
   const dev = g.device;
@@ -1793,6 +1904,9 @@ async function main(): Promise<void> {
     results.push(await testGemvAccum(g, "q4_1"));
     results.push(await testMoeFfnBlock(g, "q4_0"));
     results.push(await testMoeFfnBlock(g, "q4_1"));
+
+    // --- prefill batched M>1 (C3a fase 5): catena su unione vs catena decode ---
+    results.push(await testPrefillMoeBatchedChain(g));
 
     // --- router top-4 su GPU (C3a fase 4 strato 1): fedelta' f32 vs CPU f64 ---
     results.push(await testRouterTopK(g, 64));

@@ -1702,3 +1702,41 @@ I kernel: GEMM per-expert con gather (rows) che scrive negli slot y[m][k],
 combine WGSL in ordine k, e il percorso denso del chunk (MLA prefill batched
 — pattern chunked del path Qwen adattato all'attention MLA). Poi wiring in
 glmmodel + test identita' su modello sintetico (ktest) + p6 reale.
+
+## it.27 — 2026-08-06 — fase 5 slice 2: i kernel della catena batched, BIT-IDENTICI sul device
+
+### La correzione che ha aperto l'iterazione
+
+Scrivendo il contratto WGSL, la catena vera del decode (glmmodel) e' emersa
+diversa dalla referenza it.26: `moeOut` PARTE DALLO SHEXP (gemvShexpDown
+scrive), i 4 expert accumulano in ordine k, poi `addMoe: x += moeOut` —
+quindi out = x + ((((s + w0y0) + w1y1) + w2y2) + w3y3), NON
+(x + w0y0) + ... `combineMoeRow` riscritta sulla catena vera (accumulatore
+t da s, poi x + t) e test it.26 allineati (6/6 ancora verdi). E' il motivo
+per cui la referenza CPU esiste: l'errore e' morto nel piano, non nel kernel.
+
+### I tre kernel (wgsl.ts, varianti plain; arena col wiring)
+
+- `pairGemvSiluGatherWgsl`: corpo aritmetico IDENTICO a pairGemvSiluFast
+  (stesso ordine di riduzione ⇒ dot bit-identici), riga raccolta da wid.z
+  via `gather` (u32: m | k<<16), x da xM[riga], scrive h[m][k];
+- `gemvDownSlotsWgsl`: corpo di gemvAccumFast ma SCRIVE y[m][k] non pesato
+  (niente accumulo — il peso e' della combine);
+- `moeCombineWgsl`: xM[m] += s[m] + Σ_k w·y in ordine k — la catena esatta.
+`Gpu.run` di ktest esteso a griglie [x,y,z] (retrocompatibile).
+
+### Verifica — il gate della fase, ridotto ai kernel, sul device
+
+ktest nuovo `prefill-moe-batched-vs-decode-chain`: catena batched vs catena
+DECODE vera (pairGemvSiluFast + gemvAccumFast k-order + addInPlace), M=4 su
+pool di 6 expert (molteplicita' 2.67), geometria reale (K=2048, N=1536),
+pesi sintetici formato slab. Esito: **BIT-IDENTICO, maxAbs 0 maxRel 0**
+(fallback R2 dichiarato ma NON servito — la contrazione FMA cade uguale).
+ktest **54/54**; suite **337+7**; tsc pulito; scan WGSL di gpulimits verde
+(i kernel nuovi rientrano nei limiti derivati).
+
+### Prossimo (fase 5, slice 3)
+
+Il percorso denso del chunk: MLA prefill batched (pattern chunked Qwen
+adattato alla MLA absorbed) + shexp GEMM su M righe; poi wiring in glmmodel
+(prefill path con planMoeChunk + Sel/ensure per unione) e test identita' p6.

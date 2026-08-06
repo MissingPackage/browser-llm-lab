@@ -97,7 +97,14 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
     return out;
   };
 
-  it("eseguire il piano (unione + combine k-order) ≡ per-token del decode, BIT-IDENTICO", () => {
+  // shexp finto: la base dell'accumulatore moeOut nel decode vero (glmmodel)
+  const fakeShexp = (x: Float32Array): Float32Array => {
+    const out = new Float32Array(D);
+    for (let i = 0; i < D; i++) out[i] = Math.fround(0.5 * x[(i + 3) % D]);
+    return out;
+  };
+
+  it("eseguire il piano (unione + combine k-order) ≡ catena del decode, BIT-IDENTICO", () => {
     const M = 16;
     const sels = randSelections(M, 1234);
     const r = rng(555);
@@ -105,14 +112,17 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
       Float32Array.from({ length: D }, () => Math.fround(r() * 2 - 1)));
     const plan = planMoeChunk(sels);
 
-    // percorso DECODE (riferimento): per token, accumulo k crescente
+    // percorso DECODE (riferimento, catena di glmmodel): moeOut = shexp;
+    // += w_k·y_k in ordine k; poi x += moeOut
     const refOut = xs.map((x, m) => {
-      const out = Float32Array.from(x);
+      const moeOut = fakeShexp(x);
       for (let k = 0; k < G.nExpertUsed; k++) {
         const w = Math.fround(sels[m].weights[k]); // selF32
         const y = fakeExpert(sels[m].experts[k], x);
-        for (let i = 0; i < D; i++) out[i] = Math.fround(out[i] + Math.fround(w * y[i]));
+        for (let i = 0; i < D; i++) moeOut[i] = Math.fround(moeOut[i] + Math.fround(w * y[i]));
       }
+      const out = new Float32Array(D);
+      for (let i = 0; i < D; i++) out[i] = Math.fround(x[i] + moeOut[i]);
       return out;
     });
 
@@ -124,7 +134,7 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
         slots[b.rows[i]][b.slots[i]] = fakeExpert(b.expert, xs[b.rows[i]]);
       }
     }
-    const gotOut = xs.map((x, m) => combineMoeRow(x, slots[m], plan.weights, m));
+    const gotOut = xs.map((x, m) => combineMoeRow(x, fakeShexp(x), slots[m], plan.weights, m));
 
     for (let m = 0; m < M; m++) {
       // uguaglianza ESATTA, elemento per elemento (Float32Array bit-uguali)
@@ -143,15 +153,17 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
     const plan = planMoeChunk(sels);
 
     const refOut = xs.map((x, m) => {
-      const out = Float32Array.from(x);
+      const moeOut = fakeShexp(x);
       for (let k = 0; k < G.nExpertUsed; k++) {
         const w = Math.fround(sels[m].weights[k]);
         const y = fakeExpert(sels[m].experts[k], x);
-        for (let i = 0; i < D; i++) out[i] = Math.fround(out[i] + Math.fround(w * y[i]));
+        for (let i = 0; i < D; i++) moeOut[i] = Math.fround(moeOut[i] + Math.fround(w * y[i]));
       }
+      const out = new Float32Array(D);
+      for (let i = 0; i < D; i++) out[i] = Math.fround(x[i] + moeOut[i]);
       return out;
     });
-    const unionOut = xs.map((x) => Float32Array.from(x));
+    const unionOut = xs.map((x) => fakeShexp(x));
     for (const b of plan.experts) {
       for (let i = 0; i < b.rows.length; i++) {
         const m = b.rows[i];
@@ -159,6 +171,9 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
         const y = fakeExpert(b.expert, xs[m]);
         for (let j = 0; j < D; j++) unionOut[m][j] = Math.fround(unionOut[m][j] + Math.fround(w * y[j]));
       }
+    }
+    for (let m = 0; m < M; m++) {
+      for (let j = 0; j < D; j++) unionOut[m][j] = Math.fround(xs[m][j] + unionOut[m][j]);
     }
     const anyDiff = unionOut.some((o, m) => o.some((v, i) => v !== refOut[m][i]));
     expect(anyDiff).toBe(true); // le somme riordinate DIVERGONO in f32

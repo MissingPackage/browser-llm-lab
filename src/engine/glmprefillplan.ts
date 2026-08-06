@@ -87,22 +87,27 @@ export function planMoeChunk(selections: RouterSelection[], mMax = GLM_PREFILL_M
 }
 
 /**
- * Combine per token, in ordine k CRESCENTE — l'ordine di somma del decode.
- * `base[m]` è x della riga (il residuo su cui il decode fa addMoe), `y[m][k]`
- * gli output per-slot scritti dai kernel batched. Referenza CPU della combine
- * GPU: il test di identità la confronta col percorso per-token.
- * Tutto in f32 (Math.fround su ogni op, come farà il kernel).
+ * Combine per token — la CATENA ESATTA del decode, letta da glmmodel:
+ * `moeOut` parte dallo SHEXP (gemvShexpDown scrive), i 4 expert vi si
+ * accumulano in ordine k (gemvAccumFast), poi `addMoe: x += moeOut`.
+ * Quindi: out = x + ((((s + w0·y0) + w1·y1) + w2·y2) + w3·y3).
+ * NOTA (correzione it.27): la prima stesura partiva da x e accumulava
+ * sopra — (x + w0·y0) + … — che in f32 NON è la stessa somma. La referenza
+ * modella la catena GPU vera, non una sua parafrasi.
+ * `s[m]` = output shexp della riga; tutto f32 (fround per op, come i kernel).
  */
 export function combineMoeRow(
-  base: Float32Array, y: ReadonlyArray<Float32Array>, weights: Float32Array, row: number,
+  x: Float32Array, s: Float32Array, y: ReadonlyArray<Float32Array>,
+  weights: Float32Array, row: number,
 ): Float32Array {
-  const out = Float32Array.from(base);
-  for (let k = 0; k < G.nExpertUsed; k++) {
-    const w = weights[row * G.nExpertUsed + k];
-    const yk = y[k];
-    for (let i = 0; i < out.length; i++) {
-      out[i] = Math.fround(out[i] + Math.fround(w * yk[i]));
+  const out = new Float32Array(x.length);
+  for (let i = 0; i < out.length; i++) {
+    let t = s[i];
+    for (let k = 0; k < G.nExpertUsed; k++) {
+      const w = weights[row * G.nExpertUsed + k];
+      t = Math.fround(t + Math.fround(w * y[k][i]));
     }
+    out[i] = Math.fround(x[i] + t);
   }
   return out;
 }
