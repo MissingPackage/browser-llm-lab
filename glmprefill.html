@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>browser-llm-lab — GLM prefill identity</title>
+  </head>
+  <body>
+    <h1>GLM prefill identity (dev-only, C3a fase 5)</h1>
+    <p>
+      Identità prefillChunk vs prefill sequenziale: stesso modello, due run dalla
+      pos 0; gate = confine bit-uguale + generazione identica + routing identico.
+    </p>
+    <p>Status: <span id="status">running…</span></p>
+    <p><strong id="live"></strong></p>
+    <section id="log" style="font-family: monospace; font-size: 12px"></section>
+    <script type="module" src="/src/engine/glmprefill/page.ts"></script>
+  </body>
+</html>
