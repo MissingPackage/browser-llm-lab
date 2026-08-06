@@ -1,28 +1,25 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-29: 4d chiusa; fase 5 kernel COMPLETI)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-30: 4d chiusa; fase 5 corredo kernel COMPLETO)
 
 ## 1. Next decidable
 
-**FATTO (it.29): fase 5 slice 3b — l'attention MLA batched è BIT-IDENTICA.**
-Opzione `batch` su part+reduce dello split MLA: wid.z = riga, passato per
-riga da `rowPast` (storage al posto dell'uniform) ⇒ causalità intra-chunk
-n = rowPast[m]+1 **per costruzione**, non una maschera. ktest
-`mla-split-batch-vs-per-row` **maxAbs 0** su righe a passato crescente col
-bordo di partizione attraversato (nParts diverso per riga). ktest **56/56**,
-suite **337+7**, tsc pulito.
+**FATTO (it.30): fase 5 slice 3c — IL CORREDO KERNEL DEL CHUNK È COMPLETO.**
+Varianti batch dei sei generatori densi (gemvQuant ×3 kind, gemvQ8Heads,
+rmsnorm, ropeMlaNorm, kvAppend, stridedCopy; posizione per riga da `rowPos`
+storage; addInPlace non serve — elementwise). Sweep ktest `dense-batch-*`
+**8/8 BIT-IDENTICI (maxAbs 0)**; testo non-batch byte-identico per tutte le
+configurazioni (diff programmatico). ktest **64/64**, suite **337+7**, tsc
+pulito. Bilancio it.26-30: piano sotto test + catena expert su unione +
+shexp + MLA causale + dense — **ogni kernel del forward GLM ha la variante
+batch, ogni variante è bit-identica al per-riga sul device**: l'identità del
+chunk M>1 è garantita per costruzione a livello di kernel.
 
-**I KERNEL A RISCHIO DELLA FASE 5 SONO TUTTI FATTI (it.27-29), tutti
-bit-identici sul device**: catena expert su unione (gather+slot+combine,
-molteplicità 2.67), shexp batch, MLA split batch causale. L'idioma è
-consolidato: corpo aritmetico invariato + variante batch condizionale +
-diff programmatico che PROVA il testo non-batch byte-identico.
-
-**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 3c): le varianti meccaniche +
-il wiring** — rope/kvAppend/rms/GEMV densi del chunk su M righe (pattern
-wid.z, provato 3 volte), dense blk.0, poi il wiring in glmmodel (router per
-riga + planMoeChunk + ensure dell'unione + Sel/gather batched + submit per
-chunk) e il done-when della fase: test identità argmax M=1 vs M>1 su p6
-verde in npm test + bench con prefill tok/s e TTFT (oggi 5.66 tok/s, 81.4 s
-vs 4 s UX).
+**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 4 — l'ULTIMO): il wiring** —
+`glmprefill` path in glmmodel: per chunk di M=16 righe, embed batch →
+[per layer: attention batch (rope/kvApp/MLA split con rowPast) → router per
+riga (readback M×64 logit in un sync/chunk, o GPU) → planMoeChunk → ensure
+dell'unione → gather/slot/combine → shexp batch] → done-when: test identità
+argmax M=1 vs M>1 su p6 verde in npm test + bench con prefill tok/s e TTFT
+(oggi 5.66 tok/s, 81.4 s vs 4 s UX — M=16 atteso ~5-6 s da spec §5).
 
 **FATTO (it.26): fase 5 slice 1** — design MoE batched deciso coi numeri di
 fase 4 (unione per expert: ~40 dispatch/layer a M=16 vs 64, traffico pesi
