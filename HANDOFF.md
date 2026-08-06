@@ -1,25 +1,24 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-30: 4d chiusa; fase 5 corredo kernel COMPLETO)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-31: 4d chiusa; fase 5 pronta al wiring col piano su disco)
 
 ## 1. Next decidable
 
-**FATTO (it.30): fase 5 slice 3c — IL CORREDO KERNEL DEL CHUNK È COMPLETO.**
-Varianti batch dei sei generatori densi (gemvQuant ×3 kind, gemvQ8Heads,
-rmsnorm, ropeMlaNorm, kvAppend, stridedCopy; posizione per riga da `rowPos`
-storage; addInPlace non serve — elementwise). Sweep ktest `dense-batch-*`
-**8/8 BIT-IDENTICI (maxAbs 0)**; testo non-batch byte-identico per tutte le
-configurazioni (diff programmatico). ktest **64/64**, suite **337+7**, tsc
-pulito. Bilancio it.26-30: piano sotto test + catena expert su unione +
-shexp + MLA causale + dense — **ogni kernel del forward GLM ha la variante
-batch, ogni variante è bit-identica al per-riga sul device**: l'identità del
-chunk M>1 è garantita per costruzione a livello di kernel.
+**FATTO (it.31): il piano di wiring `prefillChunk` è SU DISCO**
+(`docs/engine/glmprefill-wiring-plan-2026-08-06.md`) — ogni decisione presa
+con razionale, eseguibile da contesto fresco: API additiva (forward
+intoccato), router CPU per chunk (**2.9 sync/token a M=16**, oggi 46), bind
+group a sotto-range per l'unione dopo gli ensure (niente porting arena),
+inventario buffer M× (~30 MB), sequenza per-chunk speculare al forward, head
+sull'ultima riga con headSteps riusati, identità attesa ESATTA (argomento in
+§6), 4 fette di verifica (a-d) con commit separati. Più `gemvF32` batch
+(l'ultimo generatore che ne era privo): ktest **65/65**, tutti i kernel del
+forward GLM hanno la variante batch bit-identica. Suite **337+7**, tsc pulito.
 
-**PROSSIMO PEZZO DECIDIBILE (fase 5, slice 4 — l'ULTIMO): il wiring** —
-`glmprefill` path in glmmodel: per chunk di M=16 righe, embed batch →
-[per layer: attention batch (rope/kvApp/MLA split con rowPast) → router per
-riga (readback M×64 logit in un sync/chunk, o GPU) → planMoeChunk → ensure
-dell'unione → gather/slot/combine → shexp batch] → done-when: test identità
-argmax M=1 vs M>1 su p6 verde in npm test + bench con prefill tok/s e TTFT
-(oggi 5.66 tok/s, 81.4 s vs 4 s UX — M=16 atteso ~5-6 s da spec §5).
+**PROSSIMO PEZZO DECIDIBILE: ESEGUIRE IL PIANO** — fetta (a) `prefillChunk`
+in glmmodel compilato + suite verde (path additivo, commit); poi (b)
+identità E2E corta su p4 (glmconf param prefill), (c) identità p6 intera
+461 posizioni + gateCpuref/gateGolden in modalità prefill, (d) bench
+glmbench con prefill batched → prefill tok/s e TTFT nel report (attesi
+~5-6 s vs 81.4 oggi, spec §5) = il done-when della fase 5.
 
 **FATTO (it.26): fase 5 slice 1** — design MoE batched deciso coi numeri di
 fase 4 (unione per expert: ~40 dispatch/layer a M=16 vs 64, traffico pesi
