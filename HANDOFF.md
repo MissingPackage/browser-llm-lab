@@ -1,23 +1,26 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-33: prefillChunk FUNZIONA, bit-identico, 5.55×)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-34: 4d e FASE 5 CHIUSE)
 
 ## 1. Next decidable
 
-**FATTO (it.33): l'identità E2E del prefillChunk PASSA AL PRIMO COLPO.**
-Harness glmprefill (additivo) su p4 (364 pos, N=8): hidden e logits del
-confine **BIT-UGUALI (maxAbs 0)**, id generati identici, routing **0/16744**
-difformi. E il numero: **prefill 97.9 s → 17.7 s = 5.55×** con gli stessi
-kernel (3.7 → 20.6 tok/s). Zero debug sul device: la strategia per-kernel
-bit-identity (it.27-31) + piano su disco (it.31) ha pagato per intero.
-Report: `prefill-identity-p4-2026-08-06.json`, exit 0.
+**FATTO (it.34): FASE 5 CHIUSA.** Identità p6 intera BIT-EXACT (461 pos,
+hidden/logits maxAbs 0, routing 0/21206, generazione identica; sostituzione
+della forma npm-test dichiarata a docket item 20, pattern item 11). Bench di
+fase (`bench-glm-4090-b12-prefillbatch-2026-08-06.json`, protocollo pieno,
+host quiescent): **prefill 25.78 tok/s** (4.55× vs 5.66), **TTFT 17.88 s**
+(da 81.4 — gap UX da 20.3× a 4.47×), **decode 5.211 ≥ 5.013** ri-baseline,
+dispatchPlan PASS, retention 97.61%. La capacità mancante di docket C2
+item 6 ESISTE. Landmine operativa nuova (journal): gara di profilo OPFS fra
+run consecutive sullo stesso profilo (1 retry risolutivo).
 
-**PROSSIMO PEZZO DECIDIBILE: fetta (c) identità p6 intera (461 pos)** —
-stessa run con --prompt 6 e N più lungo; poi **fetta (d)**: glmbench in
-modalità prefill batched → prefill tok/s e TTFT nel report (proiezione:
-81.4 s → ~15 s; budget UX 4 s — il resto da taratura M e leve future, ma la
-CAPACITÀ mancante di docket C2 item 6 ora ESISTE). Alla chiusura di fase:
-decidere/dichiarare la forma del "test identità in npm test" (l'E2E è
-GPU-bound: sostituzione dichiarata come conformance C2, o identity-test CPU
-ampliato) — nota nel journal it.33.
+**PROSSIMO PEZZO DECIDIBILE: FASE 6 — E2E & GATE sotto clausola 17a** —
+bench quiescente coi due gate di chiusura (decode ≥13.43 / prefill ≥56.58:
+FAIL ATTESI, dichiarati irraggiungibili per hardware −415 MiB, non per
+struttura), i campi di gap obbligatori, conformance logits (argmax ≡
+cpuref-f64 256/256 via gateCpuref; top-1 golden ≥98.83% FULL-CORPUS — item
+11: è QUESTO il momento del full-corpus, ~ore di run), routing ≥ C2, bench
+Qwen ≥ ri-baseline (322.2), suite verde. Poi FASE 7 (chiusura: docket input
+C3b, direction/ledger, HANDOFF, merge+push). Il full-corpus va lanciato a
+macchina scarica con albero congelato — pianificare la finestra.
 
 **FATTO (it.26): fase 5 slice 1** — design MoE batched deciso coi numeri di
 fase 4 (unione per expert: ~40 dispatch/layer a M=16 vs 64, traffico pesi
