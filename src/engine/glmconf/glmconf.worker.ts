@@ -29,7 +29,16 @@ async function main(cfg: Cfg): Promise<void> {
   const golden = (await (await fetch("/models/glm-conf-golden.json")).json()) as Golden;
   if (golden.modelSha256 !== GLM47_FLASH_SHA256) throw new Error("golden: SHA GGUF diverso dal canonico");
 
+  // Argmax cpuref-f64 del campione ratificato (fase 4d): serviti dal runner
+  // come il golden. Assenti (404/run manuale) ⇒ gateCpuref null, dichiarato.
+  const cpuref = await fetch("/models/glm-cpuref-argmax.json")
+    .then((r) => (r.ok ? (r.json() as Promise<{ source: string[]; prompts: Record<string, number[]> }>) : null))
+    .catch(() => null);
+
   const prompts = golden.prompts.filter((_, i) => !cfg.prompts || cfg.prompts.includes(i));
+  // indice ORIGINALE nel golden di ogni prompt filtrato: le chiavi del dump
+  // cpuref sono indici del golden (4, 7), non posizioni post-filtro
+  const origIdx = golden.prompts.map((_, i) => i).filter((i) => !cfg.prompts || cfg.prompts.includes(i));
   const maxGen = cfg.maxGen ?? Infinity;
   const ctxMax = Math.max(...prompts.map((p) => p.promptTokens.length + Math.min(p.generated.length, maxGen)));
 
@@ -59,6 +68,7 @@ async function main(cfg: Cfg): Promise<void> {
   });
 
   let top1Ok = 0, top1Tot = 0, klSum = 0, maxDl = 0;
+  let cpurefOk = 0, cpurefTot = 0; // gate (256/256): argmax ≡ cpuref-f64 sul campione ratificato
   const perPrompt: Array<{ id: string; golden: number; top1: number; klMean: number; maxDl: number }> = [];
   const positions: Array<{ p: number; k: number; gold: number; got: number; kl: number; dl: number; gotTop: Array<[number, number]> }> = [];
   const tReplay0 = performance.now();
@@ -82,6 +92,9 @@ async function main(cfg: Cfg): Promise<void> {
         for (let t = 1; t < lg.length; t++) if (lg[t] > lg[arg]) arg = t;
         top1Tot++;
         if (arg === gp.argmax) { top1Ok++; pTop1++; }
+        // confronto vs cpuref-f64 dove il campione ratificato ha la posizione
+        const cRef = cpuref?.prompts[String(origIdx[pi])]?.[k];
+        if (cRef !== undefined) { cpurefTot++; if (arg === cRef) cpurefOk++; }
         // KL sui top-32 del golden (softmax ristrette agli stessi 32 id) + max|Δ| logit
         const ids = gp.top.map((t) => t[0]);
         const gl = gp.top.map((t) => t[1]);
@@ -131,6 +144,14 @@ async function main(cfg: Cfg): Promise<void> {
       ggufSha256: GLM47_FLASH_SHA256, oracle: golden.oracle, corpusHash: golden.corpusHash,
       config: { prompts: cfg.prompts ?? null, maxGen: cfg.maxGen ?? null, budgetGiB: cfg.budgetGiB, ctxMax },
       gateGolden: { threshold: 97, top1Ok, top1Tot, pct: top1Pct, pass: top1Tot > 0 && top1Pct! >= 97 },
+      // fase 4d: il "256/256" come CAMPO, non un confronto assemblato a mano.
+      // pass: null = non valutato (dump non serviti, o run senza posizioni del
+      // campione) — neutro per l'exit; false = divergenza dal cpuref-f64.
+      gateCpuref: cpuref ? {
+        agree: cpurefOk, total: cpurefTot,
+        pass: cpurefTot > 0 ? cpurefOk === cpurefTot : null,
+        source: cpuref.source,
+      } : null,
       secondary: { klMeanTop32: top1Tot ? klSum / top1Tot : null, maxAbsDeltaLogit: maxDl },
       perPrompt, positions,
       residency: { ...st, hitRate: st.hits + st.misses > 0 ? st.hits / (st.hits + st.misses) : null, importMs: source.importMs },

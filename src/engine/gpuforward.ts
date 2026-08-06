@@ -1,17 +1,17 @@
 // Load GPU + forward decode di Qwen2.5-0.5B — assemblatore "correttezza prima".
 //
-// Orchestrazione deliberatamente semplice: op non fuse (~340 dispatch/token), MA con
-// bind group precostruiti al load e un solo submit per token — nel NOSTRO motore i
+// Bind group precostruiti al load, un solo submit per token: nel NOSTRO motore i
 // buffer hanno indirizzi statici, quindi L1/L2 sono gratis by construction (è la tesi:
-// ciò che in WebLLM richiede rework, qui è il default). La fusione (L3) arriva col
-// piano statico vero. Questo modulo è il gate di parità (conformance) e lo scaffolding
-// di debug dei kernel fusi.
+// ciò che in WebLLM richiede rework, qui è il default). Piano decode FUSO (147
+// step compute/token); il ramo non-fuso del bring-up è stato RIMOSSO nella fase
+// 4d (zero consumatori da first-light, correttezza kernel coperta da ktest +
+// conformance cpuref — journal C3a it.24). Questo modulo resta il gate di parità
+// (conformance) del path Qwen.
 import { parseGguf, GGML_TYPE, type GgufTensorInfo } from "./gguf";
 import { repackQ4_0, repackQ8_0, dequantQ4_0Row } from "./quant";
 import { QWEN25_05B as S, validateQwen25_05B } from "./shape";
 import {
-  gemvQuantWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl, attnDecodeWgsl,
-  siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, ARGMAX_CHUNK,
+  argmaxStage1Wgsl, argmaxStage2Wgsl, ARGMAX_CHUNK,
   gemvGrid,
   rmsGemvQ8FastWgsl, rmsPairGemvSiluFastWgsl, gemvResidualFastWgsl, rmsGemvQ4FastBiasWgsl,
   ropeChunkWgsl, kvAppendChunkWgsl, attnPrefillChunkWgsl,
@@ -95,7 +95,7 @@ export async function createEngine(
   gguf: ArrayBuffer,
   onProgress: (text: string, frac: number) => void,
   opts: {
-    taps?: number[]; fused?: boolean; telemetry?: boolean; telemetryGpu?: boolean;
+    taps?: number[]; telemetry?: boolean; telemetryGpu?: boolean;
   } = {},
 ): Promise<EngineHandle> {
   // Limiti DERIVATI dai consumatori (C3a it.8): prima qui c'era
@@ -208,15 +208,9 @@ export async function createEngine(
 
   // --- attivazioni ---
   const x = storage(S.dModel * 4);
-  const hn = storage(S.dModel * 4);
-  const qB = storage(S.dModel * 4);
   const qkvB = storage((S.dModel + 2 * KV_DIM) * 4);
-  const kB = storage(KV_DIM * 4);
-  const vB = storage(KV_DIM * 4);
   const attnOut = storage(S.dModel * 4);
-  const tmpD = storage(S.dModel * 4);       // out di o-proj / ffn-down
   const gateB = storage(S.dFfn * 4);
-  const upB = storage(S.dFfn * 4);
   const logits = storage(S.vocab * 4);
   // attention split (spec B2): partial {out|m|l} per (head, partizione) — griglia
   // fissa (nHead, S_MAX), il piano statico resta immutabile
@@ -281,19 +275,6 @@ export async function createEngine(
   const mkPipe = (code: string) =>
     device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code }), entryPoint: "main" } });
   const pipes = {
-    rms: mkPipe(rmsnormWgsl(S.dModel, S.rmsEps)),
-    gemvQDD_b: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: S.dModel, N: S.dModel, hasBias: true })),
-    gemvQDKV_b: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: S.dModel, N: KV_DIM, hasBias: true })),
-    gemvQDD: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: S.dModel, N: S.dModel, hasBias: false })),
-    gemvQDF: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: S.dModel, N: S.dFfn, hasBias: false })),
-    gemvQFD: mkPipe(gemvQuantWgsl({ kind: "q4_0", K: S.dFfn, N: S.dModel, hasBias: false })),
-    gemvOut: mkPipe(gemvQuantWgsl({ kind: "q8_0", K: S.dModel, N: S.vocab, hasBias: false })),
-    ropeQ: mkPipe(ropeNeoxWgsl(S.nHead, S.headDim, S.ropeFreqBase)),
-    ropeK: mkPipe(ropeNeoxWgsl(S.nKvHead, S.headDim, S.ropeFreqBase)),
-    kvApp: mkPipe(kvAppendWgsl(KV_DIM)),
-    attn: mkPipe(attnDecodeWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: S.headDim, ctxMax: CTX_MAX })),
-    silu: mkPipe(siluMulWgsl(S.dFfn)),
-    add: mkPipe(addInPlaceWgsl(S.dModel)),
     am1: mkPipe(argmaxStage1Wgsl(S.vocab)),
     am2: mkPipe(argmaxStage2Wgsl(N_PARTIALS)),
     // fusi (L3)
@@ -332,45 +313,20 @@ export async function createEngine(
     tapBufs.set(l, storage(S.dModel * 4));
   }
 
-  const fused = opts.fused ?? true;
+  // Piano decode: SOLO il path fuso (fase 4d: il ramo non-fuso del bring-up
+  // e' stato rimosso — zero consumatori da first-light, correttezza dei kernel
+  // coperta da ktest + conformance cpuref; journal it.24).
   for (const L of layers) {
-    if (fused) {
-      push(pipes.rmsQkv, [L.qkv.qs, L.qkv.scales, x, L.attnNorm, qkvB, L.qkvBias], gemvGrid((S.dModel + 2 * KV_DIM) / 4));
-      push(pipes.attnPart, [qkvB, L.kCache, L.vCache, attnPartials], [S.nHead, attnSMax(CTX_MAX)], P);
-      push(pipes.attnReduce, [attnPartials, attnOut], S.nHead, P);
-      push(pipes.oResid, [L.wo.qs, L.wo.scales, attnOut, x], gemvGrid(S.dModel / 4));
-      push(pipes.pairSilu, [L.wGate.qs, L.wGate.scales, L.wUp.qs, L.wUp.scales, x, L.ffnNorm, gateB], gemvGrid(S.dFfn / 4));
-      push(pipes.downResid, [L.wDown.qs, L.wDown.scales, gateB, x], gemvGrid(S.dModel / 4));
-      const tapDstF = tapBufs.get(layers.indexOf(L));
-      if (tapDstF) steps.push({ kind: "copy", src: x, dst: tapDstF, bytes: S.dModel * 4 });
-      continue;
-    }
-    push(pipes.rms, [x, L.attnNorm, hn], 1);
-    push(pipes.gemvQDD_b, [L.wq.qs, L.wq.scales, hn, qB, L.bq], gemvGrid(S.dModel));
-    push(pipes.gemvQDKV_b, [L.wk.qs, L.wk.scales, hn, kB, L.bk], gemvGrid(KV_DIM));
-    push(pipes.gemvQDKV_b, [L.wv.qs, L.wv.scales, hn, vB, L.bv], gemvGrid(KV_DIM));
-    push(pipes.ropeQ, [qB], Math.ceil((S.nHead * S.headDim / 2) / 64), P);
-    push(pipes.ropeK, [kB], Math.ceil((S.nKvHead * S.headDim / 2) / 64), P);
-    push(pipes.kvApp, [kB, L.kCache], Math.ceil(KV_DIM / 64), P);
-    push(pipes.kvApp, [vB, L.vCache], Math.ceil(KV_DIM / 64), P);
-    push(pipes.attn, [qB, L.kCache, L.vCache, attnOut], S.nHead, P);
-    push(pipes.gemvQDD, [L.wo.qs, L.wo.scales, attnOut, tmpD], gemvGrid(S.dModel));
-    push(pipes.add, [x, tmpD], Math.ceil(S.dModel / 64));
-    push(pipes.rms, [x, L.ffnNorm, hn], 1);
-    push(pipes.gemvQDF, [L.wGate.qs, L.wGate.scales, hn, gateB], gemvGrid(S.dFfn));
-    push(pipes.gemvQDF, [L.wUp.qs, L.wUp.scales, hn, upB], gemvGrid(S.dFfn));
-    push(pipes.silu, [gateB, upB], Math.ceil(S.dFfn / 64));
-    push(pipes.gemvQFD, [L.wDown.qs, L.wDown.scales, gateB, tmpD], gemvGrid(S.dModel));
-    push(pipes.add, [x, tmpD], Math.ceil(S.dModel / 64));
-    const tapDst = tapBufs.get(layers.indexOf(L));
-    if (tapDst) steps.push({ kind: "copy", src: x, dst: tapDst, bytes: S.dModel * 4 });
+    push(pipes.rmsQkv, [L.qkv.qs, L.qkv.scales, x, L.attnNorm, qkvB, L.qkvBias], gemvGrid((S.dModel + 2 * KV_DIM) / 4));
+    push(pipes.attnPart, [qkvB, L.kCache, L.vCache, attnPartials], [S.nHead, attnSMax(CTX_MAX)], P);
+    push(pipes.attnReduce, [attnPartials, attnOut], S.nHead, P);
+    push(pipes.oResid, [L.wo.qs, L.wo.scales, attnOut, x], gemvGrid(S.dModel / 4));
+    push(pipes.pairSilu, [L.wGate.qs, L.wGate.scales, L.wUp.qs, L.wUp.scales, x, L.ffnNorm, gateB], gemvGrid(S.dFfn / 4));
+    push(pipes.downResid, [L.wDown.qs, L.wDown.scales, gateB, x], gemvGrid(S.dModel / 4));
+    const tapDstF = tapBufs.get(layers.indexOf(L));
+    if (tapDstF) steps.push({ kind: "copy", src: x, dst: tapDstF, bytes: S.dModel * 4 });
   }
-  if (fused) {
-    push(pipes.rmsLmHead, [wOut.qs, wOut.scales, x, outNorm, logits], gemvGrid(S.vocab / 4));
-  } else {
-    push(pipes.rms, [x, outNorm, hn], 1);
-    push(pipes.gemvOut, [wOut.qs, wOut.scales, hn, logits], gemvGrid(S.vocab));
-  }
+  push(pipes.rmsLmHead, [wOut.qs, wOut.scales, x, outNorm, logits], gemvGrid(S.vocab / 4));
   push(pipes.am1, [logits, pmax, pidx], N_PARTIALS);
   push(pipes.am2, [pmax, pidx, amaxOut], 1);
 
@@ -420,7 +376,7 @@ export async function createEngine(
     if (tapDstP) preSteps.push({ kind: "tapLast", dst: tapDstP });
   }
   // coda del piano decode (lm_head [+rms] + argmax): riusata a fine prefill
-  const tailSteps = steps.slice(steps.length - (fused ? 3 : 4));
+  const tailSteps = steps.slice(steps.length - 3); // rmsLmHead, am1, am2
   // --- decode multi-step (spec B2): bind group dell'embed gather + slot P + staging ids ---
   const bgEmbed = bg(pipes.embedGather, [wEmbd.qs, wEmbd.scales, amaxOut, x]);
   const dbSlots = device.createBuffer({

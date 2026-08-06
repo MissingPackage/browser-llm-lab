@@ -20,8 +20,41 @@ export const GLM47_GGUF_BYTES = 17_216_676_192;
 const HEADER_BYTES = 64 * 1024 * 1024;
 const OPFS_NAME = "GLM-4.7-Flash-Q4_0.gguf";
 
+/**
+ * La superficie di store che GlmOpfsSource usa davvero (fase 4d: glmsource
+ * sotto test). ExpertOpfsStore la soddisfa strutturalmente; i test iniettano
+ * store in memoria — la logica di apertura/validazione/lettura si esercita
+ * senza OPFS, che nei worker di produzione resta l'unica implementazione.
+ */
+export interface SlabStoreLike {
+  size(): number;
+  read(offset: number, bytes: number, dst?: Uint8Array): Uint8Array;
+  write(data: Uint8Array, at: number): number;
+  truncate(bytes: number): void;
+  flush(): void;
+  close(): void;
+  importFromUrl(url: string, expectedSha256: string): Promise<{ bytes: number; ms: number }>;
+}
+
+export interface GlmSourceDeps {
+  openStore(name: string): Promise<SlabStoreLike>;
+  /** rename atomico tmp→finale dentro models/ (in OPFS: move(), l'unico). */
+  moveFile(tmpName: string, finalName: string): Promise<void>;
+}
+
+const OPFS_DEPS: GlmSourceDeps = {
+  openStore: (n) => ExpertOpfsStore.open(n),
+  async moveFile(tmpName, finalName) {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle("models", { create: true });
+    await dir.removeEntry(finalName).catch(() => { /* non esisteva */ });
+    const th = await dir.getFileHandle(tmpName);
+    await (th as FileSystemFileHandle & { move(name: string): Promise<void> }).move(finalName);
+  },
+};
+
 export class GlmOpfsSource implements GlmWeightSource {
-  private store: ExpertOpfsStore;
+  private store: SlabStoreLike;
   private byName: Map<string, GgufTensorInfo>;
   private dataOffset: number;
   private idx: GgufExpertIndex;
@@ -33,7 +66,7 @@ export class GlmOpfsSource implements GlmWeightSource {
   private downBuf40 = new Uint8Array(EXPERT_DOWN_Q4_0_BYTES);
   private downBuf41 = new Uint8Array(EXPERT_DOWN_Q4_1_BYTES);
   // file slab (repack all'import): null se non generabile
-  private slabs: ExpertOpfsStore | null = null;
+  private slabs: SlabStoreLike | null = null;
   private slabBuf40 = new Uint8Array(SLAB_DOWN_Q4_0.bytes);
   private slabBuf41 = new Uint8Array(SLAB_DOWN_Q4_1.bytes);
   /** ms spesi a generare il file slab (0 = era già valido). */
@@ -41,7 +74,7 @@ export class GlmOpfsSource implements GlmWeightSource {
   /** motivo della rigenerazione, per il report (null = nessuna). */
   slabRebuildReason: string | null = null;
 
-  private constructor(store: ExpertOpfsStore, byName: Map<string, GgufTensorInfo>, dataOffset: number) {
+  private constructor(store: SlabStoreLike, byName: Map<string, GgufTensorInfo>, dataOffset: number) {
     this.store = store;
     this.byName = byName;
     this.dataOffset = dataOffset;
@@ -49,7 +82,12 @@ export class GlmOpfsSource implements GlmWeightSource {
   }
 
   static async open(url: string, onProgress?: (msg: string) => void): Promise<GlmOpfsSource> {
-    const store = await ExpertOpfsStore.open(OPFS_NAME);
+    return GlmOpfsSource.openWith(OPFS_DEPS, url, onProgress);
+  }
+
+  /** open() con le dipendenze esplicite — la produzione passa OPFS_DEPS, i test store in memoria. */
+  static async openWith(deps: GlmSourceDeps, url: string, onProgress?: (msg: string) => void): Promise<GlmOpfsSource> {
+    const store = await deps.openStore(OPFS_NAME);
     let importMs = 0;
     if (store.size() !== GLM47_GGUF_BYTES) {
       onProgress?.(`import OPFS ${OPFS_NAME} (17.2 GB, SHA streaming)…`);
@@ -63,7 +101,7 @@ export class GlmOpfsSource implements GlmWeightSource {
     const byName = validateGlm47Flash(f); // validazione hard (844 tensori, tipi, dims)
     const src = new GlmOpfsSource(store, byName, f.dataOffset);
     src.importMs = importMs;
-    const s = await GlmOpfsSource.ensureSlabs(store, src.idx, onProgress);
+    const s = await GlmOpfsSource.ensureSlabs(deps, store, src.idx, onProgress);
     src.slabs = s.slabs;
     src.slabBuildMs = s.ms;
     src.slabRebuildReason = s.reason;
@@ -92,10 +130,10 @@ export class GlmOpfsSource implements GlmWeightSource {
    * Ritorna il motivo della rigenerazione (null = era già buono).
    */
   private static async ensureSlabs(
-    store: ExpertOpfsStore, idx: GgufExpertIndex, onProgress?: (msg: string) => void,
-  ): Promise<{ slabs: ExpertOpfsStore; reason: string | null; ms: number }> {
+    deps: GlmSourceDeps, store: SlabStoreLike, idx: GgufExpertIndex, onProgress?: (msg: string) => void,
+  ): Promise<{ slabs: SlabStoreLike; reason: string | null; ms: number }> {
     const t0 = performance.now();
-    let slabs = await ExpertOpfsStore.open(SLAB_FILE_NAME);
+    let slabs = await deps.openStore(SLAB_FILE_NAME);
     const size = slabs.size();
     const header = size >= SLAB_HEADER_BYTES ? parseSlabHeader(slabs.read(0, SLAB_HEADER_BYTES)) : null;
     const reason = slabFileReason(header, size, GLM47_FLASH_SHA256);
@@ -104,7 +142,7 @@ export class GlmOpfsSource implements GlmWeightSource {
     onProgress?.(`file slab da rigenerare (${reason}) — repack di ${N_SLABS} expert…`);
     slabs.close();
     const tmpName = `${SLAB_FILE_NAME}.tmp`;
-    const tmp = await ExpertOpfsStore.open(tmpName);
+    const tmp = await deps.openStore(tmpName);
     tmp.truncate(0);
     tmp.write(buildSlabHeader(GLM47_FLASH_SHA256), 0);
     const gate = new Uint8Array(EXPERT_GATE_UP_BYTES);
@@ -129,13 +167,8 @@ export class GlmOpfsSource implements GlmWeightSource {
     }
     tmp.flush();
     tmp.close();
-    const root = await navigator.storage.getDirectory();
-    const dir = await root.getDirectoryHandle("models", { create: true });
-    await dir.removeEntry(SLAB_FILE_NAME).catch(() => { /* non esisteva */ });
-    // move() è l'unico rename atomico disponibile in OPFS
-    const th = await dir.getFileHandle(tmpName);
-    await (th as FileSystemFileHandle & { move(name: string): Promise<void> }).move(SLAB_FILE_NAME);
-    slabs = await ExpertOpfsStore.open(SLAB_FILE_NAME);
+    await deps.moveFile(tmpName, SLAB_FILE_NAME); // rename atomico (OPFS move)
+    slabs = await deps.openStore(SLAB_FILE_NAME);
     const ms = performance.now() - t0;
     onProgress?.(`file slab pronto in ${(ms / 1000).toFixed(0)} s`);
     return { slabs, reason, ms };

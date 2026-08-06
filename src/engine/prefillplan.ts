@@ -6,6 +6,11 @@
 export const PREFILL_M = 8; // righe per chunk (ultimo chunk parziale ammesso)
 // Knee misurato dalla sim (prefill-sim-4090-*.json): submit ogni ~64 token; il
 // submit unico peggiora (4.22 vs 3.78 ms/token).
+// GIUSTIFICAZIONE PINNATA (fase 4d, censimento orfani): i due
+// results/engine/prefill-sim-4090-2026-07-29T*.json sono l'UNICA evidenza di
+// questo knee — il produttore (sim prefillBatched, f18ff73) e' stato rimosso
+// deliberatamente alla chiusura della fase 3 B1 (e9dcb4a). I file si tengono;
+// il 64 NON si cambia senza ri-misurare (servirebbe riscrivere la sim).
 export const PREFILL_SUBMIT_TOKENS = 64;
 
 export interface PrefillChunk {

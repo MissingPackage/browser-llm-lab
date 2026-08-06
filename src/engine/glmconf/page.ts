@@ -13,13 +13,18 @@ const log = (line: string): void => {
   $("log").prepend(el);
 };
 worker.onmessage = (e: MessageEvent) => {
-  const m = e.data as { type: string; msg?: string; message?: string; report?: { gateGolden?: { pass?: boolean } } };
+  const m = e.data as {
+    type: string; msg?: string; message?: string;
+    report?: { gateGolden?: { pass?: boolean }; gateCpuref?: { pass?: boolean | null } | null };
+  };
   if (m.type === "progress" || m.type === "tick") {
     $("live").textContent = m.msg ?? "";
     if (m.type === "progress") log(m.msg ?? "");
   } else if (m.type === "done") {
     (window as unknown as { __report?: unknown }).__report = m.report;
-    $("status").textContent = m.report?.gateGolden?.pass ? "done" : "done-gate-fail";
+    // gateCpuref: null/non valutato = neutro; false = divergenza dal cpuref-f64 (4d)
+    const cpurefOk = m.report?.gateCpuref?.pass !== false;
+    $("status").textContent = m.report?.gateGolden?.pass && cpurefOk ? "done" : "done-gate-fail";
   } else if (m.type === "error") {
     $("status").textContent = `ERROR: ${m.message?.slice(0, 400)}`;
   }

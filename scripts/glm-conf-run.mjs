@@ -4,7 +4,7 @@
 //   node scripts/glm-conf-run.mjs [--prompts 7] [--max-gen 128]
 //     [--budget-gib 12] [--out results/engine/...json] [--timeout-min 240]
 import { chromium } from "playwright";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,20 @@ const BASE_URL = process.env.BASE_URL ?? "http://localhost:5199";
 
 if (!existsSync(GOLDEN_PUB)) copyFileSync(GOLDEN, GOLDEN_PUB);
 mkdirSync(PROFILE, { recursive: true });
+
+// Dump argmax cpuref-f64 del campione ratificato (fase 4d: il 256/256 diventa
+// campo JSON — gateCpuref — invece di un confronto assemblato a mano). Il file
+// merged si RIGENERA a ogni run (derivato, costa nulla); se i dump mancano il
+// worker emette gateCpuref null e lo dichiara.
+const CPUREF_DUMPS = [4, 7].map((p) => join(ROOT, `results/engine/logits-cpuref-p${p}-2026-08-01.json`));
+const cpurefMerged = { kind: "glm-cpuref-argmax", source: [], prompts: {} };
+for (const f of CPUREF_DUMPS) {
+  if (!existsSync(f)) continue;
+  const d = JSON.parse(readFileSync(f, "utf8"));
+  cpurefMerged.source.push(f.slice(ROOT.length));
+  cpurefMerged.prompts[d.prompt] = d.positions.map((x) => x.argmax);
+}
+writeFileSync(join(ROOT, "public/models/glm-cpuref-argmax.json"), JSON.stringify(cpurefMerged));
 
 const qs = new URLSearchParams();
 if (prompts) qs.set("prompts", prompts);
@@ -62,6 +76,10 @@ for (;;) {
     if (out) writeFileSync(join(ROOT, out), JSON.stringify(report, null, 1));
     const g = report.gateGolden ?? {};
     console.log(`[glmconf] ${status} — top1 ${g.top1Ok}/${g.top1Tot} (${g.pct?.toFixed(3)}%) klMean ${report.secondary?.klMeanTop32?.toExponential(2)} maxDl ${report.secondary?.maxAbsDeltaLogit?.toFixed(3)}`);
+    const c = report.gateCpuref;
+    console.log(c
+      ? `[glmconf] gateCpuref: ${c.agree}/${c.total} — ${c.pass === null ? "non valutato (nessuna posizione del campione)" : c.pass ? "PASS" : "FAIL (divergenza da cpuref-f64)"}`
+      : "[glmconf] gateCpuref: dump non serviti (null, dichiarato)");
     process.exit(status === "done" ? 0 : status === "done-gate-fail" ? 4 : 2);
   }
   await new Promise((r) => setTimeout(r, 5000));

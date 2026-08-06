@@ -1552,3 +1552,64 @@ Il piano statico e il path eseguito non possono piu' divergere in silenzio:
 
 Debiti §7: glmsource sotto test, gateCpuref come campo JSON, decisione path
 non-fuso nel journal, censimento orfani. Poi ri-baseline (ultima).
+
+## it.24 — 2026-08-06 — fase 4d pezzo 4: i quattro debiti §7, chiusi
+
+### 1. glmsource SOTTO TEST (em.6)
+
+Seam iniettabile `GlmSourceDeps` (openStore/moveFile) + `SlabStoreLike`
+(ExpertOpfsStore la soddisfa strutturalmente): `open()` delega a `openWith()`,
+comportamento identico. `tests/glmsource.test.ts` (7 unit, store in memoria,
+fixture GGUF sintetica 844-tensori ESTRATTA in tests/helpers/glm-gguf-fixture
+e riusata da engine-gguf-glm): size-match ⇒ import saltato, SHA canonico
+all'import, byte-check hard, range nonExpert/expert per size-class, slabRange
+esatto, taglia slab monca ⇒ arriva alla decisione di rigenerare. FUORI,
+dichiarato: il loop di rigenerazione (~15 GB I/O; slabFileReason gia' coperto).
+
+### 2. Il 256/256 come campo JSON (gateCpuref)
+
+glm-conf-run.mjs rigenera a ogni run public/models/glm-cpuref-argmax.json dai
+dump `logits-cpuref-p{4,7}-2026-08-01.json`; glmconf confronta per posizione
+(indice ORIGINALE del golden, non post-filtro) ed emette
+`gateCpuref {agree,total,pass,source}` — pass null = non valutato (dump non
+serviti o nessuna posizione del campione), neutro per l'exit; false = FAIL.
+**Verificato su device**: run corta prompt 4 max-gen 8 ⇒ gateCpuref 8/8 PASS,
+top1 8/8, exit 0.
+
+### 3. Path non-fuso Qwen: RIMOSSO (decisione, con git-log check)
+
+`fused: false` aveva ZERO consumatori (grep su src+tests); il ramo era lo
+scaffolding del bring-up (nato a90e8a9 first-light) e la correttezza dei
+kernel e' coperta da ktest + conformance cpuref. Autorita': done-when em.6
+("rimosso o reso raggiungibile") + ruling 18c (path morto = vincolo hard).
+Via: opzione `fused`, ramo else del loop (16 push), tail non-fusa, 13
+pipeline compilate a ogni load (il debito §7.8: compilate e irraggiungibili),
+6 buffer, 7 import kernel. Header del modulo aggiornato.
+**Verificato su device**: engine-bench post-rimozione decode **324.5 ± 1.5**
+(≥ baseline 321.9), dispatchPlan PASS con planned 148 invariato.
+
+### 4. Censimento artefatti orfani (risultato: NIENTE da rimuovere)
+
+Censimento per campo `kind` (118 JSON in results/engine) contro i produttori
+in repo: orfani veri = **prefill-sim ×2** (produttore sim rimosso
+deliberatamente a e9dcb4a, chiusura fase 3 B1) e **tsq-diag ×3** (citati da
+docs/engine/tsq-diag-2026-07-29.md come evidenza del known-issue fase A).
+Entrambe le famiglie sono evidence-bearing ⇒ SI TENGONO: giustificazione
+prefill-sim PINNATA in prefillplan.ts (il knee 64 non si cambia senza
+ri-misurare), tsq-diag ha gia' il doc che li cita. Il "13 orfani" dello state
+doc 08-02 era impreciso: engine-prof ×5 ha il produttore vivo in
+`.harness/tools/engine-prof.mjs`, prefix-cache ×5 in scripts/prefix-cache.mjs.
+L'insieme "da rimuovere con nota" e' VUOTO.
+
+### Verifica
+
+Suite **331 passed + 7 skipped** (+7); tsc pulito; 2 run GPU committabili nei
+log (/tmp/qwenbench-it24.log, /tmp/glmconf-it24.log), report Qwen nuovo in
+results/engine/ (bench-4090-2026-08-06T15-23-43-832Z.json, hostState
+quiescent).
+
+### Prossimo pezzo (4d, ULTIMO): ri-baseline dichiarata
+
+2 run quiescenti nuove Qwen+GLM con deviceLimits nel payload, sostituzione
+registrata a docket (item 10 opzione a / em.6). Albero congelato + GPU
+esclusiva (lezione it.16). Poi la 4d CHIUDE e parte la fase 5.
