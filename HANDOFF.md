@@ -1,27 +1,24 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-22: 4d pezzi 1-2 (device unico, telemetria unica); prossimo: Planned+Measured)
+# HANDOFF — browser-llm-lab   (updated 2026-08-06, sessione 22 — it.21-23: 4d pezzi 1-3; prossimo: debiti §7)
 
 ## 1. Next decidable
 
-**FATTO (it.21-22): FASE 4d pezzi 1-2.** It.21 — `gpudevice.ts` punto unico
-(adapter + negotiateLimits + `uncapturederror` con label), 8 siti migrati,
-test strutturale a scansione di src/; ktest 53/53 sul device vero (chiude il
-residuo 10a lato codice). It.22 — `telemetry.ts` core UNICO (CoreCounters
-cumulativi diffabili, `diffCounters` null-contagioso), GlmTelemetry ed
-EngineTelemetry lo estendono per costruzione; Qwen: default OFF (era l'unico
-`?? true`), submits/dispatches contati sempre, engine-bench **v4** con
-`ttftMs`+`deviceLimits`; **retention** + hitsResident/hitsPrefetch in
-ExpertCacheStats e nel report glmbench (mai un hit-rate da solo — lezione
-kimi-k3-in-c); `hostState` (declared + smi before/after) iniettato dai runner
-via `scripts/lib/hoststate.mjs`. Verifica: suite **324+7**, tsc pulito.
-NON verificato su GPU: i campi nuovi dei report si esercitano alla
-ri-baseline di fine 4d (by design).
+**FATTO (it.21-23): FASE 4d pezzi 1-3.** It.21 — `gpudevice.ts` punto unico
+(8 siti migrati, test strutturale, ktest 53/53). It.22 — `telemetry.ts` core
+unico (CoreCounters diffabili, Qwen default OFF, engine-bench v4 con
+ttftMs+deviceLimits, retention+hit split in ExpertCacheStats/glmbench,
+hostState nei runner). It.23 — **dispatch Planned+Measured con gate sui due
+path, ENTRAMBI verificati sul device vero**: Qwen uguaglianza esatta
+(148 ≡ 148, submit 0.125 ≡ 0.125; report committato con tutti i campi nuovi
+vivi, decode 329.6 ≥ baseline 321.9), GLM planned+2 testa (1405 ≡ 1405)
+cablato nell'exit code di glmbench. Suite **324+7**, tsc pulito.
 
-**PROSSIMO PEZZO DECIDIBILE (4d, pezzo 3): dispatch Planned+Measured con
-gate su entrambi i path** (Qwen ora HA il contatore misurato: manca nel
-report e nel confronto col piano); poi debiti §7 (glmsource sotto test,
-256/256 come campo JSON, path non-fuso morto con git-log check, artefatti
-orfani censiti), e la ri-baseline per ULTIMA (albero congelato + GPU
-esclusiva, lezione it.16).
+**PROSSIMO PEZZO DECIDIBILE (4d, pezzo 4): debiti §7** — glmsource sotto
+test; il 256/256 cpuref come campo JSON di glmconf (gateCpuref: servire i
+dump `logits-cpuref-p{4,7}-2026-08-01.json` come il golden, confronto per
+posizione); decisione path non-fuso Qwen nel journal (`fused: false` ha ZERO
+consumatori — candidato rimozione con git-log check); censimento artefatti
+orfani (i 2 prefill-sim-* load-bearing). Poi la **ri-baseline dichiarata per
+ULTIMA** (albero congelato + GPU esclusiva, lezione it.16).
 
 **FATTO (it.20): WP-0 — la tassa di replay è simulata sulla traccia vera**
 (`wp0-replay-sim-2026-08-06.json`, semantica differita al confine di token,
