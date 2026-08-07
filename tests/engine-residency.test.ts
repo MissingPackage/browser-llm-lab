@@ -701,3 +701,32 @@ describe("precondizione di residenza totale (slice C)", () => {
     expect(expertSlots({ budgetBytes: 64 * 2 ** 30 })).toEqual({ q4_0: PARK_Q4_0, q4_1: PARK_Q4_1 });
   });
 });
+
+// ------------------- I1 del decode ottimistico (C3b fase 3) -------------------
+// Fra submit e readback di coda la slotTable e' intoccabile: ensure, flush e
+// il debugMarkMiss dell'harness devono ALZARE col guard armato, e tornare a
+// funzionare al confine di token. Il guard si arma solo in "optimistic"
+// (glmmodel): qui si testa il meccanismo in ExpertCache, non chi lo arma.
+describe("ExpertCache — I1: slotTable congelata a token in volo (C3b)", () => {
+  const GIB = 1 << 30;
+  it("ensure/flush/debugMarkMiss alzano in volo, tornano a funzionare al confine", () => {
+    const { device } = mkDevice();
+    const opts = { budgetBytes: 0, slotsOverride: { q4_0: 4, q4_1: 4 }, maxBindingBytes: GIB, maxBufferBytes: GIB, slotTable: true };
+    const c = new ExpertCache(device, opts);
+    const reader = (ll: number) => rawFor(ll);
+    c.ensure(1, 0, reader); // fuori volo: legale
+    c.setInFlight(true);
+    expect(() => c.ensure(1, 1, reader)).toThrow(/token in volo/);
+    expect(() => c.flushSlotTable()).toThrow(/token in volo/);
+    expect(() => c.debugMarkMiss([64 + 0])).toThrow(/token in volo/);
+    c.setInFlight(false);
+    expect(() => c.ensure(1, 1, reader)).not.toThrow();
+    c.flushSlotTable();
+    // il debugMarkMiss EVINCE davvero: l'expert torna miss e rioccupa uno slot
+    const before = c.stats().occupied.q4_1;
+    c.debugMarkMiss([64 + 1]); // chiave = layer*64 + expert (layer 1: classe q4_1)
+    expect(c.stats().occupied.q4_1).toBe(before - 1);
+    const again = c.ensure(1, 1, reader);
+    expect(again.hit).toBe(false); // fetch reale, come un miss di capacita'
+  });
+});

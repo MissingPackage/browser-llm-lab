@@ -39,3 +39,16 @@
 - **1 submit/0 sync anche in optimistic** sul token pulito; dispatch/token
   invariati. Suite 337+7, tsc pulito, verifier PASS su 7/7 punti.
 - **Prossimo**: fase 3 — repair + replay + identita' ottimistico-vs-sincrono.
+
+## it.3 (2026-08-07) — fase 3 DONE: repair+replay, identita' BIT-esatta
+
+- **Il claim del GOAL e' misurato**: 64 posizioni (3 con replay dal primo
+  layer sporco), hidden e logits **bit-identici 131072/131072** vs decode
+  sincrono, argmax 64/64, submits 67=64+3, 0 sync router. ktest 69/69.
+- Replay = secondo giro da hiddenCkpt[firstDirty]; pin-for-replay ⇒ replay
+  pulito per costruzione (replay sporco = throw I3, mai un secondo); I1
+  (slotTable congelata in volo) con guard nel path + unit node.
+- Deviazione dichiarata: identita' a ctx 64 (limite ktest), non ~500 — la
+  scala vera e' fase 4/6. Suite 338+7, tsc pulito, verifier PASS 8/8.
+- **Prossimo**: fase 4 — glmbench ottimistico sul modello vero, gate
+  strutturale in produzione.

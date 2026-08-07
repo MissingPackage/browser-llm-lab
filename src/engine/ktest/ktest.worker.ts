@@ -1282,8 +1282,11 @@ async function testGlmOptimisticForcedMiss(g: Gpu): Promise<KResult> {
   const name = "glm-optimistic-forced-miss";
   const problems: string[] = [];
   const arenaCfg = ktestArena(true); // 64 slot: la precondizione 0.88 passa, i MISS li inietta l'harness
+  // repair SPENTO (solo harness): questo caso misura il flag e il degrado
+  // definito, che il repair della fase 3 altrimenti ripara prima del ritorno.
+  // Il repair acceso lo esercita glm-optimistic-identita.
   const mkModel = () => createGlmModel(g.device, mkMiniModelKit().srcMock, {
-    nLayer: 2, ctxMax: 16, head: true, vocab: 2048, select: "optimistic",
+    nLayer: 2, ctxMax: 16, head: true, vocab: 2048, select: "optimistic", optimisticRepair: false,
     cache: {
       budgetBytes: 0, slotsOverride: arenaCfg.slotsOverride,
       maxBindingBytes: arenaCfg.window, maxBufferBytes: arenaCfg.window, timing: true,
@@ -1445,6 +1448,85 @@ async function testGlmCheckpointHidden(g: Gpu): Promise<KResult> {
     note: `${NPOS} pos: gpu==optimistic ${bitEq}/${ckptG.length} bit, riga0==xIn ${row0Eq}/${G.dModel} bit, ` +
       `riga1 vs f64 L2rel=${l2Row1.toExponential(2)}, dispatch/token invariati` +
       (problems.length ? `; ${problems.join("; ")}` : ""),
+  };
+}
+
+// Il test d'IDENTITA' del contratto (fase 3): decode ottimistico vs sincrono
+// sulla STESSA sequenza, argmax identico su tutte le posizioni — e qui il
+// claim del GOAL e' piu' forte: "qualita' BIT-invariata", quindi il gate e'
+// la bit-uguaglianza di hidden e logits, non solo l'argmax. Ai token forzati
+// il replay parte dal primo layer sporco (startLayer > 0: rientro dal
+// checkpoint esercitato davvero) e l'esito deve restare bit-identico.
+async function testGlmOptimisticIdentity(g: Gpu): Promise<KResult> {
+  const name = "glm-optimistic-identita";
+  const problems: string[] = [];
+  const arenaCfg = ktestArena(true);
+  const mkOpts = (select: "gpu" | "optimistic") => ({
+    nLayer: 2, ctxMax: 64, head: true, vocab: 2048, select,
+    cache: {
+      budgetBytes: 0, slotsOverride: arenaCfg.slotsOverride,
+      maxBindingBytes: arenaCfg.window, maxBufferBytes: arenaCfg.window, timing: true,
+    },
+  });
+  const mSync = createGlmModel(g.device, mkMiniModelKit().srcMock, mkOpts("gpu"));
+  const mOpt = createGlmModel(g.device, mkMiniModelKit().srcMock, mkOpts("optimistic"));
+  mOpt.setTelemetry(true, false);
+  const NPOS = 64;                       // il [ASSUMED >= 64 token] del contratto
+  const FORCE = new Set([5, 20, 40]);    // token con miss forzato ⇒ replay
+  let bitH = 0, bitHTot = 0, bitL = 0, bitLTot = 0, argmaxEq = 0, replayed = 0;
+  for (let p = 0; p < NPOS; p++) {
+    const xp = randF32(G.dModel, 63_000 + p, 0.5);
+    const rs = await mSync.forward(xp, p, true);
+    if (FORCE.has(p)) {
+      // si evincono 2 dei 4 che il SINCRONO ha appena selezionato: per identita'
+      // l'ottimistico selezionera' gli stessi ⇒ miss garantito, replay garantito
+      const ids = Array.from(rs.routing[0].experts);
+      mOpt.debugMarkMiss([{ layer: 1, id: ids[0] }, { layer: 1, id: ids[2] }]);
+    }
+    const ro = await mOpt.forward(xp, p, true);
+    if (FORCE.has(p)) {
+      if (!ro.dirty || ro.dirty.missCount === 0 || ro.dirty.repaired !== true) {
+        problems.push(`pos ${p}: replay atteso, dirty=${JSON.stringify(ro.dirty)}`);
+      } else replayed++;
+    } else if (ro.dirty && ro.dirty.missCount !== 0) {
+      problems.push(`pos ${p}: miss inatteso (${ro.dirty.missCount})`);
+    }
+    // routing identico (id per-k, ogni layer MoE) — il replay ridecide uguale (I4)
+    for (const [mi, r] of ro.routing.entries()) {
+      const sExp = rs.routing[mi].experts;
+      for (let k = 0; k < G.nExpertUsed; k++) {
+        if (r.experts[k] !== sExp[k]) problems.push(`pos ${p} m${mi} k${k}: expert ${r.experts[k]} != ${sExp[k]}`);
+      }
+    }
+    for (let i = 0; i < G.dModel; i++) { if (Object.is(ro.hidden[i], rs.hidden[i])) bitH++; }
+    bitHTot += G.dModel;
+    let aO = 0, aS = 0;
+    for (let r = 0; r < 2048; r++) {
+      if (Object.is(ro.logits![r], rs.logits![r])) bitL++;
+      if (ro.logits![r] > ro.logits![aO]) aO = r;
+      if (rs.logits![r] > rs.logits![aS]) aS = r;
+    }
+    bitLTot += 2048;
+    if (aO === aS) argmaxEq++;
+    else problems.push(`pos ${p}: argmax ${aO} != ${aS}`);
+  }
+  const tel = await mOpt.telemetry();
+  mSync.destroy(); mOpt.destroy();
+  // contabilita' del gate strutturale: 1 submit sui puliti, 2 sui rigiocati,
+  // zero sync router SEMPRE; forwards conta i token, non i giri.
+  if (tel.forwards !== NPOS || tel.dirtyTokens !== FORCE.size || tel.replays !== FORCE.size
+    || tel.submits !== NPOS + FORCE.size || tel.routerSyncs !== 0) {
+    problems.push(`contatori: forwards=${tel.forwards} dirty=${tel.dirtyTokens} replays=${tel.replays} ` +
+      `submits=${tel.submits} (attesi ${NPOS}/${FORCE.size}/${FORCE.size}/${NPOS + FORCE.size}), sync=${tel.routerSyncs}`);
+  }
+  const pass = problems.length === 0 && bitH === bitHTot && bitL === bitLTot
+    && argmaxEq === NPOS && replayed === FORCE.size;
+  return {
+    kernel: name, pass, maxAbs: 0, maxRel: 0,
+    note: `${NPOS} pos (${FORCE.size} con replay): hidden bit ${bitH}/${bitHTot}, ` +
+      `logits bit ${bitL}/${bitLTot}, argmax ${argmaxEq}/${NPOS}, ` +
+      `submits ${tel.submits} = ${NPOS}+${tel.replays} replay, sync/token 0, repairMs=${tel.repairMs.toFixed(1)}` +
+      (problems.length ? `; ${problems.slice(0, 6).join("; ")}` : ""),
   };
 }
 
@@ -2660,9 +2742,11 @@ async function main(): Promise<void> {
     results.push(await testGlmModel2Layer(g, "gpu", { against: cpuTrace }));
     results.push(await testGlmGpuPartialResidency(g));
 
-    // decode ottimistico (C3b fase 2): flag di miss, degrado definito, checkpoint
+    // decode ottimistico (C3b fase 2-3): flag di miss, degrado definito,
+    // checkpoint, identita' repair+replay, precondizione
     results.push(await testGlmOptimisticForcedMiss(g));
     results.push(await testGlmCheckpointHidden(g));
+    results.push(await testGlmOptimisticIdentity(g));
     results.push(await testGlmOptimisticPrecondition(g));
 
     // conformance layer-level con pesi reali (fase 4 slice 3) — il test lungo in coda

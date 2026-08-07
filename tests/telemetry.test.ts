@@ -44,7 +44,8 @@ describe("aderenza dei due path al nucleo (compile-time, esercitata)", () => {
     const glm: GlmTelemetry = {
       ...zeroCounters(),
       on: false, ensureMs: 0, routerWaitMs: 0, tailWaitMs: 0, routerSyncs: 0,
-      selMiss: 0, gpuPassOverflow: 0, gpuByCatMs: null, gpuByCatPasses: null,
+      selMiss: 0, dirtyTokens: 0, replays: 0, repairMs: 0,
+      gpuPassOverflow: 0, gpuByCatMs: null, gpuByCatPasses: null,
     };
     const qwen: EngineTelemetry = {
       ...zeroCounters(),

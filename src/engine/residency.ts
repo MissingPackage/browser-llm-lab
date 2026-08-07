@@ -243,6 +243,8 @@ export class ExpertCache {
   // slotTable (slice B): ombra CPU + intervallo sporco. La GPU la vede solo
   // quando il chiamante chiama `flushSlotTable`, cioe' una volta per layer.
   private table: { buf: GPUBuffer; shadow: Uint32Array; lo: number; hi: number } | null = null;
+  // I1 (C3b): true fra submit e readback di coda in modo "optimistic"
+  private inFlight = false;
 
   constructor(device: GPUDevice, opts: ExpertCacheOpts) {
     this.device = device;
@@ -334,6 +336,7 @@ export class ExpertCache {
    * tenere una lista di intervalli.
    */
   flushSlotTable(): void {
+    this.assertNotInFlight("flushSlotTable");
     const t = this.table;
     if (!t || t.hi < t.lo) return;
     this.device.queue.writeBuffer(t.buf, t.lo * 4, t.shadow, t.lo, t.hi - t.lo + 1);
@@ -342,14 +345,44 @@ export class ExpertCache {
   }
 
   /**
-   * SOLO HARNESS (C3b fase 2, ktest): marca MISS le chiavi date nella
-   * slotTable (ombra + flush immediato) SENZA toccare slot ne' LRU — serve a
-   * forzare miss DETERMINISTICI nel resolve del modo "optimistic". Mai nel
-   * path di produzione: li' i MISS nascono dalla capacita', non si iniettano.
+   * I1 del decode ottimistico (C3b spec §1): fra il submit di un token e il
+   * suo readback di coda la slotTable e' INTOCCABILE — insert/evict avvengono
+   * SOLO al confine di token. Il guard si arma da glmmodel nel solo modo
+   * "optimistic": nel path sync l'ensure fra submit e mapAsync E' il design.
+   */
+  setInFlight(v: boolean): void {
+    this.inFlight = v;
+  }
+
+  private assertNotInFlight(op: string): void {
+    if (this.inFlight) {
+      throw new Error(
+        `residency: ${op} con token in volo — la slotTable e' intoccabile fra submit e readback ` +
+        "(I1, C3b decode ottimistico): insert/evict solo al confine di token");
+    }
+  }
+
+  /**
+   * SOLO HARNESS (C3b, ktest): EVIZIONE deterministica delle chiavi date —
+   * rimosse dalla LRU, slot restituiti alla free list, entry di slotTable a
+   * MISS, flush immediato. Serve a forzare miss veri (expert genuinamente
+   * non residente, come un miss di capacita') nel resolve del modo
+   * "optimistic": cosi' il repair della fase 3 fa un fetch reale. Le
+   * statistiche NON si toccano (l'evizione e' iniettata, non del regime).
    */
   debugMarkMiss(keys: number[]): void {
     if (!this.table) throw new Error("residency: debugMarkMiss senza slotTable (ExpertCacheOpts.slotTable)");
-    for (const k of keys) this.tableSet(k, SLOT_TABLE_MISS);
+    this.assertNotInFlight("debugMarkMiss");
+    for (const k of keys) {
+      const layer = Math.floor(k / G.nExpert);
+      const c = this.cls[ExpertCache.classOf(layer)];
+      const found = c.lru.get(k);
+      if (found !== undefined) {
+        c.lru.delete(k);
+        c.free.push(found);
+      }
+      this.tableSet(k, SLOT_TABLE_MISS);
+    }
     this.flushSlotTable();
   }
 
@@ -396,6 +429,7 @@ export class ExpertCache {
   // token corrente sta per bindare: mai scelti come vittima (i top-4 di un
   // layer devono coesistere).
   ensure(layer: number, expert: number, readRaw: ExpertReader, pinned?: Set<number>): { slot: SlotRef; hit: boolean } {
+    this.assertNotInFlight("ensure");
     const cls = ExpertCache.classOf(layer);
     const c = this.cls[cls];
     const key = expertKey(layer, expert);

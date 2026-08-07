@@ -24,9 +24,15 @@ forzati marcati esatti con 0 falsi positivi, degrado ≡ ref f64 a expert
 azzerati, checkpoint hidden bit-identico gpu↔optimistic 4096/4096. Suite
 337+7, tsc pulito, verifier PASS. Landmine annotata: preload in ordine
 (layer,expert) ⇒ se P(dirty) fuori proiezione in fase 4, guardare lì prima
-della LRU. **Next decidable: fase 3** — repair al confine (fetch mancanti,
-pin-for-replay, flush unico, replay da hiddenCkpt, assert I1/I3) + test di
-identità ottimistico-vs-sincrono con miss forzato + caso di rifiuto.
+della LRU. **It.3 — fase 3 DONE: repair+replay, identità BIT-esatta** —
+ktest 69/69: 64 posizioni (3 con replay forzato dal primo layer sporco,
+rientro dal checkpoint), hidden e logits bit-identici 131072/131072 vs
+sincrono, submits 67=64+3, 0 sync router; I1 nel path (guard + unit, suite
+338+7); deviazione dichiarata nel journal (identità a ctx 64, limite ktest —
+la scala ~500 è fase 4/6). **Next decidable: fase 4** — glmbench sul ramo
+ottimistico (modello vero, ctx ~500): wiring `select:"optimistic"` nel bench,
+gate strutturale sync/token ≤ 2 e submits/token ≤ 2 in produzione, report con
+P(dirty)/miss/tassa ms/token + decode/prefill/TTFT + gap UX + hostState.
 Ratifiche c3a ancora pendenti (non bloccanti): item 14/14b, item 2 formale,
 item 19/20/21 prese d'atto.
 

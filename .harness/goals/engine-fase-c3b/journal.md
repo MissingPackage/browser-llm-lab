@@ -106,3 +106,61 @@ cpu/shadow/gpu (metriche identiche a c3a).
 Fase 3: repair al confine (fetch dei mancanti, pin-for-replay, flush unico,
 replay da hiddenCkpt[firstDirty], assert I1/I3) + test di identita'
 ottimistico-vs-sincrono con miss forzato e caso di rifiuto.
+
+## it.3 — 2026-08-07 — fase 3: repair + replay, e l'identita' e' BIT-esatta
+
+### Cosa
+
+- `forward` ristrutturato in `runPass(startLayer)` (wrap meccanico a
+  indentazione preservata, ordine delle operazioni INVARIATO — verificato dal
+  verifier col diff): il replay e' un secondo giro dello stesso token con
+  rientro `hiddenCkpt[startLayer] -> x` e `l < startLayer => continue`.
+- Driver del confine (spec §4): pin-for-replay (slot Sel dei layer >=
+  firstDirty, miss inclusi), `ensure` dei mancanti, UN `flushSlotTable` dopo
+  le writeBuffer (R5), replay, **throw I3 se il replay e' sporco — mai un
+  secondo replay**, `dirty.repaired`. `optimisticRepair:false` SOLO harness.
+  hiddenCkpt ora FORZATO in optimistic (e' l'input del replay).
+- I1 nel path: `ExpertCache.setInFlight` + guard su ensure/flush/debugMarkMiss
+  (armato solo in optimistic; nel sync l'ensure fra submit e mapAsync E' il
+  design). Unit node dedicata. `debugMarkMiss` ora EVICTION vera (lru+free+
+  MISS+flush): il repair fa fetch reali.
+- Telemetria: `dirtyTokens`/`replays`/`repairMs` (P(dirty) = dirtyTokens/
+  forwards; la tassa GPU sta gia' in submits/dispatches/gpuBusy).
+
+### Verifica (GPU reale, /tmp/ktest-c3b-it3.log; verifier a550b0ff PASS su sostanza 8/8)
+
+**ktest 69/69**; il nuovo `glm-optimistic-identita` misura il claim del GOAL
+("qualita' bit-invariata"), piu' forte del done-when (argmax): **64 posizioni,
+3 con replay forzato (startLayer=1: rientro dal checkpoint esercitato),
+hidden E logits bit-identici 131072/131072 vs sincrono**, argmax 64/64,
+routing per-k identico, submits 67 = 64+3, routerSyncs 0, contatori 3/3.
+La bit-identita' dell'INTERA sequenza prova anche la KV: le posizioni dopo i
+replay dipendono dalle righe KV riscritte dal replay (kvAppend idempotente
+per pos, verificato dal verifier sul WGSL). 68 kernel preesistenti con
+metriche IDENTICHE a it.2 (solo timing OPFS variato). `npm test` **338+7**
+(+1: unit I1); `tsc` pulito. Fase-2 forced-miss ora a `optimisticRepair:false`
+(senza, il repair ripara prima del ritorno e il degrado non si osserva).
+
+### Deviazione dichiarata (il verifier di fase 7 non la riapra)
+
+Il `[ASSUMED ctx ~500]` del done-when non e' esercitabile in ktest (device
+ktest ctxMax 64): identita' misurata a **ctx 64 / 64 token**. Giudizio del
+verifier: accettabile — parametro [ASSUMED] non fissato dal PI, proprieta'
+strutturalmente ctx-indipendente, dipendenza cross-posizione via KV inclusa
+nella prova; la scala vera e' coperta dai done-when di fase 4 (glmbench sul
+modello vero) e fase 6 (conformance).
+
+### Note non bloccanti (recepite)
+
+- Throw fra submit e readback ⇒ inFlight resta true: DELIBERATO (throw
+  fatale), ora commentato nel codice.
+- debugMarkMiss libera slot che la Sel in VRAM puo' ancora referenziare:
+  SOLO harness, mai in produzione (documentato).
+- PHASES riga 3: owns integrato con src/engine/ktest/ (correzione da
+  verifier, non un re-scope: il done-when esigeva il test in ktest).
+
+### Prossimo pezzo
+
+Fase 4: glmbench sul ramo ottimistico (modello vero, ctx ~500) + gate
+strutturale sync/token <= 2 e submits/token <= 2 in produzione, report con
+P(dirty)/miss/tassa/decode/prefill/TTFT + gap UX + hostState.
