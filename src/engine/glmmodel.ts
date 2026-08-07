@@ -178,6 +178,11 @@ export interface GlmDirtyInfo {
   misses: { layer: number; id: number; k: number }[];
   /** true = il token e' stato RIPARATO e rigiocato: hidden/logits sono puliti. */
   repaired?: boolean;
+  /**
+   * Round di repair+replay del token (>= 1 se repaired). Piu' di 1 = cascata:
+   * l'hidden riparato ha cambiato selezioni a valle (I4 emendata, it.4).
+   */
+  repairRounds?: number;
 }
 
 // Scomposizione del wall per token (contatori CUMULATIVI: il chiamante prende
@@ -212,6 +217,7 @@ export interface GlmTelemetry extends CoreCounters {
    */
   dirtyTokens: number;
   replays: number;
+  replayLayers: number; // somma dei layer rigiocati: E[replayFrac|dirty] = replayLayers/(replays*nLayer)
   repairMs: number;
   gpuPassOverflow: number;  // pass non strumentati per ring pieno (atteso 0)
   // Attribuzione di gpuBusyMs per CATEGORIA di kernel (spec §4, primo task
@@ -324,7 +330,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const T = {
     forwards: 0, encodeCpuMs: 0, ensureMs: 0, routerWaitMs: 0, tailWaitMs: 0,
     routerSyncs: 0, submits: 0, selMiss: 0, gpuBusyMs: 0, gpuPasses: 0, gpuPassOverflow: 0,
-    dirtyTokens: 0, replays: 0, repairMs: 0,
+    dirtyTokens: 0, replays: 0, replayLayers: 0, repairMs: 0,
     dispatches: 0,
   };
   const catMs = new Map<string, number>();
@@ -440,20 +446,28 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         '(residenza totale, fase 4c) oppure usare select "cpu".');
     }
   }
-  // PRECONDIZIONE DEL REGIME OTTIMISTICO (C3b spec §2): residenza near-total
-  // per classe. Sotto la soglia il replay collassa (WP-0: a budget 50/25% ogni
-  // token e' sporco) — quello e' il segmento di C3c, non di questo modo.
-  const optMinRes = opts.optimisticMinResidency ?? 0.88;
+  // PRECONDIZIONE DEL REGIME OTTIMISTICO (C3b spec §2, emendata in it.4 —
+  // docket c3b item 6): residenza TOTALE complessiva >= soglia. Sul TOTALE e
+  // non per classe: P(dirty) dipende dalla frazione complessiva di selezioni
+  // residenti, le classi sono un dettaglio di storage — e il riparto
+  // proporzionale rendeva q4_1 un vincolo artificiale (0.88 per classe =
+  // 13.5 GiB di slab, oltre il tetto fisico del device a QUALUNQUE host).
+  // La soglia di RIFIUTO e' 0.80: WP-0 misura il collasso a <= 50% (100%
+  // token sporchi) e piena funzionalita' a 82% (P(dirty) 85%, 9.55 tok/s
+  // proiettati — sopra il decode sync attuale); ~0.88 resta il riferimento
+  // delle proiezioni "near-total", non il confine del meccanismo.
+  const optMinRes = opts.optimisticMinResidency ?? 0.8;
   if (optSel) {
     const slots = expertSlots(opts.cache);
     const park = modelExpertPark(nLayer);
-    const corte = (["q4_0", "q4_1"] as const).filter((c) => park[c] > 0 && slots[c] < Math.ceil(optMinRes * park[c]));
-    if (corte.length > 0) {
+    const parkTot = park.q4_0 + park.q4_1;
+    const slotTot = Math.min(slots.q4_0, park.q4_0) + Math.min(slots.q4_1, park.q4_1);
+    if (slotTot < Math.ceil(optMinRes * parkTot)) {
       throw new Error(
-        'glmmodel: select "optimistic" esige la residenza NEAR-TOTAL — ' +
-        corte.map((c) => `classe ${c}: ${slots[c]} slot per ${park[c]} expert (< ${optMinRes})`).join("; ") +
-        ". Sotto questa soglia il decode ottimistico collassa (WP-0: ogni token e' sporco e il " +
-        "replay costa piu' del sync). Il regime di scarsita' e' materia della fase C3c " +
+        `glmmodel: select "optimistic" esige la residenza NEAR-TOTAL — ${slotTot} slot per ` +
+        `${parkTot} expert = ${(100 * slotTot / parkTot).toFixed(1)}% < ${optMinRes}. ` +
+        "Sotto questa soglia il decode ottimistico collassa (WP-0: a budget 50/25% ogni token e' " +
+        "sporco e il replay costa piu' del sync). Il regime di scarsita' e' materia della fase C3c " +
         '(sync+overlap): usare select "cpu" oppure allargare gli slot.');
     }
   }
@@ -808,29 +822,58 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // (`expertSlab`, che salta il pack CPU) con preload chunked/asincrono e la
   // pubblicazione della slotTable per blocchi. Qui il meccanismo e' il piu'
   // semplice che garantisca zero evict, non il piu' veloce.
-  if (gpuSel || optSel) {
-    // In optimistic il parco puo' eccedere gli slot: si riempie FINO ALLA
-    // CAPACITA' e mai oltre — zero evict resta la precondizione del preload
-    // (un evict qui scombinerebbe la LRU prima ancora del primo token). Gli
-    // expert oltre capacita' restano MISS nella slotTable: e' il regime del
-    // modo, non un difetto. L'ordine di riempimento (layer, expert crescenti)
-    // e' arbitrario finche' il repair di fase 3 non porta una policy.
-    for (const l of moeLayerAbs) {
-      const cls = ExpertCache.classOf(l);
-      const cap = cache.arenaGeometry(cls).nSlots;
-      for (let e = 0; e < G.nExpert; e++) {
-        if (optSel && cache.stats().occupied[cls] >= cap) break;
-        cache.ensure(l, e, expertReader);
-      }
-    }
-    cache.flushSlotTable();
+  const preloadCheck = (): void => {
     const ev = cache.stats().evictions;
     if (ev !== 0) {
       throw new Error(
         `glmmodel: preload con ${ev} evizioni — la precondizione sugli slot ` +
         "e' passata ma la cache ha comunque evinto (riparto degli slot per classe incoerente col parco)");
     }
+  };
+  if (gpuSel) {
+    // Residenza totale a scala ktest: il ciclo sincrono basta (v. nota SCALA).
+    for (const l of moeLayerAbs) {
+      for (let e = 0; e < G.nExpert; e++) cache.ensure(l, e, expertReader);
+    }
+    cache.flushSlotTable();
+    preloadCheck();
   }
+  // In optimistic il preload e' ASINCRONO E CHUNKED (la nota SCALA qui sopra
+  // non era decorativa: 2 417 ensure sincroni = ~12 GiB di writeBuffer senza
+  // mai drenare la staging interna della coda — firma R4, device perso su
+  // modello vero alla prima run di bench it.4). Ogni 64 expert (~340 MB) si
+  // attende onSubmittedWorkDone: la staging si svuota e la coda respira.
+  // Il parco puo' eccedere gli slot: si riempie FINO ALLA CAPACITA' e mai
+  // oltre — zero evict resta la precondizione (un evict scombinerebbe la LRU
+  // prima del primo token); gli expert oltre capacita' restano MISS, e' il
+  // regime del modo. Ordine (layer, expert) crescente: arbitrario finche' il
+  // repair non porta una policy (landmine it.2: se P(dirty) esce dalla
+  // proiezione, guardare prima qui). forward/prefillChunk attendono la
+  // promise al primo uso.
+  let preloadReady: Promise<void> | null = null;
+  if (optSel) {
+    preloadReady = (async () => {
+      let n = 0;
+      for (const l of moeLayerAbs) {
+        const cls = ExpertCache.classOf(l);
+        const cap = cache.arenaGeometry(cls).nSlots;
+        for (let e = 0; e < G.nExpert; e++) {
+          if (cache.stats().occupied[cls] >= cap) break;
+          cache.ensure(l, e, expertReader);
+          if (++n % 64 === 0) await device.queue.onSubmittedWorkDone();
+        }
+      }
+      cache.flushSlotTable();
+      await device.queue.onSubmittedWorkDone();
+      preloadCheck();
+    })();
+  }
+  const awaitPreload = async (): Promise<void> => {
+    if (preloadReady) {
+      await preloadReady;
+      preloadReady = null;
+    }
+  };
   const nMoeLayer = nMoeSeen;
   const nSel = Math.max(1, nMoeLayer * G.nExpertUsed);
   if (MOE_IDX_STRIDE % device.limits.minUniformBufferOffsetAlignment !== 0) {
@@ -1149,6 +1192,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       // Piano: docs/engine/glmprefill-wiring-plan-2026-08-06.md. Telemetria:
       // contatori sempre-on (dispatches/submits/routerSyncs); il dettaglio ms
       // liv.1 del prefill si aggiunge quando servira' all'attribuzione.
+      await awaitPreload();
       const m = xRows.length / G.dModel;
       if (!Number.isInteger(m) || m < 1 || m > MPF) throw new Error(`prefillChunk: righe ${m} (ammesse 1..${MPF})`);
       if (posStart + m > ctxMax) throw new Error("glmmodel: contesto pieno (chunk)");
@@ -1275,6 +1319,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     async forward(xIn: Float32Array, pos: number, readLogits = false) {
       if (pos >= ctxMax) throw new Error("glmmodel: contesto pieno");
       if (readLogits && !opts.head) throw new Error("glmmodel: head non abilitata");
+      await awaitPreload();
       device.queue.writeBuffer(x, 0, xIn as unknown as BufferSource);
       device.queue.writeBuffer(P, 0, new Uint32Array([pos, pos, 0, 0]));
       const routing: GlmRouting[] = [];
@@ -1591,42 +1636,57 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       // vede la tassa). Sempre, anche a telemetria spenta, come prima.
       T.forwards++;
       let dirty = out.dirty;
-      // ---- repair + replay al confine di token (spec §4, punto 2) ----
+      // ---- repair + replay ITERATIVO al confine di token (spec §4, I3/I4
+      // emendate in it.4 — docket item 7). I4 vale SOLO per il primo layer
+      // sporco di ogni round: il suo input e' il checkpoint bit-identico ⇒
+      // stessa selezione ⇒ coi miss riparati si risolve pulito. Nei layer A
+      // VALLE l'hidden riparato differisce da quello degradato del giro prima
+      // ⇒ il router puo' scegliere expert DIVERSI, anche non residenti ⇒ un
+      // nuovo miss e' FISIOLOGIA, non bug (scoperto sul modello vero al primo
+      // token: il mini-modello ktest ha un solo layer MoE e non ha valle).
+      // La convergenza e' per PREFISSO: firstDirty cresce STRETTAMENTE a ogni
+      // round (assert — la sua violazione SI' e' un bug strutturale), quindi
+      // <= nMoeLayer round. Il costo dei round e' parte della tassa misurata.
       if (dirty && dirty.missCount > 0) {
         T.dirtyTokens++;
         if (repairOn) {
-          // (c) pin-for-replay: l'eviction del repair non puo' toccare gli slot
-          // referenziati dalla Sel dei layer >= firstDirtyLayer (<= 184 slot).
-          // I miss stessi sono in quelle Sel ⇒ pinnati anche fra loro. Con I4
-          // (stesso hidden bit-identico ⇒ stessa selezione) e' cio' che rende
-          // il replay pulito PER COSTRUZIONE (I3).
-          const pinned = new Set<number>();
-          for (const r of routing) {
-            if (r.layer < dirty.firstDirtyLayer) continue;
-            for (const e of r.experts) pinned.add(expertKey(r.layer, e));
+          let cur: GlmDirtyInfo | undefined = out.dirty;
+          let lastFirst = -1;
+          let rounds = 0;
+          while (cur && cur.missCount > 0) {
+            if (cur.firstDirtyLayer <= lastFirst) {
+              throw new Error(
+                `glmmodel select "optimistic": replay round ${rounds + 1} sporco allo STESSO layer ` +
+                `${cur.firstDirtyLayer} (precedente ${lastFirst}) — progresso violato: o l'eviction ha ` +
+                "toccato uno slot pinnato o l'insert non ha preceduto il flush. Bug strutturale.");
+            }
+            if (++rounds > nMoeLayer + 1) {
+              throw new Error(`glmmodel select "optimistic": ${rounds} round di repair — oltre il cap teorico (${nMoeLayer} layer MoE)`);
+            }
+            lastFirst = cur.firstDirtyLayer;
+            // pin-for-replay del ROUND: gli slot referenziati dalla Sel
+            // corrente nei layer >= firstDirty (miss inclusi: stanno li').
+            const pinned = new Set<number>();
+            for (const r of routing) {
+              if (r.layer < cur.firstDirtyLayer) continue;
+              for (const e of r.experts) pinned.add(expertKey(r.layer, e));
+            }
+            const tRep = nowT();
+            // fetch dei mancanti; UN flush, DOPO le writeBuffer degli slab
+            // (ordine R5: il dato prima della tabella che lo indirizza).
+            for (const ms of cur.misses) cache.ensure(ms.layer, ms.id, expertReader, pinned);
+            cache.flushSlotTable();
+            if (telemOn) T.repairMs += performance.now() - tRep;
+            T.replays++;
+            T.replayLayers += nLayer - cur.firstDirtyLayer; // frazione rigiocata (spec §5)
+            // replay: la routing si ricostruisce dalla Sel del giro nuovo —
+            // le entry dei layer non rigiocati restano in VRAM dal giro prima,
+            // la copia di coda e' sempre dell'intera Sel.
+            routing.length = 0;
+            out = await runPass(cur.firstDirtyLayer);
+            cur = out.dirty;
           }
-          const tRep = nowT();
-          // (b) fetch dei mancanti; (d) UN flush, DOPO le writeBuffer degli
-          // slab (ordine R5: il dato prima della tabella che lo indirizza).
-          for (const ms of dirty.misses) cache.ensure(ms.layer, ms.id, expertReader, pinned);
-          cache.flushSlotTable();
-          if (telemOn) T.repairMs += performance.now() - tRep;
-          T.replays++;
-          // (e) replay: il giro ridecide con la STESSA selezione (I4) e la
-          // routing si ricostruisce dalla Sel del replay — le entry dei layer
-          // non rigiocati restano in VRAM dal primo giro, la copia di coda e'
-          // sempre dell'intera Sel.
-          routing.length = 0;
-          out = await runPass(dirty.firstDirtyLayer);
-          // I3: un replay sporco e' un bug strutturale (pin bucato o insert
-          // dopo il flush) — si alza, MAI un secondo replay.
-          if (out.dirty && out.dirty.missCount > 0) {
-            throw new Error(
-              `glmmodel select "optimistic": replay SPORCO (${out.dirty.missCount} miss, primo layer ` +
-              `${out.dirty.firstDirtyLayer}) dopo il repair — I3 violata: o l'eviction ha toccato uno ` +
-              "slot pinnato o l'insert non ha preceduto il flush. Bug strutturale, mai un secondo replay.");
-          }
-          dirty = { ...dirty, repaired: true };
+          dirty = { ...dirty, repaired: true, repairRounds: rounds };
         }
       }
       return { hidden: out.hidden, logits: out.logits, routing, dirty };
@@ -1650,7 +1710,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         on: telemOn, forwards: T.forwards, encodeCpuMs: T.encodeCpuMs, ensureMs: T.ensureMs,
         routerWaitMs: T.routerWaitMs, tailWaitMs: T.tailWaitMs, routerSyncs: T.routerSyncs,
         submits: T.submits, selMiss: T.selMiss, gpuBusyMs: canGpuTs ? T.gpuBusyMs : null,
-        dirtyTokens: T.dirtyTokens, replays: T.replays, repairMs: T.repairMs,
+        dirtyTokens: T.dirtyTokens, replays: T.replays, replayLayers: T.replayLayers, repairMs: T.repairMs,
         gpuPasses: T.gpuPasses, gpuPassOverflow: T.gpuPassOverflow,
         dispatches: T.dispatches,
         gpuByCatMs: catMs.size ? Object.fromEntries(catMs) : null,

@@ -15,11 +15,24 @@ import { GlmOpfsSource } from "../glmsource";
 import { grantedLimits, slabBufferCap } from "../gpulimits";
 import { createEngineDevice } from "../gpudevice";
 import type { GlmTelemetry } from "../glmmodel";
-import { arenaNeeds, type ExpertCacheStats } from "../residency";
+import { arenaNeeds, modelExpertPark, type ExpertCacheStats } from "../residency";
+import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../moe";
 
 interface GoldenPrompt { id: string; promptTokens: number[]; generated: number[] }
 interface Golden { modelSha256: string; prompts: GoldenPrompt[] }
-interface Cfg { prompt: number; nGen: number; replicates: number; budgetGiB: number; attribReplicates?: number; prefillBatch?: boolean }
+interface Cfg { prompt: number; nGen: number; replicates: number; budgetGiB: number; attribReplicates?: number; prefillBatch?: boolean; select?: "cpu" | "optimistic" }
+
+// Allocazione slot del modo ottimistico (C3b it.4, docket item 6b): q4_1
+// INTERA per prima (256 slot ≈ 1.3 GiB: azzera il miss surface dei 4 layer
+// MoE q4_1), il resto del budget a q4_0. Il riparto proporzionale del
+// default renderebbe q4_1 il vincolo artificiale della precondizione.
+const optimisticSlots = (budgetBytes: number): { q4_0: number; q4_1: number } => {
+  const park = modelExpertPark(G.nLayer);
+  const q41 = Math.min(park.q4_1, Math.floor(budgetBytes / SLAB_DOWN_Q4_1.bytes));
+  const rest = budgetBytes - q41 * SLAB_DOWN_Q4_1.bytes;
+  const q40 = Math.min(park.q4_0, Math.floor(rest / SLAB_DOWN_Q4_0.bytes));
+  return { q4_0: q40, q4_1: q41 };
+};
 
 // Funzione obiettivo (direction §2, ruling PI 2026-08-01): NON sono gate — il
 // report li stampa perché il floor CPU non venga scambiato per l'obiettivo.
@@ -71,6 +84,7 @@ interface PhaseResult {
 interface TelemDelta {
   forwards: number; encodeCpuMs: number; ensureMs: number; routerWaitMs: number;
   tailWaitMs: number; routerSyncs: number; submits: number;
+  dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
   gpuBusyMs: number | null; gpuPasses: number; gpuPassOverflow: number;
   dispatches: number;
   gpuByCatMs: Record<string, number> | null;
@@ -84,6 +98,10 @@ const telemDelta = (a: GlmTelemetry, b: GlmTelemetry): TelemDelta => ({
   tailWaitMs: b.tailWaitMs - a.tailWaitMs,
   routerSyncs: b.routerSyncs - a.routerSyncs,
   submits: b.submits - a.submits,
+  dirtyTokens: b.dirtyTokens - a.dirtyTokens,
+  replays: b.replays - a.replays,
+  replayLayers: b.replayLayers - a.replayLayers,
+  repairMs: b.repairMs - a.repairMs,
   gpuBusyMs: a.gpuBusyMs === null || b.gpuBusyMs === null ? null : b.gpuBusyMs - a.gpuBusyMs,
   gpuPasses: b.gpuPasses - a.gpuPasses,
   gpuPassOverflow: b.gpuPassOverflow - a.gpuPassOverflow,
@@ -127,6 +145,10 @@ async function main(cfg: Cfg): Promise<void> {
   // Il device si crea DOPO aver saputo ctxMax e budget: i limiti sono DERIVATI
   // dai consumatori (C3a it.6), non chiesti al massimo dell'adapter.
   const budgetBytes = Math.floor(cfg.budgetGiB * (1 << 30));
+  const optimistic = cfg.select === "optimistic";
+  // In ottimistico gli slot sono ESPLICITI (q4_1-first): la STESSA override va
+  // sia ad arenaNeeds (sizing device) sia alla cache — una sola verita'.
+  const slotsOverride = optimistic ? optimisticSlots(budgetBytes) : undefined;
   const { adapter, device, has } = await createEngineDevice({
     label: "glmbench",
     // timestamp-query: livello 2 dell'attribuzione (gpuBusy). Se l'adapter non
@@ -138,7 +160,7 @@ async function main(cfg: Cfg): Promise<void> {
       // arena expert (C3a fase 4 strato 1): quanti buffer di classe e quanto
       // grandi. L'aritmetica e' quella della cache (residency), non ricopiata.
       ...arenaNeeds({
-        budgetBytes,
+        budgetBytes, slotsOverride,
         maxBufferBytes: adapter.limits.maxBufferSize,
         maxBindingBytes: adapter.limits.maxStorageBufferBindingSize,
       }),
@@ -156,14 +178,16 @@ async function main(cfg: Cfg): Promise<void> {
     return xRow;
   };
 
-  progress(`modello 47 layer + head, ctxMax ${ctxMax}, slab ${cfg.budgetGiB} GiB…`);
+  progress(`modello 47 layer + head, ctxMax ${ctxMax}, slab ${cfg.budgetGiB} GiB` +
+    (optimistic ? ` — OPTIMISTIC, slot ${JSON.stringify(slotsOverride)} (preload…)` : "") + "…");
   const tBuild0 = performance.now();
   const model = createGlmModel(device, source, {
     ctxMax, head: true,
+    select: optimistic ? "optimistic" : undefined,
     // capacità di telemetria allocata, REGISTRAZIONE spenta: le repliche
     // headline (quelle dei gate) girano a overhead nullo
     telemetry: false, telemetryGpu: hasTsq,
-    cache: { budgetBytes, maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true },
+    cache: { budgetBytes, slotsOverride, maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true },
   });
   const buildMs = performance.now() - tBuild0;
 
@@ -316,8 +340,18 @@ async function main(cfg: Cfg): Promise<void> {
     // Prima di questa iterazione `dispatchesPerToken` e `syncsPerToken` erano
     // valori derivati con nomi che li facevano sembrare misure.
     dispatchesPerTokenPlanned: model.dispatchesPerTokenPlanned,
-    syncsPerTokenExpected: nMoe + 1, // by design: 46 readback router + 1 logits/hidden
+    // sync path: 46 readback router + 1 di coda. Ottimistico: 1 readback di
+    // coda per GIRO ⇒ atteso 1+P(dirty) <= 2 — e' il gate strutturale C3b.
+    syncsPerTokenExpected: optimistic ? 2 : nMoe + 1,
+    syncsNote: optimistic
+      ? "optimistic: 1 readback di coda per giro (pulito 1, sporco 2 col replay); il valore e' il TETTO del gate strutturale, l'atteso vero e' 1+P(dirty). Confronto C3a sync path: 47/token."
+      : "sync path: 46 readback router + 1 di coda per token",
     decode: {
+      // ATTENZIONE (optimistic): gli ensure del decode avvengono SOLO nel
+      // repair, sui soli miss ⇒ hitRate/retention 0% PER COSTRUZIONE — il
+      // contatore cambia semantica, non e' una regressione vs i bench sync
+      // (hit ~99%). La residenza effettiva e' optimistic.residencyRatio.
+      hitRateNote: optimistic ? "semantica diversa in optimistic: solo i miss passano da ensure — v. optimistic.residencyRatio" : undefined,
       hitRate: median(decRes.map((r) => r.hitRate ?? 0)),
       // retention accanto all'hitRate, mai da sola ne' lui da solo (4d,
       // lezione kimi-k3-in-c: e' l'unica delle tre definizioni di "hit rate"
@@ -425,7 +459,9 @@ async function main(cfg: Cfg): Promise<void> {
       dispatchesPerTokenMeasured: median(withT.map((r) => r.telem!.decode.dispatches / cfg.nGen)),
       gpuPassesPerToken: median(withT.map((r) => r.telem!.decode.gpuPasses / cfg.nGen)),
       gpuPassOverflow: withT.reduce((a, r) => a + r.telem!.decode.gpuPassOverflow, 0),
-      projectionByK: [2, 4, 8, 46].map(project),
+      // il batching dei router sync non esiste in optimistic (routerSyncs 0):
+      // la proiezione sarebbe rumore accanto al misurato — si sopprime.
+      projectionByK: optimistic ? null : [2, 4, 8, 46].map(project),
       caveats: [
         "Chrome quantizza i timestamp GPU (~100 µs): con ~140 pass/token l'errore per pass si media, ma gpuBusy va letto come stima, non come misura esatta.",
         "routerWait include il tempo in cui la GPU esegue: NON è tutto overhead recuperabile. Il limite inferiore recuperabile è syncFloorProbe × routerSyncsPerToken.",
@@ -481,7 +517,10 @@ async function main(cfg: Cfg): Promise<void> {
         promptIdx: cfg.prompt, promptId: pr.id, promptTokens: nPrompt, nGen: cfg.nGen,
         replicates: cfg.replicates, budgetGiB: cfg.budgetGiB, ctxMax,
         prefillPath: cfg.prefillBatch ? `chunked M=${GLM_PREFILL_M} (prefillChunk, fase 5)` : "decode-only (forward per posizione)",
-        decodePath: "single-step greedy (argmax dai logits del motore)",
+        decodePath: optimistic
+          ? 'single-step greedy su select:"optimistic" (1 submit + repair/replay, C3b)'
+          : "single-step greedy (argmax dai logits del motore)",
+        selectMode: optimistic ? "optimistic" : "cpu",
         rateWindow: "intera fase (prefill: nPrompt posizioni; decode: nGen token)",
         protocol: "B2: warmup scartato + N repliche, mediana come headline",
       },
@@ -495,17 +534,56 @@ async function main(cfg: Cfg): Promise<void> {
         // con readLogits — nota it.8): l'atteso e' planned+2 ESATTO, contatori
         // interi su piano statico. Uno scarto = drift piano/path. null (attrib
         // spenta) = gate non valutato, neutro per l'exit (page.ts).
-        dispatchPlan: attribution2 ? {
+        // In OTTIMISTICO il gate d'uguaglianza non e' valutabile: il replay
+        // aggiunge dispatch LEGITTIMI (frazione di layer rigiocata) — si
+        // riporta la banda attesa invece dell'uguaglianza.
+        dispatchPlan: attribution2 && !optimistic ? {
           planned: model.dispatchesPerTokenPlanned,
           expectedWithHead: model.dispatchesPerTokenPlanned + 2,
           measured: attribution2.dispatchesPerTokenMeasured,
           pass: attribution2.dispatchesPerTokenMeasured === model.dispatchesPerTokenPlanned + 2,
+        } : null,
+        // gate STRUTTURALE C3b (contratto v2): sync/token <= 2 e submits/token
+        // <= 2 in media steady-state sul ramo decode di PRODUZIONE. In
+        // ottimistico ogni giro ha UN readback di coda ⇒ syncs == submits.
+        structural: optimistic && attribution2 ? {
+          submitsPerToken: attribution2.submitsPerToken,
+          syncsPerToken: attribution2.submitsPerToken + attribution2.routerSyncsPerToken,
+          routerSyncsPerToken: attribution2.routerSyncsPerToken,
+          gate: 2,
+          pass: attribution2.submitsPerToken <= 2
+            && attribution2.submitsPerToken + attribution2.routerSyncsPerToken <= 2,
+          vsC3aSyncPath: { syncsPerToken: nMoe + 1, note: "il termine che il decode ottimistico elimina (46 readback router + 1 coda)" },
         } : null,
         floorSource: "results/engine/moe-oracle/llama-bench-glm47flash-q4_0-2026-07-30.json (llama.cpp 5f55650, CPU i9-14900HX 16 thread, n_prompt 512 / n_gen 64)",
       },
       decodeToksPerSec: decodeTps, prefillToksPerSec: prefillTps,
       ttftMs: ttft,
       objective,
+      // ---- statistiche del regime ottimistico (input della fase 5: confronto
+      // con wp0-replay-sim ALLO STESSO budget slot) ----
+      optimistic: optimistic ? (() => {
+        const withT = attribReps.filter((r) => r.telem);
+        const d = (f: (t: TelemDelta) => number) => withT.length ? median(withT.map((r) => f(r.telem!.decode))) : null;
+        const dirtyTok = d((t) => t.dirtyTokens);
+        const replays = d((t) => t.replays);
+        const replayLayers = d((t) => t.replayLayers);
+        return {
+          slots: slotsOverride, park: modelExpertPark(G.nLayer),
+          slotsPolicy: "q4_1-first (docket c3b item 6b): q4_1 intera, resto a q4_0",
+          residencyRatio: slotsOverride
+            ? (slotsOverride.q4_0 + slotsOverride.q4_1) / (modelExpertPark(G.nLayer).q4_0 + modelExpertPark(G.nLayer).q4_1)
+            : null,
+          // dalla finestra di attribuzione (contatori accesi):
+          pDirty: dirtyTok === null ? null : dirtyTok / cfg.nGen,
+          replaysPerToken: replays === null ? null : replays / cfg.nGen,
+          replayFracPerDirty: replays && replayLayers ? replayLayers / (replays * G.nLayer) : null,
+          repairMsPerToken: d((t) => t.repairMs / cfg.nGen),
+          // dalla headline (sempre misurate): miss e stallo per token stanno
+          // gia' in telemetry.decode (missesPerToken, stallMsPerToken)
+          note: "pDirty/replayFrac/repair dalla finestra di attribuzione; miss/stallo per token in telemetry.decode (headline); la tassa si confronta in fase 5 con wp0-replay-sim-2026-08-06.json allo stesso budget slot",
+        };
+      })() : null,
       attribution2, attributionByCategory, syncFloorProbe: syncFloor,
       timestampQuery: { available: hasTsq, used: attribution2?.gpuBusyMsPerToken != null },
       // I limiti CONCESSI, non quelli sperati: una prestazione misurata su

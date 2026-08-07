@@ -38,7 +38,9 @@ if (!existsSync(GOLDEN_PUB)) copyFileSync(GOLDEN, GOLDEN_PUB);
 mkdirSync(PROFILE, { recursive: true });
 
 const prefillBatch = arg("prefill-batch", "0");
-const qs = new URLSearchParams({ prompt, ngen: nGen, reps, budget, attrib, prefillbatch: prefillBatch });
+// C3b fase 4: --select optimistic (decode a 1 submit + repair/replay)
+const select = arg("select", "cpu");
+const qs = new URLSearchParams({ prompt, ngen: nGen, reps, budget, attrib, prefillbatch: prefillBatch, select });
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
@@ -76,6 +78,21 @@ for (;;) {
     if (dp) {
       console.log(
         `[glmbench] piano dispatch: planned ${dp.planned} (+2 testa = ${dp.expectedWithHead}) vs misurato ${dp.measured} — ${dp.pass ? "PASS" : "DRIFT (FAIL)"}`);
+    }
+    // gate STRUTTURALE C3b (solo select=optimistic)
+    const sg = g.structural;
+    if (sg) {
+      console.log(
+        `[glmbench] gate strutturale C3b: ${sg.syncsPerToken.toFixed(3)} sync / ${sg.submitsPerToken.toFixed(3)} submit per token ` +
+        `(gate <= ${sg.gate}: ${sg.pass ? "PASS" : "FAIL"}) — sync path C3a: ${sg.vsC3aSyncPath.syncsPerToken}/token`);
+    }
+    const os = report.optimistic;
+    if (os) {
+      console.log(
+        `[glmbench] ottimistico: slot ${os.slots.q4_0}+${os.slots.q4_1} = ${(100 * os.residencyRatio).toFixed(1)}% del parco, ` +
+        `P(dirty) ${os.pDirty === null ? "n/d" : (100 * os.pDirty).toFixed(1) + "%"}, ` +
+        `replayFrac|dirty ${os.replayFracPerDirty === null ? "n/d" : (100 * os.replayFracPerDirty).toFixed(1) + "%"}, ` +
+        `repair ${os.repairMsPerToken === null ? "n/d" : os.repairMsPerToken.toFixed(1) + " ms/token"}`);
     }
     const d = report.telemetry.decode;
     console.log(

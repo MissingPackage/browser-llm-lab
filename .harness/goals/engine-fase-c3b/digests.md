@@ -52,3 +52,16 @@
   scala vera e' fase 4/6. Suite 338+7, tsc pulito, verifier PASS 8/8.
 - **Prossimo**: fase 4 — glmbench ottimistico sul modello vero, gate
   strutturale in produzione.
+
+## it.4 (2026-08-07) — fase 4: l'ottimistico in produzione — 11.60 tok/s (+123%)
+
+- **Prima misura assoluta**: decode 5.211 → **11.60 tok/s**, TTFT 17.88 →
+  16.79 s, prefill 25.78 → 27.45, gpuBusy 54.2 → 39.4 (clock recovery
+  reale). **Token generati 64/64 identici al sync** a ctx 525.
+- **Due finding dal modello vero**, risolti e docketati: preload R4 (device
+  perso ⇒ chunked async) e la CASCATA del replay (I3 falsificata ⇒ repair
+  iterativo per prefisso, spec emendata).
+- **Gate strutturale 2.188 > 2: FAIL dichiarato, ruling al PI (item 8)** —
+  P(dirty) 93.8% × round 1.27; al tetto 2596 l'aritmetica e' 1.82 PASS.
+  Opzione raccomandata: una run a sessione minima (azione host tua).
+- **Prossimo**: fase 5 — tassa vs WP-0 (analisi, indipendente dal ruling).

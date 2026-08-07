@@ -28,11 +28,17 @@ della LRU. **It.3 — fase 3 DONE: repair+replay, identità BIT-esatta** —
 ktest 69/69: 64 posizioni (3 con replay forzato dal primo layer sporco,
 rientro dal checkpoint), hidden e logits bit-identici 131072/131072 vs
 sincrono, submits 67=64+3, 0 sync router; I1 nel path (guard + unit, suite
-338+7); deviazione dichiarata nel journal (identità a ctx 64, limite ktest —
-la scala ~500 è fase 4/6). **Next decidable: fase 4** — glmbench sul ramo
-ottimistico (modello vero, ctx ~500): wiring `select:"optimistic"` nel bench,
-gate strutturale sync/token ≤ 2 e submits/token ≤ 2 in produzione, report con
-P(dirty)/miss/tassa ms/token + decode/prefill/TTFT + gap UX + hostState.
+338+7); deviazione ctx-64 poi chiusa in it.4. **It.4 — fase 4: L'OTTIMISTICO
+IN PRODUZIONE — decode 5.211 → 11.60 tok/s (+123%)**, TTFT 16.79 s, prefill
+27.45, gpuBusy 39.4 (clock recovery reale), token generati **64/64 identici
+al sync** a ctx 525 (`bench-glm-4090-b12-optimistic-2026-08-07.json`, host
+quiescent). Due finding dal modello vero risolti e docketati: preload R4 ⇒
+chunked async (item 6), **cascata del replay** ⇒ repair iterativo per
+prefisso, I3/I4 emendate (item 7). **Gate strutturale 2.188 > 2 FAIL
+DICHIARATO — RULING PI in docket item 8** (raccomandata: run a sessione
+minima, al tetto 2596 l'aritmetica dà 1.82 PASS). **Next decidable: fase 5**
+— tassa vs wp0-replay-sim allo stesso budget slot (analisi, indipendente dal
+ruling; attenzione all'unità di replayFrac — journal it.4).
 Ratifiche c3a ancora pendenti (non bloccanti): item 14/14b, item 2 formale,
 item 19/20/21 prese d'atto.
 

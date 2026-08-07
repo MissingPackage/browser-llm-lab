@@ -164,3 +164,66 @@ modello vero) e fase 6 (conformance).
 Fase 4: glmbench sul ramo ottimistico (modello vero, ctx ~500) + gate
 strutturale sync/token <= 2 e submits/token <= 2 in produzione, report con
 P(dirty)/miss/tassa/decode/prefill/TTFT + gap UX + hostState.
+
+## it.4 — 2026-08-07 — fase 4: il decode ottimistico in produzione — 11.60 tok/s (+123%)
+
+### Cosa
+
+Wiring bench: `--select optimistic` (runner/page/worker), allocazione slot
+q4_1-first (`optimisticSlots`: q4_1 intera + resto a q4_0 — docket item 6b),
+report esteso (gates.structural, sezione optimistic, TelemDelta con
+dirty/replay/repair), dispatchPlan neutralizzato in optimistic (il replay
+aggiunge dispatch legittimi). Precondizione EMENDATA a TOTALE >= 0.80
+(docket item 6a: per-classe 0.88 = 13.5 GiB, oltre il tetto fisico a
+qualunque host; collasso WP-0 a <= 50%).
+
+### I due finding del modello vero (il ktest non poteva vederli)
+
+1. **Preload R4** (run 1): 2 417 ensure sincroni = ~12 GiB di writeBuffer
+   senza drenaggio ⇒ device perso ("A valid external Instance reference no
+   longer exists"). La nota SCALA del codice lo prediceva. Fix: preload
+   asincrono chunked (onSubmittedWorkDone ogni 64 expert), forward e
+   prefillChunk attendono la promise al primo uso.
+2. **La cascata del replay** (run 2): replay SPORCO (3 miss al layer 11)
+   dopo il repair — **I3 "mai un secondo replay" FALSIFICATA**. I4 vale solo
+   per il PRIMO layer sporco (input = checkpoint bit-identico); a valle
+   l'hidden riparato cambia le selezioni ⇒ nuovi miss possibili. Il
+   mini-modello (1 layer MoE) non ha valle; WP-0 ha selezioni fisse dalla
+   traccia. Fix: **repair ITERATIVO per prefisso** — round finche' pulito,
+   progresso stretto di firstDirty asserito (violazione = throw), cap nMoe,
+   `repairRounds` nel dirty. Spec I3/I4 emendate, docket item 7.
+
+### La misura (bench-glm-4090-b12-optimistic-2026-08-07.json, host quiescent)
+
+- **decode 11.60 tok/s** (5.211 ⇒ +123%; sopra la proiezione WP-0 9.55),
+  repliche 11.75/11.53/11.60; **prefill 27.45** (25.78); **TTFT 16.79 s**
+  (17.88). Floor C1 ancora FAIL (13.43/56.58), gap UX 2.59x / TTFT 4.20x.
+- **gpuBusy decode 39.4 ms/token (da 54.2)**: il clock recovery di it.1 e'
+  reale — meno bolle, boost su. Wall 86.5 = 39.4 gpu + 15.4 stallo + 31.6
+  sync/CPU (repair 15.5 dentro).
+- **Identita' in produzione: token generati 64/64 IDENTICI al bench sync**
+  (rebaseline4d, stesso p6, greedy, ctx 525) e 3 repliche identiche fra
+  loro — chiude anche la deviazione ctx-64 dichiarata in it.3.
+- **Gate strutturale: 2.188 sync(=submit)/token > 2 — FAIL DICHIARATO**
+  (docket item 8, ruling PI): 1 + P(dirty) 93.8% × E[round|dirty] 1.267.
+  Al tetto 2596 (sessione minima) l'aritmetica da' 1.82 PASS; su M4 ~1.0.
+  Il termine eliminato: 47 → 2.19 sync/token (−95%).
+- P(dirty) 93.8% vs 85.2% del sim a pari slot: gap da spiegare in fase 5
+  (LruFast, ordine di preload — landmine it.2 — e cascata non modellata).
+
+### Verifica
+
+Verifier (ab93a715) PASS su 8/8 punti: report completo (nessun campo del
+done-when assente), identita' ricalcolata indipendentemente, aritmetica slot
+e item 8 ricontrollate, sync path invariato, suite 338+7 e tsc rilanciati.
+Note recepite: hitRate 0% in optimistic = cambio di semantica (annotato nel
+worker per le run future), projectionByK soppressa in optimistic, e —
+LOAD-BEARING per la fase 5 — **replayLayers conta TUTTI i layer dal primo
+sporco (densi inclusi) su denominatore nLayer: verificare l'unita' del sim
+prima del confronto ±25%**.
+
+### Prossimo pezzo
+
+Fase 5: confronto della tassa con wp0-replay-sim allo stesso budget slot
+(2417 vs 2419: delta dichiarato), unita' di replayFrac verificata, gap
+P(dirty) attribuito. Non dipende dal ruling item 8.

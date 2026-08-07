@@ -1550,9 +1550,11 @@ async function testGlmOptimisticPrecondition(g: Gpu): Promise<KResult> {
     msg = e instanceof Error ? e.message : String(e);
   }
   modello?.destroy();
+  // Precondizione emendata in it.4 (docket c3b item 6): sul TOTALE, soglia
+  // 0.8 — il mini-modello ha parco 64 (solo q4_1) e 7 slot utili = 10.9%.
   const want = [
     "residenza NEAR-TOTAL",
-    `classe q4_1: ${KTEST_SLOTS.q4_1} slot per ${G.nExpert} expert`,
+    `${KTEST_SLOTS.q4_1} slot per ${G.nExpert} expert = ${(100 * KTEST_SLOTS.q4_1 / G.nExpert).toFixed(1)}% < 0.8`,
     "C3c",
   ];
   const mancanti = want.filter((w) => !msg.includes(w));

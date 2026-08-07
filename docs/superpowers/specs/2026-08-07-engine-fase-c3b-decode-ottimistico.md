@@ -28,12 +28,25 @@ regime near-total e il replay e' l'eccezione, non la regola.
   ExpertCache; `ensure`/`flushSlotTable` con `inFlight=true` ⇒ throw.
 - **I2 — un token sporco non emette.** Il campionamento (argmax/sampling) legge
   esclusivamente logits di un forward PULITO (0 miss dichiarati dal readback).
-- **I3 — il replay e' pulito per costruzione.** Dopo il repair, il replay dello
-  stesso token NON puo' produrre nuovi miss (v. §4, pin-for-replay). Un replay
-  sporco e' un bug strutturale ⇒ throw con diagnosi, mai un secondo replay.
-- **I4 — determinismo del replay.** Il router di layer L nel replay riceve un
-  hidden BIT-IDENTICO a quello del giro ottimistico (checkpoint, §3) e pesi
-  identici ⇒ stessa selezione. E' cio' che rende valido il pin di §4.
+- **I3 — il repair CONVERGE per prefisso** [EMENDATA it.4, docket item 7 —
+  prima stesura: "replay pulito per costruzione, mai un secondo replay",
+  FALSIFICATA dal modello vero al primo token di bench]. Il replay puo'
+  produrre nuovi miss nei layer A VALLE del primo sporco (v. I4): si ripara
+  e si rigioca in ROUND, e il primo layer sporco cresce STRETTAMENTE a ogni
+  round ⇒ convergenza in <= nMoe round. L'assert e' sul progresso (stesso
+  layer due volte = pin bucato o insert dopo il flush ⇒ throw) e sul cap
+  teorico. Il costo dei round e' parte della tassa misurata (sync/token =
+  1 + P(dirty)·E[round|dirty] — e' il numero che il gate strutturale <= 2
+  osserva in produzione).
+- **I4 — determinismo del PRIMO layer sporco** [EMENDATA it.4]. Il primo
+  layer sporco di ogni round riceve nel replay un hidden BIT-IDENTICO
+  (checkpoint, §3) ⇒ stessa selezione ⇒ coi miss riparati si risolve pulito:
+  e' cio' che garantisce il progresso di I3. Nei layer a valle NON vale: il
+  primo giro li aveva attraversati con l'hidden DEGRADATO (contributo zero
+  dei miss), il replay li attraversa con quello riparato ⇒ il router puo'
+  selezionare expert diversi, anche non residenti. Il mini-modello ktest
+  (1 solo layer MoE) non ha valle e non poteva vederlo: il banco di prova
+  della cascata e' il bench di produzione.
 - **I5 — prefill invariato.** Il path prefill (chunked M=16, sincrono, ensure
   per layer) non cambia di una riga. L'ottimistico e' SOLO decode.
 
@@ -42,13 +55,20 @@ regime near-total e il replay e' l'eccezione, non la regola.
 `select:"gpu"` resta com'e' (residenza totale, throw — it.17 non si tocca: e'
 il riferimento e il caso M4). Modo nuovo con la stessa struttura a 1 submit:
 
-- **Precondizione (build-time)**: `slots/park >= OPTIMISTIC_MIN_RESIDENCY`
-  per ciascuna classe. Default **0.88** [ASSUMED: la soglia del regime WP-0;
-  override esplicito `optimisticMinResidency` per i test, mai abbassabile in
-  produzione senza docket]. Sotto soglia ⇒ throw con messaggio esplicito
-  (specchio del messaggio it.17: qui il rimedio indicato e' "usare select
-  'cpu' (sync) o aspettare C3c — il regime di scarsita' e' l'altro segmento
-  della Pareto").
+- **Precondizione (build-time)** [EMENDATA it.4, docket item 6 — prima
+  stesura: 0.88 per classe]: `slotTot/parkTot >= OPTIMISTIC_MIN_RESIDENCY`
+  sul TOTALE del parco. Default **0.80**. Razionale dell'emendamento:
+  (a) P(dirty) dipende dalla frazione COMPLESSIVA di selezioni residenti —
+  le classi sono un dettaglio di storage, e il riparto proporzionale rendeva
+  q4_1 il vincolo artificiale (0.88 per classe = 13.5 GiB di slab, oltre il
+  tetto fisico del device a qualunque host: un rifiuto che nessun host reale
+  passa non protegge, blocca); (b) il confine di COLLASSO misurato da WP-0 e'
+  <= 50% (100% token sporchi), mentre a 82% (2419 slot, il b12 canonico) il
+  meccanismo e' pienamente funzionale (P(dirty) 85%, 9.55 tok/s proiettati —
+  sopra il decode sync). ~0.88 resta il riferimento delle proiezioni
+  "near-total", NON il confine di rifiuto. Override `optimisticMinResidency`
+  per i test, mai abbassabile in produzione senza docket. Sotto soglia ⇒
+  throw esplicito (rimedio: select "cpu" o aspettare C3c).
 - **Rifiuto runtime**: nessuno switch automatico. La telemetria riporta
   P(dirty) osservato; se la finestra mobile [ASSUMED 64 token] supera
   `2*(1-minResidency)` si LOGGA un warning strutturato (una volta), non si

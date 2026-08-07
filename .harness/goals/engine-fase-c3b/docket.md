@@ -63,3 +63,57 @@
    replay pulito per costruzione, max 1 replay/token, replay sporco = throw;
    (d) niente fallback dinamico a sync (warning strutturato oltre soglia,
    lo switch e' materia C3c).
+
+6. **REGISTRAZIONE (2026-08-07, it.4) — emendamento della precondizione
+   ottimistica (spec §2) + policy slot del bench.** Due decisioni di
+   meccanismo prese sotto la delega di item 2, sindacabili con un edit:
+   (a) **precondizione sul TOTALE (soglia 0.80), non per classe (0.88)**:
+   il riparto proporzionale rendeva q4_1 il vincolo artificiale — 0.88 per
+   classe = 13.5 GiB di slab, oltre il tetto fisico del device a QUALUNQUE
+   host (il tetto misurato in sessione minima, 2596 slot, e' l'88.2% totale).
+   P(dirty) dipende dalla frazione complessiva; WP-0 misura il collasso a
+   <= 50% e piena funzionalita' a 82% (b12: 2419 slot, 9.55 tok/s proiettati
+   > 5.211 sync). 0.88 resta il riferimento delle proiezioni, non il rifiuto.
+   (b) **allocazione q4_1-first nel bench ottimistico**: q4_1 intera (256
+   slot, ~1.3 GiB — azzera il miss surface di 4 layer MoE), il resto a q4_0;
+   dichiarata nel report. Cosi' la run di fase 4 gira al protocollo b12
+   canonico (12 GiB, parita' storica, zero rischio OOM) — l'alternativa era
+   nessuna run possibile su questo device senza spegnere la sessione.
+
+7. **FINDING + EMENDAMENTO SPEC (2026-08-07, it.4) — I3/I4: il replay puo'
+   CASCARE, il repair diventa iterativo per prefisso.** Alla prima run di
+   bench sul modello vero (b12 optimistic, warmup token 0) il replay e'
+   uscito SPORCO (3 miss al layer 11) dopo il repair: l'invariante "replay
+   pulito per costruzione" era FALSA — I4 vale solo per il PRIMO layer
+   sporco (input = checkpoint bit-identico); a valle l'hidden riparato
+   differisce da quello degradato del giro prima ⇒ selezioni diverse ⇒
+   possibili nuovi miss. Ne' il ktest (mini-modello a 1 layer MoE: nessuna
+   valle) ne' WP-0 (selezioni fisse dalla traccia oracolo) potevano vederlo.
+   Emendamento (meccanismo, delega item 2): repair ITERATIVO — round di
+   repair+replay finche' pulito, progresso stretto di firstDirty asserito
+   (violazione = throw), cap teorico nMoe. Conseguenza da MISURARE: la tassa
+   ha un termine in piu' (sync/token = 1 + P(dirty)*E[round|dirty]) e il
+   confronto di fase 5 con WP-0 deve dichiarare che il sim NON modella la
+   cascata (le sue selezioni non dipendono dall'hidden). Se il gate
+   strutturale <= 2 fallisse per E[round] alto, e' un dato per il PI, non
+   un fallimento da nascondere.
+
+8. **RULING RICHIESTO — gate strutturale 2.188 > 2 al punto di budget b12:
+   di chi e' il FAIL?** (2026-08-07, it.4, report
+   `results/engine/bench-glm-4090-b12-optimistic-2026-08-07.json`, host
+   quiescent). Il decode ottimistico in PRODUZIONE: **11.60 tok/s (da 5.211,
+   +123%)**, TTFT 16.79 s (da 17.88), prefill 27.45 (da 25.78), gpuBusy
+   39.4 ms/token (da 54.2: il clock recovery previsto in it.1 e' reale),
+   **token generati 64/64 IDENTICI al bench sync** (qualita' invariata a ctx
+   525). Il gate strutturale pero' misura **2.188 sync(=submit)/token > 2**:
+   1 + P(dirty)·E[round|dirty] = 1 + 0.938·1.267 — P(dirty) 93.8% (sim WP-0
+   a pari slot: 85.2%, gap da spiegare in fase 5) e la CASCATA dei round
+   (item 7) che il sim non modella. Ai 2596 slot del tetto (sessione minima)
+   l'aritmetica da' 1 + 0.65·1.27 = **1.82 PASS**; su M4 e' ~1.0. Il termine
+   eliminato resta enorme: 47 → 2.19 sync/token (−95%).
+   **Opzioni**: (a) [RACCOMANDATA] una run a SESSIONE MINIMA (azione host
+   tua) per misurare il gate al tetto 2596: se PASS, la fase 4 chiude con
+   quel report e il b12 resta il punto della tassa; (b) clausola 17a-style:
+   FAIL dichiarato per budget/hardware, non per struttura; (c) emendare il
+   gate sulle componenti. Il loop prosegue con la fase 5 (analisi della
+   tassa: non dipende dal ruling).
