@@ -65,3 +65,14 @@
   P(dirty) 93.8% × round 1.27; al tetto 2596 l'aritmetica e' 1.82 PASS.
   Opzione raccomandata: una run a sessione minima (azione host tua).
 - **Prossimo**: fase 5 — tassa vs WP-0 (analisi, indipendente dal ruling).
+
+## it.5 (2026-08-07) — fase 5 DONE: la tassa conferma WP-0, la cascata spiega il resto
+
+- **Bottom line del modello CONFERMATA**: tassa ×1.14, pDirty ×1.10, tok/s
+  ×1.21 (tutti entro ±25%; il misurato batte la proiezione per il clock
+  recovery). FUORI solo missPerToken ×1.47 e replayTerm ×1.35 — i termini
+  della CASCATA che il sim dichiaratamente non modella; il moltiplicatore
+  dei round (1.39×) spiega l'eccesso quasi esattamente.
+- Unita' di replayFrac verificate identiche PRIMA del confronto.
+- **Prossimo**: fase 6 — non-regressione a perimetro pieno (run lunghe,
+  albero congelato). Ruling item 8 pendente, non blocca.

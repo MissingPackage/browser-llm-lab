@@ -1,0 +1,95 @@
+{
+ "kind": "wp0-vs-measured",
+ "schemaVersion": 1,
+ "date": "2026-08-07",
+ "inputs": {
+  "sim": "results/engine/moe-oracle/wp0-replay-sim-2026-08-06.json",
+  "bench": "results/engine/bench-glm-4090-b12-optimistic-2026-08-07.json"
+ },
+ "budget": {
+  "simSlots": 2419,
+  "measuredSlots": 2417,
+  "deltaSlots": -2,
+  "note": "riga sim piu' vicina; il delta (q4_1-first vs riparto proporzionale) e' dichiarato, non corretto"
+ },
+ "toleranza": 0.25,
+ "eReplayFracSim": 0.665377642883921,
+ "comparisons": [
+  {
+   "name": "pDirty",
+   "sim": 0.8517680921052632,
+   "measured": 0.9375,
+   "ratio": 1.1006517016654598,
+   "withinTol": true,
+   "note": "quota token con >= 1 miss; il misurato include l'effetto dell'ordine di preload (landmine it.2) e della LRU reale vs LruFast"
+  },
+  {
+   "name": "replayFracPerRound",
+   "sim": 0.665377642883921,
+   "measured": 0.6458566629339306,
+   "ratio": 0.9706618036257105,
+   "withinTol": true,
+   "note": "frazione di layer rigiocati per round: unita' identiche (sim (46-m)/47, motore (47-l)/47) — il confronto standalone della 'frazione layer ripetuti' del done-when"
+  },
+  {
+   "name": "missPerToken",
+   "sim": 3.2458881578947367,
+   "measured": 4.78125,
+   "ratio": 1.473017481631619,
+   "withinTol": false,
+   "note": "IL SIM NON MODELLA LA CASCATA: i suoi miss sono le sole selezioni della traccia; i misurati includono i fetch dei round successivi (ri-selezioni a valle del repair, docket item 7) — fuori tolleranza ATTESO, spiegazione nel journal it.5"
+  },
+  {
+   "name": "replayGpuTerm (pDirty*frac vs replays/token*frac)",
+   "sim": 0.5667474454087346,
+   "measured": 0.7669547872340426,
+   "ratio": 1.3532567168095833,
+   "withinTol": false,
+   "note": "il moltiplicatore di gpuBusy nella tassa: sim a 1 round, motore a N round — confrontato il termine aggregato"
+  },
+  {
+   "name": "taxMsPerToken (formula sim a gpuBusy misurato vs wall-wallClean)",
+   "sim": 34.463994012318025,
+   "measured": 39.23896087425494,
+   "ratio": 1.138549433946346,
+   "withinTol": true,
+   "note": "wallClean = gpuBusy misurato + syncLogits 7.6 del cost model; il misurato assorbe encode/event-loop non modellati"
+  },
+  {
+   "name": "taxMsPerToken STRICT (wallClean col probe misurato 0.08 ms)",
+   "sim": 34.463994012318025,
+   "measured": 46.75896095054889,
+   "ratio": 1.356748174162183,
+   "withinTol": false,
+   "note": "la lettura severa: syncLogits dal probe di QUESTA run — il delta vs la riga sopra (~7.5 ms/token) e' l'overhead CPU/event-loop che il cost model assume 'in pipeline' e che il wall reale contiene; se FUORI, la spiegazione e' questa, dichiarata"
+  },
+  {
+   "name": "tokPerSec (proiezione pura sim@54.2 serial vs misurato)",
+   "sim": 9.554992172361224,
+   "measured": 11.596986595614524,
+   "ratio": 1.2137096908524923,
+   "withinTol": true,
+   "note": "il misurato batte la proiezione perche' gpuBusy e' sceso 54.2 -> 39.4 (clock recovery, previsto da it.1 e non modellato dal sim)"
+  }
+ ],
+ "verdict": {
+  "within": [
+   "pDirty",
+   "replayFracPerRound",
+   "taxMsPerToken (formula sim a gpuBusy misurato vs wall-wallClean)",
+   "tokPerSec (proiezione pura sim@54.2 serial vs misurato)"
+  ],
+  "outside": [
+   "missPerToken",
+   "replayGpuTerm (pDirty*frac vs replays/token*frac)",
+   "taxMsPerToken STRICT (wallClean col probe misurato 0.08 ms)"
+  ],
+  "note": "contratto C3b: entro ±25% il modello e' confermato; fuori, la spiegazione nel journal e' parte del done-when (it.5)"
+ },
+ "caveats": [
+  "il sim non modella la cascata dei round (selezioni fisse dalla traccia C1): missPerToken e replay term misurati la includono",
+  "LRU del sim = LruFast, non byte-identica alla nostra; ordine di preload reale = (layer, expert) crescente (landmine it.2)",
+  "gpuBusy misurato 39.4 vs scenario sim 54.2: clock recovery reale — le proiezioni pure del sim vanno lette a scenario, non a valore",
+  "syncLogitsMs 7.6 del cost model e' dell'era C3a; il probe quiescente di questa run misura 0.08 ms round-trip — la tassa misurata e' quindi un limite SUPERIORE"
+ ]
+}

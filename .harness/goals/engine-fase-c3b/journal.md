@@ -227,3 +227,58 @@ prima del confronto ±25%**.
 Fase 5: confronto della tassa con wp0-replay-sim allo stesso budget slot
 (2417 vs 2419: delta dichiarato), unita' di replayFrac verificata, gap
 P(dirty) attribuito. Non dipende dal ruling item 8.
+
+## it.5 — 2026-08-07 — fase 5: la tassa misurata conferma il modello WP-0 (dove il modello arriva)
+
+### Cosa
+
+`scripts/wp0-compare.mjs` (nuovo) → `results/engine/wp0-vs-measured-2026-08-07.json`:
+confronto campo per campo bench@2417 vs sim@2419 (riga piu' vicina, delta 2
+slot dichiarato — q4_1-first vs riparto proporzionale). UNITA' di replayFrac
+VERIFICATE identiche prima del confronto (nota it.4): sim (46-m)/47, motore
+(47-l)/47 con l=m+1 ⇒ stessa definizione.
+
+### Esito (tolleranza ±25% del contratto)
+
+- **ENTRO (3)**: pDirty 0.852→0.938 (×1.10); **taxMsPerToken 34.5→39.2
+  (×1.14)** — la formula del sim coi suoi input a gpuBusy MISURATO contro
+  wall−wallClean: la bottom line del modello REGGE; tok/s 9.55→11.60 (×1.21,
+  e il misurato BATTE la proiezione perche' gpuBusy e' sceso 54.2→39.4 —
+  clock recovery non modellato, previsto da it.1).
+- **FUORI (2), spiegazione quantitativa** (parte del done-when): missPerToken
+  ×1.47 e replayGpuTerm ×1.35 — sono esattamente i termini che il sim NON
+  puo' modellare (selezioni fisse dalla traccia ⇒ niente cascata, item 7).
+  La spiegazione e' coerente nei numeri: moltiplicatore dei round misurato
+  = replaysPerToken/pDirty_sim = 1.1875/0.852 = **1.39×**, che riportato sui
+  miss da' primo-round ≈ 4.781/1.39 = 3.44 vs 3.25 del sim (+6%, dentro il
+  rumore LRU/preload). L'eccesso e' TUTTO cascata, non un buco del motore
+  ne' del sim: due meccanismi dichiaratamente diversi.
+
+### Verifica
+
+Script deterministico sui due JSON committati; numeri incrociati a mano
+(replayTerm 0.852·0.665=0.567 vs 1.1875·0.646=0.767; tax misurata 86.23 −
+(39.4+7.6) = 39.2). Caveat nel JSON: syncLogits 7.6 e' dell'era C3a (probe
+quiescente di questa run: 0.08 ms) ⇒ la tassa misurata e' un limite
+SUPERIORE; LruFast != LRU nostra; gpuBusy a scenario.
+
+### Prossimo pezzo
+
+Fase 6 (non-regressione a perimetro pieno, albero congelato, run lunghe) —
+NOTA: le run di conformance/routing/Qwen girano sul path SYNC (non toccato),
+piu' bench sync di non-regressione. Poi fase 7 (chiusura). Ruling item 8
+ancora pendente (non blocca la 6).
+
+### Addendum it.5 (nota verifier recepita, load-bearing)
+
+Aggiunte al JSON due righe: (1) `replayFracPerRound` standalone — sim 0.665
+vs misurato 0.646, ×0.97, ENTRO (la "frazione layer ripetuti" del done-when
+ora e' autoportante); (2) `taxMsPerToken STRICT` con wallClean al syncLogits
+MISURATO da questa run (probe 0.08 ms, non il 7.6 dell'era C3a): ×1.36,
+FUORI — il delta (~7.5 ms/token) e' l'overhead CPU/event-loop che il cost
+model assume "in pipeline" e che il wall reale contiene (attribution2:
+sync/CPU 31.6 ms/token ne e' il contenitore). Le due letture stanno nel JSON
+una accanto all'altra: la conclusione "modello confermato" vale per la
+formula del sim COI SUOI TERMINI; il residuo di wall non modellato e'
+dichiarato, ed e' materia di C3c (overlap/encode), non un buco del modello
+di replay. Rimisura formale di syncLogits annotata per la fase 7 / C3c.

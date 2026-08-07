@@ -36,9 +36,15 @@ quiescent). Due finding dal modello vero risolti e docketati: preload R4 ⇒
 chunked async (item 6), **cascata del replay** ⇒ repair iterativo per
 prefisso, I3/I4 emendate (item 7). **Gate strutturale 2.188 > 2 FAIL
 DICHIARATO — RULING PI in docket item 8** (raccomandata: run a sessione
-minima, al tetto 2596 l'aritmetica dà 1.82 PASS). **Next decidable: fase 5**
-— tassa vs wp0-replay-sim allo stesso budget slot (analisi, indipendente dal
-ruling; attenzione all'unità di replayFrac — journal it.4).
+minima, al tetto 2596 l'aritmetica dà 1.82 PASS). **It.5 — fase 5 DONE:
+la tassa CONFERMA WP-0** (`wp0-vs-measured-2026-08-07.json`): tassa ×1.14,
+pDirty ×1.10, tok/s ×1.21 entro ±25%; fuori solo i 2 termini della cascata
+(miss ×1.47, replayTerm ×1.35) che il sim non modella — il moltiplicatore
+dei round 1.39× li spiega quantitativamente (journal it.5). **Next
+decidable: fase 6** — non-regressione a perimetro pieno (albero congelato,
+run lunghe sul path sync non toccato: conformance cpuref+golden, routing
+firma 14b, Qwen, bench sync, ktest, suite). Ruling item 8 pendente (gate
+strutturale a b12), non blocca la 6.
 Ratifiche c3a ancora pendenti (non bloccanti): item 14/14b, item 2 formale,
 item 19/20/21 prese d'atto.
 
