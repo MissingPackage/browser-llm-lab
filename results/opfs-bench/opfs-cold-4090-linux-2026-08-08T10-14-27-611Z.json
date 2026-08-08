@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "kind": "opfs-cold-bench",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-08-08T10:14:27.611Z",
+  "tool": "tools/opfs-cold/opfs-cold-bench.mjs",
+  "protocol": {
+    "fileGiB": 6,
+    "data": "crypto.getRandomValues per-tile (incomprimibile: profilo su btrfs compress=zstd:1)",
+    "profileDir": "/home/neuromancer/.cache/blab-opfs-cold-profile",
+    "backingFiles": [
+      "/home/neuromancer/.cache/blab-opfs-cold-profile/Default/File System/000/t/00/00000000"
+    ],
+    "eviction": "fsync + posix_fadvise(POSIX_FADV_DONTNEED) x2 con sleep 1 s (python3, da fuori il browser) sui file di backing OPFS; identica al tool OS di C1 (tools/cold-read-bench.py) => confronto appaiato",
+    "evictionEvidence": [
+      {
+        "phase": "pre-seq-1MiB",
+        "residentBytesBefore": 1987649536,
+        "residentBytesAfter": 0
+      },
+      {
+        "phase": "pre-seq-expert",
+        "residentBytesBefore": 4301258752,
+        "residentBytesAfter": 0
+      },
+      {
+        "phase": "pre-rand-expert",
+        "residentBytesBefore": 2155872256,
+        "residentBytesAfter": 0
+      }
+    ],
+    "coldnessProof": "ogni misura COLD e' preceduta da un drop con residenza fincore registrata prima/dopo (evictionEvidence); controprova: delta cold/warm sugli STESSI offset in randExpert{Cold,Warm}",
+    "hostLoadavg": [
+      1.42,
+      0.71,
+      0.5
+    ]
+  },
+  "results": {
+    "seqCold1MiBGBps": 3.73,
+    "seqWarmGBps": 15.74,
+    "seqColdExpert": {
+      "gBps": 3.66,
+      "latencyMsP50": 1.3,
+      "latencyMsP95": 2.3,
+      "n": 404,
+      "bytesRead": 2151506848
+    },
+    "randExpertCold": {
+      "gBps": 1.94,
+      "latencyMsP50": 2.9,
+      "latencyMsP95": 3.7,
+      "n": 192
+    },
+    "randExpertWarm": {
+      "gBps": 11.88,
+      "latencyMsP50": 0.4,
+      "latencyMsP95": 0.6,
+      "n": 192
+    },
+    "expertBytes": 5325512
+  },
+  "comparisonVsOsC1": {
+    "ref": "results/opfs-bench/cold-read-os-4090-linux-2026-07-31.json",
+    "os": {
+      "ref": "results/opfs-bench/cold-read-os-4090-linux-2026-07-31.json",
+      "seqCold1MiBGBps": 3.22,
+      "randExpertColdGBps": 1.63,
+      "randExpertColdLatencyMsP50": 3.74,
+      "randExpertColdLatencyMsP95": 4.34,
+      "randExpertWarmGBps": 10.92,
+      "randExpertWarmLatencyMsP50": 0.46
+    },
+    "browser": {
+      "seqCold1MiBGBps": 3.73,
+      "randExpertColdGBps": 1.94,
+      "randExpertColdLatencyMsP50": 2.9,
+      "randExpertColdLatencyMsP95": 3.7,
+      "randExpertWarmGBps": 11.88,
+      "randExpertWarmLatencyMsP50": 0.4
+    },
+    "ratioBrowserOverOs": {
+      "seqCold1MiB": 1.158,
+      "randExpertCold": 1.19,
+      "randExpertColdLatencyP50": 0.775
+    }
+  },
+  "caveats": [
+    "fadvise DONTNEED e' best-effort: validato da fincore (evictionEvidence) + delta cold/warm",
+    "layout extent del backing store Chrome puo' differire dal file scritto dal tool OS (secondo ordine)",
+    "SyncAccessHandle.read passa dallo storage service di Chrome: il numero include l'overhead browser reale - e' IL numero che serve al modello di banda (fase 6), non un bound"
+  ]
+}

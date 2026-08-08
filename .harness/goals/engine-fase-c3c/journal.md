@@ -15,3 +15,43 @@ relativo di instant-on è parte della proposta per docket item 1 (fase 2).
 PHASES.md: 9 fasi sequenziali, authority delta = none ovunque, nessuna
 docket-born. Plan-check: registrato a docket item 3 (pattern c3b item 4).
 Tag goal-engine-fase-c3c-start al commit di setup.
+
+## it.1 — 2026-08-08 — FASE 1 DONE: WP banda fredda browser
+
+**Fatto.** Tool nuovo `tools/opfs-cold/opfs-cold-bench.mjs`: misura in Chrome
+(SyncAccessHandle, worker) la lettura OPFS a page cache FREDDA. Eviction DA
+FUORI il browser (fsync + posix_fadvise DONTNEED ×2, python3) sui file di
+backing OPFS del profilo dedicato — stessa tecnica del tool OS di C1 ⇒
+confronto appaiato. Freddezza DIMOSTRATA nel JSON, non asserita:
+`evictionEvidence` con residenza fincore prima/dopo ogni drop (6.44 GB → 0 B)
++ controprova warm sugli stessi offset (delta 8×). Dati incomprimibili
+(crypto.getRandomValues; profilo su btrfs zstd:1), file 6 GiB, expert-size
+esatto 5 325 512 B, self-served su porta fissa 5327 (l'origin determina il
+bucket OPFS — bug porta effimera trovato e fisso prima delle run canoniche).
+
+**Numeri (2 run canoniche committate, `opfs-cold-4090-linux-2026-08-08T10-14-*`):**
+- random expert-size COLD: **1.79 / 1.94 GB/s, p50 3.1 / 2.9 ms/expert, p95
+  4.5 / 3.7** (OS C1: 1.63 / p50 3.74 / p95 4.34)
+- seq 1 MiB COLD: 3.43 / 3.73 GB/s (OS: 3.22); seq expert-size streaming:
+  3.51 / 3.66 GB/s, p50 1.4 / 1.3 ms/expert (= regime instant-on)
+- warm control: rand 11.41 / 11.88 GB/s p50 0.4-0.5 ms (OS: 10.92 / 0.46) —
+  lo stack di misura coincide con opfs-bench fase A (10.7-11.7)
+
+**Il finding: PARITÀ col bound OS (ratio 1.07-1.19, p50 sotto).** L'ipotesi
+C1 "il freddo browser è ≤ dei numeri OS" era prudente ma la tassa browser sul
+path freddo è ZERO. Il modello di banda (fase 6) e la spec (fase 2) usano il
+numero browser misurato: ~1.8 GB/s random / ~3.0 ms p50 per expert;
+instant-on streaming a ~3.5 GB/s ⇒ lower bound di lettura per il non-routed
++ caldi (1.53 GB) ≈ 0.44 s: il budget TTFT a freddo non muore di banda disco.
+
+**Done-when riga 1:** tool committato in tools/opfs-cold/ PASS; JSON in
+results/opfs-bench/ con p50/p95 random e sequenziale PASS; confronto
+esplicito coi numeri OS C1 nel JSON (`comparisonVsOsC1` con ratio) PASS;
+ledger §A e direction §8.3 aggiornati col numero browser PASS; freddezza
+dimostrata dal protocollo nel JSON (`evictionEvidence` fincore + delta
+cold/warm, drop dichiarato) PASS.
+
+**Igiene:** 2 run pre-fix scartate (bug origin/porta effimera: bucket OPFS
+duplicato nel profilo — numeri identici, ma il tool committato è quello
+fisso e le run canoniche sono le sue). Profilo bench: ~6.4 GiB in
+`~/.cache/blab-opfs-cold-profile` (riusabile con KEEP_FILE=1, cancellabile).

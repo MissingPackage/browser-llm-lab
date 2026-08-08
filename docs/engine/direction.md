@@ -261,9 +261,13 @@ del codice (convenzione repo). Il benchmark pubblico e la roadmap generale del p
 3. **Banda OPFS** — misurata (fase 2 del goal, 2026-07-29, 4090/NVMe): write 2.2 GB/s,
    read via SyncAccessHandle 7.5-11.7 GB/s **a page-cache calda** ⇒ l'API non è il
    bottleneck. **Bound freddo misurato lato OS (2026-07-31, fadvise, 990 PRO)**:
-   random expert-size **1.63 GB/s (3.74 ms/expert p50, 8× il warm)**, seq 3.22 GB/s;
-   il freddo browser è ≤ di questi numeri (WP browser di conferma in C3, ruling
-   docket C1 item 4). Conseguenza sul target: "modello ~2× la memoria" vale come
+   random expert-size **1.63 GB/s (3.74 ms/expert p50, 8× il warm)**, seq 3.22 GB/s.
+   **WP browser ESEGUITO (2026-08-08, goal c3c fase 1, `tools/opfs-cold/`)**: il
+   freddo IN CHROME è alla pari col bound OS — random expert-size **1.79-1.94
+   GB/s (p50 2.9-3.1 ms/expert)**, seq 3.43-3.73 GB/s, streaming sequenziale
+   expert-size p50 1.3-1.4 ms/expert; nessuna tassa browser sul path freddo
+   (freddezza provata: fincore 0 B post-drop, delta warm 8×). I numeri del
+   modello di banda C3c partono da qui, non dall'estrapolazione OS. Conseguenza sul target: "modello ~2× la memoria" vale come
    **2× la VRAM con spillover RAM-backed** (24% del budget a 30 tok/s); in regime
    disk-bound il tetto è ~18 tok/s o serve hit ≥94.5% con prefetch a overlap
    perfetto — il paging vive di hit-rate (prefetch prima leva, ruling item 4).

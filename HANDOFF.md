@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-08, sessione 24 — GOAL C3B CHIUSO: decode 16.64 al tetto, 1.89 sync/token; next = apertura C3c)
+# HANDOFF — browser-llm-lab   (updated 2026-08-08, sessione 25 — C3c fase 1 DONE: banda fredda browser = parità OS; next = fase 2 spec)
 
 ## 1. Next decidable
 
@@ -18,16 +18,30 @@ b12-optimistic / wp0-vs-measured / 5 JSON nonreg (it.6).
 **GOAL C3C APERTO (2026-08-08, PI: "partiamo con c3c").** Contratto v1
 riletto (journal c3c it.0), PHASES 9 fasi sequenziali, plan-check
 pre-autorizzato (docket c3c item 3), tag goal-engine-fase-c3c-start.
-**Next decidable: FASE 1 — WP banda fredda browser**: tool
-`tools/opfs-cold/**` che misura in Chrome la lettura OPFS a page cache
-FREDDA su blocchi expert-size (5.33 MB), JSON in results/opfs-bench/,
-confronto coi numeri OS di C1 (random 1.63 GB/s / 3.74 ms p50, seq 3.22
-GB/s — NON si estrapolano, si misurano). Blocca la spec (fase 2). Ruling
-c3c item 1 (budget instant-on) si decide con la spec, proposta ancorata a
-un riferimento a caldo esplicito (16.79 b12 / 12.60 tetto). Finding chiave
-ereditato: P(dirty) sensibile allo stato cache post-prefill (v1 tetto:
-0.922/2.203 FAIL agli stessi slot); leva P(dirty) = policy > LRU (Belady
-~dimezza), intera qui.
+
+**FASE 1 DONE (it.1): WP banda fredda browser — PARITÀ col bound OS.**
+Tool `tools/opfs-cold/opfs-cold-bench.mjs` (eviction fadvise da fuori sui
+backing file OPFS, freddezza provata: fincore 0 B post-drop + delta warm
+8×; dati incomprimibili, porta fissa 5327 = origin/bucket stabile). Numeri
+(2 run, `results/opfs-bench/opfs-cold-4090-linux-2026-08-08*`): random
+expert-size COLD **1.79-1.94 GB/s, p50 2.9-3.1 ms/expert** (OS C1: 1.63 /
+3.74), seq 1 MiB 3.43-3.73 (OS 3.22), streaming seq expert-size 3.5-3.66
+GB/s p50 1.3-1.4 ms = regime instant-on ⇒ non-routed+caldi 1.53 GB ≈ 0.44 s
+di banda disco. Tassa browser sul path freddo: ZERO (ratio 1.07-1.19).
+Ledger §A + direction §8.3 aggiornati.
+
+**Next decidable: FASE 2 — Spec C3c coi numeri del WP dentro**
+(docs/superpowers/specs/2026-08-XX-engine-fase-c3c-design.md): budget slab
+= f(VRAM, residente non-expert, KV(ctx)); tier.h + AUTOPIN (pin ≤ 12.5%);
+prefetch IN-FORWARD (tap hidden L → router L+1, NIENTE predictor al
+confine — WP-0); definizione operativa di instant-on + strumento di
+misura; budget TTFT a freddo; PROPOSTA per docket item 1 (budget
+instant-on assoluto vs relativo 1.25×) coi numeri, ancorata a un
+riferimento a caldo esplicito (16.79 b12 / 12.60 tetto) — il ruling PI si
+prende lì. Se la spec tocca gate/soglie: STOP, ruling. Landmine ereditate
+(docket item 2): P(dirty) sensibile allo stato cache post-prefill; leva
+P(dirty) = policy > LRU (Belady ~dimezza); syncLogits 7.6 ms era-C3a vs
+probe 0.08 — rimisura formale in spec.
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:
