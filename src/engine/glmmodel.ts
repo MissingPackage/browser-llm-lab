@@ -82,7 +82,7 @@ export interface GlmModelOpts {
   // parametrico SOLO per i ktest (head sintetica ridotta); default G.vocab.
   head?: boolean;
   vocab?: number;
-  cache: { budgetBytes: number; maxBindingBytes: number; maxBufferBytes: number; slotsOverride?: { q4_0: number; q4_1: number }; timing?: boolean };
+  cache: { budgetBytes: number; maxBindingBytes: number; maxBufferBytes: number; slotsOverride?: { q4_0: number; q4_1: number }; timing?: boolean; policy?: "lru" | "tier" };
   /**
    * Chi riempie `Sel`, cioe' chi decide quali expert bindare (C3a fase 4).
    * - "cpu" (default): la selezione e' il routerSelect f64 dopo il sync per layer.
@@ -1502,6 +1502,8 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
             if (telemOn) tSeg = performance.now();
             if (telemOn) T.routerWaitMs += tSeg - tWait;
             const sel = routerSelect(logits, m.bias);
+            // policy tier (C3c fase 5): registra la selezione (no-op in lru)
+            cache.noteSelection(l, sel.experts);
             // ---- recall in-engine + prossima predizione (C3c fase 4) ----
             if (prefetchOn) {
               if (telemOn && lastPredRecall && lastPredRecall.layer === l) {

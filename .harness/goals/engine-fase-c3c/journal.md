@@ -203,3 +203,32 @@ registrato come firma nota.
 C1 confrontato nel JSON con 92.0% @K=8 e scostamento spiegato PASS;
 identità forward invariata (ktest 69/69, firma 14b esatta, cpuref 256/256)
 PASS; suite+tsc puliti PASS.
+
+## it.5 — 2026-08-08 — fase 5 (1/2): meccanica tier.h + AUTOPIN in codice
+
+**Fatto (meccanica, spec §4 — la MISURA è it.6).** `ExpertCache` con
+`policy:"lru"|"tier"` (default lru = zero overhead, stats.policy null):
+eusage u32[3008] (storia, snapshot/load ADDITIVO per la persistenza OPFS del
+chiamante via createWritable = commit atomico), eheat u16 con decay >>1 al
+repin, erec (clock recency), `noteSelection(layer, experts)` chiamata dal
+forward dopo routerSelect (no-op in lru); AUTOPIN con storia ≥5000 e budget
+= min(cap, max(1, floor(cap×conf))) — il max(1) serve alle classi piccole
+dove floor(cap×conf) resterebbe 0 fino a conf 0.5; **cap HARD 12.5% per
+classe con throw** (ruling C1); REPIN ogni 2944 selezioni (LFRU score
+heat×256+recency, isteresi ×1.25+4, max 4 swap, SOLO metadata — deviazione
+dichiarata da colibri che nel repin carica ~20 MB/swap: qui la protezione
+dall'eviction plasma il set residente nel tempo); eviction = LRU fra i non
+pinnati (caller + policy), messaggio esplicito se nessuna vittima.
+Harness glmroute: `--policy tier` + `--park-frac 0.5|0.25` (override slot
+proporzionale per classe: 1344+128 / 672+64), config nel report. Fix in
+corsa: cadenza repin scalata per SELEZIONI (non per chiamate).
+
+**Test:** 5 unit nuovi (`engine-tier-policy.test.ts`): no-op in lru, cap
+12.5% mai superato, pin sopravvive al churn completo della classe, load
+additivo (2 load = doppia storia) + taglie/policy sbagliate = throw,
+tutti-pinnati = rifiuto esplicito. Suite **349+7**, tsc pulito.
+
+**Prossimo (it.6):** batch notturno delle 4 run full-corpus {lru, tier} ×
+{1472, 736 slot} (tier CON prefetch in-forward, lru pura senza — la
+formulazione del done-when), poi confronto sui miss al momento d'uso, delta
+vs Belady WP-0, JSON committati, chiusura riga 5.

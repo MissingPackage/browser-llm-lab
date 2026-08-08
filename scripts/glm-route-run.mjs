@@ -46,6 +46,10 @@ mkdirSync(PROFILE, { recursive: true });
 
 const qs = new URLSearchParams();
 const prefetch = arg("prefetch", null);
+const policy = arg("policy", null);
+if (policy) qs.set("policy", policy);
+const parkFrac = arg("park-frac", null);
+if (parkFrac) qs.set("parkfrac", parkFrac);
 if (prefetch) qs.set("prefetch", prefetch);
 if (cap) qs.set("cap", cap);
 if (prompts) qs.set("prompts", prompts);

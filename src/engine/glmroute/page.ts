@@ -10,6 +10,10 @@ const cfg = {
   // C3c fase 4: ?prefetch=inforward — tap + prefetch nel path sync, recall
   // in-engine nel report. La run di FIRMA (14b) resta quella senza flag.
   prefetch: q.get("prefetch") === "inforward" ? ("inforward" as const) : undefined,
+  // C3c fase 5: ?policy=tier (default lru) e ?parkfrac=0.5|0.25 — budget
+  // stretti in FRAZIONE DEL PARCO slot (override, ignora budget GiB)
+  policy: q.get("policy") === "tier" ? ("tier" as const) : undefined,
+  parkFrac: q.has("parkfrac") ? Number(q.get("parkfrac")) : undefined,
 };
 
 const worker = new Worker(new URL("./glmroute.worker.ts", import.meta.url), { type: "module" });

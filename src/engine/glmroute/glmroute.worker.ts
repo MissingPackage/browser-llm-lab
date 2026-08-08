@@ -12,14 +12,14 @@ import { createGlmModel } from "../glmmodel";
 import { GlmOpfsSource } from "../glmsource";
 import { slabBufferCap, grantedLimits } from "../gpulimits";
 import { createEngineDevice } from "../gpudevice";
-import { arenaNeeds } from "../residency";
+import { arenaNeeds, PARK_Q4_0, PARK_Q4_1 } from "../residency";
 
 interface TraceRow { p: number; i: number; tok: number; ph: "p" | "d"; e: number[] }
 interface TraceFile {
   header: { ggufSha256: string; llamaCppCommit: string; corpusHash: string; nMoe: number };
   rows: TraceRow[];
 }
-interface Cfg { cap?: number; prompts?: number[]; budgetGiB: number; prefetch?: "inforward" }
+interface Cfg { cap?: number; prompts?: number[]; budgetGiB: number; prefetch?: "inforward"; policy?: "tier"; parkFrac?: number }
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
 const progress = (msg: string) => post({ type: "progress", msg });
@@ -62,6 +62,11 @@ async function main(cfg: Cfg): Promise<void> {
   // Device creato DOPO ctxMax: mlaAttnDecode tiene scores[ctxMax] in workgroup
   // memory (4*ctxMax+256 B) e il corpus arriva a 6688 pos — il requisito si
   // DERIVA dal contesto invece di chiedere il massimo (C3a it.6).
+  // C3c fase 5: budget stretto in FRAZIONE DEL PARCO slot (1472 = 0.5,
+  // 736 = 0.25) — override esplicito, riparto proporzionale per classe
+  const slotsOverride = cfg.parkFrac !== undefined
+    ? { q4_0: Math.floor(cfg.parkFrac * PARK_Q4_0), q4_1: Math.floor(cfg.parkFrac * PARK_Q4_1) }
+    : undefined;
   const { adapter, device } = await createEngineDevice({
     label: "glmroute",
     needs: (adapter) => ({
@@ -69,7 +74,7 @@ async function main(cfg: Cfg): Promise<void> {
       slabClassBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
       // arena expert (C3a fase 4 strato 1): binding d'arena e finestra
       ...arenaNeeds({
-        budgetBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
+        budgetBytes: Math.floor(cfg.budgetGiB * (1 << 30)), slotsOverride,
         maxBufferBytes: adapter.limits.maxBufferSize,
         maxBindingBytes: adapter.limits.maxStorageBufferBindingSize,
       }),
@@ -96,6 +101,8 @@ async function main(cfg: Cfg): Promise<void> {
     telemetry: cfg.prefetch !== undefined,
     cache: {
       budgetBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
+      // C3c fase 5: budget stretto (override slot) + policy tier|lru
+      slotsOverride, policy: cfg.policy,
       maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true,
     },
   });
@@ -200,7 +207,7 @@ async function main(cfg: Cfg): Promise<void> {
     date: new Date().toISOString(),
     ggufSha256: GLM47_FLASH_SHA256,
     oracle: { llamaCppCommit: trace.header.llamaCppCommit, corpusHash: trace.header.corpusHash },
-    config: { cap: cfg.cap ?? null, prompts: cfg.prompts ?? null, budgetGiB: cfg.budgetGiB, ctxMax, prefetch: cfg.prefetch ?? null },
+    config: { cap: cfg.cap ?? null, prompts: cfg.prompts ?? null, budgetGiB: cfg.budgetGiB, ctxMax, prefetch: cfg.prefetch ?? null, policy: cfg.policy ?? "lru", parkFrac: cfg.parkFrac ?? null, slotsOverride: slotsOverride ?? null },
     positions: totalRows,
     setMatch: {
       prefill: { ...phase.p, pct: phase.p.total ? 100 * phase.p.match / phase.p.total : null },

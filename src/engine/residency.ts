@@ -105,6 +105,16 @@ export interface ExpertCacheOpts {
    * miss; da spenta la cache e' identica a prima (nessun campo tocca il path).
    */
   slotTable?: boolean;
+  /**
+   * Policy di residenza (C3c fase 5, spec §4). "lru" (default) = il
+   * comportamento storico, zero overhead. "tier" = LRU + AUTOPIN (pin dei
+   * top-eusage con confidenza, cap HARD 12.5% degli slot per classe, assert)
+   * + REPIN LFRU (score heat<<8|recency, isteresi 25%+4, max 4 swap/passata,
+   * decay del calore). Il pin protegge dall'eviction; l'eviction resta LRU
+   * fra i non pinnati. La selezione si registra con `noteSelection` (chiamata
+   * dal forward dopo routerSelect — no-op in "lru").
+   */
+  policy?: "lru" | "tier";
 }
 
 export interface ExpertCacheStats {
@@ -125,6 +135,15 @@ export interface ExpertCacheStats {
   readMs: number; packMs: number; uploadMs: number;
   occupied: { q4_0: number; q4_1: number };
   slots: { q4_0: number; q4_1: number };
+  /** policy tier (C3c fase 5): pin correnti, cap 12.5%, selezioni, repin.
+   *  null con policy "lru" (schema unico, null contagioso). */
+  policy: {
+    pinSlots: { q4_0: number; q4_1: number };
+    pinCap: { q4_0: number; q4_1: number };
+    selections: number;
+    repinPasses: number;
+    repinSwaps: number;
+  } | null;
 }
 
 interface ClassState {
@@ -324,11 +343,35 @@ export const SLOT_TABLE_MISS = 0xffffffff;
 /** Chiavi della slotTable: TUTTO il parco, layer assoluti (come `expertKey`). */
 export const SLOT_TABLE_ENTRIES = G.nLayer * G.nExpert;
 
+// ---- policy tier.h + AUTOPIN (C3c fase 5, spec §4 — colibri §2 tradotto) ----
+// Costanti [ASSUMED spec §4], taratura eventualmente in fase 5 coi numeri:
+/** storia minima prima che l'AUTOPIN pinni qualcosa (colibri: 5 000) */
+export const AUTOPIN_MIN_HIST = 5000;
+/** confidenza = selezioni/200k, cap 1 (colibri conf=hist/200000) */
+export const AUTOPIN_CONF_DIVISOR = 200_000;
+/** cap HARD del pin: ≤ 12.5% degli slot della classe (ruling C1; assert) */
+export const PIN_CAP_FRAC = 0.125;
+/** passata di repin ogni N selezioni di layer (≈ ogni 64 posizioni × nMoe) */
+export const REPIN_EVERY_SEL = 64 * 46;
+/** isteresi anti ping-pong: swap solo se score_cand > score_pin×1.25 + 4 */
+export const REPIN_HYST_MULT = 1.25;
+export const REPIN_HYST_ADD = 4;
+export const REPIN_MAX_SWAPS = 4;
+
 export class ExpertCache {
   private device: GPUDevice;
   private cls: Record<ExpertClass, ClassState>;
   private timing: boolean;
   private s = { hits: 0, hitsResident: 0, hitsPrefetch: 0, misses: 0, evictions: 0, bytesRead: 0, bytesUploaded: 0, readMs: 0, packMs: 0, uploadMs: 0 };
+  // ---- stato della policy "tier" (null con policy "lru": zero overhead) ----
+  private policy: "lru" | "tier";
+  private eusage: Uint32Array | null = null; // storia per expertKey (persistibile, additiva)
+  private eheat: Uint16Array | null = null;  // calore di sessione (decade >>1 al repin)
+  private erec: Uint32Array | null = null;   // clock dell'ultima selezione (recency LFRU)
+  private selClock = 0;                      // selezioni totali (confidenza AUTOPIN)
+  private pins: Record<ExpertClass, Set<number>> = { q4_0: new Set(), q4_1: new Set() };
+  private repinCountdown = REPIN_EVERY_SEL;
+  private pol = { repinSwaps: 0, repinPasses: 0 };
   // slotTable (slice B): ombra CPU + intervallo sporco. La GPU la vede solo
   // quando il chiamante chiama `flushSlotTable`, cioe' una volta per layer.
   private table: { buf: GPUBuffer; shadow: Uint32Array; lo: number; hi: number } | null = null;
@@ -338,6 +381,12 @@ export class ExpertCache {
   constructor(device: GPUDevice, opts: ExpertCacheOpts) {
     this.device = device;
     this.timing = opts.timing ?? false;
+    this.policy = opts.policy ?? "lru";
+    if (this.policy === "tier") {
+      this.eusage = new Uint32Array(SLOT_TABLE_ENTRIES);
+      this.eheat = new Uint16Array(SLOT_TABLE_ENTRIES);
+      this.erec = new Uint32Array(SLOT_TABLE_ENTRIES);
+    }
     const arena = opts.arena === true;
     const mk = (layout: SlabLayout, nSlots: number): ClassState => {
       if (nSlots < G.nExpertUsed) throw new Error(`residency: ${nSlots} slot < ${G.nExpertUsed} (un token deve poter bindare 4 expert)`);
@@ -535,12 +584,14 @@ export class ExpertCache {
     if (c.free.length > 0) {
       idx = c.free.pop()!;
     } else {
-      // vittima = primo della mappa (least recently used) non pinnato
+      // vittima = primo della mappa (least recently used) non pinnato — né dal
+      // chiamante (pin-for-replay/ensure) né dalla policy (AUTOPIN, fase 5)
+      const polPins = this.pins[cls];
       let victim: [number, number] | undefined;
       for (const e of c.lru) {
-        if (!pinned?.has(e[0])) { victim = e; break; }
+        if (!pinned?.has(e[0]) && !polPins.has(e[0])) { victim = e; break; }
       }
-      if (!victim) throw new Error("residency: nessuna vittima evincibile (tutti gli slot pinnati)");
+      if (!victim) throw new Error(`residency: nessuna vittima evincibile (pinned caller ${pinned?.size ?? 0} + policy ${polPins.size} su ${c.lru.size} residenti)`);
       c.lru.delete(victim[0]);
       idx = victim[1];
       this.s.evictions++;
@@ -583,6 +634,105 @@ export class ExpertCache {
     return { slot, hit: false };
   }
 
+  // ---- policy tier: selezione, repin, persistenza (C3c fase 5, spec §4) ----
+
+  /**
+   * Registra la selezione del router per un layer (chiamata dal forward dopo
+   * routerSelect; in policy "lru" è un no-op). Fa scattare la passata di
+   * repin ogni REPIN_EVERY_SEL selezioni.
+   */
+  noteSelection(layer: number, experts: ArrayLike<number>): void {
+    if (this.policy !== "tier") return;
+    for (let k = 0; k < experts.length; k++) {
+      const key = expertKey(layer, experts[k] as number);
+      this.eusage![key]++;
+      if (this.eheat![key] < 0xffff) this.eheat![key]++;
+      this.erec![key] = ++this.selClock;
+    }
+    this.repinCountdown -= experts.length; // la cadenza e' in SELEZIONI, non in chiamate
+    if (this.repinCountdown <= 0) {
+      this.repinCountdown = REPIN_EVERY_SEL;
+      this.repinPass();
+    }
+  }
+
+  /** score LFRU di colibri tier.h: frequenza primaria, recency a spareggio */
+  private lfruScore(key: number): number {
+    const age = this.selClock - this.erec![key];
+    const rec = Math.max(0, 255 - Math.min(255, age >> 6));
+    return this.eheat![key] * 256 + rec;
+  }
+
+  /**
+   * Passata di repin (colibri repin_pass_limit): per classe — (1) budget
+   * AUTOPIN = cap 12.5% × confidenza (storia/200k, cap 1; niente pin sotto
+   * AUTOPIN_MIN_HIST selezioni); (2) riempi il budget coi top-eusage
+   * RESIDENTI; (3) fino a REPIN_MAX_SWAPS scambi pin-freddo ↔ residente-caldo
+   * con isteresi (score_cand > score_pin×1.25 + 4); (4) decay del calore
+   * (>>1). Solo metadata: nessun load qui — la protezione dall'eviction
+   * plasma il set residente nel tempo (deviazione dichiarata da colibri, che
+   * nel repin carica ~20 MB a swap).
+   */
+  private repinPass(): void {
+    this.pol.repinPasses++;
+    for (const cls of ["q4_0", "q4_1"] as const) {
+      const c = this.cls[cls];
+      const pins = this.pins[cls];
+      const cap = Math.floor(PIN_CAP_FRAC * c.nSlots);
+      const conf = Math.min(1, this.selClock / AUTOPIN_CONF_DIVISOR);
+      // sopra la storia minima si parte da 1 pin: floor(cap×conf) a classi
+      // piccole resterebbe 0 fino a conf 0.5 e l'AUTOPIN non partirebbe mai
+      const budget = this.selClock < AUTOPIN_MIN_HIST ? 0 : Math.min(cap, Math.max(1, Math.floor(cap * conf)));
+      // sopra budget (confidenza scesa? cap piu' piccolo?): spinna i piu' freddi
+      while (pins.size > budget) {
+        let coldest = -1, coldScore = Infinity;
+        for (const k of pins) { const s = this.lfruScore(k); if (s < coldScore) { coldScore = s; coldest = k; } }
+        pins.delete(coldest);
+      }
+      if (budget === 0) continue;
+      // candidati = residenti non pinnati, per eusage (l'AUTOPIN pinna la storia)
+      const cand: number[] = [];
+      for (const k of c.lru.keys()) if (!pins.has(k)) cand.push(k);
+      cand.sort((a, b) => this.eusage![b] - this.eusage![a]);
+      let ci = 0;
+      while (pins.size < budget && ci < cand.length) pins.add(cand[ci++]);
+      // swap con isteresi: il residente più caldo scalza il pin più freddo
+      for (let sw = 0; sw < REPIN_MAX_SWAPS && ci < cand.length; sw++) {
+        const cand2 = cand.slice(ci).sort((a, b) => this.lfruScore(b) - this.lfruScore(a));
+        const hot = cand2[0];
+        if (hot === undefined) break;
+        let coldest = -1, coldScore = Infinity;
+        for (const k of pins) { const s = this.lfruScore(k); if (s < coldScore) { coldScore = s; coldest = k; } }
+        if (coldest < 0 || this.lfruScore(hot) <= coldScore * REPIN_HYST_MULT + REPIN_HYST_ADD) break;
+        pins.delete(coldest); pins.add(hot);
+        cand.splice(cand.indexOf(hot), 1);
+        this.pol.repinSwaps++;
+      }
+      // il cap e' un contratto (ruling C1), non una speranza
+      if (pins.size > cap) {
+        throw new Error(`residency tier: pin ${pins.size} > cap ${cap} (12.5% di ${c.nSlots} slot ${cls})`);
+      }
+    }
+    if (this.eheat) for (let i = 0; i < this.eheat.length; i++) this.eheat[i] >>= 1;
+  }
+
+  /** snapshot della storia eusage (per la persistenza OPFS, write atomica del
+   *  chiamante via createWritable — commit-on-close). */
+  usageSnapshot(): Uint8Array {
+    if (!this.eusage) throw new Error("residency: usageSnapshot richiede policy tier");
+    return new Uint8Array(this.eusage.buffer.slice(0));
+  }
+
+  /** carica la storia ADDITIVAMENTE (colibri usage_load: eusage[k] += cnt). */
+  loadUsage(bytes: Uint8Array): void {
+    if (!this.eusage) throw new Error("residency: loadUsage richiede policy tier");
+    if (bytes.byteLength !== this.eusage.byteLength) {
+      throw new Error(`residency: eusage ${bytes.byteLength} B, attesi ${this.eusage.byteLength}`);
+    }
+    const inc = new Uint32Array(bytes.buffer, bytes.byteOffset, this.eusage.length);
+    for (let i = 0; i < this.eusage.length; i++) this.eusage[i] += inc[i];
+  }
+
   stats(): ExpertCacheStats {
     const requests = this.s.hits + this.s.misses;
     return {
@@ -591,6 +741,17 @@ export class ExpertCache {
       retention: requests > 0 ? 1 - this.s.evictions / requests : null,
       occupied: { q4_0: this.cls.q4_0.lru.size, q4_1: this.cls.q4_1.lru.size },
       slots: { q4_0: this.cls.q4_0.nSlots, q4_1: this.cls.q4_1.nSlots },
+      // policy tier (C3c fase 5): null con policy "lru" (schema unico)
+      policy: this.policy === "tier" ? {
+        pinSlots: { q4_0: this.pins.q4_0.size, q4_1: this.pins.q4_1.size },
+        pinCap: {
+          q4_0: Math.floor(PIN_CAP_FRAC * this.cls.q4_0.nSlots),
+          q4_1: Math.floor(PIN_CAP_FRAC * this.cls.q4_1.nSlots),
+        },
+        selections: this.selClock,
+        repinPasses: this.pol.repinPasses,
+        repinSwaps: this.pol.repinSwaps,
+      } : null,
     };
   }
 

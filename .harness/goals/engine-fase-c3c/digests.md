@@ -63,3 +63,12 @@
   cpuref 256/256, ktest 69/69, suite 344+7, tsc pulito.
 - Next: fase 5 — tier.h+AUTOPIN vs LRU a 1472/736 slot (il confronto vero
   sui miss al momento d'uso; ceiling Belady +9-19pp).
+
+## it.5 (2026-08-08) — fase 5 (1/2): la policy è in codice
+
+- tier.h+AUTOPIN+REPIN dentro ExpertCache dietro policy:"tier" (lru default
+  intatto): eusage persistibile additivo, cap pin 12.5% HARD con throw,
+  LFRU con isteresi, pin mai evinti. 5 unit test, suite 349+7, tsc ok.
+- glmroute: --policy e --park-frac (1472/736 slot esatti per classe).
+- it.6 = batch notturno 4 run full-corpus + analisi (delta vs LRU e vs
+  ceiling Belady) + chiusura riga 5.
