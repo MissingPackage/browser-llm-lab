@@ -15,15 +15,19 @@ emendata 2%→5%; gate di correttezza secchi). Direction §7 riga C3b chiusa
 coi numeri; artefatti chiave: bench-glm-4090-btetto-optimistic-v2 /
 b12-optimistic / wp0-vs-measured / 5 JSON nonreg (it.6).
 
-**Next decidable: APERTURA C3C (decisione PI).** Contratto chartered in
-`.harness/goals/engine-fase-c3c/GOAL.md`; pre-avvio (docket c3c item 2)
-ESEGUITO — input fissati (profilo con tassa a b12/tetto, hit-rate LRU
-b11 0.9575 / b12 0.9756, landmine i-v, banda ±5%); primo pezzo = WP banda
-fredda browser; alla rilettura del contratto: tag goal-engine-fase-c3c-
-start. Ruling c3c item 1 (budget instant-on) si decide in fase di spec,
-non blocca. Finding chiave lasciato a C3c: P(dirty) sensibile allo stato
-cache post-prefill (v1 tetto: 0.922/2.203 FAIL agli stessi slot); leva
-P(dirty) = policy > LRU (Belady ~dimezza), intera in C3c.
+**GOAL C3C APERTO (2026-08-08, PI: "partiamo con c3c").** Contratto v1
+riletto (journal c3c it.0), PHASES 9 fasi sequenziali, plan-check
+pre-autorizzato (docket c3c item 3), tag goal-engine-fase-c3c-start.
+**Next decidable: FASE 1 — WP banda fredda browser**: tool
+`tools/opfs-cold/**` che misura in Chrome la lettura OPFS a page cache
+FREDDA su blocchi expert-size (5.33 MB), JSON in results/opfs-bench/,
+confronto coi numeri OS di C1 (random 1.63 GB/s / 3.74 ms p50, seq 3.22
+GB/s — NON si estrapolano, si misurano). Blocca la spec (fase 2). Ruling
+c3c item 1 (budget instant-on) si decide con la spec, proposta ancorata a
+un riferimento a caldo esplicito (16.79 b12 / 12.60 tetto). Finding chiave
+ereditato: P(dirty) sensibile allo stato cache post-prefill (v1 tetto:
+0.922/2.203 FAIL agli stessi slot); leva P(dirty) = policy > LRU (Belady
+~dimezza), intera qui.
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:

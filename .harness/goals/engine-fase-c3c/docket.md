@@ -50,3 +50,14 @@
    in C3c per split ratificato (c3b item 2c); (iv) syncLogits 7.6 ms e'
    dell'era C3a, probe it.5 dice 0.08 — rimisura formale in apertura C3c;
    (v) 60 s fra run GPU consecutive, albero congelato nelle run lunghe.
+
+3. **PLAN-CHECK — PRE-AUTORIZZATO (2026-08-08, PI in chat: "partiamo con
+   c3c"; pattern c3b item 4 / c3a item 3).** PHASES.md è su disco al tag di
+   apertura: 9 fasi sequenziali, authority delta = none ovunque, nessuna
+   docket-born. Se vuoi rivederla, il punto giusto è PRIMA della fase 3
+   (le fasi 1-2 producono tool di misura e spec, reversibili). Item 1
+   (budget instant-on) arriva al ruling con la proposta della fase 2, coi
+   numeri del WP banda fredda dentro; nota di rilettura contratto: il
+   target relativo va ancorato a un riferimento a caldo esplicito — i
+   candidati chiusi da C3b sono 16.79 s (b12) e 12.60 s (tetto/sessione
+   minima), la proposta della spec deve sceglierne uno e motivarlo.

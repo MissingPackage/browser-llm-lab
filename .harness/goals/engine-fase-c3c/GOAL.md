@@ -5,9 +5,11 @@ sulla banda fredda misurata DENTRO il browser.
 
 <!-- CONTRATTO v1 (perimetro ex-C3b chartered 2026-08-01, riscritto 2026-08-07
      dopo lo split registrato in .harness/goals/engine-fase-c3b/docket.md item 2).
-     CHARTERED, NON AVVIATO: parte DOPO la chiusura di engine-fase-c3b; i numeri
-     di non-regressione ("il valore chiuso da C3b") si fissano a quel momento,
-     pattern c3a item 21 / c3b docket item 1, prima di /goal.
+     APERTO 2026-08-08 (PI in chat: "partiamo con c3c") a C3b CHIUSO (83477a9).
+     Numeri di non-regressione fissati alla chiusura C3b (docket c3c item 2,
+     ESEGUITO): riferimenti sync + optimistic b12/tetto, banda ±5% (ruling c3b
+     item 9). Rilettura all'apertura: journal it.0 (nota: "TTFT a caldo ~18 s"
+     nel commento sotto è superato — riferimenti C3b: 16.79 b12 / 12.60 tetto).
      Modifiche sostanziali rispetto al chartered 2026-08-01, da rileggere:
      (1) il decode ottimistico e' USCITO (e' C3b); (2) il floor 13.43 e' ENTRATO,
      con clausola pre-negoziata; (3) PILOT-real e' riformulato dopo WP-0
