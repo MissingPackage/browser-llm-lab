@@ -38,3 +38,16 @@
   f32; ctx 6k = 665 MB non 361). HANDOFF corretto, docket item 4.
 - Next: fase 3 — slab ctx-aware (formula in codice, ctx 6k senza OOM,
   non-regressione b12, rimisura syncLogits).
+
+## it.3 (2026-08-08) — fase 3 DONE: slab ctx-aware, ctx 6k senza OOM
+
+- Formula in produzione: budget = ceiling misurato − nonExpert − KV(ctx) −
+  work(ctx) − riserva; glmbench --budget-gib auto + --ctx-max; 6 unit test.
+- ctx 6144: NO OOM a budget calcolato 12.146 GiB (prima: OOM garantito);
+  ctx 525 auto in sessione viva = regime tetto (16.55 tok/s, TTFT 12.53,
+  strutturale 1.875 PASS) senza config a mano; b12 migliorato (+11%/−11%).
+- Due OOM istruttivi: attnPartialsM ×16 mancante dal work (253 MiB @6k) e
+  riserva tarata 256→512 MiB sui punti OOM osservati. syncLogits rimisurato
+  (0.09-0.11 ms): landmine iv chiusa.
+- Next: fase 4 — prefetch in-forward (tap hidden L → router L+1) + recall
+  in-engine vs oracolo 92% @K=8.

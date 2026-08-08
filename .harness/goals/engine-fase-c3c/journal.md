@@ -96,3 +96,50 @@ prefetch in-forward con esclusione predictor/definizione operativa instant-on
 + strumento/budget TTFT a freddo PASS; registrazione a docket (item 4) +
 proposta item 1 depositata coi numeri (item 1-bis) PASS; la spec NON tocca
 gate/soglie ⇒ nessuno STOP di ruling PASS.
+
+## it.3 — 2026-08-08 — FASE 3 DONE: slab ctx-aware
+
+**Fatto.** Formula della spec §2 in codice: `slabBudgetCtxAware` +
+`slabWorkBytes` + costanti misurate (`NON_EXPERT_BYTES`, `KV_PER_TOKEN_BYTES`
+108 288, `MIN_SLOTS` 168/16 per classe = pin-for-replay c3b I3, throw sotto)
+in residency.ts; glmbench worker/page con `allocCeilingBytes` (budget
+CALCOLATO, breakdown nel report) e `ctxMaxOverride`; runner `--budget-gib
+auto` (ceiling misurato con nvidia-smi A CHROME LANCIATO: il footprint del
+browser sta in used, stessa contabilità del probe it.19) + `--ctx-max` +
+picco VRAM campionato ogni 5 s nel report. Unit
+`tests/engine-slab-budget.test.ts` (6): identità della sottrazione, monotonia
+in ctx, clamp al parco, MIN_SLOTS throw, riproduzione del regime dai numeri
+del probe (12 GiB ≤ formula ≤ 12.88 a sessione minima).
+
+**Due OOM istruttivi prima della run buona (cause distinte, diagnosticate dal
+codice, non retry ciechi):** (1) workBytes dimenticava `attnPartialsM` del
+prefill chunked = partials ×GLM_PREFILL_M(16) ≈ 253 MiB @ctx6k
+(glmmodel.ts:1125 — lo stesso buffer di un OOM storico documentato a riga
+641); (2) riserva 256 MiB < slack di sessione viva (>247 MiB: staging ring
+Dawn durante il preload da ~13 GB + compositor) ⇒ TARATA 512 MiB coi due
+punti OOM come evidenza (procedura prevista dalla spec §2). Spec aggiornata.
+
+**Run committate (3, tutte user-session-light dichiarato, optimistic +
+prefill chunked):**
+- `bench-glm-4090-ctx6k-autobudget-2026-08-08.json`: ctxMax 6144, **NON va
+  OOM** — budget CALCOLATO 12.146 GiB (breakdown nel JSON: ceiling 15 867 −
+  nonExp 1354 − kv 665.3 − work 268.8 − riserva 536.9 MB), slot 2191+256
+  (83.1%), decode 12.97, TTFT 14.53, **vramPeak osservato 15 853 MiB**.
+- `bench-glm-4090-b12-optimistic-nonreg-c3c-2026-08-08.json`: b12 esplicito,
+  codice nuovo — decode **12.92 vs 11.60 rif (+11%)**, TTFT **14.94 vs 16.79
+  (−11%)**: migliorati, nessuna regressione; strutturale 2.188 = il punto
+  della tassa del riferimento, P(dirty) 0.938 identico.
+- `bench-glm-4090-ctx525-autobudget-2026-08-08.json`: **il budget calcolato
+  a ctx ~500 riproduce il regime attuale** — 2348+256 slot (88.5%), decode
+  **16.55 vs tetto 16.64 (−0.5%)**, TTFT **12.53 vs 12.60**, strutturale
+  **1.875 ≤ 2 PASS**, floor 13.43 PASS; in sessione VIVA, senza config a
+  mano (il tetto c3b richiedeva sessione minima e budget trovato a mano).
+**Rimisura formale syncLogits (landmine iv, spec §9): syncFloorProbe
+mapRoundTripMs median 0.09-0.11 ms nelle 3 run** — conferma il probe c3b
+it.5 (0.08), il 7.6 era dell'era C3a. Landmine CHIUSA.
+
+**Done-when riga 3:** ctx6k senza OOM con budget calcolato + VRAM di picco
+nel JSON PASS; ctx ~500 riproduce il regime (b12 migliorato, tetto in banda
+−0.5%) PASS; suite 344+7 ≥ 338+7 e tsc puliti PASS. Exit 4 delle run = gate
+floor prefill 56.58 FAIL preesistente (materia fase 8 con clausola, non di
+questa fase).

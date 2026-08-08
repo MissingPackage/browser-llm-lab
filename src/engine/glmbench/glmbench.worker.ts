@@ -15,12 +15,22 @@ import { GlmOpfsSource } from "../glmsource";
 import { grantedLimits, slabBufferCap } from "../gpulimits";
 import { createEngineDevice } from "../gpudevice";
 import type { GlmTelemetry } from "../glmmodel";
-import { arenaNeeds, modelExpertPark, type ExpertCacheStats } from "../residency";
+import { arenaNeeds, modelExpertPark, slabBudgetCtxAware, type ExpertCacheStats } from "../residency";
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../moe";
 
 interface GoldenPrompt { id: string; promptTokens: number[]; generated: number[] }
 interface Golden { modelSha256: string; prompts: GoldenPrompt[] }
-interface Cfg { prompt: number; nGen: number; replicates: number; budgetGiB: number; attribReplicates?: number; prefillBatch?: boolean; select?: "cpu" | "optimistic" }
+interface Cfg {
+  prompt: number; nGen: number; replicates: number; budgetGiB: number;
+  attribReplicates?: number; prefillBatch?: boolean; select?: "cpu" | "optimistic";
+  /** C3c fase 3: budget CALCOLATO dalla formula ctx-aware (spec §2) invece del
+   *  budgetGiB fisso. Il valore è il tetto allocabile MISURATO dal runner
+   *  (nvidia-smi al lancio) — la sessione host sta in hostState del report. */
+  allocCeilingBytes?: number;
+  /** C3c fase 3: alloca KV/partials per QUESTO ctx (≥ nPrompt+nGen), per le
+   *  run che provano il regime a contesto lungo senza un prompt da 6k token. */
+  ctxMaxOverride?: number;
+}
 
 // Allocazione slot del modo ottimistico (C3b it.4, docket item 6b): q4_1
 // INTERA per prima (256 slot ≈ 1.3 GiB: azzera il miss surface dei 4 layer
@@ -140,11 +150,19 @@ async function main(cfg: Cfg): Promise<void> {
 
   const promptTokens = pr.promptTokens;
   const nPrompt = promptTokens.length;
-  const ctxMax = nPrompt + cfg.nGen;
+  if (cfg.ctxMaxOverride && cfg.ctxMaxOverride < nPrompt + cfg.nGen) {
+    throw new Error(`ctxMaxOverride ${cfg.ctxMaxOverride} < nPrompt+nGen ${nPrompt + cfg.nGen}`);
+  }
+  const ctxMax = Math.max(nPrompt + cfg.nGen, cfg.ctxMaxOverride ?? 0);
 
   // Il device si crea DOPO aver saputo ctxMax e budget: i limiti sono DERIVATI
   // dai consumatori (C3a it.6), non chiesti al massimo dell'adapter.
-  const budgetBytes = Math.floor(cfg.budgetGiB * (1 << 30));
+  // C3c fase 3: con allocCeilingBytes il budget è CALCOLATO dalla formula
+  // ctx-aware (spec §2) — il breakdown finisce nel report.
+  const slabBudget = cfg.allocCeilingBytes
+    ? slabBudgetCtxAware({ allocCeilingBytes: cfg.allocCeilingBytes, ctxMax })
+    : null;
+  const budgetBytes = slabBudget ? slabBudget.budgetBytes : Math.floor(cfg.budgetGiB * (1 << 30));
   const optimistic = cfg.select === "optimistic";
   // In ottimistico gli slot sono ESPLICITI (q4_1-first): la STESSA override va
   // sia ad arenaNeeds (sizing device) sia alla cache — una sola verita'.
@@ -178,7 +196,8 @@ async function main(cfg: Cfg): Promise<void> {
     return xRow;
   };
 
-  progress(`modello 47 layer + head, ctxMax ${ctxMax}, slab ${cfg.budgetGiB} GiB` +
+  progress(`modello 47 layer + head, ctxMax ${ctxMax}, slab ${(budgetBytes / (1 << 30)).toFixed(2)} GiB` +
+    (slabBudget ? ` [ctx-aware: ceiling ${(slabBudget.allocCeilingBytes / (1 << 30)).toFixed(2)} − nonExp − kv ${(slabBudget.kvBytes / 2 ** 20).toFixed(0)} MiB]` : "") +
     (optimistic ? ` — OPTIMISTIC, slot ${JSON.stringify(slotsOverride)} (preload…)` : "") + "…");
   const tBuild0 = performance.now();
   const model = createGlmModel(device, source, {
@@ -515,7 +534,12 @@ async function main(cfg: Cfg): Promise<void> {
       ggufSha256: GLM47_FLASH_SHA256,
       config: {
         promptIdx: cfg.prompt, promptId: pr.id, promptTokens: nPrompt, nGen: cfg.nGen,
-        replicates: cfg.replicates, budgetGiB: cfg.budgetGiB, ctxMax,
+        replicates: cfg.replicates,
+        // con la formula ctx-aware il budget riportato è quello CALCOLATO
+        budgetGiB: slabBudget ? +(budgetBytes / (1 << 30)).toFixed(3) : cfg.budgetGiB,
+        budgetMode: slabBudget ? "ctx-aware (spec c3c §2)" : "fisso (config)",
+        // spec §2: il report mostra il budget calcolato con gli addendi
+        slabBudget, ctxMax,
         prefillPath: cfg.prefillBatch ? `chunked M=${GLM_PREFILL_M} (prefillChunk, fase 5)` : "decode-only (forward per posizione)",
         decodePath: optimistic
           ? 'single-step greedy su select:"optimistic" (1 submit + repair/replay, C3b)'

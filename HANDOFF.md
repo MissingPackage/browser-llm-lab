@@ -43,12 +43,23 @@ relativo 1.25× AUTO-ancorato alla config della run** (senza overlap
 pendente, blocca SOLO la fase 7**. Correzione: KV "54 KB/token" in §5 era
 stale 2× (vero 108 288 B/token, ctx 6k = 665 MB).
 
-**Next decidable: FASE 3 — Slab ctx-aware**: formula della spec §2 in
-`src/engine/{residency,gpulimits,glmmodel}.ts` + glmbench, unit test
-(monotonia/clamp/riproduzione punti b12-tetto), run glmbench ctx 6k senza
-OOM con budget calcolato + VRAM di picco nel JSON, non-regressione a ctx
-~525 (banda ±5% sul punto b12), rimisura formale syncLogits nel report
-(landmine iv), suite+tsc puliti.
+**FASE 3 DONE (it.3): slab ctx-aware in produzione.** `slabBudgetCtxAware`
+(residency.ts) + glmbench `--budget-gib auto` (ceiling nvidia-smi a Chrome
+lanciato) + `--ctx-max`. Run committate: **ctx 6144 NON va OOM** a budget
+calcolato 12.146 GiB (breakdown+vramPeak 15 853 MiB nel JSON); **ctx 525
+auto riproduce il regime tetto in sessione VIVA**: 16.55/12.53 vs 16.64/
+12.60, strutturale 1.875 PASS, floor PASS; b12 esplicito migliorato
+(12.92/14.94 vs 11.60/16.79). Due OOM istruttivi fissati: workBytes
+dimenticava attnPartialsM ×16 (253 MiB @6k); riserva TARATA 512 MiB (slack
+sessione viva >247: staging Dawn + compositor). syncLogits rimisurato
+formalmente: 0.09-0.11 ms (landmine iv CHIUSA). Suite 344+7, tsc pulito.
+
+**Next decidable: FASE 4 — Prefetch in-forward + recall in-engine** (spec
+§3): tap hidden L → router L+1 dentro il token, dietro flag (default off),
+path sync/prefill (ottimistico I1-I5 NON si toccano); recall misurato
+in-engine sul corpus C1 vs 92.0% @K=8 oracolo (scostamento spiegato, non
+gateato); identità forward invariata (ktest PASS, argmax = sync); K=4
+[ASSUMED]; suite+tsc puliti.
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:

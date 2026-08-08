@@ -42,8 +42,8 @@ sfonda e il device va OOM. La formula sostituisce la costante:
 slabBudgetBytes(ctx) = allocCeilingBytes          // tetto misurato del device (probe, sessione dichiarata nel report)
                      − nonExpertBytes             // misurato all'import (oggi 1 354 078 720)
                      − kvBytes(ctx)               // nLayer·keyLen·4·ctx = 108 288·ctx
-                     − workBytes(ctx)             // buffer ctx-dipendenti da engineNeeds (attnPartials, staging, hiddenCkpt, dirtyB…) — derivati dagli stessi candidates, NON stimati a mano
-                     − reserveBytes               // riserva driver/frammentazione [ASSUMED 256 MiB, si tara in fase 3 sul punto OOM osservato]
+                     − workBytes(ctx)             // buffer ctx-dipendenti dai consumatori veri: partials MLA ×(1+GLM_PREFILL_M) — il ×16 del prefill chunked, scoperto dall'OOM della prima run (fase 3) — + hiddenCkpt
+                     − reserveBytes               // riserva driver/frammentazione: TARATA 512 MiB in fase 3 (era [ASSUMED 256]; due punti OOM: slack sessione viva >247 MiB = staging ring Dawn nel preload + compositor)
 slots(ctx) = expertSlots(slabBudgetBytes(ctx))    // riparto esistente (q4_1-first nel modo optimistic, item c3b 6b)
 ```
 

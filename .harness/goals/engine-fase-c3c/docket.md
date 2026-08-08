@@ -81,3 +81,13 @@
    target relativo va ancorato a un riferimento a caldo esplicito — i
    candidati chiusi da C3b sono 16.79 s (b12) e 12.60 s (tetto/sessione
    minima), la proposta della spec deve sceglierne uno e motivarlo.
+
+5. **REGISTRAZIONE (2026-08-08, it.3, nota verifier — non richiede decisione
+   ora)** — il punto b12 rimisurato a codice fase-3 (run nonreg-c3c:
+   decode 12.92 / TTFT 14.94) MIGLIORA il riferimento c3b (11.60 / 16.79)
+   di ~11%, oltre la banda ±5% in direzione buona; spiegazione plausibile:
+   sessione host (oggi la macchina rende come la sessione minima del tetto —
+   la run ctx525 replica il tetto a −0.5%). Per il ruling "le metriche non
+   peggiorano mai", 12.92/14.94 è il CANDIDATO nuovo riferimento b12: da
+   fissare al più tardi in fase 8 (con host state comparabile dichiarato),
+   non adottato unilateralmente qui.

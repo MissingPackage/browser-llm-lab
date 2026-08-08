@@ -28,6 +28,8 @@
 import { GLM47_FLASH as G } from "./shape";
 import { packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, type SlabLayout } from "./moe";
 import { downIsQ4_1 } from "./expertstore";
+import { mlaPartialsLen } from "./mlasplit";
+import { GLM_PREFILL_M } from "./glmprefillplan";
 
 export type ExpertClass = "q4_0" | "q4_1";
 
@@ -167,6 +169,93 @@ export function modelExpertPark(nLayer: number): Record<ExpertClass, number> {
   const park: Record<ExpertClass, number> = { q4_0: 0, q4_1: 0 };
   for (let l = G.denseLead; l < nLayer; l++) park[downIsQ4_1(l) ? "q4_1" : "q4_0"] += G.nExpert;
   return park;
+}
+
+// ---------------------------------------------------------------------------
+// Budget slab ctx-aware (C3c fase 3, spec 2026-08-08 §2): il budget non è più
+// una costante di config ma una funzione di (tetto allocabile MISURATO, ctx).
+// A ctx 6k il KV (665 MB) + partials sfondava il budget fisso ⇒ OOM.
+
+/** Non-expert residente, MISURATO (probe vram-ceiling it.19 c3a,
+ *  `required.nonExpertBytes`): attention + denso + shexp + router + head +
+ *  norm. Si aggiorna solo con una rimisura, non a mano. */
+export const NON_EXPERT_BYTES = 1_354_078_720;
+
+/** KV f32 per token: nLayer × keyLen × 4 (glmmodel alloca
+ *  `storage(ctxMax·keyLen·4)` PER LAYER). = 108 288 B/token — il "54 KB" citato
+ *  fino a c3c it.2 era il conto f16, stale di 2× (docket c3c item 4). */
+export const KV_PER_TOKEN_BYTES = G.nLayer * G.keyLen * 4;
+
+/** Riserva driver/frammentazione, TARATA sul punto OOM osservato (spec §2:
+ *  partiva [ASSUMED 256 MiB]). Evidenza della taratura (c3c it.3, due run):
+ *  a sessione utente viva con free nvidia-smi 15 139 MiB la build va OOM con
+ *  domanda ~14 890 ⇒ slack reale > 247 MiB — il probe it.19 (sessione minima
+ *  post-riavvio) misurava ~160, ma la sessione viva aggiunge lo staging ring
+ *  di Dawn durante il preload (~13 GB di writeBuffer) e le fluttuazioni del
+ *  compositor. 512 MiB copre entrambe le osservazioni; copre anche i buffer
+ *  fissi piccoli (staging logits, row576/q576, Sel, dirtyB: < 10 MiB). */
+export const SLAB_RESERVE_BYTES = 512 * 2 ** 20;
+
+/** Minimo di slot per classe = pin-for-replay del decode ottimistico (c3b I3:
+ *  fino a 4 expert × layer MoE della classe devono poter restare pinnati
+ *  durante un repair). q4_0: 4×42 layer, q4_1: 4×4 layer. */
+export const MIN_SLOTS = { q4_0: 4 * (PARK_Q4_0 / G.nExpert), q4_1: 4 * (PARK_Q4_1 / G.nExpert) } as const;
+
+export interface SlabBudgetInputs {
+  /** Tetto di allocazione VRAM MISURATO (nvidia-smi total−used−reserved al
+   *  lancio, o probe vram-ceiling): mai una costante inventata. La sessione
+   *  host va dichiarata nel report (pattern hostState). */
+  allocCeilingBytes: number;
+  ctxMax: number;
+  /** override per test/rimisure; default le costanti misurate qui sopra */
+  nonExpertBytes?: number;
+  reserveBytes?: number;
+}
+
+export interface SlabBudget {
+  budgetBytes: number;
+  slots: { q4_0: number; q4_1: number };
+  /** addendi della sottrazione, per il report (spec §2: il JSON mostra il
+   *  budget CALCOLATO, non asserito) */
+  allocCeilingBytes: number;
+  nonExpertBytes: number;
+  kvBytes: number;
+  workBytes: number;
+  reserveBytes: number;
+  ctxMax: number;
+}
+
+/** I buffer di lavoro ctx-dipendenti, derivati dagli stessi consumatori di
+ *  engineNeeds (spec §2: NON stimati a mano). I termini che crescono con ctx
+ *  sono i partials dello split MLA: quello del decode (×1) E quello del
+ *  prefill chunked `attnPartialsM` (×GLM_PREFILL_M — glmmodel.ts:1125, già
+ *  colpevole di un OOM storico a ctx 6688, commento a riga 641; ri-scoperto
+ *  dall'OOM della prima run ctx-aware, c3c it.3). hiddenCkpt è fisso e sta
+ *  qui perché è il più grosso dei "fissi" (385 KB). */
+export const slabWorkBytes = (ctxMax: number): number =>
+  (1 + GLM_PREFILL_M) * mlaPartialsLen(G.nHead, G.kvLora, ctxMax) * 4 + G.nLayer * G.dModel * 4;
+
+export function slabBudgetCtxAware(o: SlabBudgetInputs): SlabBudget {
+  const nonExpertBytes = o.nonExpertBytes ?? NON_EXPERT_BYTES;
+  const reserveBytes = o.reserveBytes ?? SLAB_RESERVE_BYTES;
+  const kvBytes = o.ctxMax * KV_PER_TOKEN_BYTES;
+  const workBytes = slabWorkBytes(o.ctxMax);
+  const budgetBytes = o.allocCeilingBytes - nonExpertBytes - kvBytes - workBytes - reserveBytes;
+  if (budgetBytes <= 0) {
+    throw new Error(
+      `slab ctx-aware: budget ${budgetBytes} B <= 0 (ceiling ${o.allocCeilingBytes} − ` +
+      `nonExpert ${nonExpertBytes} − kv ${kvBytes} @ctx${o.ctxMax} − work ${workBytes} − riserva ${reserveBytes})`);
+  }
+  const slots = expertSlots({ budgetBytes });
+  for (const cls of ["q4_0", "q4_1"] as const) {
+    if (slots[cls] < MIN_SLOTS[cls]) {
+      throw new Error(
+        `slab ctx-aware: ${slots[cls]} slot ${cls} < minimo ${MIN_SLOTS[cls]} (pin-for-replay c3b I3) ` +
+        `a budget ${budgetBytes} B (ceiling ${o.allocCeilingBytes}, ctx ${o.ctxMax}) — ` +
+        `niente degradazione silenziosa (emendamento 5 c3a): servono più VRAM o meno contesto`);
+    }
+  }
+  return { budgetBytes, slots, allocCeilingBytes: o.allocCeilingBytes, nonExpertBytes, kvBytes, workBytes, reserveBytes, ctxMax: o.ctxMax };
 }
 
 /** Slab per buffer nel regime arena: il buffer È il binding, quindi lo cappano

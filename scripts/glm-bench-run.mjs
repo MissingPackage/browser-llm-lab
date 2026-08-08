@@ -8,6 +8,7 @@
 // il loro wall NON entra nei gate). 0 le disattiva.
 // Exit: 0 gate PASS, 4 gate FAIL (report scritto), 2 errore, 3 timeout.
 import { chromium } from "playwright";
+import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -40,14 +41,38 @@ mkdirSync(PROFILE, { recursive: true });
 const prefillBatch = arg("prefill-batch", "0");
 // C3b fase 4: --select optimistic (decode a 1 submit + repair/replay)
 const select = arg("select", "cpu");
-const qs = new URLSearchParams({ prompt, ngen: nGen, reps, budget, attrib, prefillbatch: prefillBatch, select });
+// C3c fase 3: --budget-gib auto ⇒ tetto allocabile MISURATO ORA con nvidia-smi
+// (total − used − reserved) e budget calcolato dalla formula ctx-aware nel
+// worker; --ctx-max N alloca KV/partials per contesto lungo.
+const ctxMaxArg = arg("ctx-max", null);
+const smiMem = () => {
+  const [total, used, reserved] = execFileSync("nvidia-smi",
+    ["--query-gpu=memory.total,memory.used,memory.reserved", "--format=csv,noheader,nounits"],
+    { encoding: "utf8" }).trim().split(",").map(Number);
+  return { totalMiB: total, usedMiB: used, reservedMiB: reserved };
+};
+let ceilingMeasured = null;
+const qs = new URLSearchParams({ prompt, ngen: nGen, reps, attrib, prefillbatch: prefillBatch, select });
+if (budget !== "auto") qs.set("budget", budget);
+if (ctxMaxArg) qs.set("ctxmax", ctxMaxArg);
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
 page.on("pageerror", (e) => console.log("[glmbench][pageerror]", e.message.slice(0, 300)));
+if (budget === "auto") {
+  // il ceiling si misura A CHROME LANCIATO: il footprint VRAM del browser
+  // (~200-300 MiB di compositor) deve stare dentro "used", non dentro il
+  // budget — stessa contabilita' del probe it.19 (Chrome incluso in used)
+  await new Promise((r) => setTimeout(r, 2000));
+  ceilingMeasured = smiMem();
+  const ceilingBytes = (ceilingMeasured.totalMiB - ceilingMeasured.usedMiB - ceilingMeasured.reservedMiB) * 2 ** 20;
+  qs.set("ceiling", String(ceilingBytes));
+  console.log(`[glmbench] ceiling misurato (post-lancio Chrome): ${JSON.stringify(ceilingMeasured)} => ${(ceilingBytes / 2 ** 30).toFixed(2)} GiB allocabili`);
+}
 await page.goto(`${BASE_URL}/glmbench.html?${qs}`, { waitUntil: "load" });
 
 let lastLive = "";
+let vramPeakMiB = 0;
 const t0 = Date.now();
 for (;;) {
   if (Date.now() - t0 > timeoutMin * 60_000) {
@@ -69,6 +94,10 @@ for (;;) {
       process.exit(2);
     }
     report.hostState = host.close(); // schema 4d: dichiarato + campioni smi before/after
+    // C3c fase 3: ceiling misurato al lancio (se --budget-gib auto) + picco
+    // VRAM osservato durante la run (campionato ogni 5 s dal poll)
+    if (ceilingMeasured) report.allocCeilingMeasured = ceilingMeasured;
+    if (vramPeakMiB > 0) report.vramPeakMiB = vramPeakMiB;
     if (out) writeFileSync(join(ROOT, out), JSON.stringify(report, null, 1));
     const g = report.gates;
     console.log(
@@ -129,5 +158,8 @@ for (;;) {
     }
     process.exit(status === "done" ? 0 : status === "done-gate-fail" ? 4 : 2);
   }
+  // picco VRAM osservato (spec c3c §2: il report del regime ctx-aware mostra
+  // budget calcolato E VRAM di picco) — campione a ogni poll, costo ~nulla
+  try { vramPeakMiB = Math.max(vramPeakMiB, smiMem().usedMiB); } catch { /* smi assente: resta 0 */ }
   await new Promise((r) => setTimeout(r, 5000));
 }

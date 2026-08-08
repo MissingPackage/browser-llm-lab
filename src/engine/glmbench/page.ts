@@ -12,6 +12,11 @@ const cfg = {
   prefillBatch: q.get("prefillbatch") === "1", // fase 5: prefillChunk M=16
   // C3b fase 4: ?select=optimistic — decode a 1 submit + repair/replay
   select: q.get("select") === "optimistic" ? ("optimistic" as const) : ("cpu" as const),
+  // C3c fase 3: ?ceiling=<bytes> ⇒ budget slab CALCOLATO dalla formula
+  // ctx-aware (il runner misura il tetto con nvidia-smi); ?ctxmax=<n> alloca
+  // KV/partials per un contesto lungo anche col prompt corto del corpus.
+  allocCeilingBytes: q.has("ceiling") ? Number(q.get("ceiling")) : undefined,
+  ctxMaxOverride: q.has("ctxmax") ? Number(q.get("ctxmax")) : undefined,
 };
 const worker = new Worker(new URL("./glmbench.worker.ts", import.meta.url), { type: "module" });
 const log = (line: string): void => {
