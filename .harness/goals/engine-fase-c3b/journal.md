@@ -282,3 +282,55 @@ una accanto all'altra: la conclusione "modello confermato" vale per la
 formula del sim COI SUOI TERMINI; il residuo di wall non modellato e'
 dichiarato, ed e' materia di C3c (overlap/encode), non un buco del modello
 di replay. Rimisura formale di syncLogits annotata per la fase 7 / C3c.
+
+## it.6 — 2026-08-08 — fase 6 DONE: non-regressione a perimetro pieno, tutte le righe PASS (banda ±5%, ruling item 9)
+
+### Contesto
+
+Ruling PI in chat (2026-08-08, docket item 9): banda di non-regressione
+fissata a ±5% sulle metriche di prestazione ("troppa variabilità nella
+macchina di sviluppo"); ratifica c3a item 14 con larghezza emendata 2%→5%
+(14b resta pendente); gate di correttezza secchi. Le 4 run notturne del
+07-08 (lanciate a fine sessione precedente, mai committate) sono state
+adjudicate sotto la banda nuova; le righe rimanenti (routing full-corpus,
+ktest, suite, tsc) eseguite oggi a host APPENA RIAVVIATO (GPU a inizio
+run: 210 MHz, 0%, 492 MiB — la quiescenza migliore mai avuta).
+
+### Esito riga per riga (blocco non-regressione del contratto)
+
+- decode sync **5.299 ≥ 5.211** PASS (`bench-glm-4090-b12-sync-nonreg-2026-08-07.json`, reps 5.188/5.299/5.325);
+- prefill **25.01 vs 25.78 = −3.0%** PASS in banda ±5% (stessa run);
+- TTFT **18.43 s vs 17.88 = +3.1%** PASS in banda (stessa run);
+- Qwen K=8 **325.3 vs 326.2 = −0.3%** PASS (`bench-4090-2026-08-07T00-52-35-088Z.json`);
+- golden full-corpus **98.828%** (1012/1024, b11) PASS secco, cpuref GLM
+  **256/256** PASS (`conformance-glm47flash-full-nonreg-2026-08-07.json`);
+- fase A: cpuref-f64 **512/512 (100%)** + golden 98.05% = firma storica
+  esatta (`conformance-4090-2026-08-07T00-53-39-887Z.json`, campi
+  vsCpurefPct/cpuAgree — il 502/512 è il vs-golden, identico a it.8 c3a);
+- routing full-corpus **= firma 14b AL CONTEGGIO ESATTO**: prefill
+  1 047 485/1 203 084 (87.0667%), decode 208 441/235 520 (88.5025%),
+  router GPU set-match 1 438 591/1 438 604, pesi fuori tolleranza 0, Sel
+  di produzione 0/5 754 416 difformi
+  (`routing-conformance-glm47flash-full-nonreg-2026-08-08.json`, b11 come
+  il riferimento 08-06; exit 4 del runner = gate legacy engine-vs-oracolo
+  soglia 99, FALSE anche nel riferimento — landmine near-tie, non è il
+  criterio di fase);
+- ktest **69/69** PASS su GPU reale; suite **338 passed + 7 skipped**
+  (≥ 337+7); `npx tsc --noEmit` pulito.
+
+### Verifica
+
+Albero congelato per tutta la finestra (nessun edit src; vite spento a
+fine run). Nessuna riga fuori banda: la fase 6 chiude senza deroghe.
+Verifier indipendente: PASS su tutti i punti di sostanza (suite e tsc
+rieseguiti dal verifier stesso); artefatti committati nel commit di
+questa iterazione.
+
+### Prossimo pezzo
+
+Fase 7 (chiusura): checklist DONE WHEN punto per punto, direction §7,
+input C3c nel docket, HANDOFF, digest, merge+push. NOTA BLOCCANTE
+PARZIALE: la riga "gate strutturale ≤ 2" del DONE WHEN dipende dal
+ruling item 8 (2.188 a b12; opzione raccomandata = run a sessione
+minima al tetto 2596, azione host del PI). La fase 7 può preparare
+tutto, ma la chiusura del goal è user-gated su item 8.

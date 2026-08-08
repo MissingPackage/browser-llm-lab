@@ -34,7 +34,8 @@
    Se una di queste tre non ti sta bene, il revert e' un edit di contratto —
    da fare PRIMA della fase di implementazione.
 
-3. **RATIFICA COLLEGATA (pendente altrove, applicata qui in via provvisoria).**
+3. ~~**RATIFICA COLLEGATA**~~ **RISOLTO (2026-08-08): banda ratificata a ±5%,
+   v. item 9.** Testo originale:
    La banda di rumore del gate di non-regressione tok/s (c3a docket item 14,
    proposta: regressione = mediana sotto il riferimento oltre il 2% OPPURE
    sotto in modo statisticamente significativo a livello di repliche) e'
@@ -117,3 +118,18 @@
    FAIL dichiarato per budget/hardware, non per struttura; (c) emendare il
    gate sulle componenti. Il loop prosegue con la fase 5 (analisi della
    tassa: non dipende dal ruling).
+
+9. **RULING PI (2026-08-08, in chat): banda di non-regressione fissata a
+   ±5%.** Testuale: "Le bande è meglio fissarle al ±5%. C'è troppa
+   variabilità nella macchina di sviluppo. Non abbiamo l'affidabilità di un
+   server, purtroppo." Sostituisce il 2% provvisorio di item 3 (e ratifica
+   c3a item 14 con larghezza emendata: 2% → 5%; il ramo "OPPURE
+   statisticamente significativo su repliche" della proposta originale resta
+   in piedi come criterio aggiuntivo). Si applica a TUTTE le metriche di
+   rumore del blocco non-regressione (tok/s al ribasso, TTFT al rialzo); i
+   gate di correttezza (cpuref, golden, firma routing, ktest, suite) restano
+   secchi. Conseguenza immediata sulla fase 6 (run 2026-08-07 su disco):
+   prefill 25.01 vs 25.78 (−3.0%) e TTFT 18.43 vs 17.88 (+3.1%) rientrano
+   in banda ⇒ PASS; Qwen 325.3 vs 326.2 (−0.3%) PASS. Nota: c3a item 14b
+   (riferimenti di conformance con ordine di somma diverso) NON è coperto
+   da questo ruling e resta pendente.

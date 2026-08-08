@@ -229,8 +229,11 @@
     quando il cambio di matematica è validato dai gate di correttezza forti
     (argmax vs cpuref), e "non peggiore" si valuta sull'aggregato.
 
-14. **RATIFICA RICHIESTA — banda di rumore nel gate di non-regressione tok/s**
-    (2026-08-03, it.13). Il gate confronta MEDIANE di 3 repliche con varianza
+14. ~~**RATIFICA RICHIESTA**~~ **RATIFICATO (2026-08-08, PI in chat, con
+    larghezza emendata: banda ±5%, non 2% — "troppa variabilità nella
+    macchina di sviluppo"; registrazione in c3b docket item 9; item 14b
+    NON coperto, resta pendente).** Testo originale — banda di rumore nel
+    gate di non-regressione tok/s (2026-08-03, it.13). Il gate confronta MEDIANE di 3 repliche con varianza
     run-to-run ~±1%: confrontare ogni run nuova col MASSIMO storico delle
     mediane respinge rumore puro circa metà delle volte, e prima o poi blocca
     un merge sano (ratchet statistico). Caso concreto: prefill it.13

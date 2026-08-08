@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-07, sessione 23 — GOAL ENGINE-FASE-C3B APERTO: decode ottimistico)
+# HANDOFF — browser-llm-lab   (updated 2026-08-08, sessione 24 — C3B: fasi 1-6 DONE, chiusura user-gated su item 8)
 
 ## 1. Next decidable
 
@@ -40,11 +40,22 @@ minima, al tetto 2596 l'aritmetica dà 1.82 PASS). **It.5 — fase 5 DONE:
 la tassa CONFERMA WP-0** (`wp0-vs-measured-2026-08-07.json`): tassa ×1.14,
 pDirty ×1.10, tok/s ×1.21 entro ±25%; fuori solo i 2 termini della cascata
 (miss ×1.47, replayTerm ×1.35) che il sim non modella — il moltiplicatore
-dei round 1.39× li spiega quantitativamente (journal it.5). **Next
-decidable: fase 6** — non-regressione a perimetro pieno (albero congelato,
-run lunghe sul path sync non toccato: conformance cpuref+golden, routing
-firma 14b, Qwen, bench sync, ktest, suite). Ruling item 8 pendente (gate
-strutturale a b12), non blocca la 6.
+dei round 1.39× li spiega quantitativamente (journal it.5). **RULING PI
+2026-08-08: banda di non-regressione ±5%** (variabilità della macchina di
+sviluppo; c3b docket item 9, ratifica c3a item 14 con larghezza emendata
+2%→5%; 14b resta pendente; gate di correttezza restano secchi). **It.6 —
+FASE 6 DONE (2026-08-08, host appena riavviato): tutte le righe PASS
+senza deroghe** — decode 5.299 ≥ 5.211; prefill −3.0% e TTFT +3.1% in
+banda ±5%; Qwen 325.3 (−0.3%); golden 98.828% e cpuref 256/256 secchi;
+fase A cpuref-f64 512/512 + golden 98.05% (firma storica); **routing
+full-corpus = firma 14b AL CONTEGGIO ESATTO** (prefill 1 047 485/1 203 084,
+decode 208 441/235 520, router GPU 1 438 591/1 438 604, Sel 0/5 754 416
+difformi — exit 4 runner = gate legacy oracolo, FALSE anche nel
+riferimento); ktest 69/69, suite 338+7, tsc pulito. **Next decidable:
+fase 7 (chiusura)** — checklist DONE WHEN, direction §7, input C3c,
+merge+push; MA la riga "gate strutturale ≤ 2" è user-gated sul ruling
+item 8 (2.188 a b12; raccomandata run a sessione minima, tetto 2596 ⇒
+aritmetica 1.82 PASS). La 7 si prepara, la chiusura aspetta item 8.
 Ratifiche c3a ancora pendenti (non bloccanti): item 14/14b, item 2 formale,
 item 19/20/21 prese d'atto.
 

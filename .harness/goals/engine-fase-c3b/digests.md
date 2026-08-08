@@ -76,3 +76,16 @@
 - Unita' di replayFrac verificate identiche PRIMA del confronto.
 - **Prossimo**: fase 6 — non-regressione a perimetro pieno (run lunghe,
   albero congelato). Ruling item 8 pendente, non blocca.
+
+## it.6 (2026-08-08) — fase 6 DONE: non-regressione a perimetro pieno, zero deroghe
+
+- **Ruling PI recepito (docket item 9): banda ±5%** — ratifica c3a item 14
+  con larghezza emendata (2%→5%); gate di correttezza secchi; 14b pendente.
+- **Tutte le righe PASS**: decode 5.299 ≥ 5.211; prefill −3.0% e TTFT +3.1%
+  in banda; Qwen 325.3 (−0.3%); golden 98.828% e cpuref 256/256 secchi;
+  fase A 512/512 + 98.05% = firma storica; **routing full-corpus = firma
+  14b al conteggio esatto** (87.0667/88.5025, router GPU 1438591/1438604);
+  ktest 69/69, suite 338+7, tsc pulito. Host appena riavviato (GPU 210 MHz
+  a inizio run). Verifier PASS sulla sostanza (unico rilievo: questo digest).
+- **Prossimo**: fase 7 (chiusura) — preparabile tutta; la riga "gate
+  strutturale ≤ 2" del DONE WHEN resta user-gated sul ruling item 8.
