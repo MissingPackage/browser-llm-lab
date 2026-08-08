@@ -143,3 +143,63 @@ nel JSON PASS; ctx ~500 riproduce il regime (b12 migliorato, tetto in banda
 −0.5%) PASS; suite 344+7 ≥ 338+7 e tsc puliti PASS. Exit 4 delle run = gate
 floor prefill 56.58 FAIL preesistente (materia fase 8 con clausola, non di
 questa fase).
+
+## it.4 — 2026-08-08 — FASE 4 DONE: prefetch in-forward + recall in-engine
+
+**Meccanismo (spec §3, dietro flag `prefetch:"inforward"`, default off = path
+bit-identico).** Al router del layer MoE L il pass accoda ANCHE il GEMV del
+router di L+1 sullo stesso fnB (tap: +1 dispatch, pesi router già in VRAM);
+i logits del tap viaggiano nella STESSA copy di staging e nella STESSA
+mapAsync (staging 256→512 B): zero sync aggiunti. Le predizioni (top-4 via
+routerSelect coi bias di L+1) si consumano al submit successivo PRIMA
+dell'await: il fetch OPFS+writeBuffer cade nel tempo in cui la CPU aspetta
+il router e la GPU lavora — writeBuffer dopo il submit = eseguita dopo i
+suoi dispatch (ordine di coda), nessuno slab in volo si corrompe. Lo stato
+del prefetch vive DENTRO la funzione di forward: una predizione non può
+STRUTTURALMENTE attraversare il confine di token (esclusione WP-0 —
+l'ultimo MoE non ha tap). Path: sezione sync per-posizione (select
+"cpu"/"shadow"); oneSubmit ⇒ throw (I1-I5 c3b intatti). Telemetria nuova
+(null quando spento): preds/fetches/resident/prefetchMs + recallPreds/
+recallHits4/recallHits8. Flag su glmroute/glmconf (glmbench NON toccato: non serviva alla riga 4) + runner
+--prefetch.
+
+**Recall in-engine (done-when) — l'oracolo è REPLICATO nel motore:**
+`routing-prefetch-inforward-2026-08-08.json`, full-corpus C1 (1 407 330
+predizioni consumate): **recall@8 91.917% vs oracolo 92.0% (−0.08pp),
+recall@4 77.045% vs 77.5% (−0.46pp)**. Spiegazione dello scostamento
+(non gateato): il tap applica il router L+1 a ffn_norm_L(x) in f32 su GPU
+(hidden PRIMA del contributo FFN/MoE di L, con la norm di L); l'oracolo C1
+usava il suo hidden f64 al punto equivalente, su base campionaria diversa
+(qui prefill+decode teacher-forced). < 0.5pp = il potere predittivo
+dell'oracolo arriva in-engine intero.
+
+**Identità del forward (done-when):** firma 14b ai conteggi ESATTI con
+prefetch ACCESO — decode 208 441/235 520 (88.5025%), prefill
+1 047 485/1 203 084 (87.0667%), router GPU 1 438 591/1 438 604 (99.9991%),
+Sel produzione 0/5 754 416 difformi = 1.44M selezioni identiche al
+riferimento; argmax ≡ cpuref-f64 **256/256 PASS** col prefetch acceso
+(`conf-glm-prefetch-sample-2026-08-08.json`, golden 254/256 = le stesse 2
+divergenze di C2); ktest 69/69 PASS; suite 344+7; tsc pulito.
+
+**Osservazioni per la fase 5 (registrate, non decise):** (i) hit-rate
+residency della run prefetch 98.16% vs 97.56% LRU pura b12 — MA il numero
+non è direttamente confrontabile: gli ensure di prefetch alimentano gli
+stessi contatori (resident 5 495 182 / fetches 134 138), il confronto
+pulito di fase 5 va fatto sui miss AL MOMENTO D'USO agli stessi budget;
+(ii) prefetchMs 222.6 s / 31 274 pos ≈ 7.1 ms/posizione dentro la finestra
+d'attesa (0.04 ms/pred × 184 pred/pos): a b12 è quasi tutto touch LRU —
+da tenere d'occhio come costo CPU della finestra di overlap ai budget
+stretti. (iii) Il prefill CHUNKED (produzione) non ha il prefetch: il
+meccanismo vive nel forward per-posizione (decode sync + prefill legacy);
+l'estensione al chunked è materia dell'overlap instant-on (fase 7), non
+di questa riga.
+
+**Igiene:** primo tentativo glmconf fallito per lock OPFS transitorio
+("Access Handles cannot be created…", stesso profilo; la glmroute
+successiva e il retry sono passati puliti) — nessun fix necessario,
+registrato come firma nota.
+
+**Done-when riga 4:** prefetch dietro flag PASS; recall in-engine su corpus
+C1 confrontato nel JSON con 92.0% @K=8 e scostamento spiegato PASS;
+identità forward invariata (ktest 69/69, firma 14b esatta, cpuref 256/256)
+PASS; suite+tsc puliti PASS.

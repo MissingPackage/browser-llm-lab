@@ -45,6 +45,8 @@ if (!existsSync(TRACE_JSON)) {
 mkdirSync(PROFILE, { recursive: true });
 
 const qs = new URLSearchParams();
+const prefetch = arg("prefetch", null);
+if (prefetch) qs.set("prefetch", prefetch);
 if (cap) qs.set("cap", cap);
 if (prompts) qs.set("prompts", prompts);
 qs.set("budget", budget);

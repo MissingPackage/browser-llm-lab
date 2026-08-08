@@ -54,12 +54,24 @@ dimenticava attnPartialsM ×16 (253 MiB @6k); riserva TARATA 512 MiB (slack
 sessione viva >247: staging Dawn + compositor). syncLogits rimisurato
 formalmente: 0.09-0.11 ms (landmine iv CHIUSA). Suite 344+7, tsc pulito.
 
-**Next decidable: FASE 4 — Prefetch in-forward + recall in-engine** (spec
-§3): tap hidden L → router L+1 dentro il token, dietro flag (default off),
-path sync/prefill (ottimistico I1-I5 NON si toccano); recall misurato
-in-engine sul corpus C1 vs 92.0% @K=8 oracolo (scostamento spiegato, non
-gateato); identità forward invariata (ktest PASS, argmax = sync); K=4
-[ASSUMED]; suite+tsc puliti.
+**FASE 4 DONE (it.4): prefetch in-forward — l'oracolo replicato nel
+motore.** Tap = +1 GEMV (router L+1 su fnB) nello stesso pass/mapAsync,
+predizioni consumate al submit successivo nella finestra d'attesa; stato
+DENTRO il forward (mai oltre il confine di token, WP-0). **Recall@8
+91.917% vs oracolo 92.0 (−0.08pp), recall@4 77.045 vs 77.5** su 1.407M
+predizioni full-corpus; identità: firma 14b ai conteggi ESATTI con
+prefetch ON (1.44M selezioni), cpuref 256/256, ktest 69/69. Osservazioni
+fase 5 nel journal: hit 98.16% NON confrontabile direttamente (ensure di
+prefetch nei contatori), prefetchMs ~7 ms/pos nella finestra, prefill
+chunked senza prefetch (materia fase 7).
+
+**Next decidable: FASE 5 — Policy tier+AUTOPIN vs LRU** (spec §4): eusage
+persistente OPFS + eheat con decay + AUTOPIN (pin ≤ 12.5% HARD, assert)
++ REPIN LFRU `heat<<8|recency` (isteresi 25%+4, max 4 swap), dietro
+`policy:"tier"|"lru"`; misura su harness routing agli STESSI budget
+stretti 1472 e 736 slot, hit-rate tier+AUTOPIN+prefetch > LRU pura, JSON
+per policy×budget, delta vs ceiling Belady WP-0 (+9-19pp); confronto sui
+miss AL MOMENTO D'USO (nota it.4); suite+tsc puliti.
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:

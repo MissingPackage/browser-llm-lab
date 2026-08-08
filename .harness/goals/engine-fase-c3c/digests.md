@@ -51,3 +51,15 @@
   (0.09-0.11 ms): landmine iv chiusa.
 - Next: fase 4 — prefetch in-forward (tap hidden L → router L+1) + recall
   in-engine vs oracolo 92% @K=8.
+
+## it.4 (2026-08-08) — fase 4 DONE: prefetch in-forward, oracolo replicato
+
+- Tap in-forward (+1 GEMV router L+1, stessa mapAsync, zero sync extra);
+  fetch dei predetti nella finestra d'attesa del router; predizioni
+  strutturalmente confinate al token (stato dentro il forward).
+- Recall in-engine full-corpus: **91.92% @K=8 vs 92.0 oracolo (−0.08pp)**,
+  77.04% @K=4 vs 77.5 — il potere predittivo di C1 arriva intero.
+- Identità blindata: firma 14b ai conteggi ESATTI con prefetch acceso,
+  cpuref 256/256, ktest 69/69, suite 344+7, tsc pulito.
+- Next: fase 5 — tier.h+AUTOPIN vs LRU a 1472/736 slot (il confronto vero
+  sui miss al momento d'uso; ceiling Belady +9-19pp).

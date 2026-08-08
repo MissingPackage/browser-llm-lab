@@ -5,6 +5,8 @@ const cfg = {
   prompts: q.has("prompts") ? q.get("prompts")!.split(",").map(Number) : undefined,
   maxGen: q.has("maxgen") ? Number(q.get("maxgen")) : undefined,
   budgetGiB: q.has("budget") ? Number(q.get("budget")) : 12,
+  // C3c fase 4: ?prefetch=inforward — identita' argmax con prefetch acceso
+  prefetch: q.get("prefetch") === "inforward" ? ("inforward" as const) : undefined,
 };
 const worker = new Worker(new URL("./glmconf.worker.ts", import.meta.url), { type: "module" });
 const log = (line: string): void => {

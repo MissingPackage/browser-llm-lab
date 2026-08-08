@@ -7,6 +7,9 @@ const cfg = {
   cap: q.has("cap") ? Number(q.get("cap")) : undefined,
   prompts: q.has("prompts") ? q.get("prompts")!.split(",").map(Number) : undefined,
   budgetGiB: q.has("budget") ? Number(q.get("budget")) : 12,
+  // C3c fase 4: ?prefetch=inforward — tap + prefetch nel path sync, recall
+  // in-engine nel report. La run di FIRMA (14b) resta quella senza flag.
+  prefetch: q.get("prefetch") === "inforward" ? ("inforward" as const) : undefined,
 };
 
 const worker = new Worker(new URL("./glmroute.worker.ts", import.meta.url), { type: "module" });

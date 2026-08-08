@@ -116,6 +116,19 @@ export interface GlmModelOpts {
    */
   optimisticMinResidency?: number;
   /**
+   * Prefetch IN-FORWARD (C3c fase 4, spec §3): al router del layer MoE L si
+   * incoda ANCHE il GEMV del router di L+1 sullo stesso hidden normato (fnB)
+   * — stesso pass, stessa copy di staging, stessa mapAsync: zero sync in più.
+   * Le predizioni (top-K=4 via routerSelect coi bias di L+1) si consumano al
+   * submit successivo, PRIMA dell'await: il fetch OPFS+writeBuffer dei
+   * predetti avviene mentre la GPU esegue il lavoro appena sottomesso — è il
+   * tempo in cui la CPU oggi aspetta. Solo path sync per-posizione
+   * (`select:"cpu"`): l'ottimistico C3b (I1-I5) non si tocca. NIENTE
+   * predizioni oltre il confine di token (predictor al confine FALSIFICATO —
+   * WP-0): l'ultimo layer MoE non ha tap. Default off = path bit-identico.
+   */
+  prefetch?: "inforward";
+  /**
    * Checkpoint dell'hidden di INGRESSO di ogni layer (C3b spec §3c): una
    * copyBufferToBuffer per layer (x → hiddenCkpt[l]) nell'encoder del token —
    * zero dispatch in piu', l'input del replay dal primo layer sporco.
@@ -195,6 +208,17 @@ export interface GlmDirtyInfo {
 // qui restano solo i campi specifici del path GLM.
 export interface GlmTelemetry extends CoreCounters {
   on: boolean;
+  /**
+   * Prefetch in-forward (C3c fase 4), null quando spento. `preds` =
+   * predizioni consumate (fetch al submit successivo), `fetches` = quelle
+   * NON residenti (I/O reale), `resident` = gia' in cache; recall in-engine:
+   * hits4/hits8 su `recallPreds` predizioni × 4 expert veri (confronto col
+   * 92.0% @K=8 dell'oracolo C1 — spiegato, non gateato).
+   */
+  prefetch: {
+    preds: number; fetches: number; resident: number; prefetchMs: number;
+    recallPreds: number; recallHits4: number; recallHits8: number;
+  } | null;
   ensureMs: number;       // tempo dentro ExpertCache.ensure (residenza)
   routerWaitMs: number;   // tempo negli await di readback del router (46/token)
   tailWaitMs: number;     // tempo nell'await finale (hidden + logits)
@@ -332,6 +356,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     routerSyncs: 0, submits: 0, selMiss: 0, gpuBusyMs: 0, gpuPasses: 0, gpuPassOverflow: 0,
     dirtyTokens: 0, replays: 0, replayLayers: 0, repairMs: 0,
     dispatches: 0,
+    // prefetch in-forward (C3c fase 4)
+    prefetchPreds: 0, prefetchFetches: 0, prefetchResident: 0, prefetchMs: 0,
+    recallPreds: 0, recallHits4: 0, recallHits8: 0,
   };
   const catMs = new Map<string, number>();
   const catPasses = new Map<string, number>();
@@ -427,6 +454,13 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   const repairOn = opts.optimisticRepair !== false;
   if (opts.checkpointHidden === true && !oneSubmit) {
     throw new Error('glmmodel: checkpointHidden richiede select "gpu" o "optimistic" (submit unico)');
+  }
+  // C3c fase 4: prefetch in-forward — vive nella sezione sync per-posizione
+  // (select "cpu" e "shadow": stesso branch !oneSubmit). Nei modi a submit
+  // unico non esiste il punto di consumo (I1-I5 c3b non si toccano).
+  const prefetchOn = opts.prefetch === "inforward";
+  if (prefetchOn && oneSubmit) {
+    throw new Error('glmmodel: prefetch "inforward" vive nel path sync per-posizione (select "cpu"/"shadow")');
   }
   // PRECONDIZIONE DI RESIDENZA TOTALE (design §4 slice C, R6). Si verifica PRIMA
   // di costruire la cache: un errore dopo lascerebbe in giro i buffer d'arena
@@ -643,7 +677,11 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
   // niente piu' `wExp`: il peso di mixing e' il campo `w` di Sel (§2.1 del
   // design) — la stessa indirezione che porta lo slot porta anche il peso.
   const P = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const logitsStaging = device.createBuffer({ size: G.nExpert * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  // C3c fase 4: col prefetch lo staging raddoppia — [0,256) logits del router
+  // del layer corrente, [256,512) logits del TAP (router L+1 su fnB). Stessa
+  // copy window, stessa mapAsync: il tap non aggiunge sync.
+  const logitsStaging = device.createBuffer({ size: G.nExpert * 4 * (prefetchOn ? 2 : 1), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const logits2B = prefetchOn ? storage(G.nExpert * 4) : null;
   const hiddenStaging = device.createBuffer({ size: G.dModel * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
   const bg = (pipe: GPUComputePipeline, bufs: Array<GPUBuffer | BindRange>, uni?: GPUBuffer) =>
@@ -673,6 +711,10 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     selBase: number;         // prima entry di Sel del layer: moeLayerIdx * nUsed
     routerBind: GPUBindGroup | null; // bind group del router GPU (shadow)
     preRouter: Step[];       // ffn_norm + router (dopo l'attention)
+    /** C3c fase 4: GEMV del router del PROSSIMO layer MoE su fnB (il tap).
+     *  Assente sull'ultimo layer MoE: niente predizioni oltre il confine di
+     *  token (WP-0). Costruito solo con prefetch attivo. */
+    tapNext?: { st: Step; layer: number; bias: Float32Array };
     shexp: Step[];           // scrive moeOut
     addMoe: Step;            // x += moeOut
     downLayout: SlabLayout;  // layout slab della classe (sub-range dei gather)
@@ -794,6 +836,22 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           addMoe: step(pipes.add, [x, moeOut], Math.ceil(G.dModel / 64)),
         },
       });
+    }
+  }
+
+  // ---- tap del prefetch in-forward (C3c fase 4): ogni layer MoE aggancia il
+  // router del MoE SUCCESSIVO (pesi già in VRAM) sullo stesso fnB. L'ultimo
+  // MoE resta senza tap: dentro il token, mai oltre il confine (WP-0).
+  if (prefetchOn) {
+    const moeIdxs = layers.map((L, i) => (L.moe ? i : -1)).filter((i) => i >= 0);
+    for (let j = 0; j + 1 < moeIdxs.length; j++) {
+      const cur = layers[moeIdxs[j]].moe!;
+      const nxt = layers[moeIdxs[j + 1]];
+      cur.tapNext = {
+        st: step(pipes.router, [nxt.bw.routerW!, fnB, logits2B!], G.nExpert),
+        layer: moeIdxs[j + 1],
+        bias: nxt.moe!.bias,
+      };
     }
   }
 
@@ -1370,6 +1428,12 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         };
         const endPass = () => { if (pass) { pass.end(); pass = null; } };
 
+        // Stato del prefetch in-forward: vive DENTRO questo forward — una
+        // predizione non puo' strutturalmente attraversare il confine di token
+        // (l'esclusione del contratto C3c, WP-0).
+        let pendingPrefetch: { layer: number; ids: number[] } | null = null;
+        let lastPredRecall: { layer: number; p4: Set<number>; p8: Set<number> } | null = null;
+
         for (const [l, L] of layers.entries()) {
           if (l < startLayer) continue; // replay: i layer puliti non si rigiocano
           // checkpoint dell'hidden di INGRESSO del layer (spec §3c): la copy va
@@ -1407,16 +1471,57 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
             T.dispatches++;
           }
           if (!oneSubmit) {
+            // tap del prefetch: stesso pass del router (categoria "router")
+            if (prefetchOn && m.tapNext) runSteps(pass!, [m.tapNext.st]);
             endPass();
             enc.copyBufferToBuffer(logitsB, 0, logitsStaging, 0, G.nExpert * 4);
+            if (prefetchOn && m.tapNext) enc.copyBufferToBuffer(logits2B!, 0, logitsStaging, G.nExpert * 4, G.nExpert * 4);
             device.queue.submit([enc.finish()]);
             // ---- sync GPU→CPU: selezione ----
             if (telemOn) { T.encodeCpuMs += performance.now() - tSeg; T.submits++; T.routerSyncs++; }
+            // ---- prefetch in-forward (C3c fase 4): consuma le predizioni del
+            // layer MoE precedente ADESSO, mentre la GPU esegue il submit appena
+            // accodato — il fetch OPFS+upload cade nel tempo d'attesa del router,
+            // non in coda a esso. writeBuffer dopo il submit = eseguito dopo i
+            // suoi dispatch (ordine di coda): nessuno slab in volo si corrompe.
+            if (prefetchOn && pendingPrefetch) {
+              const pf = pendingPrefetch; pendingPrefetch = null;
+              const tPf = nowT();
+              const pinnedP = new Set<number>();
+              for (const e of pf.ids) pinnedP.add(expertKey(pf.layer, e));
+              for (const e of pf.ids) {
+                const r = cache.ensure(pf.layer, e, expertReader, pinnedP);
+                if (telemOn) { T.prefetchPreds++; if (r.hit) T.prefetchResident++; else T.prefetchFetches++; }
+              }
+              cache.flushSlotTable();
+              if (telemOn) T.prefetchMs += nowT() - tPf;
+            }
             const tWait = nowT();
-            const logits = await mapLogits();
+            const mapped = await mapLogits();
+            const logits = prefetchOn ? mapped.subarray(0, G.nExpert) : mapped;
             if (telemOn) tSeg = performance.now();
             if (telemOn) T.routerWaitMs += tSeg - tWait;
             const sel = routerSelect(logits, m.bias);
+            // ---- recall in-engine + prossima predizione (C3c fase 4) ----
+            if (prefetchOn) {
+              if (telemOn && lastPredRecall && lastPredRecall.layer === l) {
+                T.recallPreds++;
+                for (const e of sel.experts) {
+                  if (lastPredRecall.p4.has(e)) T.recallHits4++;
+                  if (lastPredRecall.p8.has(e)) T.recallHits8++;
+                }
+              }
+              lastPredRecall = null;
+              if (m.tapNext) {
+                const lg2 = mapped.subarray(G.nExpert, 2 * G.nExpert);
+                const pred = routerSelect(lg2, m.tapNext.bias); // K=4 (spec §3)
+                pendingPrefetch = { layer: m.tapNext.layer, ids: Array.from(pred.experts) };
+                if (telemOn) {
+                  const p8 = routerSelect(lg2, m.tapNext.bias, 8).experts;
+                  lastPredRecall = { layer: m.tapNext.layer, p4: new Set(pred.experts), p8: new Set(p8) };
+                }
+              }
+            }
             routing.push({ layer: l, experts: sel.experts, weights: sel.weights });
             const pinned = new Set<number>();
             for (const e of sel.experts) pinned.add(expertKey(l, e));
@@ -1715,6 +1820,12 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         dispatches: T.dispatches,
         gpuByCatMs: catMs.size ? Object.fromEntries(catMs) : null,
         gpuByCatPasses: catPasses.size ? Object.fromEntries(catPasses) : null,
+        // C3c fase 4: null quando il prefetch e' spento (schema unico)
+        prefetch: prefetchOn ? {
+          preds: T.prefetchPreds, fetches: T.prefetchFetches, resident: T.prefetchResident,
+          prefetchMs: T.prefetchMs,
+          recallPreds: T.recallPreds, recallHits4: T.recallHits4, recallHits8: T.recallHits8,
+        } : null,
       };
     },
     debugMarkMiss(misses: { layer: number; id: number }[]) {
@@ -1734,7 +1845,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     },
     destroy() {
       for (const b of [x, hn, qaB, qanB, qB, kvB, row576, qCkv, q576, attnCkv, attnPartials, attnMla, tmp, fnB, gateD, upD, gateE, moeOut, logitsB, selBuf, moeIdxUni, P, logitsStaging, hiddenStaging, ...weightBufs]) b.destroy();
-      for (const b of [routerIds, routerWts, selStaging, dirtyB, dirtyStaging, hiddenCkpt]) b?.destroy();
+      for (const b of [routerIds, routerWts, selStaging, dirtyB, dirtyStaging, hiddenCkpt, logits2B]) b?.destroy();
       tsqResolve?.destroy();
       querySet?.destroy();
       cache.destroy();

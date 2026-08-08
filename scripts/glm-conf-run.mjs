@@ -42,6 +42,8 @@ for (const f of CPUREF_DUMPS) {
 writeFileSync(join(ROOT, "public/models/glm-cpuref-argmax.json"), JSON.stringify(cpurefMerged));
 
 const qs = new URLSearchParams();
+const prefetch = arg("prefetch", null);
+if (prefetch) qs.set("prefetch", prefetch);
 if (prompts) qs.set("prompts", prompts);
 if (maxGen) qs.set("maxgen", maxGen);
 qs.set("budget", budget);

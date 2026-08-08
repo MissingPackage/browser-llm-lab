@@ -18,7 +18,7 @@ interface Golden {
   modelSha256: string; oracle: { commit: string }; corpusHash: string; topK: number;
   prompts: GoldenPrompt[];
 }
-interface Cfg { prompts?: number[]; maxGen?: number; budgetGiB: number }
+interface Cfg { prompts?: number[]; maxGen?: number; budgetGiB: number; prefetch?: "inforward" }
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
 const progress = (msg: string) => post({ type: "progress", msg });
@@ -64,6 +64,7 @@ async function main(cfg: Cfg): Promise<void> {
   progress(`modello 47 layer + head, ctxMax ${ctxMax}…`);
   const model = createGlmModel(device, source, {
     ctxMax, head: true,
+    prefetch: cfg.prefetch, // C3c fase 4: l'identita' argmax non deve muoversi
     cache: { budgetBytes: Math.floor(cfg.budgetGiB * (1 << 30)), maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true },
   });
 
@@ -142,7 +143,7 @@ async function main(cfg: Cfg): Promise<void> {
     report: {
       kind: "glm-logits-conformance", schemaVersion: 1, date: new Date().toISOString(),
       ggufSha256: GLM47_FLASH_SHA256, oracle: golden.oracle, corpusHash: golden.corpusHash,
-      config: { prompts: cfg.prompts ?? null, maxGen: cfg.maxGen ?? null, budgetGiB: cfg.budgetGiB, ctxMax },
+      config: { prompts: cfg.prompts ?? null, maxGen: cfg.maxGen ?? null, budgetGiB: cfg.budgetGiB, ctxMax, prefetch: cfg.prefetch ?? null },
       gateGolden: { threshold: 97, top1Ok, top1Tot, pct: top1Pct, pass: top1Tot > 0 && top1Pct! >= 97 },
       // fase 4d: il "256/256" come CAMPO, non un confronto assemblato a mano.
       // pass: null = non valutato (dump non serviti, o run senza posizioni del

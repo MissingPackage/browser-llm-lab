@@ -46,6 +46,7 @@ describe("aderenza dei due path al nucleo (compile-time, esercitata)", () => {
       on: false, ensureMs: 0, routerWaitMs: 0, tailWaitMs: 0, routerSyncs: 0,
       selMiss: 0, dirtyTokens: 0, replays: 0, replayLayers: 0, repairMs: 0,
       gpuPassOverflow: 0, gpuByCatMs: null, gpuByCatPasses: null,
+      prefetch: null, // C3c fase 4: null = spento (schema unico)
     };
     const qwen: EngineTelemetry = {
       ...zeroCounters(),

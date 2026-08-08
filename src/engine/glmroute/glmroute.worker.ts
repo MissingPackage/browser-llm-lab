@@ -19,7 +19,7 @@ interface TraceFile {
   header: { ggufSha256: string; llamaCppCommit: string; corpusHash: string; nMoe: number };
   rows: TraceRow[];
 }
-interface Cfg { cap?: number; prompts?: number[]; budgetGiB: number }
+interface Cfg { cap?: number; prompts?: number[]; budgetGiB: number; prefetch?: "inforward" }
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
 const progress = (msg: string) => post({ type: "progress", msg });
@@ -90,6 +90,10 @@ async function main(cfg: Cfg): Promise<void> {
     // una regione di Sel, e lascia CPU-side ogni esito (setMatch verso l'oracolo
     // deve restare identico all'artefatto del 31-07)
     select: "shadow",
+    // C3c fase 4: prefetch in-forward + telemetria (serve per i contatori di
+    // recall; nella run di firma — senza flag — resta tutto spento)
+    prefetch: cfg.prefetch,
+    telemetry: cfg.prefetch !== undefined,
     cache: {
       budgetBytes: Math.floor(cfg.budgetGiB * (1 << 30)),
       maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true,
@@ -182,6 +186,9 @@ async function main(cfg: Cfg): Promise<void> {
   }
 
   const st = model.cacheStats();
+  // C3c fase 4: contatori del prefetch PRIMA del destroy (telemetria accesa
+  // solo con cfg.prefetch — nella run di firma questo e' null)
+  const telem = cfg.prefetch ? await model.telemetry() : null;
   model.destroy();
   source.close();
   const report = {
@@ -193,7 +200,7 @@ async function main(cfg: Cfg): Promise<void> {
     date: new Date().toISOString(),
     ggufSha256: GLM47_FLASH_SHA256,
     oracle: { llamaCppCommit: trace.header.llamaCppCommit, corpusHash: trace.header.corpusHash },
-    config: { cap: cfg.cap ?? null, prompts: cfg.prompts ?? null, budgetGiB: cfg.budgetGiB, ctxMax },
+    config: { cap: cfg.cap ?? null, prompts: cfg.prompts ?? null, budgetGiB: cfg.budgetGiB, ctxMax, prefetch: cfg.prefetch ?? null },
     positions: totalRows,
     setMatch: {
       prefill: { ...phase.p, pct: phase.p.total ? 100 * phase.p.match / phase.p.total : null },
@@ -230,6 +237,18 @@ async function main(cfg: Cfg): Promise<void> {
       slots,
       importMs: source.importMs,
     },
+    // C3c fase 4: recall in-engine del prefetch (spec §3) — confronto con
+    // l'oracolo C1, scostamento SPIEGATO nel journal, non gateato
+    prefetch: telem?.prefetch ? {
+      ...telem.prefetch,
+      recallAt4Pct: telem.prefetch.recallPreds ? 100 * telem.prefetch.recallHits4 / (telem.prefetch.recallPreds * G.nExpertUsed) : null,
+      recallAt8Pct: telem.prefetch.recallPreds ? 100 * telem.prefetch.recallHits8 / (telem.prefetch.recallPreds * G.nExpertUsed) : null,
+      oracleRef: {
+        recallAt8Pct: 92.0, recallAt4Pct: 77.5,
+        source: "C1 (results/engine/moe-oracle/): lookahead di un layer sull'oracolo llama.cpp",
+        note: "tap in-engine = router L+1 su ffn_norm_L(x) f32; l'oracolo usa il suo hidden — scostamento atteso, spiegato nel journal",
+      },
+    } : null,
     dispatchesPerTokenPlanned: model.dispatchesPerTokenPlanned, // DERIVATO dal piano, non contato (C3a it.3)
     deviceLimits: grantedLimits(device), // limiti CONCESSI: senza, un confronto fra run non e' falsificabile
     wallMs: performance.now() - t0,
