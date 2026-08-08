@@ -393,3 +393,59 @@ gate PASS nel JSON (`gates.structural.pass = true`); repliche a stdev
 Fase 7 — chiusura: checklist DONE WHEN punto per punto, direction §7,
 input C3c nel docket, HANDOFF, digest, push da goal verificato. Con item
 8 risolto non restano gate pendenti sul contratto C3b.
+
+## it.8 — 2026-08-08 — fase 7: CHIUSURA — checklist DONE WHEN 7/7 PASS
+
+### Checklist DONE WHEN del contratto v2, punto per punto
+
+1. **Spec scritta e registrata** — PASS.
+   `docs/superpowers/specs/2026-08-07-engine-fase-c3b-decode-ottimistico.md`
+   (it.1, docket item 5, verifier 7/7 punti); emendamenti registrati: item 6
+   (precondizione a TOTALE 0.80, q4_1-first), item 7 (repair iterativo per
+   prefisso, I3/I4). Nessun gate/soglia toccato senza ruling.
+2. **Gate strutturale sync/token ≤ 2 e submits/token ≤ 2 in produzione** —
+   PASS (ruling item 8, opzione a): al tetto 2595 slot **1.890625 ≤ 2**
+   (`bench-glm-4090-btetto-optimistic-v2-2026-08-08.json`, hostState
+   quiescent dichiarato, confronto coi 47 sync C3a nel JSON); al punto
+   della tassa b12: 2.188 (dichiarato, resta il riferimento della tassa).
+   Il termine eliminato: 47 → 2.19/1.89 sync/token (−95/−96%).
+3. **Identità del meccanismo** — PASS. ktest `glm-optimistic-identita`
+   (it.3): 64 posizioni, 3 replay forzati con rientro dal checkpoint,
+   hidden+logits BIT-identici 131072/131072 vs sincrono, caso di rifiuto
+   precondizione; in produzione 64/64 token identici al sync (it.4).
+4. **Tassa di replay vs proiezione WP-0** — PASS (it.5,
+   `wp0-vs-measured-2026-08-07.json`): tassa ×1.14, pDirty ×1.10,
+   replayFrac ×0.97, tok/s ×1.21 ENTRO ±25%; miss ×1.47 e replayTerm
+   ×1.35 FUORI con spiegazione quantitativa nel journal (cascata, round
+   1.39× — parte del done-when: modello confermato dove modella).
+5. **Niente gate tok/s; doppio livello sui numeri in ogni report** — PASS.
+   Tutti i bench riportano decode/prefill/TTFT, floor C1 e gap UX (campo
+   `objective`); al tetto decode 16.64 (floor C3c 13.43 gia' battuto li'),
+   gap UX 30 tok/s = 1.80×, TTFT 12.60 vs 4 s = 3.15×.
+6. **Non-regressione permanente** — PASS (it.6, tutte le righe, banda ±5%
+   ratificata docket item 9 che sostituisce la provvisoria item 3):
+   decode sync 5.299 / prefill 25.01 (−3.0% in banda) / TTFT 18.43 (+3.1%
+   in banda) / Qwen 325.3 / golden 98.828% / cpuref 256/256 + 512/512 /
+   routing = firma 14b ai conteggi esatti / ktest 69/69 / suite 338+7 /
+   tsc pulito.
+7. **Chiusura** — PASS (questa iterazione): docket c3b aggiornato (item 8
+   risolto con esito; nessun item aperto che blocchi); direction §7 riga
+   C3b CHIUSA coi numeri; ideas-ledger NON toccato dal goal (nessun
+   obbligo); HANDOFF refresh; input C3c fissati in
+   `.harness/goals/engine-fase-c3c/docket.md` item 2 (profilo con tassa a
+   b12 e tetto, hit-rate LRU b11/b12, landmine i-v, banda ±5%).
+
+### Stato finale
+
+Il goal consegna: `select:"optimistic"` in produzione (spec-first, 5
+invarianti con assert), repair iterativo per prefisso con identita'
+bit-esatta, telemetria della tassa, e i numeri: **decode 5.211 → 11.60
+(b12) / 16.64 (tetto), TTFT 17.88 → 12.60 s, 47 → 1.89 sync/token**.
+Restano fuori-goal (gia' docketate altrove): ratifiche c3a 14b/2/19/20/21;
+igiene test:conformance e BASE_URL; goal stale fase-1b/fase-2.
+
+### Prossimo pezzo
+
+C3c (paging in scarsita'): contratto chartered, input fissati, parte con
+il WP banda fredda. Apertura su /goal del PI (pre-avvio item 2 ESEGUITO;
+tag goal-engine-fase-c3c-start alla rilettura del contratto).

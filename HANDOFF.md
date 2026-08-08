@@ -1,67 +1,34 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-08, sessione 24 — C3B: fasi 1-6 DONE, chiusura user-gated su item 8)
+# HANDOFF — browser-llm-lab   (updated 2026-08-08, sessione 24 — GOAL C3B CHIUSO: decode 16.64 al tetto, 1.89 sync/token; next = apertura C3c)
 
 ## 1. Next decidable
 
-**GOAL C3B APERTO (2026-08-07, contratto v2).** Su delega PI in chat ("Scegli
-tu su questi punti e poi procedi con il loop") ho preso e REGISTRATO tre
-decisioni (docket c3b item 2): (a) split — C3b = decode ottimistico + repair
-(regime near-total, spec-ready da WP-0), **C3c = paging in scarsità**
-(contratto nuovo `.harness/goals/engine-fase-c3c/`, chartered, parte a C3b
-chiuso); (b) gate C3b = **STRUTTURALE** (sync/token ≤ 2 in produzione + tassa
-di replay entro proiezione WP-0 ±25%), niente gate tok/s — il floor 13.43
-passa a C3c **con clausola pre-negoziata scritta nel contratto**; (c) policy
-> LRU resta intera in C3c. In più: banda di rumore c3a item 14 applicata in
-via provvisoria nella non-regressione (docket c3b item 3, ratifica pendente).
-Non-regressione fissata da c3a item 21: decode 5.211 / prefill 25.78 / TTFT
-17.88 / Qwen 326.2 / golden 98.828% / firma 14b / ktest 65 / suite 337+7.
-**FATTO (it.1-2): fasi 1-2 DONE.** It.1: spec
-`docs/superpowers/specs/2026-08-07-engine-fase-c3b-decode-ottimistico.md`
-depositata (docket c3b item 5) e verificata (7/7 punti). It.2: **il
-meccanismo del miss è misurato su GPU reale — ktest 68/68** (+3):
-`select:"optimistic"` (precondizione 0.88, 1 submit/0 sync sul token pulito),
-dirtyB piggyback (binding 7 opt-in, WGSL shadow/gpu byte-invariati), miss
-forzati marcati esatti con 0 falsi positivi, degrado ≡ ref f64 a expert
-azzerati, checkpoint hidden bit-identico gpu↔optimistic 4096/4096. Suite
-337+7, tsc pulito, verifier PASS. Landmine annotata: preload in ordine
-(layer,expert) ⇒ se P(dirty) fuori proiezione in fase 4, guardare lì prima
-della LRU. **It.3 — fase 3 DONE: repair+replay, identità BIT-esatta** —
-ktest 69/69: 64 posizioni (3 con replay forzato dal primo layer sporco,
-rientro dal checkpoint), hidden e logits bit-identici 131072/131072 vs
-sincrono, submits 67=64+3, 0 sync router; I1 nel path (guard + unit, suite
-338+7); deviazione ctx-64 poi chiusa in it.4. **It.4 — fase 4: L'OTTIMISTICO
-IN PRODUZIONE — decode 5.211 → 11.60 tok/s (+123%)**, TTFT 16.79 s, prefill
-27.45, gpuBusy 39.4 (clock recovery reale), token generati **64/64 identici
-al sync** a ctx 525 (`bench-glm-4090-b12-optimistic-2026-08-07.json`, host
-quiescent). Due finding dal modello vero risolti e docketati: preload R4 ⇒
-chunked async (item 6), **cascata del replay** ⇒ repair iterativo per
-prefisso, I3/I4 emendate (item 7). **Gate strutturale 2.188 > 2 FAIL
-DICHIARATO — RULING PI in docket item 8** (raccomandata: run a sessione
-minima, al tetto 2596 l'aritmetica dà 1.82 PASS). **It.5 — fase 5 DONE:
-la tassa CONFERMA WP-0** (`wp0-vs-measured-2026-08-07.json`): tassa ×1.14,
-pDirty ×1.10, tok/s ×1.21 entro ±25%; fuori solo i 2 termini della cascata
-(miss ×1.47, replayTerm ×1.35) che il sim non modella — il moltiplicatore
-dei round 1.39× li spiega quantitativamente (journal it.5). **RULING PI
-2026-08-08: banda di non-regressione ±5%** (variabilità della macchina di
-sviluppo; c3b docket item 9, ratifica c3a item 14 con larghezza emendata
-2%→5%; 14b resta pendente; gate di correttezza restano secchi). **It.6 —
-FASE 6 DONE (2026-08-08, host appena riavviato): tutte le righe PASS
-senza deroghe** — decode 5.299 ≥ 5.211; prefill −3.0% e TTFT +3.1% in
-banda ±5%; Qwen 325.3 (−0.3%); golden 98.828% e cpuref 256/256 secchi;
-fase A cpuref-f64 512/512 + golden 98.05% (firma storica); **routing
-full-corpus = firma 14b AL CONTEGGIO ESATTO** (prefill 1 047 485/1 203 084,
-decode 208 441/235 520, router GPU 1 438 591/1 438 604, Sel 0/5 754 416
-difformi — exit 4 runner = gate legacy oracolo, FALSE anche nel
-riferimento); ktest 69/69, suite 338+7, tsc pulito. **It.7 — RULING ITEM 8
-= OPZIONE (a), ESEGUITO: GATE STRUTTURALE PASS AL TETTO — 1.891 ≤ 2**
-(run a sessione minima post-riavvio, 2595 slot @12.88 GiB, report canonico
-`bench-glm-4090-btetto-optimistic-v2-2026-08-08.json`): P(dirty) 0.8125,
-replays/token 0.891, **decode 16.64 tok/s, TTFT 12.60 s**; fase 4 CHIUSA,
-b12 resta il punto della tassa. Deviazione dichiarata: v1 senza
---prefill-batch (2.203 FAIL, cache churnata) conservata come finding per
-C3c. **Next decidable: fase 7 (chiusura)** — checklist DONE WHEN,
-direction §7, input C3c nel docket, HANDOFF, push. Nessun gate pendente.
-Ratifiche c3a ancora pendenti (non bloccanti): item 14/14b, item 2 formale,
-item 19/20/21 prese d'atto.
+**GOAL C3B CHIUSO E VERIFICATO (2026-08-08, it.8 — checklist DONE WHEN 7/7
+PASS nel journal).** Il decode ottimistico e' in produzione: **decode 5.211
+→ 11.60 tok/s a b12 (+123%) e 16.64 al tetto** (2595 slot, sessione
+minima), **TTFT 17.88 → 12.60 s** (gap UX 3.15×), **47 → 1.89 sync/token**
+(gate strutturale 1.891 ≤ 2 PASS al tetto, ruling item 8 opzione a;
+b12 2.188 = punto della tassa), qualita' BIT-invariata (ktest
+131072/131072; produzione 64/64 = sync), tassa ×1.14 vs WP-0 (entro ±25%,
+cascata spiegata 1.39×), non-regressione a perimetro pieno tutta PASS
+sotto la **banda ±5% ratificata** (c3b docket item 9; ratifica c3a item 14
+emendata 2%→5%; gate di correttezza secchi). Direction §7 riga C3b chiusa
+coi numeri; artefatti chiave: bench-glm-4090-btetto-optimistic-v2 /
+b12-optimistic / wp0-vs-measured / 5 JSON nonreg (it.6).
+
+**Next decidable: APERTURA C3C (decisione PI).** Contratto chartered in
+`.harness/goals/engine-fase-c3c/GOAL.md`; pre-avvio (docket c3c item 2)
+ESEGUITO — input fissati (profilo con tassa a b12/tetto, hit-rate LRU
+b11 0.9575 / b12 0.9756, landmine i-v, banda ±5%); primo pezzo = WP banda
+fredda browser; alla rilettura del contratto: tag goal-engine-fase-c3c-
+start. Ruling c3c item 1 (budget instant-on) si decide in fase di spec,
+non blocca. Finding chiave lasciato a C3c: P(dirty) sensibile allo stato
+cache post-prefill (v1 tetto: 0.922/2.203 FAIL agli stessi slot); leva
+P(dirty) = policy > LRU (Belady ~dimezza), intera in C3c.
+
+**Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
+conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:
+`npm run test:conformance` punta all'harness benchmark, BASE_URL :5173 in
+2 script; goal stale fase-1b/fase-2 (weekly-maintenance).
 
 **CONTESTO — C3A CHIUSO (it.36, verifier finale: sostanza 100% riscontrata).**
 Checklist DONE WHEN 9/9 nel journal it.36: gate tok/s decode 5.211 / prefill

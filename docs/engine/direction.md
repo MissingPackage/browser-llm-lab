@@ -208,8 +208,18 @@ assi con due condizioni di chiusura, un goal unico ne perdeva una.
   niente gate tok/s (WP-0 proietta 11.3 al tetto misurato coi kernel di oggi) —
   il floor 13.43 è ereditato da C3c con clausola pre-negoziata. NIENTE predictor
   GPU al confine di token (falsificato 3×) né repair batched.
-  **APERTO 2026-08-07** (contratto v2; split e decisioni di gate su delega PI,
-  docket c3b item 2).
+  **CHIUSO 2026-08-08 (it.8)**: il drain e' eliminato — **47 → 2.188
+  sync/token a b12 (−95%) e 1.891 ≤ 2 PASS al tetto** (2595 slot, sessione
+  minima; ruling docket c3b item 8, opzione a). Decode **5.211 → 11.60 a b12
+  (+123%) e 16.64 al tetto** (sopra il floor 13.43 ereditato da C3c), TTFT
+  **17.88 → 16.79 / 12.60 s** (gap UX 3.15×), qualita' BIT-invariata (ktest
+  identita' 131072/131072 hidden+logits; produzione 64/64 token = sync).
+  Tassa di replay ×1.14 vs WP-0 (entro ±25%); fuori solo i 2 termini della
+  cascata del replay (repair iterativo per prefisso, item 7) che il sim non
+  modella, spiegati dal moltiplicatore dei round 1.39×. Non-regressione a
+  perimetro pieno tutta PASS (banda ±5%, ruling item 9). Finding per C3c:
+  P(dirty) sensibile allo stato cache post-prefill; leva P(dirty) = policy
+  > LRU (Belady ~dimezza), intera in C3c.
 - **C3c — paging (la residenza in scarsità vera)**: budget slab ctx-aware,
   tier.h, AUTOPIN, prefetch in-forward (non il predictor di confine), modello
   di banda, WP banda fredda browser (primo pezzo, blocca la spec), instant-on

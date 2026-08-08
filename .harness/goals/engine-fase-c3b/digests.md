@@ -104,3 +104,14 @@
   projectionByK nel runner (crash post-report mascherava l'exit code).
 - **Prossimo**: fase 7 — chiusura goal (checklist, direction §7, input C3c,
   push). Nessun gate pendente sul contratto.
+
+## it.8 (2026-08-08) — fase 7: GOAL CHIUSO — checklist 7/7 PASS
+
+- **Il consegnato**: decode ottimistico in produzione — 5.211 → **11.60
+  tok/s a b12, 16.64 al tetto**; TTFT 17.88 → **12.60 s**; **47 → 1.89
+  sync/token** (gate strutturale PASS); qualità bit-invariata; tassa ×1.14
+  vs WP-0; non-regressione tutta PASS (banda ±5%).
+- Direction §7 chiusa coi numeri; input C3c depositati (c3c docket item 2:
+  profilo con tassa, hit-rate LRU, 5 landmine); HANDOFF §1 riscritto.
+- **Prossimo**: apertura C3c su /goal del PI (WP banda fredda per primo);
+  ratifiche c3a 14b/2/19-21 restano pendenti, non bloccanti.
