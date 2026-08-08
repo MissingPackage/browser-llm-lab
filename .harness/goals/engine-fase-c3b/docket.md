@@ -99,7 +99,25 @@
    strutturale <= 2 fallisse per E[round] alto, e' un dato per il PI, non
    un fallimento da nascondere.
 
-8. **RULING RICHIESTO — gate strutturale 2.188 > 2 al punto di budget b12:
+8. ~~**RULING RICHIESTO**~~ **RISOLTO (2026-08-08, PI in chat: "vai con la
+   a")** — opzione (a): run a sessione minima al tetto per misurare il gate
+   strutturale; se PASS, la fase 4 chiude con quel report e il b12 resta il
+   punto della tassa. Esecuzione: host post-riavvio (VRAM desktop ~0.5 GiB,
+   regime "sessione minima" del probe it.19), budget 12.88 GiB ≈ tetto 2596
+   slot (delta eventuale dichiarato nel journal, precedente it.5).
+   **ESITO (2026-08-08, it.7): PASS — sync/token 1.890625 <= 2 al tetto**
+   (2595 slot, delta 1 dal nominale, dichiarato; report CANONICO
+   `bench-glm-4090-btetto-optimistic-v2-2026-08-08.json`, prefill chunked
+   M=16 come it.4). Decode 16.64 tok/s, TTFT 12.60 s, P(dirty) 0.8125,
+   replays/token 0.891. **La fase 4 CHIUDE con quel report; b12 resta il
+   punto della tassa.** Deviazione dichiarata: prima run NON canonica
+   (senza --prefill-batch 1, artefatto `...-optimistic-2026-08-08.json`
+   conservato) dava 2.203 FAIL con cache churnata dal prefill
+   per-posizione — la sensibilita' di P(dirty) allo stato cache
+   post-prefill e' un FINDING per C3c (policy). Igiene: guard
+   projectionByK null in glm-bench-run.mjs (crash post-report che
+   mascherava l'exit code), fix a run concluse.
+   Testo originale — gate strutturale 2.188 > 2 al punto di budget b12:
    di chi e' il FAIL?** (2026-08-07, it.4, report
    `results/engine/bench-glm-4090-b12-optimistic-2026-08-07.json`, host
    quiescent). Il decode ottimistico in PRODUZIONE: **11.60 tok/s (da 5.211,

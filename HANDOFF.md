@@ -51,11 +51,15 @@ fase A cpuref-f64 512/512 + golden 98.05% (firma storica); **routing
 full-corpus = firma 14b AL CONTEGGIO ESATTO** (prefill 1 047 485/1 203 084,
 decode 208 441/235 520, router GPU 1 438 591/1 438 604, Sel 0/5 754 416
 difformi — exit 4 runner = gate legacy oracolo, FALSE anche nel
-riferimento); ktest 69/69, suite 338+7, tsc pulito. **Next decidable:
-fase 7 (chiusura)** — checklist DONE WHEN, direction §7, input C3c,
-merge+push; MA la riga "gate strutturale ≤ 2" è user-gated sul ruling
-item 8 (2.188 a b12; raccomandata run a sessione minima, tetto 2596 ⇒
-aritmetica 1.82 PASS). La 7 si prepara, la chiusura aspetta item 8.
+riferimento); ktest 69/69, suite 338+7, tsc pulito. **It.7 — RULING ITEM 8
+= OPZIONE (a), ESEGUITO: GATE STRUTTURALE PASS AL TETTO — 1.891 ≤ 2**
+(run a sessione minima post-riavvio, 2595 slot @12.88 GiB, report canonico
+`bench-glm-4090-btetto-optimistic-v2-2026-08-08.json`): P(dirty) 0.8125,
+replays/token 0.891, **decode 16.64 tok/s, TTFT 12.60 s**; fase 4 CHIUSA,
+b12 resta il punto della tassa. Deviazione dichiarata: v1 senza
+--prefill-batch (2.203 FAIL, cache churnata) conservata come finding per
+C3c. **Next decidable: fase 7 (chiusura)** — checklist DONE WHEN,
+direction §7, input C3c nel docket, HANDOFF, push. Nessun gate pendente.
 Ratifiche c3a ancora pendenti (non bloccanti): item 14/14b, item 2 formale,
 item 19/20/21 prese d'atto.
 

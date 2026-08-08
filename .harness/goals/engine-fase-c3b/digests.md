@@ -89,3 +89,18 @@
   a inizio run). Verifier PASS sulla sostanza (unico rilievo: questo digest).
 - **Prossimo**: fase 7 (chiusura) — preparabile tutta; la riga "gate
   strutturale ≤ 2" del DONE WHEN resta user-gated sul ruling item 8.
+
+## it.7 (2026-08-08) — ruling (a) eseguito: gate strutturale PASS al tetto, fase 4 chiusa
+
+- **PI sceglie l'opzione (a)**; host post-riavvio = sessione minima. Run al
+  tetto: budget 12.88 GiB → 2595 slot (delta 1 dal nominale, dichiarato),
+  allocazione a 15 708 MiB senza OOM.
+- **Gate strutturale 1.891 ≤ 2 PASS** (report canonico v2, prefill chunked
+  M=16): P(dirty) 0.8125, replays/token 0.891, repair 3.70 ms/token.
+  In più: **decode 16.64 tok/s** (sopra il floor 13.43 di C3c), TTFT 12.60 s.
+- Deviazione dichiarata: prima run senza --prefill-batch (mio errore) dava
+  2.203 FAIL a cache churnata — conservata; finding di sensibilità
+  P(dirty)↔stato cache post-prefill registrato per C3c. Igiene: guard
+  projectionByK nel runner (crash post-report mascherava l'exit code).
+- **Prossimo**: fase 7 — chiusura goal (checklist, direction §7, input C3c,
+  push). Nessun gate pendente sul contratto.

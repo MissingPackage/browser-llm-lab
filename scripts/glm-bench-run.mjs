@@ -121,7 +121,9 @@ for (;;) {
       console.log(
         `[glmbench] floor sync: mapAsync ${p.mapRoundTripMs.median.toFixed(2)} ms × ${a.routerSyncsPerToken.toFixed(0)} = ` +
         `${p.floorMsPerToken.toFixed(1)} ms/token irriducibili senza cambiare meccanismo`);
-      for (const pk of a.projectionByK.filter(Boolean)) {
+      // In optimistic non ci sono sync router da batchare: projectionByK è null
+      // e il crash qui mascherava l'exit code del gate (report già scritto).
+      for (const pk of (a.projectionByK ?? []).filter(Boolean)) {
         console.log(`[glmbench]   proiezione sync batchato K=${pk.K}: ${pk.msPerToken.toFixed(1)} ms/token = ${pk.toksPerSec.toFixed(2)} tok/s`);
       }
     }

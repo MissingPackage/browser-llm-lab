@@ -334,3 +334,62 @@ PARZIALE: la riga "gate strutturale ≤ 2" del DONE WHEN dipende dal
 ruling item 8 (2.188 a b12; opzione raccomandata = run a sessione
 minima al tetto 2596, azione host del PI). La fase 7 può preparare
 tutto, ma la chiusura del goal è user-gated su item 8.
+
+## it.7 — 2026-08-08 — ruling item 8 opzione (a) ESEGUITO: gate strutturale PASS al tetto (1.891 ≤ 2), fase 4 CHIUSA
+
+### Cosa
+
+Ruling PI in chat ("vai con la a"): run di gate a sessione minima al tetto.
+Host post-riavvio (VRAM desktop 529-545 MiB = regime "sessione minima" del
+probe it.19). Budget 12.88 GiB ⇒ slot 2339+256 = **2595** (tetto nominale
+2596: delta 1 slot, dichiarato — pattern it.5). Allocazione riuscita a
+15 708 MiB, ~240 MiB sotto il tetto fisico 15 947, zero OOM.
+
+### Esito (report `bench-glm-4090-btetto-optimistic-v2-2026-08-08.json`)
+
+- **Gate strutturale: sync/token = submits/token = 1.890625 ≤ 2 PASS**
+  (router syncs 0). P(dirty) 0.8125, replays/token 0.891, repair 3.70
+  ms/token, miss/token 2.234. L'aritmetica della raccomandazione (1.82)
+  era corretta a meno del 4%.
+- Decode **16.64 tok/s** (mediana; reps 16.31/16.64/16.74, stdev 0.22) —
+  sopra il floor 13.43 trasferito a C3c (qui è informazione, non gate);
+  prefill 36.58, **TTFT 12.60 s** (gap UX 3.15×, da 4.47× di c3a).
+- vs b12 (it.4): P(dirty) 0.938→0.813, miss/token 4.78→2.23, tassa di
+  repair 15.5→3.7 ms/token — la capienza extra lavora come previsto da
+  WP-0 in direzione, un po' meno in grandezza (sim: 0.65 a 2596).
+- Per il ruling (a): **la fase 4 chiude con questo report; il b12
+  (11.60 tok/s, 2.188) resta il punto di misura della tassa** (fase 5).
+
+### Deviazione dichiarata (v1 non canonica, artefatto conservato)
+
+La PRIMA run al tetto (`bench-glm-4090-btetto-optimistic-2026-08-08.json`)
+era partita SENZA `--prefill-batch 1` (mio errore di invocazione): prefill
+"decode-only" non canonico ⇒ decode con cache churnata dal prefill per
+posizione ⇒ P(dirty) 0.922 e gate 2.203 FAIL. Protocollo corretto
+identificato e dichiarato PRIMA di lanciare la v2 (trascrizione sessione);
+il riferimento del gate è la v2 canonica (stesso protocollo di it.4 b12 e
+del bench sync di non-regressione). FINDING registrato: la P(dirty) del
+decode ottimistico è sensibile allo stato di cache lasciato dal prefill —
+il prefill chunked scalda la LRU con gli expert del contesto reale;
+rilevante per C3c (policy/AUTOPIN).
+
+### Igiene
+
+`scripts/glm-bench-run.mjs:124` crashava su `projectionByK null` (in
+optimistic non ci sono sync router da proiettare) DOPO la scrittura del
+report, mascherando l'exit code del gate (1 invece di 0/4): guard aggiunta
+(`?? []`), fix a run concluse, albero scongelato. hostState.before della
+v1 riporta powerW 588.21 a 210 MHz/0%: lettura spuria del sensore,
+dichiarata (il resto della telemetria host è coerente).
+
+### Verifica
+
+Report v2 con hostState quiescent dichiarato e stabile (537→545 MiB);
+gate PASS nel JSON (`gates.structural.pass = true`); repliche a stdev
+0.22 tok/s. Verifier indipendente a valle (esito nel commit).
+
+### Prossimo pezzo
+
+Fase 7 — chiusura: checklist DONE WHEN punto per punto, direction §7,
+input C3c nel docket, HANDOFF, digest, push da goal verificato. Con item
+8 risolto non restano gate pendenti sul contratto C3b.
