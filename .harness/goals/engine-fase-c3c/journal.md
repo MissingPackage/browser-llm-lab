@@ -55,3 +55,44 @@ cold/warm, drop dichiarato) PASS.
 duplicato nel profilo — numeri identici, ma il tool committato è quello
 fisso e le run canoniche sono le sue). Profilo bench: ~6.4 GiB in
 `~/.cache/blab-opfs-cold-profile` (riusabile con KEEP_FILE=1, cancellabile).
+
+## it.2 — 2026-08-08 — FASE 2 DONE: spec C3c coi numeri del WP dentro
+
+**Fatto.** Spec depositata:
+`docs/superpowers/specs/2026-08-08-engine-fase-c3c-design.md` (10 §, pattern
+c3b). Fissa: (§2) budget slab ctx-aware = allocCeiling − nonExpert(1 354 078
+720 B) − KV(ctx) − work(ctx) − reserve [ASSUMED 256 MiB, si tara in fase 3],
+con MIN_SLOTS 184 (pin-for-replay c3b) e throw esplicito sotto; (§3) prefetch
+IN-FORWARD (tap hidden L → router L+1 dentro il token, K=4 [ASSUMED], flag
+default off, recall in-engine vs 92.0% @K=8 oracolo, scostamento spiegato non
+gateato) con esclusione ESPLICITA del predictor al confine (falsificato 3×);
+(§4) tier.h+AUTOPIN da colibri §2 (eusage persistente OPFS, eheat con decay,
+LFRU heat<<8|recency, isteresi 25%+4, pin cap 12.5% HARD con assert) misurata
+vs LRU a 1472/736 slot vs ceiling Belady; (§5) modello di banda con formula e
+tolleranza ±15% su 3 budget; (§6) instant-on con definizione operativa
+RIPRODUCIBILE (OPFS popolata + VRAM vuota + page cache FREDDA col protocollo
+eviction del WP fase 1) e strumento (glmbench cold-start, evictionEvidence nel
+JSON); (§9) rimisura formale syncLogits nel primo report di fase 3 (landmine
+iv chiusa lì).
+
+**Numeri d'ingresso verificati dal codice/artefatti** (spec §1): parco 2944
+slot (2688×5 308 416 + 256×5 505 024 = 15 678 308 352 B), non-expert
+1 354 078 720 B, KV 108 288 B/token (glmmodel.ts:725 keyLen 576 × f32 × 47
+layer; probe kvBytes 56 851 200 / 525 = conferma esatta). **Scoperta
+collaterale: la landmine HANDOFF §5 "KV 54 KB/token ⇒ 361 MB @6k" era STALE
+di 2×** (conto f16): vero = 665 MB @6k. Corretta (ruling
+docs-update-when-stale), registrata a docket item 4.
+
+**Proposta docket item 1 DEPOSITATA** (item 1-bis): (a) RACCOMANDATA relativo
+1.25× AUTO-ANCORATO alla config della run instant-on (scioglie 16.79-vs-12.60:
+l'ancora è la stessa run, entrambe le config riportate); aritmetica: senza
+overlap 1.28-1.61× (I/O freddo extra 3.1-7.3 s su ~15.7 GB unici a 1.8-3.5
+GB/s + 0.4 s non-expert), 1.25× richiede overlap ≥ ~60% dell'I/O dietro il
+compute del prefill (12.6 s GPU — c'è spazio); (b) 1.4× conservativa; (c) 4 s
+= fase D. Il ruling blocca SOLO fase 7.
+
+**Done-when riga 2:** spec esiste e fissa budget slab/tier+AUTOPIN≤12.5%/
+prefetch in-forward con esclusione predictor/definizione operativa instant-on
++ strumento/budget TTFT a freddo PASS; registrazione a docket (item 4) +
+proposta item 1 depositata coi numeri (item 1-bis) PASS; la spec NON tocca
+gate/soglie ⇒ nessuno STOP di ruling PASS.

@@ -24,3 +24,17 @@
 - Verifier: sostanza PASS; sanature applicate (digest, range ratio).
 - Next: fase 2 — spec C3c coi numeri del WP; lì la PROPOSTA per il ruling
   docket item 1 (budget instant-on).
+
+## it.2 (2026-08-08) — fase 2 DONE: spec depositata, proposta item 1 al PI
+
+- Spec `2026-08-08-engine-fase-c3c-design.md`: budget slab ctx-aware
+  (formula con numeri verificati dal codice), prefetch in-forward (K=4,
+  predictor al confine ESCLUSO), tier.h+AUTOPIN (pin ≤12.5% HARD), modello
+  di banda ±15%, instant-on con freddezza riproducibile (protocollo WP).
+- PROPOSTA per il ruling item 1 (docket 1-bis): (a) raccomandata 1.25×
+  AUTO-ancorato alla config della run instant-on; senza overlap l'aritmetica
+  dice 1.28-1.61× ⇒ il target morde sull'overlap I/O. Blocca solo fase 7.
+- Scoperta: landmine "KV 54 KB/token" era stale 2× (vero 108 288 B/token,
+  f32; ctx 6k = 665 MB non 361). HANDOFF corretto, docket item 4.
+- Next: fase 3 — slab ctx-aware (formula in codice, ctx 6k senza OOM,
+  non-regressione b12, rimisura syncLogits).

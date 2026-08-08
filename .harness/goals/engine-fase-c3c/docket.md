@@ -51,6 +51,26 @@
    dell'era C3a, probe it.5 dice 0.08 — rimisura formale in apertura C3c;
    (v) 60 s fra run GPU consecutive, albero congelato nelle run lunghe.
 
+1-bis. **PROPOSTA DEPOSITATA (2026-08-08, fase 2 — spec §7).** Per il ruling
+   item 1, coi numeri del WP banda fredda dentro: **(a) RACCOMANDATA —
+   relativo 1.25× AUTO-ANCORATO** al TTFT a caldo misurato nella stessa
+   config/sessione del report instant-on (scioglie la scelta 16.79 b12 vs
+   12.60 tetto: l'ancora è la config della run, entrambe riportate);
+   richiede overlap I/O-dietro-compute ≥ ~60% (proiezione senza overlap:
+   1.28-1.61×). **(b)** relativo 1.4× (overlap parziale ~30% basta).
+   **(c)** 4 s assoluto = obiettivo fase D (aritmeticamente fuori: il solo
+   prefill a caldo è 12.6 s). Il ruling blocca SOLO la fase 7; fasi 3-6
+   procedono. Dettaglio: spec §6-7.
+
+4. **REGISTRAZIONE (2026-08-08, fase 2, non richiede decisione)** — spec
+   depositata: `docs/superpowers/specs/2026-08-08-engine-fase-c3c-design.md`.
+   Non tocca gate né soglie (floor 13.43, banda ±5%, correttezza invariati)
+   ⇒ nessuno STOP di ruling oltre item 1 (regime di approvazione C3b).
+   Correzione collaterale: KV vero = 108 288 B/token (nLayer 47 × keyLen
+   576 × f32; probe kvBytes/525 conferma) — il "54 KB/token" di HANDOFF §5
+   era il conto f16, stale di 2× (⇒ ctx 6k = 665 MB, non 361). HANDOFF
+   corretto (ruling docs-update-when-stale).
+
 3. **PLAN-CHECK — PRE-AUTORIZZATO (2026-08-08, PI in chat: "partiamo con
    c3c"; pattern c3b item 4 / c3a item 3).** PHASES.md è su disco al tag di
    apertura: 9 fasi sequenziali, authority delta = none ovunque, nessuna

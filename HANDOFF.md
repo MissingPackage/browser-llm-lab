@@ -30,18 +30,25 @@ GB/s p50 1.3-1.4 ms = regime instant-on ⇒ non-routed+caldi 1.53 GB ≈ 0.44 s
 di banda disco. Tassa browser sul path freddo: ZERO (ratio 1.07-1.19).
 Ledger §A + direction §8.3 aggiornati.
 
-**Next decidable: FASE 2 — Spec C3c coi numeri del WP dentro**
-(docs/superpowers/specs/2026-08-XX-engine-fase-c3c-design.md): budget slab
-= f(VRAM, residente non-expert, KV(ctx)); tier.h + AUTOPIN (pin ≤ 12.5%);
-prefetch IN-FORWARD (tap hidden L → router L+1, NIENTE predictor al
-confine — WP-0); definizione operativa di instant-on + strumento di
-misura; budget TTFT a freddo; PROPOSTA per docket item 1 (budget
-instant-on assoluto vs relativo 1.25×) coi numeri, ancorata a un
-riferimento a caldo esplicito (16.79 b12 / 12.60 tetto) — il ruling PI si
-prende lì. Se la spec tocca gate/soglie: STOP, ruling. Landmine ereditate
-(docket item 2): P(dirty) sensibile allo stato cache post-prefill; leva
-P(dirty) = policy > LRU (Belady ~dimezza); syncLogits 7.6 ms era-C3a vs
-probe 0.08 — rimisura formale in spec.
+**FASE 2 DONE (it.2): spec depositata**
+(`docs/superpowers/specs/2026-08-08-engine-fase-c3c-design.md`, docket
+item 4 — non tocca gate/soglie, nessuno STOP). Budget slab = allocCeiling
+− nonExpert 1 354 078 720 B − KV(ctx) 108 288 B/token − work(ctx) −
+reserve [ASSUMED 256 MiB]; tier.h+AUTOPIN (colibri §2, pin ≤ 12.5% HARD);
+prefetch in-forward K=4 (recall vs 92% @K=8, spiegato non gateato);
+instant-on = OPFS popolata + VRAM vuota + **page cache fredda** (protocollo
+WP fase 1). **Proposta item 1 depositata (item 1-bis): raccomandato
+relativo 1.25× AUTO-ancorato alla config della run** (senza overlap
+1.28-1.61×; serve overlap ≥60% I/O dietro compute prefill) — **ruling PI
+pendente, blocca SOLO la fase 7**. Correzione: KV "54 KB/token" in §5 era
+stale 2× (vero 108 288 B/token, ctx 6k = 665 MB).
+
+**Next decidable: FASE 3 — Slab ctx-aware**: formula della spec §2 in
+`src/engine/{residency,gpulimits,glmmodel}.ts` + glmbench, unit test
+(monotonia/clamp/riproduzione punti b12-tetto), run glmbench ctx 6k senza
+OOM con budget calcolato + VRAM di picco nel JSON, non-regressione a ctx
+~525 (banda ±5% sul punto b12), rimisura formale syncLogits nel report
+(landmine iv), suite+tsc puliti.
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:
@@ -432,8 +439,9 @@ termini) e §7 (fase C splittata).
 - Oracolo CPU quantizza le attivazioni q8: MAI gate diretti engine-vs-oracolo
   su selezioni near-tie; il confronto giusto è vs cpuref-f64; golden ≥97%
   assorbe il drift. maxAbsDeltaLogit è metrica di SCALA: mai gate.
-- VRAM 16.4 GB: slab 12 GiB + head OK a ctx corto (KV 54 KB/token); ctx 6k
-  ⇒ KV 361 MB ⇒ OOM. Budget slab ctx-aware in C3.
+- VRAM 16.4 GB: slab 12 GiB + head OK a ctx corto (KV **108 288 B/token** =
+  47 layer × 576 × f32 — il "54 KB" citato fino a c3c it.2 era il conto f16,
+  stale di 2×); ctx 6k ⇒ KV 665 MB ⇒ OOM. Budget slab ctx-aware = c3c fase 3.
 - `/tmp` è tmpfs 16 GB: profilo Chrome con OPFS 17 GB in
   `~/.cache/blab-glmroute-profile` (E2E_PROFILE); import skip su size-match.
 - mlaAttnDecode MONOLITICO (glmforward/glmroute, ktest): ctx>4k richiede
