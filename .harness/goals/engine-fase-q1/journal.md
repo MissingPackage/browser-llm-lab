@@ -36,3 +36,19 @@
   drift none, violazioni none.
 - Next: it.2 = fase 2 (reader GGUF + tokenizer; download pinnati, enum
   type del file UD, verifica supporto oracolo b10333).
+
+## it.2 (2026-08-10) — fase 2 IN CORSO, checkpoint strumentazione (c59c76c)
+
+- Download dei 3 GGUF pinnati in background (~29 GB, hf CLI, sequenziale
+  4B→9B→35B in ~/.cache/blab-models/q35/).
+- Strumentazione committata E validata: q35-manifest.json (SHA spec §1);
+  q35-verify-sha.mjs (gate secco byte+hash, FAIL pulito su assenti
+  VERIFICATO); q35-header-dump.py (VALIDATO su GLM: 844 tensori,
+  deepseek2, 47 block — chiuderà i [VERIFY] spec §3 + inventario UD);
+  corpus-tok/09-12 (emoji/CJK/ZWJ, whitespace, numeri/code, special
+  adversariali; 01-08 GLM riusati per il regime).
+- Al risveglio (notifica download): verify-sha (exit 0), header-dump sui
+  3 file, verifica supporto qwen3_5 dell'oracolo b10333 (llama-tokenize),
+  poi reader+tokenizer (grosso di fase 2, it.3).
+- Oracolo localizzato: ~/.cache/llamacpp-vulkan/llama-b10333/ (include
+  llama-tokenize, llama-quantize, llama-perplexity).
