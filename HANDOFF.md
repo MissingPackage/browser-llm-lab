@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — C3c fasi 1-7 DONE; next = fase 8 gate+nonreg, poi chiusura)
+# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — C3c fasi 1-8 DONE, floor 15.641 PASS; next = fase 9 chiusura goal)
 
 ## 1. Next decidable
 
@@ -98,14 +98,19 @@ PRE-dichiarato (mediane 3+3 sessioni, eviction provata per sessione):
 VERIFICATA). Gap UX 6.18× (fase D). Docket item 6: selezioni prefill non
 in eusage (registrazione).
 
-**Next decidable: FASE 8 — Gate floor + non-regressione a perimetro
-pieno** (riga 8): decode alla config di budget migliore, quiescente ≥13.43
-(la ctx525-auto ha già dato 16.55 in sessione viva — al protocollo giusto
-dovrebbe passare secco); blocco nonreg completo con run fresche: decode/
-prefill/TTFT/Qwen ±5%, cpuref 256/256 + 512/512, golden ≥98.828% b11
-full-corpus, routing = firma 14b, ktest, suite ≥338+7, tsc; albero
-CONGELATO durante le run; da fissare il candidato nuovo riferimento b12
-(docket item 5). Poi fase 9 (chiusura goal).
+**FASE 8 DONE (it.9): floor PASS in produzione.** Decode **15.641 ≥
+13.43 SECCO** alla config migliore (budget CALCOLATO 12.737 GiB,
+optimistic, strutturale 2.000, sessione utente viva) — niente clausola.
+Nonreg piena: sync b12 5.390/29.75/15.50 in banda; optimistic b12
+**13.172/31.26/14.74 = NUOVO riferimento (item 5 risolto)**; Qwen 323.1
+(−0.95%); golden **98.828125% AL PIN**; cpuref 256/256 + 512/512; firma
+routing esatta; ktest 69/69; suite 359+7; tsc pulito.
+
+**Next decidable: FASE 9 — Chiusura goal** (riga 9): checklist DONE WHEN
+del contratto punto per punto nel journal con PASS/FAIL e artefatto per
+riga; docket aggiornato; direction §7 fase C CHIUSA; ledger §A; HANDOFF
+refresh; input hero-demo M4 nel docket (PI-gated per hardware); digest;
+push da goal verificato.
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:

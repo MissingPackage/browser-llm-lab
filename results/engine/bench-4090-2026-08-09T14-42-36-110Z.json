@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 4,
+  "kind": "engine-bench",
+  "promptId": "bench-512-v1",
+  "promptTokens": 469,
+  "genTokens": 256,
+  "replicates": 3,
+  "decodePath": "multi-step",
+  "k": 8,
+  "rateWindow": "post-primo-batch",
+  "baselineK1": {
+    "decodeToksPerSec": {
+      "mean": 246.07596022658285,
+      "stdev": 7.920386867395256
+    },
+    "reps": [
+      {
+        "decodeToksPerSec": 247.62209954723716,
+        "prefillMs": 595.8549999892712,
+        "msPerTokenDecode": 4.038411764654459,
+        "ttftMs": 600.5550000071526
+      },
+      {
+        "decodeToksPerSec": 253.10927372557168,
+        "prefillMs": 595,
+        "msPerTokenDecode": 3.950862745093364,
+        "ttftMs": 599.919999986887
+      },
+      {
+        "decodeToksPerSec": 237.4965074069397,
+        "prefillMs": 594.1800000071526,
+        "msPerTokenDecode": 4.210588235247369,
+        "ttftMs": 599.0200000107288
+      }
+    ]
+  },
+  "gpuBusy": {
+    "replicates": 2,
+    "gpuMsPerToken": 2.1968999999999985,
+    "wallMsPerToken": 3.1489112902913363,
+    "quotaFuoriGpu": 0.30233029848333964,
+    "note": "repliche dedicate liv.2 senza taps (diagnostica, non gate — spec B2 §Metodologia); headline dalle repliche OFF"
+  },
+  "gates": {
+    "decodeGateToksPerSec": 230,
+    "decodeGatePass": true,
+    "overheadGatePct": 2,
+    "overheadGatePass": true,
+    "dispatchPlan": {
+      "dispatchesPerTokenPlanned": 148,
+      "dispatchesPerTokenMeasured": 148,
+      "submitsPerTokenPlanned": 0.125,
+      "submitsPerTokenMeasured": 0.125,
+      "windowTokens": 256,
+      "pass": true
+    }
+  },
+  "ttftMs": {
+    "mean": 620.6233333448569,
+    "reps": [
+      621.9250000119209,
+      618.375,
+      621.5700000226498
+    ]
+  },
+  "deviceLimits": {
+    "maxBufferSize": 268435456,
+    "maxStorageBufferBindingSize": 136134656,
+    "maxStorageBuffersPerShaderStage": 8,
+    "maxComputeWorkgroupStorageSize": 30848,
+    "maxComputeInvocationsPerWorkgroup": 256,
+    "maxComputeWorkgroupSizeX": 256,
+    "maxComputeWorkgroupsPerDimension": 65535
+  },
+  "warmup": {
+    "decodeToksPerSec": 318.09757130328114,
+    "prefillMs": 810.25,
+    "msPerTokenDecode": 3.1436895160905776,
+    "ttftMs": 837.7100000083447
+  },
+  "reps": [
+    {
+      "decodeToksPerSec": 323.44732242600537,
+      "prefillMs": 596.4150000214577,
+      "msPerTokenDecode": 3.0916935484255514,
+      "ttftMs": 621.9250000119209
+    },
+    {
+      "decodeToksPerSec": 323.1249307842174,
+      "prefillMs": 594.2849999964237,
+      "msPerTokenDecode": 3.0947782257872243,
+      "ttftMs": 618.375
+    },
+    {
+      "decodeToksPerSec": 322.63520106707784,
+      "prefillMs": 596.5600000023842,
+      "msPerTokenDecode": 3.099475806398738,
+      "ttftMs": 621.5700000226498
+    }
+  ],
+  "decodeToksPerSec": {
+    "mean": 323.06915142576685,
+    "stdev": 0.40892392694538776
+  },
+  "telemetryOn": {
+    "reps": [
+      {
+        "decodeToksPerSec": 318.79475017960567,
+        "prefillMs": 598.2549999952316,
+        "msPerTokenDecode": 3.1368145160377026,
+        "ttftMs": 621.8650000095367
+      },
+      {
+        "decodeToksPerSec": 322.1595079368111,
+        "prefillMs": 595.580000013113,
+        "msPerTokenDecode": 3.104052419263509,
+        "ttftMs": 620.6950000226498
+      },
+      {
+        "decodeToksPerSec": 322.6331024114924,
+        "prefillMs": 591.4249999821186,
+        "msPerTokenDecode": 3.099495967790004,
+        "ttftMs": 615.7649999856949
+      }
+    ],
+    "decodeToksPerSec": {
+      "mean": 321.1957868426364,
+      "stdev": 2.0927985389247254
+    }
+  },
+  "telemetry": {
+    "forwards": 768,
+    "encodeCpuMs": 30.184999883174896,
+    "submits": 160,
+    "dispatches": 191212,
+    "gpuBusyMs": null,
+    "gpuPasses": 0,
+    "encodeCpuMsPerToken": 0.03930338526455065,
+    "gpuMsPerToken": null,
+    "timestampNote": "livello 2 opt-in (telemetryGpu) — spento: zero-overhead by design"
+  },
+  "telemetryOverheadPct": 0.5832469353180716,
+  "dispatchesPerToken": 147,
+  "prefill": {
+    "path": "chunked",
+    "mMax": 8,
+    "submitTokens": 64,
+    "prefillMs": {
+      "mean": 595.7533333400885,
+      "reps": [
+        596.4150000214577,
+        594.2849999964237,
+        596.5600000023842
+      ]
+    },
+    "seqBaselineMs": {
+      "mean": 1747.6499999860923,
+      "reps": [
+        1742.0149999856949,
+        1755.1349999904633,
+        1745.7999999821186
+      ]
+    },
+    "speedupVsSeq": 2.9335127513058135,
+    "thresholdMs": 810,
+    "gatePass": true
+  },
+  "quant": "Q4_0 (gguf)",
+  "note": "confronto cross-quant con WebLLM q4f32_1 MLC: dichiarato",
+  "deviceLabel": "4090-linux",
+  "ts": "2026-08-09T14-42-36-110Z",
+  "hostState": {
+    "declared": "user-session-light",
+    "before": {
+      "temperatureC": 41,
+      "smClockMHz": 210,
+      "powerW": 588.21,
+      "memUsedMiB": 825,
+      "utilizationPct": 0,
+      "throttleReasons": "0x0000000000000001"
+    },
+    "after": {
+      "temperatureC": 48,
+      "smClockMHz": 2265,
+      "powerW": 84.16,
+      "memUsedMiB": 833,
+      "utilizationPct": 0,
+      "throttleReasons": "0x0000000000000000"
+    }
+  }
+}

@@ -104,3 +104,13 @@
 - Coda fase 6 verificata: coldTtftMs −5.8% (±15%). Gap UX 6.18× → fase D.
 - Next: fase 8 — gate floor + non-regressione a perimetro pieno (batch
   lungo, albero congelato), poi fase 9 chiusura.
+
+## it.9 (2026-08-09) — fase 8 DONE: floor 15.641 ≥ 13.43 PASS in produzione
+
+- Il gate C1 passa SECCO alla config migliore (budget CALCOLATO 12.737 GiB,
+  sessione utente viva) — niente clausola. Strutturale 2.000 PASS.
+- Nonreg piena: sync b12 e Qwen in banda, optimistic b12 13.172/14.74
+  (nuovo riferimento, item 5 risolto), golden 98.828% AL PIN, cpuref
+  256/256 + 512/512, firma routing esatta, ktest 69/69, suite 359+7.
+- Next: fase 9 — chiusura del goal (checklist DONE WHEN, direction §7,
+  ledger, HANDOFF, input hero-demo M4 a docket, tag).

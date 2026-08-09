@@ -359,3 +359,36 @@ candidata estensione in chiusura o fase D, non tocca i numeri di questa fase.
 **Done-when riga 7:** TTFT a freddo ≤ budget del ruling (1.247 ≤ 1.25,
 protocollo pre-dichiarato) PASS; JSON committato con gap UX 4 s esplicito
 PASS; predizione del modello di banda confrontata nel JSON (−5.8%) PASS.
+
+## it.9 — 2026-08-09 — FASE 8 DONE: floor PASS in produzione + non-regressione piena
+
+**IL GATE: decode 15.641 ≥ 13.43 PASS** alla config di budget migliore
+(ctx-aware auto = 12.737 GiB calcolato, optimistic, strutturale 2.000 ≤ 2
+PASS, TTFT 12.90 s) — **in sessione utente viva** (user-session-light
+dichiarato): il floor C1, che C3a dichiarò irraggiungibile per hardware e
+C3b batté solo a sessione minima con budget a mano, ora passa in produzione
+con budget CALCOLATO. La clausola pre-negoziata non serve. Gap UX nel
+report (30 tok/s: 1.92×; TTFT 4 s: 3.22×).
+
+**Blocco non-regressione (run fresche, albero congelato, 60 s fra run):**
+- sync b12: 5.390 / 29.75 / 15.50 vs rif 5.299 / 25.78 / 17.88 — banda ±5%
+  PASS su tutte (migliorati);
+- optimistic b12: **13.172 / 31.26 / 14.74** vs rif c3b 11.60/16.79 e vs
+  candidato item 5 (12.92/14.94): PASS — **docket item 5 RISOLTO: il nuovo
+  riferimento b12 è 13.172 / 31.26 / 14.74** (ratchet, host state
+  dichiarato); strutturale 2.188 = il punto della tassa, invariato;
+- Qwen: 323.1 ± 0.4 vs 326.2 (−0.95%, banda ±5% PASS);
+- golden full-corpus b11: **98.828125% = il PIN alla cifra** (1012/1024);
+  cpuref 256/256 PASS;
+- fase A: cpuref **512/512 (100%)**, golden 98.047% ≥ 97 PASS;
+- routing full-corpus: **firma 14b ai conteggi ESATTI** (208 441/235 520,
+  1 047 485/1 203 084, router GPU 1 438 591/1 438 604, Sel 0/5 754 416);
+- ktest 69/69; suite 359+7; tsc pulito.
+
+**Nota di protocollo:** le run girano coi meccanismi C3c in codice (formula
+ctx-aware, tap, policy) tutti DIETRO flag off nei path di riferimento — le
+bande confermano che il default è rimasto il comportamento storico.
+
+**Done-when riga 8:** floor ≥13.43 PASS secco (niente clausola); gap UX nel
+report PASS; blocco nonreg completo con run fresche committate PASS su ogni
+riga; albero congelato durante le run PASS.

@@ -104,3 +104,16 @@
    decode sync): colibri conta tutte le selezioni. Estensione candidata a
    valle (fase D o igiene di chiusura); non toccata in fase 7 per non
    muovere le baseline misurate di fase 5-6 a metà goal.
+
+5-bis. **RISOLTO (2026-08-09, it.9, fase 8)** — item 5: il riferimento b12
+   optimistic è FISSATO ai numeri freschi di fase 8: decode 13.172 /
+   prefill 31.26 / TTFT 14.74 (host user-session-light dichiarato,
+   strutturale 2.188 invariato). Ratchet "le metriche non peggiorano mai"
+   applicato con host state comparabile dichiarato nel JSON.
+
+7. **IGIENE (2026-08-09, it.9, nota verifier — fuori goal, non bloccante)**
+   — nei campioni hostState del bench i campi power sembrano SCAMBIATI
+   (before: 588 W a 0% util; after: 42.6 W a 100% util — implausibili
+   entrambi): probabile misparsing dell'ordine dei campi nvidia-smi in
+   scripts/lib/hoststate.mjs. Non tocca i gate (i tok/s vengono dal bench).
+   Da sistemare a igiene, fuori dalle run di questo goal.
