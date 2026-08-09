@@ -91,3 +91,16 @@
    peggiorano mai", 12.92/14.94 è il CANDIDATO nuovo riferimento b12: da
    fissare al più tardi in fase 8 (con host state comparabile dichiarato),
    non adottato unilateralmente qui.
+
+1. **RISOLTO (2026-08-09, PI in chat: "ok (a)")** — budget instant-on =
+   **relativo 1.25× AUTO-ANCORATO**: TTFT a freddo ≤ 1.25 × TTFT a caldo
+   misurato NELLA STESSA config e protocollo del report instant-on (l'ancora
+   è la config della run, entrambe riportate; gap dai 4 s UX sempre nel
+   report — i 4 s assoluti restano obiettivo di fase D). Proposta 1-bis
+   opzione (a) ratificata. La fase 7 è SBLOCCATA.
+
+6. **REGISTRAZIONE (2026-08-09, it.8 — non richiede decisione ora)** — le
+   selezioni del PREFILL non alimentano eusage (noteSelection è solo nel
+   decode sync): colibri conta tutte le selezioni. Estensione candidata a
+   valle (fase D o igiene di chiusura); non toccata in fase 7 per non
+   muovere le baseline misurate di fase 5-6 a metà goal.

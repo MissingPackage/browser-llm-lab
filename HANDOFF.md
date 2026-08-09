@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — C3c fasi 1-6 DONE; STOP BY DESIGN: fase 7 attende ruling docket item 1)
+# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — C3c fasi 1-7 DONE; next = fase 8 gate+nonreg, poi chiusura)
 
 ## 1. Next decidable
 
@@ -88,13 +88,24 @@ vera +0.9%** (−0.3/−0.5 gli altri). Gradino con evidenza: gpuBusy
 Proiezioni fredde (1.79 GB/s): 5.02/2.24/1.27 tok/s; coldTtftMs() pronto
 per la fase 7. `band-model-vs-measured-2026-08-09.json` committato.
 
-**Next decidable: NIENTE senza ruling — STOP BY DESIGN.** La fase 7
-(instant-on) è `blocked-by-6 + ruling item 1`: il ruling PI sul budget
-instant-on è PENDENTE con proposta depositata (docket item 1-bis, fase 2):
-**(a) RACCOMANDATA 1.25× auto-ancorato** alla config della run (aritmetica:
-senza overlap 1.28-1.61×; coldTtftMs proietta il punto e l'overlap
-necessario), (b) 1.4× conservativa, (c) 4 s = fase D. Le fasi 8-9 sono a
-valle della 7. Il loop riparte al ruling.
+**FASE 7 DONE (it.8): instant-on nel budget del ruling.** Ruling item 1 =
+(a) ratificato (PI: "ok (a)"). Overlap costruito: prefetch in-forward
+esteso al PREFILL CHUNKED (tap batched, unione top-4 su m righe, fetch
+nella finestra) — cold 30.55→24.57 s. Verdetto al protocollo v2
+PRE-dichiarato (mediane 3+3 sessioni, eviction provata per sessione):
+**ratio 1.247 ≤ 1.25 PASS** (margine 0.3%, dichiarato sottile; v1 singola
+1.2505 FAIL da rumore). coldTtftMs del modello: −5.8% (coda fase 6
+VERIFICATA). Gap UX 6.18× (fase D). Docket item 6: selezioni prefill non
+in eusage (registrazione).
+
+**Next decidable: FASE 8 — Gate floor + non-regressione a perimetro
+pieno** (riga 8): decode alla config di budget migliore, quiescente ≥13.43
+(la ctx525-auto ha già dato 16.55 in sessione viva — al protocollo giusto
+dovrebbe passare secco); blocco nonreg completo con run fresche: decode/
+prefill/TTFT/Qwen ±5%, cpuref 256/256 + 512/512, golden ≥98.828% b11
+full-corpus, routing = firma 14b, ktest, suite ≥338+7, tsc; albero
+CONGELATO durante le run; da fissare il candidato nuovo riferimento b12
+(docket item 5). Poi fase 9 (chiusura goal).
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:

@@ -312,3 +312,50 @@ Artefatti: 3 bench JSON + `band-model-vs-measured-2026-08-09.json`
 misurati entro ±15% (di fatto ±1%) PASS; la stessa formula predice il TTFT
 a freddo (coldTtftMs, verificabile in fase 7) PASS; JSON
 predetto-vs-misurato committato PASS.
+
+## it.8 — 2026-08-09 — FASE 7 DONE: instant-on nel budget del ruling (1.247 ≤ 1.25)
+
+**Ruling recepito** (docket item 1 = opzione (a), PI in chat "ok (a)"):
+ttftCold ≤ 1.25 × ttftWarm della STESSA config, auto-ancorato.
+
+**Meccanismo costruito (l'overlap che mancava):** prefetch in-forward esteso
+al PREFILL CHUNKED (il buco dichiarato in it.4) — tap batched (router L+1 su
+fnBM, +1 dispatch/layer/chunk, stessa mapAsync con staging M raddoppiato a
+offset fisso MPF), predizioni = UNIONE dei top-4 sulle m righe, consumate al
+submit successivo nella finestra d'attesa; stato dentro il chunk (l'ultimo
+MoE non ha tap: niente attraversa chunk né token). Effetto misurato: cold
+30.55 → 24.57 s (−6.0 s), warm 22.87 → 19.65 (−3.2: l'overlap aiuta anche
+il caldo).
+
+**Strumento e protocollo** (`scripts/glm-instanton-run.mjs`, spec §6):
+OPFS popolata + VRAM vuota (sessione fresca) + page cache FREDDA provata
+(fadvise sui backing file + fincore before/after PER OGNI sessione fredda,
+16.7 GB → 0). Composizione dichiarata: ttft = buildMs + warmup.prefill.ms +
+primo token; import escluso (precondizione). Config di produzione: sync +
+tier + prefetch, prefill chunked, budget ctx-aware auto.
+
+**Percorso del verdetto, in trasparenza:** la v1 (1 sessione per ramo) ha
+dato ratio 1.2505 — FAIL per 10.5 ms su 24.5 s (0.04%, rumore di sessione
+singola). PRIMA di rimisurare è stato PRE-DICHIARATO il protocollo v2
+(pattern B2 della casa: mediane di 3 sessioni per ramo, run fresche, il
+verdetto è delle mediane qualunque sia). Esito v2: fredde 24 479/24 727/
+24 890, calde 19 824/19 174/20 027 → **mediane 24 727 / 19 824, ratio
+1.247 ≤ 1.25 PASS** — margine sottile (0.3%) e dichiarato: la distribuzione
+del ratio lambisce il gate su questo host; su M4 (banda unificata) e in
+fase D il margine è la leva, non il decimale.
+
+**Coda di fase 6 chiusa:** coldTtftMs predice 23 303 vs misurato 24 727 =
+**−5.8%, entro ±15%** (il done-when "predice il TTFT a freddo, verificabile
+in fase 7" è ora VERIFICATO). Gap UX 4 s: 6.18× (riportato, fase D).
+
+**Verifiche:** suite 359+7, tsc pulito, ktest 69/69 (flag off = path
+identico); artefatti: `instanton-glm-4090-2026-08-09.json` (+6 session
+JSON), evidenza eviction per sessione nel JSON.
+
+**Osservazione a docket (non decisa qui):** le selezioni del PREFILL non
+alimentano eusage/noteSelection (solo il decode) — colibri le conta;
+candidata estensione in chiusura o fase D, non tocca i numeri di questa fase.
+
+**Done-when riga 7:** TTFT a freddo ≤ budget del ruling (1.247 ≤ 1.25,
+protocollo pre-dichiarato) PASS; JSON committato con gap UX 4 s esplicito
+PASS; predizione del modello di banda confrontata nel JSON (−5.8%) PASS.

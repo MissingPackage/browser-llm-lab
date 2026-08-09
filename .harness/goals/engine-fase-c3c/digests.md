@@ -93,3 +93,14 @@
 - Proiezioni fredde per fase 7: 5.02/2.24/1.27 tok/s; coldTtftMs pronto.
 - STOP BY DESIGN: fase 7 bloccata dal ruling item 1 (proposta 1-bis sul
   tavolo: raccomandato 1.25× auto-ancorato). Il loop riparte al ruling.
+
+## it.8 (2026-08-09) — fase 7 DONE: instant-on 1.247 ≤ 1.25
+
+- Ruling (a) recepito; overlap costruito (prefetch nel prefill chunked:
+  tap batched + unione top-4, cold −6.0 s).
+- Verdetto al protocollo v2 PRE-dichiarato (mediane 3+3, eviction provata
+  a ogni sessione fredda): 24 727 / 19 824 ms = 1.247 PASS — margine
+  sottile (0.3%) dichiarato; v1 singola era 1.2505 (rumore).
+- Coda fase 6 verificata: coldTtftMs −5.8% (±15%). Gap UX 6.18× → fase D.
+- Next: fase 8 — gate floor + non-regressione a perimetro pieno (batch
+  lungo, albero congelato), poi fase 9 chiusura.

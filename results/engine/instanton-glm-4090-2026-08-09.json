@@ -1,0 +1,82 @@
+{
+ "schemaVersion": 1,
+ "kind": "instanton-ttft",
+ "date": "2026-08-09T14:25:54.016Z",
+ "ruling": "docket c3c item 1 opzione (a), 2026-08-09: ttftCold <= 1.25 x ttftWarm STESSA config (auto-ancorato); gap dai 4 s UX riportato (fase D)",
+ "config": {
+  "sameFor": "entrambe le sessioni: sync + tier + prefetch in-forward, prefill chunked, budget ctx-aware auto",
+  "composition": "ttft = buildMs (upload non-expert) + warmup.prefill.ms (primo prefill) + warmup.decode.msPerTokenP50 (primo token); import/SHA esclusi (OPFS popolata = precondizione)",
+  "profile": "/home/neuromancer/.cache/blab-glmroute-profile"
+ },
+ "protocolV2": "PRE-DICHIARATO: mediane su 3 sessioni per ramo (pattern B2), run fresche; il verdetto e' delle mediane",
+ "coldReplicasTtftMs": [
+  24479,
+  24727,
+  24890
+ ],
+ "warmReplicasTtftMs": [
+  19824,
+  19174,
+  20027
+ ],
+ "coldnessProof": {
+  "protocol": "fsync + posix_fadvise(DONTNEED) x2 sui backing file OPFS del profilo (WP fase 1) PRIMA DI OGNI sessione fredda; VRAM vuota = sessione Chrome fresca",
+  "backingFiles": 2,
+  "evictions": [
+   {
+    "before": 17291964416,
+    "after": 0
+   },
+   {
+    "before": 17291964416,
+    "after": 0
+   },
+   {
+    "before": 17291964416,
+    "after": 0
+   }
+  ]
+ },
+ "cold": {
+  "ttftMs": 24727,
+  "buildMs": 3264,
+  "warmupPrefillMs": 21292,
+  "firstTokenMs": 172,
+  "prefillBytesRead": 17418485760,
+  "budgetGiB": 12.78,
+  "reports": [
+   "results/engine/instanton-glm-4090-2026-08-09-sessionC1.json",
+   "results/engine/instanton-glm-4090-2026-08-09-sessionC2.json",
+   "results/engine/instanton-glm-4090-2026-08-09-sessionC3.json"
+  ]
+ },
+ "warm": {
+  "ttftMs": 19824,
+  "buildMs": 2828,
+  "warmupPrefillMs": 16829,
+  "firstTokenMs": 167,
+  "budgetGiB": 12.761,
+  "reports": [
+   "results/engine/instanton-glm-4090-2026-08-09-sessionW1.json",
+   "results/engine/instanton-glm-4090-2026-08-09-sessionW2.json",
+   "results/engine/instanton-glm-4090-2026-08-09-sessionW3.json"
+  ]
+ },
+ "gate": {
+  "threshold": 1.25,
+  "ratio": 1.247,
+  "pass": true
+ },
+ "gapUx4s": {
+  "budgetMs": 4000,
+  "coldFactor": 6.18,
+  "note": "obiettivo fase D, non gate"
+ },
+ "bandModelPrediction": {
+  "source": "src/engine/bandmodel.ts coldTtftMs (fase 6), overlap 0",
+  "predictedColdTtftMs": 23303,
+  "measuredColdTtftMs": 24727,
+  "errPct": -5.8,
+  "within15pct": true
+ }
+}

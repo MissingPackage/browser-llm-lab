@@ -1164,8 +1164,14 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     xM: GPUBuffer; fnBM: GPUBuffer; tmpM: GPUBuffer; sM: GPUBuffer;
     hSlotsM: GPUBuffer; ySlotsM: GPUBuffer; wBufM: GPUBuffer;
     logitsBM: GPUBuffer; logitsMStaging: GPUBuffer; rowPosB: GPUBuffer; gatherM: GPUBuffer;
+    logits2BM: GPUBuffer | null; // C3c fase 7: logits del tap batched
     bgAddM: GPUBindGroup; bgSiluDenseM: GPUBindGroup; bgCombineM: GPUBindGroup;
-    perLayer: Array<{ attnB: BStep[]; denseB?: BStep[]; preRouterB?: BStep[]; shexpB?: BStep[] }>;
+    perLayer: Array<{
+      attnB: BStep[]; denseB?: BStep[]; preRouterB?: BStep[]; shexpB?: BStep[];
+      /** C3c fase 7: tap batched del prefetch — router del MoE successivo su
+       *  fnBM (stesso pattern del decode, fase 4). Solo con prefetch attivo. */
+      tapNextB?: { st: BStep[]; layer: number; bias: Float32Array };
+    }>;
   }
   let PF: PrefillState | null = null;
   const initPrefill = (): PrefillState => {
@@ -1192,10 +1198,14 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     const sM = storage(MPF * G.dModel * 4);
     const wBufM = storage(MPF * G.nExpertUsed * 4);
     const logitsBM = storage(MPF * G.nExpert * 4);
-    const logitsMStaging = device.createBuffer({ size: MPF * G.nExpert * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    // C3c fase 7: col prefetch lo staging M raddoppia — [0, MPF·64·4) logits
+    // del router corrente, [MPF·64·4, …) logits del TAP (router L+1 su fnBM).
+    // Offset FISSO a MPF anche coi chunk parziali: una convenzione sola.
+    const logitsMStaging = device.createBuffer({ size: MPF * G.nExpert * 4 * (prefetchOn ? 2 : 1), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const logits2BM = prefetchOn ? storage(MPF * G.nExpert * 4) : null;
     const rowPosB = storage(MPF * 4);
     const gatherM = storage(G.nExpert * GATHER_REGION);
-    const perLayer = layers.map((L) => {
+    const perLayer: PrefillState["perLayer"] = layers.map((L) => {
       const w = L.bw;
       const attnB: BStep[] = [
         stepB(pipesB.rmsD, [xM, w.attnNorm, hnM], 1, "x"),
@@ -1232,8 +1242,21 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         stepB(pipesB.gemvShexpDown, [w.downShexp!, gateEM, sM], gemvGrid(G.dModel), "z"),
       ] };
     });
+    // C3c fase 7: aggancio del tap batched (come il decode, fase 4 — il
+    // router del MoE SUCCESSIVO sullo stesso fnBM; l'ultimo MoE senza tap)
+    if (prefetchOn) {
+      const moeIdxs = layers.map((L, i) => (L.moe ? i : -1)).filter((i) => i >= 0);
+      for (let j = 0; j + 1 < moeIdxs.length; j++) {
+        const nxt = layers[moeIdxs[j + 1]];
+        perLayer[moeIdxs[j]].tapNextB = {
+          st: [stepB(pipesB.router, [nxt.bw.routerW!, fnBM, logits2BM!], G.nExpert, "z")],
+          layer: moeIdxs[j + 1],
+          bias: nxt.moe!.bias,
+        };
+      }
+    }
     PF = {
-      xM, fnBM, tmpM, sM, hSlotsM, ySlotsM, wBufM, logitsBM, logitsMStaging, rowPosB, gatherM,
+      xM, fnBM, tmpM, sM, hSlotsM, ySlotsM, wBufM, logitsBM, logitsMStaging, rowPosB, gatherM, logits2BM,
       bgAddM: bg(pipesB.addM, [xM, tmpM]),
       bgSiluDenseM: bg(pipesB.siluDenseM, [gateDM, upDM]),
       bgCombineM: bg(pipesB.combine, [xM, sM, ySlotsM, wBufM]),
@@ -1261,6 +1284,9 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       device.pushErrorScope("validation");
       device.pushErrorScope("out-of-memory");
       const routing: GlmRouting[][] = Array.from({ length: m }, () => []);
+      // prefetch del prefill (fase 7): vive DENTRO il chunk — l'ultimo MoE non
+      // ha tap, quindi niente attraversa il confine di chunk né di token
+      let pendingPrefetchP: { layer: number; ids: number[] } | null = null;
       let enc = device.createCommandEncoder();
       let pass: GPUComputePassEncoder | null = null;
       const ensureP = (): GPUComputePassEncoder => { if (!pass) pass = enc.beginComputePass(); return pass; };
@@ -1286,10 +1312,31 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         }
         const mo = L.moe!;
         runStepsB(ensureP(), pf.perLayer[l].preRouterB!, m);
+        // C3c fase 7: tap batched — router L+1 su fnBM, stesso pass del router
+        const tapB = prefetchOn ? pf.perLayer[l].tapNextB : undefined;
+        if (tapB) runStepsB(ensureP(), tapB.st, m);
         endP();
         enc.copyBufferToBuffer(pf.logitsBM, 0, pf.logitsMStaging, 0, m * G.nExpert * 4);
+        if (tapB) enc.copyBufferToBuffer(pf.logits2BM!, 0, pf.logitsMStaging, MPF * G.nExpert * 4, m * G.nExpert * 4);
         device.queue.submit([enc.finish()]);
         if (telemOn) { T.submits++; T.routerSyncs++; }
+        // ---- prefetch in-forward del prefill (C3c fase 7): consuma l'UNIONE
+        // predetta al layer MoE precedente ADESSO, mentre la GPU esegue il
+        // submit appena accodato — è l'overlap che il TTFT a freddo paga per
+        // stare nel budget 1.25× (ruling item 1a). Ordine di coda: writeBuffer
+        // dopo il submit = eseguita dopo i suoi dispatch, niente corruzione.
+        if (prefetchOn && pendingPrefetchP) {
+          const pfp = pendingPrefetchP; pendingPrefetchP = null;
+          const tPf = nowT();
+          const pinnedP = new Set<number>();
+          for (const e of pfp.ids) pinnedP.add(expertKey(pfp.layer, e));
+          for (const e of pfp.ids) {
+            const r = cache.ensure(pfp.layer, e, expertReader, pinnedP);
+            if (telemOn) { T.prefetchPreds++; if (r.hit) T.prefetchResident++; else T.prefetchFetches++; }
+          }
+          cache.flushSlotTable();
+          if (telemOn) T.prefetchMs += nowT() - tPf;
+        }
         // ---- IL sync del chunk: M×64 logit in una mapAsync (46/chunk ≈ 46/m per token) ----
         await pf.logitsMStaging.mapAsync(GPUMapMode.READ);
         const lg = new Float32Array(pf.logitsMStaging.getMappedRange().slice(0));
@@ -1299,6 +1346,15 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
           const sel = routerSelect(lg.subarray(r * G.nExpert, (r + 1) * G.nExpert), mo.bias);
           routing[r].push({ layer: l, experts: sel.experts, weights: sel.weights });
           sels.push(sel);
+        }
+        // predizioni per il PROSSIMO layer MoE: unione dei top-4 sulle m righe
+        if (tapB) {
+          const uni = new Set<number>();
+          for (let r = 0; r < m; r++) {
+            const p = routerSelect(lg.subarray(MPF * G.nExpert + r * G.nExpert, MPF * G.nExpert + (r + 1) * G.nExpert), tapB.bias);
+            for (const e of p.experts) uni.add(e);
+          }
+          pendingPrefetchP = { layer: tapB.layer, ids: [...uni] };
         }
         const plan = planMoeChunk(sels, MPF);
         // ensure dell'UNIONE, tutte le chiavi pinnate (nessuna vittima interna al chunk)
