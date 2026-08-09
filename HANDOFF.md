@@ -10,11 +10,16 @@ sono FATTI: (a) baseline nativa llama.cpp b10333 Vulkan stesso hardware —
 decode 66.6 / prefill 1230 tok/s vs browser 15.6/35.7 = **gap 4.3× / 34×**,
 limite INFERIORE (`results/engine/native-baseline-llamacpp-vulkan-2026-08-09.json`);
 (b) recon famiglia Qwen 3.5/3.6 (`docs/engine/study/2026-08-09-qwen35-family-recon.md`).
-**Passo successivo = (c) goal-brief q1**: il contratto è approvato in sostanza
-dal PI in chat ("mi torna") ma è **ASSUMED, non è su disco** — va scritto,
-ratificato in spec (pattern c3a item 3 / c3b item 4) e poi aperto con /goal.
-Perimetro previsto dal ruling: famiglia Qwen 3.6/3.8, 2-3 taglie, 2-3 baseline
-hardware consumer (8-12 GB = scarsità vera), prefill/TTFT DENTRO il goal.
+**Il contratto q1 è SU DISCO e APPROVATO dal PI**
+(`.harness/goals/engine-fase-q1/GOAL.md`, chartered 2026-08-10, tutti gli
+[ASSUMED] approvati in chat + emendamento PI: terza taglia densa 2-4B
+mobile-target). **Passo successivo = aprire il goal con /goal al via del PI**
+(tag di avvio: `goal-engine-fase-q1-start`; ratifica formale in spec, pattern
+c3a item 3 / c3b item 4). Perimetro: Qwen 3.5/3.6 — denso 2-4B + 9B + MoE
+35B-A3B, tier mobile emulato + 8/12/16 GB, prefill/TTFT dentro il goal, WP
+decomposizione gap kernel-vs-paging (9B full-resident vs llama.cpp Vulkan)
+con leve kernel bounded (dot4I8Packed/tuning dietro flag se ROI, spike
+subgroup-matrix, WASM-SIMD fuori).
 Rischio tecnico dominante già nominato: **kernel DeltaNet WGSL** (ibrida 3:1
 linear-attention : GQA, mamba f32). Fuori sequenza, non aperti: hero-demo M4
 (docket c3c item 8, PI-gated per hardware), fase D — moltiplicatori/spec-dec
@@ -91,8 +96,8 @@ MTP (DOPO q1, è per-modello), igiene fuori-goal (§3). Riancorarsi da:
 
 ## 5. Docket (user decisions pending)
 
-- **Ratifica del contratto q1** (generalizzazione) — è il §1: il PI ha
-  approvato in sostanza in chat, va scritto su disco e ratificato in spec.
+- **Via all'apertura di q1** — è il §1: contratto su disco e approvato,
+  manca solo il "partiamo" del PI per lanciare /goal.
 - Timing del blog (prima del paper o insieme) — aperto, non bloccante
   (docket c3c item 10).
 - Freshness di HANDOFF: hook "messaggio nomina HANDOFF ⇒ HANDOFF.md in
