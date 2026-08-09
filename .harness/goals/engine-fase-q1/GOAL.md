@@ -1,18 +1,20 @@
 GOAL: engine-fase-q1 — Il motore esegue il path testo della famiglia Qwen
-3.5/3.6 (denso 2-4B mobile-target + denso 9B + MoE 35B-A3B) con la stessa
+3.5/3.6 (denso 4B mobile-target + denso 9B + MoE 35B-A3B) con la stessa
 fedelta' bit-verificata del metodo GLM (oracoli cpuref + golden llama.cpp +
 firma routing), con riferimenti decode/prefill/TTFT misurati ai budget
 consumer 8/12/16 GB piu' il tier mobile emulato, e il gap nativo e'
 DECOMPOSTO kernel-vs-paging tramite confronto full-residency a parita' di
 modello, con le leve kernel ordinate per ROI misurato.
 
-<!-- CONTRATTO v1 (chartered 2026-08-10, goal-brief in chat). Perimetro dal
-     ruling PI docket c3c item 9/10 ("vai" 2026-08-09) + conferma WP gap
-     2026-08-10 + emendamento PI 2026-08-10: terza taglia densa 2-4B
-     aggiunta (target dispositivi mobili). Tutti gli [ASSUMED] della bozza
-     APPROVATI dal PI in chat ("per il resto tutto ok") — restano marcati
-     nel testo come tracce della negoziazione; ratifica formale in spec,
-     pattern c3a item 3 / c3b item 4.
+<!-- CONTRATTO v1 (chartered 2026-08-10, goal-brief in chat). APERTO
+     2026-08-10 (PI in chat: "partiamo con la spec e poi direttamente il
+     loop"). Perimetro dal ruling PI docket c3c item 9/10 ("vai"
+     2026-08-09) + conferma WP gap 2026-08-10 + emendamenti PI 2026-08-10:
+     terza taglia densa mobile-target = 4B (il 2B = eventuale futuro).
+     Tutti gli [ASSUMED] della bozza APPROVATI dal PI in chat ("per il
+     resto tutto ok") — restano marcati nel testo come tracce della
+     negoziazione; ratifica formale in spec, pattern c3a item 3 / c3b
+     item 4.
      Vincolo di valle registrato: i numeri del writeup si rimisurano al tag
      di release (paper-contract-draft, ruling 2026-08-10) — q1 produce
      riferimenti datati con hostState, non i numeri del paper.
@@ -22,10 +24,10 @@ DONE WHEN (all measurable):
 - Spec q1 scritta (docs/superpowers/specs/<data>-engine-fase-q1-design.md) e
   registrata a docket PRIMA del codice (regime di approvazione C3b/C3c:
   ruling PI bloccante solo se tocca gate o soglie). La spec fissa: taglie
-  definitive e GGUF pinnati via SHA [ASSUMED APPROVATO: denso 2-4B
-  mobile-target (scelta puntuale 2B vs 4B in spec, criterio = budget
-  memoria mobile) + Qwen3.5-9B denso + Qwen3.6-35B-A3B, quant Q4 famiglia
-  unsloth — 3.6 sul MoE perche' refresh del tier consumer, recon §1/§5];
+  definitive e GGUF pinnati via SHA [RULING PI 2026-08-10: denso 4B
+  mobile-target (il 2B = eventuale futuro, fuori goal) + Qwen3.5-9B denso +
+  Qwen3.6-35B-A3B, quant Q4 famiglia unsloth — 3.6 sul MoE perche' refresh
+  del tier consumer, recon §1/§5];
   piano numerico DeltaNet (f32 obbligato da config, strategia di verifica
   della ricorrenza); protocollo di conformance per-modello; stato ATTUALE
   di subgroup-matrix nei browser (il [VERIFY] dello studio llamaweb si
@@ -64,7 +66,7 @@ DONE WHEN (all measurable):
   [ASSUMED APPROVATO: NESSUN floor assoluto per la famiglia nuova in q1 —
   i floor si negoziano coi numeri della prima misura, docket alla spec; il
   floor 13.43 resta di GLM.]
-- Tier MOBILE (emendamento PI 2026-08-10): il denso 2-4B misurato a un
+- Tier MOBILE (emendamento PI 2026-08-10): il denso 4B misurato a un
   budget stretto emulato definito in spec (proxy del regime mobile:
   VRAM/banda da dichiarare, non da assumere) con JSON committato
   decode/prefill/TTFT; l'esecuzione su DISPOSITIVO mobile reale (S22 o
