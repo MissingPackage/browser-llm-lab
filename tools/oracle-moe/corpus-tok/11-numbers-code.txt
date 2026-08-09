@@ -1,0 +1,5 @@
+Numeri: 3.14159, 1e-7, 0xDEADBEEF, 1_000_000, -42, 2**31-1, v1.2.3-rc.4
+URL: https://example.com/path?q=a%20b&x=1#frag
+Email: test+tag@example.org — path: /usr/local/bin/../lib
+Regex: ^[a-zA-Z0-9_]+\.(gguf|json)$ e backslash \\n letterale
+SHA: 298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb

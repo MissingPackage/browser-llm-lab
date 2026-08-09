@@ -1,0 +1,11 @@
+	Tab iniziale, poi    spazi   multipli.
+Riga con trailing spaces:   
+""
+''
+Newline doppi:
+
+
+CRLF assente per design. Spazio non-breaking: qui c'è. Zero-width: ​fine.
+   indentazione python:
+    def f(x):
+        return x  # commento

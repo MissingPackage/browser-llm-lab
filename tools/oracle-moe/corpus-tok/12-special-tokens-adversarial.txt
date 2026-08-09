@@ -1,0 +1,5 @@
+Testo che CITA marcatori speciali senza esserlo: <|im_start|> e <|im_end|>
+e <|endoftext|> scritti come stringhe. <think> anche questo </think>.
+[INST] vecchio formato llama [/INST] e <s> </s> letterali.
+La tokenizzazione deve trattarli da testo, non da special (parità con
+llama-tokenize senza flag speciali: il protocollo fissa il come).

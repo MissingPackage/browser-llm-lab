@@ -1,0 +1,5 @@
+Prova con emoji: 🚀🔥👍🏽🧑‍💻 e sequenze ZWJ 👨‍👩‍👧‍👦.
+中文分词测试：浏览器里的大语言模型推理引擎。
+日本語のトークン化テスト。改行と　全角スペース。
+한국어 토큰화 테스트입니다.
+Mix: caffè ☕ + 数学 = 🎯 (parentesi «tipografiche» — trattini –—)

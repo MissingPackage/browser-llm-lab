@@ -1,0 +1,29 @@
+{
+  "note": "GGUF pinnati del goal engine-fase-q1 (spec 2026-08-10 §1). SHA = oid LFS verificati sui pointer raw HF 2026-08-10. path relativo a ~/.cache/blab-models/.",
+  "files": [
+    {
+      "model": "Qwen3.5-4B",
+      "repo": "unsloth/Qwen3.5-4B-GGUF",
+      "file": "Qwen3.5-4B-Q4_0.gguf",
+      "path": "q35/Qwen3.5-4B-Q4_0.gguf",
+      "bytes": 2583221408,
+      "sha256": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb"
+    },
+    {
+      "model": "Qwen3.5-9B",
+      "repo": "unsloth/Qwen3.5-9B-GGUF",
+      "file": "Qwen3.5-9B-Q4_0.gguf",
+      "path": "q35/Qwen3.5-9B-Q4_0.gguf",
+      "bytes": 5379417312,
+      "sha256": "17670346b4260ddcb0173965145155885024f3c9a4a24389a3370751edbcde24"
+    },
+    {
+      "model": "Qwen3.6-35B-A3B",
+      "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+      "file": "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+      "path": "q35/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+      "bytes": 20893015008,
+      "sha256": "a8138f183e3993f12cdc23afd2babb8cdb084e64088ce4a256d49101d47b949c"
+    }
+  ]
+}
