@@ -10,16 +10,17 @@ sono FATTI: (a) baseline nativa llama.cpp b10333 Vulkan stesso hardware —
 decode 66.6 / prefill 1230 tok/s vs browser 15.6/35.7 = **gap 4.3× / 34×**,
 limite INFERIORE (`results/engine/native-baseline-llamacpp-vulkan-2026-08-09.json`);
 (b) recon famiglia Qwen 3.5/3.6 (`docs/engine/study/2026-08-09-qwen35-family-recon.md`).
-**Il contratto q1 è SU DISCO e APPROVATO dal PI**
-(`.harness/goals/engine-fase-q1/GOAL.md`, chartered 2026-08-10, tutti gli
-[ASSUMED] approvati in chat + emendamento PI: terza taglia densa 2-4B
-mobile-target). **Passo successivo = aprire il goal con /goal al via del PI**
-(tag di avvio: `goal-engine-fase-q1-start`; ratifica formale in spec, pattern
-c3a item 3 / c3b item 4). Perimetro: Qwen 3.5/3.6 — denso 2-4B + 9B + MoE
-35B-A3B, tier mobile emulato + 8/12/16 GB, prefill/TTFT dentro il goal, WP
-decomposizione gap kernel-vs-paging (9B full-resident vs llama.cpp Vulkan)
-con leve kernel bounded (dot4I8Packed/tuning dietro flag se ROI, spike
-subgroup-matrix, WASM-SIMD fuori).
+**GOAL `engine-fase-q1` APERTO** (tag `goal-engine-fase-q1-start`,
+contratto v1 approvato dal PI, taglie: 4B mobile-target + 9B + 35B-A3B; il
+2B = eventuale futuro). Spine in `.harness/goals/engine-fase-q1/PHASES.md`:
+9 fasi sequenziali, plan-check pre-autorizzato (docket q1 item 1, revisione
+naturale prima della fase 3). **Al lavoro: it.1 = fase 1 — spec + ratifica**
+(`docs/superpowers/specs/2026-08-10-engine-fase-q1-design.md`: SHA GGUF
+pinnate, piano numerico DeltaNet, protocollo conformance per-modello, proxy
+tier mobile, chiusura [VERIFY] subgroup-matrix). Perimetro: path testo Qwen
+3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
+decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
+`.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.
 Rischio tecnico dominante già nominato: **kernel DeltaNet WGSL** (ibrida 3:1
 linear-attention : GQA, mamba f32). Fuori sequenza, non aperti: hero-demo M4
 (docket c3c item 8, PI-gated per hardware), fase D — moltiplicatori/spec-dec
