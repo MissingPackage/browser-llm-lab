@@ -1,20 +1,44 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — GOAL C3C CHIUSO, fase C COMPLETA; next = decisione PI post-fase-C)
+# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 26 — fase C COMPLETA, direzione post-C DECISA; next = avvio goal q1 generalizzazione)
 
 ## 1. Next decidable
 
-**DECISIONE PI: direzione post-fase-C.** Il goal engine-fase-c3c è CHIUSO
-E VERIFICATO (it.10, checklist 10/10, tag `goal-engine-fase-c3c-done`,
-commit 58f5cf4): **floor C1 13.43 battuto SECCO in produzione — decode
-15.641 a budget CALCOLATO (ctx-aware 12.737 GiB), sessione utente viva,
-clausola non servita**. FASE C COMPLETA (C3a+C3b+C3c): **decode 4.64 →
-15.64 tok/s (3.4×), TTFT 88 → 12.9 s (6.8×), 47 → 2 sync/token, qualità
-bit-invariata** (golden 98.828% AL PIN, cpuref 256/256+512/512, firma
-routing esatta). Candidati sul tavolo (nessun goal aperto):
-(a) **hero-demo M4** — input pronti (docket c3c item 8), PI-gated per
-hardware; (b) **fase D — moltiplicatori** (spec-dec MTP, direction §7;
-gap UX residuo: 1.92× decode, 3.22× TTFT); (c) **igiene fuori-goal**
-(v. §3). Riancorarsi da: `.harness/goals/engine-fase-c3c/{GOAL,journal,
-docket}.md`, direction §7 (fase C chiusa coi numeri), ledger §A.
+**AVVIO GOAL `engine-fase-q1` — GENERALIZZAZIONE.** La direzione post-fase-C
+NON è più una decisione aperta: il PI l'ha data (docket c3c item 9, "vai") e
+poi raffinata (item 10). Sequenza congelata: **q1 (generalizzazione) →
+release (split repo + paper Zenodo + blog)**. I due prerequisiti immediati
+sono FATTI: (a) baseline nativa llama.cpp b10333 Vulkan stesso hardware —
+decode 66.6 / prefill 1230 tok/s vs browser 15.6/35.7 = **gap 4.3× / 34×**,
+limite INFERIORE (`results/engine/native-baseline-llamacpp-vulkan-2026-08-09.json`);
+(b) recon famiglia Qwen 3.5/3.6 (`docs/engine/study/2026-08-09-qwen35-family-recon.md`).
+**Passo successivo = (c) goal-brief q1**: il contratto è approvato in sostanza
+dal PI in chat ("mi torna") ma è **ASSUMED, non è su disco** — va scritto,
+ratificato in spec (pattern c3a item 3 / c3b item 4) e poi aperto con /goal.
+Perimetro previsto dal ruling: famiglia Qwen 3.6/3.8, 2-3 taglie, 2-3 baseline
+hardware consumer (8-12 GB = scarsità vera), prefill/TTFT DENTRO il goal.
+Rischio tecnico dominante già nominato: **kernel DeltaNet WGSL** (ibrida 3:1
+linear-attention : GQA, mamba f32). Fuori sequenza, non aperti: hero-demo M4
+(docket c3c item 8, PI-gated per hardware), fase D — moltiplicatori/spec-dec
+MTP (DOPO q1, è per-modello), igiene fuori-goal (§3). Riancorarsi da:
+`.harness/goals/engine-fase-c3c/{GOAL,journal,docket}.md` (item 9/10),
+`docs/publishing/{split-plan,paper-contract-draft}.md`, direction §7, ledger §A.
+
+## 2bis. State delta (sessione 26, 2026-08-09 — post-fase-C, fuori goal)
+
+- **Baseline nativa** (429bfd2): llama.cpp b10333 Vulkan, stessa GPU/driver/
+  GGUF, p512/n64 — 66.6 / 1230 tok/s (best `-ncmoe 8`; 26.7/338 con tutti gli
+  expert su CPU). Chiude il [VERIFY] del writeup. Chiave architetturale:
+  llama.cpp fa **compute-at-data** sugli spillover (computa su CPU), noi li
+  trasferiamo ⇒ direzione WASM-SIMD REGISTRATA, non promessa.
+- **Recon Qwen** (429bfd2): 3.5 + 3.6 Apache 2.0, GGUF maturi (oracolo
+  llama.cpp preservato); tutta la famiglia è IBRIDA 3:1 (KV solo su 1/4 dei
+  layer ⇒ ctx lungo quasi gratis), MTP nativa ovunque (fase D apparecchiata);
+  35B-A3B = 256 expert top-8 da ~1.7 MB Q4 (granularità 3× più fine del nostro
+  paging). 3.8 = solo API, niente pesi open.
+- **Publishing**: split in 3 repo congelato ALLA PUBBLICAZIONE (20f3d11,
+  `docs/publishing/split-plan.md`); paper = companion del rilascio su Zenodo
+  preprint, si charterizza a valle di q1 coi numeri finali (e28c0a8,
+  `docs/publishing/paper-contract-draft.md`). Il lab resta il workshop.
+- Nessun goal aperto in questa sessione; nessun codice engine toccato.
 
 ## 2. State delta (sessione 25, 2026-08-08/09 — goal C3c intero)
 
@@ -67,6 +91,9 @@ docket}.md`, direction §7 (fase C chiusa coi numeri), ledger §A.
 
 ## 5. Docket (user decisions pending)
 
-- **Direzione post-fase-C** (M4 / fase D / igiene) — la decisione di §1.
+- **Ratifica del contratto q1** (generalizzazione) — è il §1: il PI ha
+  approvato in sostanza in chat, va scritto su disco e ratificato in spec.
+- Timing del blog (prima del paper o insieme) — aperto, non bloccante
+  (docket c3c item 10).
 - c3c item 8: input hero-demo M4 (PI-gated per hardware).
 - Ratifiche c3a pendenti (14b, 2 formale, 19-21) — prese d'atto, non urgenti.
