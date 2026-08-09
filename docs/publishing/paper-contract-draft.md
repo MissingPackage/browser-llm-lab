@@ -23,7 +23,10 @@ di release; la pubblicazione resta fuori dal goal.
 
 DONE WHEN: paper/ con LaTeX che builda (exit 0); contributi coperti coi
 numeri FINALI (fase C + generalizzazione q1: modelli supportati, baseline
-consumer); claims-map meccanica (numero → JSON+campo, spot-check verifier);
+consumer) — FINALI = stato del motore AL TAG DI RELEASE, rimisurati lì
+(ruling PI 2026-08-10): mai i riferimenti registrati a chiusura fase C se
+nel frattempo il motore è cambiato; la baseline nativa llama.cpp resta in
+banca, ma il lato BROWSER di ogni gap dichiarato si rimisura al tag; claims-map meccanica (numero → JSON+campo, spot-check verifier);
 Limitations esplicite (gap nativo come limite inferiore, hardware validati,
 margini); Related Work con sweep aggiornato; statement riproducibilità
 (commit/tag/SHA/protocolli); blog draft (humanizer); figure rigenerabili da
