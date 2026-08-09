@@ -143,3 +143,12 @@
    prefill/TTFT dentro questo goal; (3) fase D DOPO, sui modelli target
    (spec-dec è per-modello). Ordine esecuzione immediato: (a) confronto
    llama.cpp, (b) recon Qwen, (c) goal-brief generalizzazione.
+
+10. **SEQUENZA POST-FASE-C AGGIORNATA (2026-08-09, PI in chat)**: split repo
+   → ALLA PUBBLICAZIONE (piano congelato in docs/publishing/split-plan.md);
+   paper → COMPANION DEL RILASCIO, target ZENODO preprint, si scrive a
+   valle della generalizzazione (bozza contratto parcheggiata in
+   docs/publishing/paper-contract-draft.md); punto aperto non bloccante:
+   timing del blog (prima del paper o insieme). Il prossimo goal operativo
+   è la GENERALIZZAZIONE (engine-fase-q1, contratto approvato in sostanza
+   dal PI "mi torna", ASSUMED da ratificare in spec come da pattern).
