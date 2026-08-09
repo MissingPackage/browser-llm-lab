@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-08, sessione 25 — C3c fase 1 DONE: banda fredda browser = parità OS; next = fase 2 spec)
+# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — C3c fasi 1-5 DONE: banda fredda, spec, slab ctx-aware, prefetch in-forward, policy tier; next = fase 6 modello di banda)
 
 ## 1. Next decidable
 
@@ -65,13 +65,26 @@ fase 5 nel journal: hit 98.16% NON confrontabile direttamente (ensure di
 prefetch nei contatori), prefetchMs ~7 ms/pos nella finestra, prefill
 chunked senza prefetch (materia fase 7).
 
-**Next decidable: FASE 5 — Policy tier+AUTOPIN vs LRU** (spec §4): eusage
-persistente OPFS + eheat con decay + AUTOPIN (pin ≤ 12.5% HARD, assert)
-+ REPIN LFRU `heat<<8|recency` (isteresi 25%+4, max 4 swap), dietro
-`policy:"tier"|"lru"`; misura su harness routing agli STESSI budget
-stretti 1472 e 736 slot, hit-rate tier+AUTOPIN+prefetch > LRU pura, JSON
-per policy×budget, delta vs ceiling Belady WP-0 (+9-19pp); confronto sui
-miss AL MOMENTO D'USO (nota it.4); suite+tsc puliti.
+**FASE 5 DONE (it.5-6): la policy batte la LRU ai budget stretti.**
+Meccanica (it.5): tier.h+AUTOPIN+REPIN in ExpertCache dietro
+`policy:"tier"` (cap pin 12.5% HARD con throw, eusage persistibile
+additivo, LFRU con isteresi; lru default bit-identico). Misura (it.6, 4
+run full-corpus, firma 14b esatta in tutte): **use-hit @1472: tier 93.75%
+vs LRU 84.33% (+9.43pp, ~94% del gap Belady 94.37); @736: 87.37% vs
+62.34% (+25.04pp, SOPRA il Belady 82.01 — il prefetch esce dal perimetro
+del bound demand-fetch, spiegato)**. Pin al cap esatto (184/92), costo
+dichiarato: +31-40% byte letti totali (input fase 6: nel disk-bound
+contano i BYTE TOTALI). Regola di metodo (domanda PI): full-corpus solo
+per firma/non-regressione/riferimenti nuovi; sim/subset di prompt interi
+per esplorazione. LRU@736 in timeout al 1° colpo (300→420 min, retry PASS).
+
+**Next decidable: FASE 6 — Modello di banda** (spec §5): formula tok/s =
+f(hit-rate, banda fredda browser, ctx, budget slab) committata CON TEST;
+predice i punti MISURATI entro ±15% su ≥3 budget (12 GiB, 1472, 736 —
+bench glmbench BREVI a quei budget, non run corpus); stessa formula
+predice TTFT a freddo entro ±15% (verifica in fase 7); JSON
+predetto-vs-misurato committato. Input: banda fredda WP fase 1 (1.8-3.5
+GB/s), hit-rate fase 5, byte totali (tier legge di più).
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:

@@ -232,3 +232,43 @@ tutti-pinnati = rifiuto esplicito. Suite **349+7**, tsc pulito.
 {1472, 736 slot} (tier CON prefetch in-forward, lru pura senza — la
 formulazione del done-when), poi confronto sui miss al momento d'uso, delta
 vs Belady WP-0, JSON committati, chiusura riga 5.
+
+## it.6 — 2026-08-09 — FASE 5 DONE: la policy batte la LRU ai budget stretti
+
+**Le 4 run full-corpus** ({lru, tier+AUTOPIN+prefetch} × {1472, 736 slot},
+protocollo identico, firma 14b ai conteggi ESATTI in tutte — le policy
+toccano la residenza, mai la selezione):
+- `routing-policy-lru-b1472-2026-08-08.json` / `routing-policy-tier-b1472-2026-08-08.json`
+- `routing-policy-lru-b736-2026-08-09.json` / `routing-policy-tier-b736-2026-08-09.json`
+
+**Hit-rate AL MOMENTO D'USO** (depurato dagli ensure di prefetch, nota it.4:
+useMiss = misses − prefetch.fetches, useReq = requests − prefetch.preds;
+denominatore identico 5 754 416 selezioni):
+- @1472 (50% parco): LRU 84.33% → tier **93.75% (+9.43pp)** — il ceiling
+  Belady WP-0 a 1472 è 94.37% (decode): il gap replacement è colmato al ~94%.
+- @736 (25% parco): LRU 62.34% → tier **87.37% (+25.04pp)** — SOPRA il
+  Belady 82.01%. Non è un paradosso: Belady limita la sola replacement a
+  demand-fetch; il prefetch in-forward anticipa i fetch prima dell'uso e
+  esce dal perimetro del bound. Dichiarate le due basi diverse (Belady =
+  trace decode-only del sim; use-hit = corpus pieno in-engine).
+**Pin al cap esatto** (184 @1472, 92 @736 = 12.5% HARD, assert mai
+scattato), repin swaps 13 929 / 10 859. **Costo dichiarato**: il tier legge
+PIÙ byte totali (6.7 vs 4.8 TB @1472; 15.2 vs 11.6 TB @736 — le
+mispredizioni si pagano in banda, +31-40%) in cambio di −60/−67% di miss
+bloccanti; wall più veloce comunque (2.9 vs 2.4 / 2.1 vs 1.6 pos/s).
+Input per la fase 6: il modello di banda deve usare i BYTE TOTALI letti nel
+regime disk-bound, non i soli miss d'uso.
+
+**Igiene di percorso:** run 3 (LRU@736) in TIMEOUT al primo colpo (300 min
+insufficienti: hit 62% ⇒ 1.6 pos/s ⇒ ~5.5 h); causa banale, retry identico
+con 420 min, PASS. **Regola di metodo adottata (domanda PI 2026-08-08 in
+chat, registrata qui): full-corpus SOLO per firma, non-regressione e
+riferimenti nuovi (questo batch: crea i riferimenti 1472/736); sim CPU su
+traccia (pattern WP-0) o subset di prompt INTERI (mai --cap: taglia la
+testa e perde il decode) per esplorazione e tuning parametri.**
+
+**Done-when riga 5:** stessi budget stretti, tier+AUTOPIN+prefetch > LRU
+pura a ENTRAMBI (+9.43pp / +25.04pp) PASS; JSON committati per policy ×
+budget (4) PASS; delta confrontato col ceiling Belady (94% del gap a 1472;
+sopra il bound a 736, spiegato) PASS; pin mai > 12.5% (assert nel path +
+misurato al cap) PASS; suite 349+7 + tsc puliti PASS.

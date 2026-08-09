@@ -72,3 +72,14 @@
 - glmroute: --policy e --park-frac (1472/736 slot esatti per classe).
 - it.6 = batch notturno 4 run full-corpus + analisi (delta vs LRU e vs
   ceiling Belady) + chiusura riga 5.
+
+## it.6 (2026-08-09) — fase 5 DONE: +9.43pp @1472, +25.04pp @736
+
+- Use-hit (depurato dal prefetch): tier 93.75%/87.37% vs LRU 84.33%/62.34%
+  — a 1472 colma il 94% del gap Belady; a 736 SUPERA Belady (il prefetch
+  anticipa i fetch: fuori dal perimetro del bound demand-fetch, spiegato).
+- Pin sempre al cap 12.5% esatto (assert mai scattato); firma 14b esatta
+  in tutte e 4 le run; costo dichiarato +31-40% byte letti totali.
+- Regola di metodo registrata: full-corpus solo per firma/nonreg/
+  riferimenti; sim o subset di prompt interi per esplorare.
+- Next: fase 6 — modello di banda (bench brevi ai 3 budget, ±15%).
