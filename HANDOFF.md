@@ -14,10 +14,14 @@ limite INFERIORE (`results/engine/native-baseline-llamacpp-vulkan-2026-08-09.jso
 contratto v1 approvato dal PI, taglie: 4B mobile-target + 9B + 35B-A3B; il
 2B = eventuale futuro). Spine in `.harness/goals/engine-fase-q1/PHASES.md`:
 9 fasi sequenziali, plan-check pre-autorizzato (docket q1 item 1, revisione
-naturale prima della fase 3). **Al lavoro: it.1 = fase 1 — spec + ratifica**
-(`docs/superpowers/specs/2026-08-10-engine-fase-q1-design.md`: SHA GGUF
-pinnate, piano numerico DeltaNet, protocollo conformance per-modello, proxy
-tier mobile, chiusura [VERIFY] subgroup-matrix). Perimetro: path testo Qwen
+naturale prima della fase 3). **Fase 1 DONE (it.1, verifier PASS)**: spec
+depositata (`docs/superpowers/specs/2026-08-10-engine-fase-q1-design.md`)
+con ratifica contratto, SHA dei 3 GGUF pinnate (4B/9B Q4_0, 35B UD-Q4_K_S —
+il Q4_0 del 35B NON esiste da fonte pulita: deviazione registrata, docket
+q1 item 3), [VERIFY] subgroup-matrix chiuso (niente origin trial ago 2026).
+**Al lavoro: it.2 = fase 2 — reader GGUF + tokenizer** (download pinnati
+~29 GB, enum type del file UD, token id == oracolo su corpus committato,
+verifica supporto qwen3_5 del b10333). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.
