@@ -1,0 +1,86 @@
+{
+ "schemaVersion": 1,
+ "kind": "native-baseline-llamacpp",
+ "date": "2026-08-09",
+ "build": "llama.cpp b10333 release binary, backend Vulkan (NV_coopmat2), stessa GPU/driver del path browser (4090 laptop 16 GB)",
+ "protocol": "llama-bench -p 512 -n 64, GGUF canonico GLM-4.7-Flash-Q4_0 (sha pinnata dal goal C1), -ngl 99 -ncmoe {46,20,12,8}; host user-session-light",
+ "note": "ncmoe = layer di expert tenuti su CPU e COMPUTATI su CPU (compute-at-data): llama.cpp non paga il trasferimento degli spillover \u2014 la differenza architetturale chiave col nostro paging OPFS->VRAM",
+ "results": [
+  {
+   "n_cpu_moe": 46,
+   "n_gpu_layers": 99,
+   "n_prompt": 512,
+   "n_gen": 0,
+   "avg_ts": 338.133831,
+   "stddev_ts": 1.084547
+  },
+  {
+   "n_cpu_moe": 46,
+   "n_gpu_layers": 99,
+   "n_prompt": 0,
+   "n_gen": 64,
+   "avg_ts": 26.738462,
+   "stddev_ts": 4.039865
+  },
+  {
+   "n_cpu_moe": 20,
+   "n_gpu_layers": 99,
+   "n_prompt": 512,
+   "n_gen": 0,
+   "avg_ts": 659.206491,
+   "stddev_ts": 3.628549
+  },
+  {
+   "n_cpu_moe": 20,
+   "n_gpu_layers": 99,
+   "n_prompt": 0,
+   "n_gen": 64,
+   "avg_ts": 54.119735,
+   "stddev_ts": 0.939975
+  },
+  {
+   "n_cpu_moe": 12,
+   "n_gpu_layers": 99,
+   "n_prompt": 512,
+   "n_gen": 0,
+   "avg_ts": 960.87999,
+   "stddev_ts": 17.599284
+  },
+  {
+   "n_cpu_moe": 12,
+   "n_gpu_layers": 99,
+   "n_prompt": 0,
+   "n_gen": 64,
+   "avg_ts": 63.307522,
+   "stddev_ts": 3.466802
+  },
+  {
+   "n_cpu_moe": 8,
+   "n_gpu_layers": 99,
+   "n_prompt": 512,
+   "n_gen": 0,
+   "avg_ts": 1230.130536,
+   "stddev_ts": 30.913741
+  },
+  {
+   "n_cpu_moe": 8,
+   "n_gpu_layers": 99,
+   "n_prompt": 0,
+   "n_gen": 64,
+   "avg_ts": 66.630378,
+   "stddev_ts": 1.924644
+  }
+ ],
+ "browserReference": {
+  "decode": 15.641,
+  "prefill": 35.72,
+  "ttftS": 12.9,
+  "source": "bench-glm-4090-best-autobudget-nonreg-2026-08-09.json"
+ },
+ "gap": {
+  "decodeX": 4.26,
+  "prefillX": 34.4,
+  "note": "anche a expert TUTTI su CPU (26.7 tok/s) llama.cpp batte il browser 1.7x sul decode: DDR5 compute-at-data > OPFS->VRAM transfer"
+ },
+ "caveat": "Vulkan, non CUDA: il numero nativo CUDA sarebbe ancora piu' alto \u2014 il gap dichiarato e' un limite INFERIORE"
+}

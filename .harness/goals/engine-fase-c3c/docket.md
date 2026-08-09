@@ -130,3 +130,16 @@
    riferimenti di non-regressione 2026-08-09 nel docket (item 2 + 5-bis);
    (v) landmine: campi power hostState (item 7), prefill in scarsità
    collassa (30→4 tok/s: su device piccoli il TTFT è prefill-bound).
+
+9. **DIREZIONE POST-FASE-C (2026-08-09, PI in chat — brain dump ordinato e
+   confermato con "vai")**: (0) identità = motore OPEN SOURCE, scopo
+   avanzamento tecnologico (licenza da scegliere, split repo al rilascio);
+   (1) research preview + writeup (blog+paper) SUBITO sui numeri di fase C —
+   prerequisiti: confronto llama.cpp CUDA offload parziale stesso hardware
+   (gate di onestà; PI: "già so che ci demolirà, giustamente"), split repo,
+   licenza pesi; (2) goal GENERALIZZAZIONE prima della fase D: famiglia
+   Qwen 3.6/3.8 (recon WP prima — architetture da misurare, non assumere),
+   2-3 taglie, 2-3 baseline hardware consumer (8-12 GB = scarsità vera),
+   prefill/TTFT dentro questo goal; (3) fase D DOPO, sui modelli target
+   (spec-dec è per-modello). Ordine esecuzione immediato: (a) confronto
+   llama.cpp, (b) recon Qwen, (c) goal-brief generalizzazione.
