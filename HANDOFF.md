@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — C3c fasi 1-5 DONE: banda fredda, spec, slab ctx-aware, prefetch in-forward, policy tier; next = fase 6 modello di banda)
+# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — C3c fasi 1-6 DONE; STOP BY DESIGN: fase 7 attende ruling docket item 1)
 
 ## 1. Next decidable
 
@@ -78,13 +78,23 @@ contano i BYTE TOTALI). Regola di metodo (domanda PI): full-corpus solo
 per firma/non-regressione/riferimenti nuovi; sim/subset di prompt interi
 per esplorazione. LRU@736 in timeout al 1° colpo (300→420 min, retry PASS).
 
-**Next decidable: FASE 6 — Modello di banda** (spec §5): formula tok/s =
-f(hit-rate, banda fredda browser, ctx, budget slab) committata CON TEST;
-predice i punti MISURATI entro ±15% su ≥3 budget (12 GiB, 1472, 736 —
-bench glmbench BREVI a quei budget, non run corpus); stessa formula
-predice TTFT a freddo entro ±15% (verifica in fase 7); JSON
-predetto-vs-misurato committato. Input: banda fredda WP fase 1 (1.8-3.5
-GB/s), hit-rate fase 5, byte totali (tier legge di più).
+**FASE 6 DONE (it.7): modello di banda — ±1% sui 3 punti.**
+`src/engine/bandmodel.ts`: wall = BASE(167.43, artefatto c3b
+indipendente) + F(h)·(bytes/banda + fisso) + STEP·[F>20]; F(h)=(1−h)·368.
+Punti (bench sync+tier+prefetch nuovi): b12 5.411 / 1472 2.837 / 736
+1.934 tok/s; fit dichiarato su {1472,736}, **b12 fuori dal fit = predizione
+vera +0.9%** (−0.3/−0.5 gli altri). Gradino con evidenza: gpuBusy
+48→84→85 ms/token. Il ±15% è un TEST in npm test (10 nuovi, suite 359+7).
+Proiezioni fredde (1.79 GB/s): 5.02/2.24/1.27 tok/s; coldTtftMs() pronto
+per la fase 7. `band-model-vs-measured-2026-08-09.json` committato.
+
+**Next decidable: NIENTE senza ruling — STOP BY DESIGN.** La fase 7
+(instant-on) è `blocked-by-6 + ruling item 1`: il ruling PI sul budget
+instant-on è PENDENTE con proposta depositata (docket item 1-bis, fase 2):
+**(a) RACCOMANDATA 1.25× auto-ancorato** alla config della run (aritmetica:
+senza overlap 1.28-1.61×; coldTtftMs proietta il punto e l'overlap
+necessario), (b) 1.4× conservativa, (c) 4 s = fase D. Le fasi 8-9 sono a
+valle della 7. Il loop riparte al ruling.
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:

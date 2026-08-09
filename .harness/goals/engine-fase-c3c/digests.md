@@ -83,3 +83,13 @@
 - Regola di metodo registrata: full-corpus solo per firma/nonreg/
   riferimenti; sim o subset di prompt interi per esplorare.
 - Next: fase 6 — modello di banda (bench brevi ai 3 budget, ±15%).
+
+## it.7 (2026-08-09) — fase 6 DONE: modello di banda a ±1%; STOP BY DESIGN
+
+- bandmodel.ts: BASE indipendente (c3b) + costo/fetch parametrico in banda
+  + gradino gpuBusy con evidenza misurata (48→84 ms/token). 3 punti bench
+  nuovi (5.41/2.84/1.93 tok/s), b12 FUORI dal fit = predizione +0.9%.
+- Il ±15% del done-when è un TEST permanente in npm test (10 nuovi, 359+7).
+- Proiezioni fredde per fase 7: 5.02/2.24/1.27 tok/s; coldTtftMs pronto.
+- STOP BY DESIGN: fase 7 bloccata dal ruling item 1 (proposta 1-bis sul
+  tavolo: raccomandato 1.25× auto-ancorato). Il loop riparte al ruling.

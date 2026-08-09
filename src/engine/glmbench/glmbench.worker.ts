@@ -15,7 +15,7 @@ import { GlmOpfsSource } from "../glmsource";
 import { grantedLimits, slabBufferCap } from "../gpulimits";
 import { createEngineDevice } from "../gpudevice";
 import type { GlmTelemetry } from "../glmmodel";
-import { arenaNeeds, modelExpertPark, slabBudgetCtxAware, type ExpertCacheStats } from "../residency";
+import { arenaNeeds, modelExpertPark, slabBudgetCtxAware, PARK_Q4_0, PARK_Q4_1, type ExpertCacheStats } from "../residency";
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../moe";
 
 interface GoldenPrompt { id: string; promptTokens: number[]; generated: number[] }
@@ -30,6 +30,11 @@ interface Cfg {
   /** C3c fase 3: alloca KV/partials per QUESTO ctx (≥ nPrompt+nGen), per le
    *  run che provano il regime a contesto lungo senza un prompt da 6k token. */
   ctxMaxOverride?: number;
+  /** C3c fase 6: bench ai budget stretti sul path sync coi meccanismi C3c
+   *  (l'ottimistico rifiuta sotto l'80% di residenza per precondizione). */
+  prefetch?: "inforward";
+  policy?: "tier";
+  parkFrac?: number;
 }
 
 // Allocazione slot del modo ottimistico (C3b it.4, docket item 6b): q4_1
@@ -164,9 +169,16 @@ async function main(cfg: Cfg): Promise<void> {
     : null;
   const budgetBytes = slabBudget ? slabBudget.budgetBytes : Math.floor(cfg.budgetGiB * (1 << 30));
   const optimistic = cfg.select === "optimistic";
+  if (optimistic && cfg.parkFrac !== undefined) {
+    throw new Error("glmbench: parkFrac (budget stretto) e' il regime sync — l'ottimistico rifiuta sotto l'80%");
+  }
   // In ottimistico gli slot sono ESPLICITI (q4_1-first): la STESSA override va
   // sia ad arenaNeeds (sizing device) sia alla cache — una sola verita'.
-  const slotsOverride = optimistic ? optimisticSlots(budgetBytes) : undefined;
+  // C3c fase 6: coi budget stretti (parkFrac) l'override e' proporzionale al
+  // parco, come nell'harness routing (una sola convenzione per i 1472/736).
+  const slotsOverride = cfg.parkFrac !== undefined
+    ? { q4_0: Math.floor(cfg.parkFrac * PARK_Q4_0), q4_1: Math.floor(cfg.parkFrac * PARK_Q4_1) }
+    : optimistic ? optimisticSlots(budgetBytes) : undefined;
   const { adapter, device, has } = await createEngineDevice({
     label: "glmbench",
     // timestamp-query: livello 2 dell'attribuzione (gpuBusy). Se l'adapter non
@@ -203,10 +215,12 @@ async function main(cfg: Cfg): Promise<void> {
   const model = createGlmModel(device, source, {
     ctxMax, head: true,
     select: optimistic ? "optimistic" : undefined,
+    // C3c fase 6: meccanismi del regime sync ai budget stretti
+    prefetch: cfg.prefetch,
     // capacità di telemetria allocata, REGISTRAZIONE spenta: le repliche
     // headline (quelle dei gate) girano a overhead nullo
     telemetry: false, telemetryGpu: hasTsq,
-    cache: { budgetBytes, slotsOverride, maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true },
+    cache: { budgetBytes, slotsOverride, policy: cfg.policy, maxBindingBytes: maxBind, maxBufferBytes: maxBuf, timing: true },
   });
   const buildMs = performance.now() - tBuild0;
 
@@ -538,6 +552,9 @@ async function main(cfg: Cfg): Promise<void> {
         // con la formula ctx-aware il budget riportato è quello CALCOLATO
         budgetGiB: slabBudget ? +(budgetBytes / (1 << 30)).toFixed(3) : cfg.budgetGiB,
         budgetMode: slabBudget ? "ctx-aware (spec c3c §2)" : "fisso (config)",
+        // C3c fase 6: regime sync ai budget stretti
+        prefetch: cfg.prefetch ?? null, policy: cfg.policy ?? "lru",
+        parkFrac: cfg.parkFrac ?? null, slotsOverride: slotsOverride ?? null,
         // spec §2: il report mostra il budget calcolato con gli addendi
         slabBudget, ctxMax,
         prefillPath: cfg.prefillBatch ? `chunked M=${GLM_PREFILL_M} (prefillChunk, fase 5)` : "decode-only (forward per posizione)",

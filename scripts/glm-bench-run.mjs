@@ -41,6 +41,10 @@ mkdirSync(PROFILE, { recursive: true });
 const prefillBatch = arg("prefill-batch", "0");
 // C3b fase 4: --select optimistic (decode a 1 submit + repair/replay)
 const select = arg("select", "cpu");
+// C3c fase 6: meccanismi del regime sync ai budget stretti
+const prefetchArg = arg("prefetch", null);
+const policyArg = arg("policy", null);
+const parkFracArg = arg("park-frac", null);
 // C3c fase 3: --budget-gib auto ⇒ tetto allocabile MISURATO ORA con nvidia-smi
 // (total − used − reserved) e budget calcolato dalla formula ctx-aware nel
 // worker; --ctx-max N alloca KV/partials per contesto lungo.
@@ -53,6 +57,9 @@ const smiMem = () => {
 };
 let ceilingMeasured = null;
 const qs = new URLSearchParams({ prompt, ngen: nGen, reps, attrib, prefillbatch: prefillBatch, select });
+if (prefetchArg) qs.set("prefetch", prefetchArg);
+if (policyArg) qs.set("policy", policyArg);
+if (parkFracArg) qs.set("parkfrac", parkFracArg);
 if (budget !== "auto") qs.set("budget", budget);
 if (ctxMaxArg) qs.set("ctxmax", ctxMaxArg);
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];

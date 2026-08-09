@@ -12,6 +12,10 @@ const cfg = {
   prefillBatch: q.get("prefillbatch") === "1", // fase 5: prefillChunk M=16
   // C3b fase 4: ?select=optimistic — decode a 1 submit + repair/replay
   select: q.get("select") === "optimistic" ? ("optimistic" as const) : ("cpu" as const),
+  // C3c fase 6: bench ai budget stretti sul path sync coi meccanismi C3c
+  prefetch: q.get("prefetch") === "inforward" ? ("inforward" as const) : undefined,
+  policy: q.get("policy") === "tier" ? ("tier" as const) : undefined,
+  parkFrac: q.has("parkfrac") ? Number(q.get("parkfrac")) : undefined,
   // C3c fase 3: ?ceiling=<bytes> ⇒ budget slab CALCOLATO dalla formula
   // ctx-aware (il runner misura il tetto con nvidia-smi); ?ctxmax=<n> alloca
   // KV/partials per un contesto lungo anche col prompt corto del corpus.
