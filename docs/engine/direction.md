@@ -226,7 +226,23 @@ assi con due condizioni di chiusura, un goal unico ne perdeva una.
   come TTFT a freddo (budget assoluto da ri-negoziare, docket c3c item 1), e il
   **floor 13.43 con clausola pre-negoziata**. Chartered 2026-08-07
   (.harness/goals/engine-fase-c3c/), parte a C3b chiuso.
-Hero-demo M4 resta PI-gated per hardware.
+  **CHIUSO 2026-08-09 (it.10, 9 fasi in 10 iterazioni)**: **il floor 13.43
+  passa SECCO in produzione — decode 15.641 alla config di budget migliore,
+  CALCOLATA dalla formula ctx-aware (12.737 GiB), in sessione utente viva**
+  (niente clausola); ctx 6144 senza OOM. Banda fredda browser = parità col
+  bound OS (1.79-1.94 GB/s random, tassa API zero). Prefetch in-forward:
+  recall in-engine **91.92% @K=8 vs 92.0 dell'oracolo** (−0.08pp), zero sync
+  aggiunti, firma routing invariata ai conteggi. Policy tier+AUTOPIN+prefetch
+  vs LRU pura: use-hit **+9.43pp @1472 slot (94% del gap Belady), +25.04pp
+  @736 (oltre Belady: il prefetch esce dal bound demand-fetch)**, pin ≤12.5%
+  HARD. Modello di banda: 3 punti predetti a **±1%** (b12 fuori dal fit), il
+  ±15% è un test permanente; TTFT freddo predetto a −5.8%. Instant-on:
+  **1.247 ≤ 1.25× auto-ancorato** (ruling item 1a) con page cache fredda
+  PROVATA; gap UX 6.18× → fase D. Qualità invariata ovunque (golden 98.828%
+  AL PIN, cpuref 256/256+512/512, ktest 69/69).
+**FASE C COMPLETA (C3a+C3b+C3c): decode 4.64 → 15.64 tok/s (3.4×), TTFT
+88 → 12.9 s (6.8×), 47 → 2 sync/token, a qualità bit-invariata.**
+Hero-demo M4 resta PI-gated per hardware (input nel docket c3c, item 8).
 
 **Fase D — moltiplicatori.** Spec-dec: prima la MTP nativa del modello (verificata,
 §3), poi eventualmente DSpark-style; verifica = rejection sampling esatto (lossless by

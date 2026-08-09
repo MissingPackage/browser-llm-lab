@@ -117,3 +117,16 @@
    entrambi): probabile misparsing dell'ordine dei campi nvidia-smi in
    scripts/lib/hoststate.mjs. Non tocca i gate (i tok/s vengono dal bench).
    Da sistemare a igiene, fuori dalle run di questo goal.
+
+8. **INPUT HERO-DEMO M4 (2026-08-09, it.10, chiusura — PI-gated per
+   hardware, nessuna azione senza ruling)** — cosa porta C3c alla demo:
+   (i) su M4 48 GB la residenza è totale ⇒ regime `select:"gpu"` (it.17
+   c3a): 1 submit / 0 sync, niente tassa; il paging C3c è il fallback
+   sotto-48GB e il layer instant-on; (ii) instant-on: protocollo misura
+   pronto (glm-instanton-run, eviction+fincore — su macOS il drop cache è
+   `purge`, da adattare); budget 1.25× auto-ancorato ratificato; (iii)
+   modello di banda parametrico in banda (bandmodel.ts): bastano i numeri
+   del WP banda fredda su M4 (tools/opfs-cold, da rieseguire lì); (iv)
+   riferimenti di non-regressione 2026-08-09 nel docket (item 2 + 5-bis);
+   (v) landmine: campi power hostState (item 7), prefill in scarsità
+   collassa (30→4 tok/s: su device piccoli il TTFT è prefill-bound).

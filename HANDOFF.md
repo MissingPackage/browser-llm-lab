@@ -1,116 +1,33 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — C3c fasi 1-8 DONE, floor 15.641 PASS; next = fase 9 chiusura goal)
+# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 25 — GOAL C3C CHIUSO: floor 15.641 PASS in produzione, fase C COMPLETA; next = decisione PI post-fase-C)
 
 ## 1. Next decidable
 
-**GOAL C3B CHIUSO E VERIFICATO (2026-08-08, it.8 — checklist DONE WHEN 7/7
-PASS nel journal).** Il decode ottimistico e' in produzione: **decode 5.211
-→ 11.60 tok/s a b12 (+123%) e 16.64 al tetto** (2595 slot, sessione
-minima), **TTFT 17.88 → 12.60 s** (gap UX 3.15×), **47 → 1.89 sync/token**
-(gate strutturale 1.891 ≤ 2 PASS al tetto, ruling item 8 opzione a;
-b12 2.188 = punto della tassa), qualita' BIT-invariata (ktest
-131072/131072; produzione 64/64 = sync), tassa ×1.14 vs WP-0 (entro ±25%,
-cascata spiegata 1.39×), non-regressione a perimetro pieno tutta PASS
-sotto la **banda ±5% ratificata** (c3b docket item 9; ratifica c3a item 14
-emendata 2%→5%; gate di correttezza secchi). Direction §7 riga C3b chiusa
-coi numeri; artefatti chiave: bench-glm-4090-btetto-optimistic-v2 /
-b12-optimistic / wp0-vs-measured / 5 JSON nonreg (it.6).
+**GOAL C3C CHIUSO E VERIFICATO (2026-08-09, it.10 — checklist DONE WHEN
+10/10 PASS nel journal; 9 fasi in 10 iterazioni, 2 giorni).** Il paging
+regge la scarsità vera e **il floor C1 13.43 passa SECCO in produzione:
+decode 15.641 alla config di budget migliore CALCOLATA (ctx-aware 12.737
+GiB), sessione utente viva, clausola non servita**. I pezzi: banda fredda
+browser = parità OS (1.79-1.94 GB/s, tassa API zero, freddezza provata);
+slab ctx-aware (ctx 6144 senza OOM, riserva tarata 512 MiB); prefetch
+in-forward (recall 91.92% @K=8 = oracolo replicato, zero sync, mai oltre
+il confine di token); policy tier+AUTOPIN+prefetch (use-hit +9.43pp @1472
+/ +25.04pp @736 vs LRU, oltre Belady demand-fetch, pin ≤12.5% HARD);
+modello di banda (±1% sui 3 punti, test permanente, TTFT freddo −5.8%);
+instant-on **1.247 ≤ 1.25×** (ruling item 1a, protocollo v2 mediane 3+3,
+eviction fincore-provata). Non-regressione piena: golden 98.828% AL PIN,
+cpuref 256/256+512/512, firma routing esatta, Qwen in banda, ktest 69/69,
+suite 359+7. **FASE C COMPLETA: decode 4.64 → 15.64 (3.4×), TTFT 88 →
+12.9 s (6.8×), 47 → 2 sync/token, qualità bit-invariata.**
+Direction §7 chiusa coi numeri; ledger §A riga paging CHIUSA; nuovi
+riferimenti b12 13.172/31.26/14.74 (docket item 5-bis). Artefatti chiave:
+bench best-autobudget-nonreg / instanton / band-model-vs-measured /
+routing-policy-{lru,tier}-b{1472,736} / opfs-cold.
 
-**GOAL C3C APERTO (2026-08-08, PI: "partiamo con c3c").** Contratto v1
-riletto (journal c3c it.0), PHASES 9 fasi sequenziali, plan-check
-pre-autorizzato (docket c3c item 3), tag goal-engine-fase-c3c-start.
-
-**FASE 1 DONE (it.1): WP banda fredda browser — PARITÀ col bound OS.**
-Tool `tools/opfs-cold/opfs-cold-bench.mjs` (eviction fadvise da fuori sui
-backing file OPFS, freddezza provata: fincore 0 B post-drop + delta warm
-8×; dati incomprimibili, porta fissa 5327 = origin/bucket stabile). Numeri
-(2 run, `results/opfs-bench/opfs-cold-4090-linux-2026-08-08*`): random
-expert-size COLD **1.79-1.94 GB/s, p50 2.9-3.1 ms/expert** (OS C1: 1.63 /
-3.74), seq 1 MiB 3.43-3.73 (OS 3.22), streaming seq expert-size 3.5-3.66
-GB/s p50 1.3-1.4 ms = regime instant-on ⇒ non-routed+caldi 1.53 GB ≈ 0.44 s
-di banda disco. Tassa browser sul path freddo: ZERO (ratio 1.07-1.19).
-Ledger §A + direction §8.3 aggiornati.
-
-**FASE 2 DONE (it.2): spec depositata**
-(`docs/superpowers/specs/2026-08-08-engine-fase-c3c-design.md`, docket
-item 4 — non tocca gate/soglie, nessuno STOP). Budget slab = allocCeiling
-− nonExpert 1 354 078 720 B − KV(ctx) 108 288 B/token − work(ctx) −
-reserve [ASSUMED 256 MiB]; tier.h+AUTOPIN (colibri §2, pin ≤ 12.5% HARD);
-prefetch in-forward K=4 (recall vs 92% @K=8, spiegato non gateato);
-instant-on = OPFS popolata + VRAM vuota + **page cache fredda** (protocollo
-WP fase 1). **Proposta item 1 depositata (item 1-bis): raccomandato
-relativo 1.25× AUTO-ancorato alla config della run** (senza overlap
-1.28-1.61×; serve overlap ≥60% I/O dietro compute prefill) — **ruling PI
-pendente, blocca SOLO la fase 7**. Correzione: KV "54 KB/token" in §5 era
-stale 2× (vero 108 288 B/token, ctx 6k = 665 MB).
-
-**FASE 3 DONE (it.3): slab ctx-aware in produzione.** `slabBudgetCtxAware`
-(residency.ts) + glmbench `--budget-gib auto` (ceiling nvidia-smi a Chrome
-lanciato) + `--ctx-max`. Run committate: **ctx 6144 NON va OOM** a budget
-calcolato 12.146 GiB (breakdown+vramPeak 15 853 MiB nel JSON); **ctx 525
-auto riproduce il regime tetto in sessione VIVA**: 16.55/12.53 vs 16.64/
-12.60, strutturale 1.875 PASS, floor PASS; b12 esplicito migliorato
-(12.92/14.94 vs 11.60/16.79). Due OOM istruttivi fissati: workBytes
-dimenticava attnPartialsM ×16 (253 MiB @6k); riserva TARATA 512 MiB (slack
-sessione viva >247: staging Dawn + compositor). syncLogits rimisurato
-formalmente: 0.09-0.11 ms (landmine iv CHIUSA). Suite 344+7, tsc pulito.
-
-**FASE 4 DONE (it.4): prefetch in-forward — l'oracolo replicato nel
-motore.** Tap = +1 GEMV (router L+1 su fnB) nello stesso pass/mapAsync,
-predizioni consumate al submit successivo nella finestra d'attesa; stato
-DENTRO il forward (mai oltre il confine di token, WP-0). **Recall@8
-91.917% vs oracolo 92.0 (−0.08pp), recall@4 77.045 vs 77.5** su 1.407M
-predizioni full-corpus; identità: firma 14b ai conteggi ESATTI con
-prefetch ON (1.44M selezioni), cpuref 256/256, ktest 69/69. Osservazioni
-fase 5 nel journal: hit 98.16% NON confrontabile direttamente (ensure di
-prefetch nei contatori), prefetchMs ~7 ms/pos nella finestra, prefill
-chunked senza prefetch (materia fase 7).
-
-**FASE 5 DONE (it.5-6): la policy batte la LRU ai budget stretti.**
-Meccanica (it.5): tier.h+AUTOPIN+REPIN in ExpertCache dietro
-`policy:"tier"` (cap pin 12.5% HARD con throw, eusage persistibile
-additivo, LFRU con isteresi; lru default bit-identico). Misura (it.6, 4
-run full-corpus, firma 14b esatta in tutte): **use-hit @1472: tier 93.75%
-vs LRU 84.33% (+9.43pp, ~94% del gap Belady 94.37); @736: 87.37% vs
-62.34% (+25.04pp, SOPRA il Belady 82.01 — il prefetch esce dal perimetro
-del bound demand-fetch, spiegato)**. Pin al cap esatto (184/92), costo
-dichiarato: +31-40% byte letti totali (input fase 6: nel disk-bound
-contano i BYTE TOTALI). Regola di metodo (domanda PI): full-corpus solo
-per firma/non-regressione/riferimenti nuovi; sim/subset di prompt interi
-per esplorazione. LRU@736 in timeout al 1° colpo (300→420 min, retry PASS).
-
-**FASE 6 DONE (it.7): modello di banda — ±1% sui 3 punti.**
-`src/engine/bandmodel.ts`: wall = BASE(167.43, artefatto c3b
-indipendente) + F(h)·(bytes/banda + fisso) + STEP·[F>20]; F(h)=(1−h)·368.
-Punti (bench sync+tier+prefetch nuovi): b12 5.411 / 1472 2.837 / 736
-1.934 tok/s; fit dichiarato su {1472,736}, **b12 fuori dal fit = predizione
-vera +0.9%** (−0.3/−0.5 gli altri). Gradino con evidenza: gpuBusy
-48→84→85 ms/token. Il ±15% è un TEST in npm test (10 nuovi, suite 359+7).
-Proiezioni fredde (1.79 GB/s): 5.02/2.24/1.27 tok/s; coldTtftMs() pronto
-per la fase 7. `band-model-vs-measured-2026-08-09.json` committato.
-
-**FASE 7 DONE (it.8): instant-on nel budget del ruling.** Ruling item 1 =
-(a) ratificato (PI: "ok (a)"). Overlap costruito: prefetch in-forward
-esteso al PREFILL CHUNKED (tap batched, unione top-4 su m righe, fetch
-nella finestra) — cold 30.55→24.57 s. Verdetto al protocollo v2
-PRE-dichiarato (mediane 3+3 sessioni, eviction provata per sessione):
-**ratio 1.247 ≤ 1.25 PASS** (margine 0.3%, dichiarato sottile; v1 singola
-1.2505 FAIL da rumore). coldTtftMs del modello: −5.8% (coda fase 6
-VERIFICATA). Gap UX 6.18× (fase D). Docket item 6: selezioni prefill non
-in eusage (registrazione).
-
-**FASE 8 DONE (it.9): floor PASS in produzione.** Decode **15.641 ≥
-13.43 SECCO** alla config migliore (budget CALCOLATO 12.737 GiB,
-optimistic, strutturale 2.000, sessione utente viva) — niente clausola.
-Nonreg piena: sync b12 5.390/29.75/15.50 in banda; optimistic b12
-**13.172/31.26/14.74 = NUOVO riferimento (item 5 risolto)**; Qwen 323.1
-(−0.95%); golden **98.828125% AL PIN**; cpuref 256/256 + 512/512; firma
-routing esatta; ktest 69/69; suite 359+7; tsc pulito.
-
-**Next decidable: FASE 9 — Chiusura goal** (riga 9): checklist DONE WHEN
-del contratto punto per punto nel journal con PASS/FAIL e artefatto per
-riga; docket aggiornato; direction §7 fase C CHIUSA; ledger §A; HANDOFF
-refresh; input hero-demo M4 nel docket (PI-gated per hardware); digest;
-push da goal verificato.
+**Next decidable: DECISIONE PI — direzione post-fase-C.** Candidati dal
+contratto e dal docket: (a) hero-demo M4 (input pronti: docket c3c item 8;
+resta PI-gated per hardware); (b) fase D — moltiplicatori (spec-dec MTP,
+direction §7; il gap UX residuo è 1.92× decode / 3.22× TTFT); (c) igiene
+fuori-goal accumulata (v. sotto). Nessun goal engine aperto.
 
 **Fuori-goal, pendenti (non bloccanti):** ratifiche c3a item 14b (near-tie
 conformance), item 2 formale, item 19/20/21 prese d'atto; igiene:

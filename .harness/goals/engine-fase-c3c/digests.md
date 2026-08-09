@@ -114,3 +114,12 @@
   256/256 + 512/512, firma routing esatta, ktest 69/69, suite 359+7.
 - Next: fase 9 — chiusura del goal (checklist DONE WHEN, direction §7,
   ledger, HANDOFF, input hero-demo M4 a docket, tag).
+
+## it.10 (2026-08-09) — GOAL CHIUSO: checklist 10/10, fase C completa
+
+- Floor C1 battuto in produzione senza clausola (15.641, budget calcolato,
+  sessione viva). Fase C completa: decode 3.4×, TTFT 6.8×, 47→2 sync/token,
+  qualità bit-invariata dall'inizio alla fine.
+- Direction §7 e ledger §A chiusi coi numeri; input hero-demo M4 a docket
+  (item 8, PI-gated); nessuna decisione pendente dentro il goal.
+- Next: decisione PI post-fase-C (M4 / fase D / igiene).

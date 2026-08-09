@@ -392,3 +392,52 @@ bande confermano che il default è rimasto il comportamento storico.
 **Done-when riga 8:** floor ≥13.43 PASS secco (niente clausola); gap UX nel
 report PASS; blocco nonreg completo con run fresche committate PASS su ogni
 riga; albero congelato durante le run PASS.
+
+## it.10 — 2026-08-09 — FASE 9: GOAL CHIUSO — checklist DONE WHEN del contratto
+
+1. **WP banda fredda browser** — PASS. tools/opfs-cold committato, freddezza
+   provata (fincore + delta warm 8×), rand expert 1.79-1.94 GB/s p50 2.9-3.1
+   ms vs OS 1.63/3.74 (parità, ratio 1.07-1.19), ledger §A + direction §8.3
+   aggiornati. Artefatti: opfs-cold-4090-linux-2026-08-08*.json (it.1).
+2. **Spec scritta e registrata DOPO il WP, coi suoi numeri** — PASS.
+   docs/superpowers/specs/2026-08-08-engine-fase-c3c-design.md; docket item
+   4; budget slab f(VRAM, nonExpert, KV(ctx)); tier.h+AUTOPIN ≤12.5%;
+   instant-on operativo + strumento; budget TTFT freddo (it.2).
+3. **Prefetch, non predictor** — PASS. Distinzione in spec §3/§8; predictor
+   al confine MAI costruito (stato del prefetch DENTRO il forward:
+   strutturalmente impossibile); recall IN-ENGINE 91.917% @K=8 vs 92.0
+   oracolo (−0.08pp, spiegato non gateato), 77.045 @K=4.
+   routing-prefetch-inforward-2026-08-08.json (it.4).
+4. **Slab ctx-aware: ctx 6k senza OOM** — PASS. Budget CALCOLATO 12.146 GiB
+   con breakdown + vramPeak 15 853 MiB nel JSON; a ctx 525 riproduce il
+   regime (tetto −0.5%). bench-glm-4090-ctx6k-autobudget-2026-08-08.json
+   (it.3).
+5. **Modello di banda ±15% su ≥3 budget + TTFT freddo** — PASS. bandmodel.ts
+   con test permanente in npm test; 3 punti a ±1% (b12 FUORI dal fit +0.9%);
+   TTFT freddo predetto −5.8%. band-model-vs-measured-2026-08-09.json (it.7)
+   + instanton JSON (it.8).
+6. **Policy > LRU a 50% e 25%** — PASS. Use-hit +9.43pp @1472 (94% del gap
+   Belady 94.37) e +25.04pp @736 (sopra Belady 82.01, spiegato: il prefetch
+   esce dal bound demand-fetch); pin ≤12.5% HARD con assert; 4 JSON
+   routing-policy-* (it.5-6).
+7. **Floor C1 ≥ 13.43 con clausola pre-negoziata** — **PASS SECCO, clausola
+   NON SERVITA**: decode 15.641 alla config di budget migliore (ctx-aware
+   auto 12.737 GiB, optimistic, strutturale 2.000), in sessione utente viva;
+   gap UX in ogni report (30 tok/s: 1.92×; thinking: 3.84×).
+   bench-glm-4090-best-autobudget-nonreg-2026-08-09.json (it.9).
+8. **Instant-on ≤ [ruling item 1]** — PASS. Ruling (a) 1.25× auto-ancorato;
+   ratio 1.247 al protocollo v2 pre-dichiarato (mediane 3+3, eviction
+   provata per sessione); overlap costruito (prefetch nel prefill chunked);
+   gap UX 4 s: 6.18× riportato. instanton-glm-4090-2026-08-09.json (it.8).
+9. **Non-regressione permanente** — PASS. Sync b12 5.390/29.75/15.50 e Qwen
+   323.1 in banda ±5%; optimistic b12 13.172/31.26/14.74 (nuovo riferimento,
+   item 5-bis); golden 98.828125% = pin; cpuref 256/256 + 512/512; routing
+   = firma 14b esatta; ktest 69/69; suite 359+7; tsc pulito (it.9).
+10. **Chiusura** — PASS: direction §7 fase C CHIUSA coi numeri (C completa:
+    decode 4.64→15.64 = 3.4×, TTFT 88→12.9 s = 6.8×, 47→2 sync/token, bit-
+    invariata); ledger §A riga paging CHIUSA; docket aggiornato (item 8 =
+    input hero-demo M4, PI-gated); HANDOFF refresh; digest; push a verifica.
+
+**Docket a fine goal:** item 1 risolto (a); 2 eseguito; 3 pre-autorizzato;
+4/5/5-bis/6 registrazioni chiuse; 7 igiene fuori-goal (hostState power);
+8 input M4 PI-gated. Nessuna decisione pendente DENTRO il goal.
