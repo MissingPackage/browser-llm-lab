@@ -63,8 +63,8 @@ MTP (DOPO q1, è per-modello), igiene fuori-goal (§3). Riancorarsi da:
 
 - **Fuori-goal, non bloccanti**: ratifiche c3a item 14b / item 2 formale /
   19-21 prese d'atto; `npm run test:conformance` punta all'harness
-  benchmark; BASE_URL :5173 in 2 script; goal stale fase-1b/fase-2
-  (weekly-maintenance); campi power hostState scambiati (c3c item 7);
+  benchmark; BASE_URL :5173 in 2 script; goal fase-1b/fase-2 in STANDBY
+  deliberato (benchmark, ripresa più avanti — NON stale, PI 2026-08-09); campi power hostState scambiati (c3c item 7);
   selezioni prefill non in eusage (c3c item 6); profilo bench ~6.4 GiB in
   `~/.cache/blab-opfs-cold-profile` (cancellabile).
 - C3b/C3a/C2: chiusi, nessun item aperto che richieda azione.
@@ -95,5 +95,9 @@ MTP (DOPO q1, è per-modello), igiene fuori-goal (§3). Riancorarsi da:
   approvato in sostanza in chat, va scritto su disco e ratificato in spec.
 - Timing del blog (prima del paper o insieme) — aperto, non bloccante
   (docket c3c item 10).
+- Freshness di HANDOFF: hook "messaggio nomina HANDOFF ⇒ HANDOFF.md in
+  index" = tampone approvato dal PI; il meccanismo vero (garanzia di
+  refresh a fine goal, non a ogni commit) è da disegnare insieme —
+  parcheggiato (PI 2026-08-09).
 - c3c item 8: input hero-demo M4 (PI-gated per hardware).
 - Ratifiche c3a pendenti (14b, 2 formale, 19-21) — prese d'atto, non urgenti.
