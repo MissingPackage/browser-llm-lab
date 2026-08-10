@@ -96,3 +96,25 @@
   tsc pulito. Verifier PASS con spot-check oracolo indipendente.
 - Next: it.4 = fase 3 (kernel DeltaNet WGSL kernel-level vs cpuref-f64;
   prima il cpuref TS della catena linear-attn, spec §4).
+
+## it.4 (2026-08-10) — fase 3 prima metà: cpuref-f64 DeltaNet (verifier PASS)
+
+- Semantica presa dalla FONTE pinnata alla build dell'oracolo (llama.cpp
+  b10333): qwen35.cpp (build_layer_attn_linear), delta-net-base.cpp (path
+  AUTOREGRESSIVO = la ricorrenza; il chunked è l'ottimizzazione della stessa
+  matematica), ops.cpp (ssm_conv = dot k4 su concat(stato,x); l2_norm con
+  eps a FLOOR: 1/max(√Σx²,eps)), ggml-impl.h (softplus x>20?x:log1p(eˣ)).
+- Ordine ESATTO della ricorrenza fissato nel cpuref: decay → lettura sk →
+  delta β(v−sk) → update S → output S·q. Broadcast k-head→v-head = h mod nK
+  (ggml_repeat TILA, non raggruppa); q/√hd; gated norm = RMS(o)·silu(z).
+- `src/engine/q35cpuref.ts`: catena f64 completa con tap intermedi esposti
+  per il ktest (qkvPreConv, convOut, q/kNorm, oCore, gated); core esportato
+  puro (deltaNetStepCore).
+- Test (7 PASS): 5 identità algebriche in aritmetica esatta (fit β=1 ⇒
+  o(q=k)=v/√hd; ortogonalità non disturba; β=0 stato invariato; g→−∞ wipe;
+  discriminante dell'ORDINE decay-prima-della-lettura) + softplus al gomito
+  + campione sintetico T=12 pinnato su fixture (helper condiviso, generatore
+  esplicito scripts/q35-deltanet-fixture-gen.mjs — niente auto-pin).
+- Suite 371 PASS (+7) / 7 skip, tsc pulito, GLM intatto.
+- RESTA per chiudere fase 3 (it.5): kernel WGSL DeltaNet + ktest vs cpuref
+  sul campione (+ pesi reali 4B layer-scale), ktest 69/69 invariati.
