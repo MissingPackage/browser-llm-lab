@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-6 DONE + fase 7 slice 1-2 (cpuref 35B==oracolo, 3 modelli provati); next = it.16 forward GPU 35B con paging)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-6 DONE + fase 7 a 3/4 (blocco MoE GPU reale L2rel ~e-7, ktest 84/84); next = it.17 forward GPU 35B completo)
 
 ## 1. Next decidable
 
@@ -59,15 +59,18 @@ shared con gate sigmoid scalare — TUTTO diverso da GLM). **Slice 2 DONE (it.15
 35B-A3B == ORACOLO al primo run (130 s; reader lazy da fd; golden smoke
 35B committato; fix head non-tied). Verifier: FAIL amministrativo journal
 sanato; elevata a docket item 7 l'arch falsa nei metadata dei golden q35.
-**Al lavoro: it.16 = fase 7 slice 3 — forward GPU 35B con paging C3c
-parametrizzato**: ricognizione residency.ts/moe.ts/glmmodel.ts (costanti
-GLM: nExpert 64/topK 4/slot 5.3 MB q4_0+q4_1 → 256/top-8/~1.15 MB
-Q4_K+Q6_K — slot BYTES da ricalcolare dai superblocchi), slotTable/classi
-parametrici con GLM INVARIATO (non-reg 82 ktest + suite), poi forward 35B
-GPU (assemblare da q35gpumodel il path denso + MoE con expert paging) e
-gate argmax==oracolo sul golden smoke; run regime C3c 16 GB senza OOM.
-Stimate 2-3 iterazioni: spezzare (slice 3a = parametrizzazione+ktest MoE
-block q4_K; 3b = forward full + paging). Perimetro: path testo Qwen
+**Slice 3a DONE (it.16)**: DECISIONE — residency GLM intatto, paging q35
+= strato nuovo parametrico; blocco MoE GPU reale == cpuref L2rel 2-3e-7
+(entrambe le classi down, arena offset-binding; slot in byte REPACKED:
+Q6_K 210→212). **Al lavoro: it.17 = fase 7 slice 3b — forward GPU 35B
+completo**: estendere q35gpumodel al qwen35moe (path denso già in casa;
+ffn → router gemv F32 + readback top-8 CPU correttezza-prima + arena per
+classe down con LRU on-miss via Range + i dispatch del ktest it.16 come
+piano per-token), gate argmax==oracolo sul golden smoke 35B; run al
+budget 16 GB senza OOM con JSON (VRAM: non-expert ~2.6 GB + arena
+dimensionata dal budget); firma routing registrata (conteggi expert
+esatti sul run). Nota verifier: niente fallback fuorviante nei nomi di
+classe (solo tipi reali dal file). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

@@ -170,3 +170,14 @@ tutta PASS con e2e rieseguito e oracolo rigenerato identico). Elevata a
 docket item 7: i golden q35 committati portano "arch":"deepseek2" falsa
 in metadata (tool da sanare prima del paper). Next: it.16 = forward GPU
 35B con paging C3c parametrizzato — l'ultimo grosso pezzo di fase 7.
+
+## it.16 (2026-08-10)
+
+Fase 7 slice 3a, verifier PASS (ktest rieseguiti, blk34 riscontrato
+Q6_K-down dal file). **DECISIONE dichiarata**: residency.ts GLM resta
+INTATTO (core indurito C3c); il paging q35 nasce come strato NUOVO
+parametrico per costruzione — rifitting C3c pieno in fase 8. **Blocco MoE
+35B su GPU con pesi reali == cpuref a L2rel 2-3e-7** (entrambe le classi
+down, arena offset-binding = seme del paging; bug repack Q6_K 210→212
+preso dal run). Kernel axpy nuovo. ktest 84/84, suite verde, GLM intatto.
+Next: it.17 = forward GPU 35B completo (arena+LRU on-miss) + argmax gate.
