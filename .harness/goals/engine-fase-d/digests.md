@@ -55,3 +55,16 @@ per parti / clamp del router), senza esenzioni per import, con guard
 anti-scansione-vuota e col ciclo delle asserzioni a sua volta testato. Ho
 riprovato io le tre evasioni: tutte rosse. Docket item 4 CHIUSO. Resta la
 migrazione di q35gpumodel (it.6), che chiude la fase 1.
+
+## it.6 (2026-08-10)
+
+Terza bocciatura del gate (5 evasioni eseguite, una delle quali — un router
+Qwen legittimo — NON catturabile da nessuna scansione). Diagnosi: stavo
+cercando una porta che non esiste, invece di crearla. **L'invariante si
+sposta nel sistema di tipi**: marchio di conio su `SlotRef` (solo
+residency.ts lo produce; un'arena parallela la ferma `tsc`) + test di tipo
+che va rosso se il marchio sparisce. La scansione resta un RATCHET, con la
+pretesa ridimensionata per iscritto. N3/N4/N5 chiuse (scansione su tutto
+src/, ancorata, estensioni; predicato di allocazione corretto). Lezione:
+tre iterazioni su un poliziotto mentre ciò che elimina la duplicazione è la
+MIGRAZIONE — che è it.7 e chiude la fase 1.

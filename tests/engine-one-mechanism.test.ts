@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { globSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import {
   mkSlabLayout, packExpertSlab, routerSelect, ROUTER_GLM47, ROUTER_QWEN35MOE,
   SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
@@ -18,6 +18,19 @@ import {
 // marcisce): si intercetta UN ATTO SINGOLO E INEVITABILE e si pretende che
 // avvenga solo nei siti DICHIARATI, con allowlist motivata.
 //
+// CHE COSA GARANTISCE QUESTO FILE, ONESTAMENTE (it.6, dopo tre bocciature):
+// NON garantisce "una meccanica, una implementazione" — un test che scansiona
+// il sorgente NON PUÒ, perché la differenza fra una duplicazione e una seconda
+// famiglia legittima è SEMANTICA. Il verifier l'ha dimostrato: un router Qwen
+// (softmax puro, niente clamp, niente nomi di tensori, niente VRAM) è
+// invisibile a qualunque impronta testuale — ed è codice che deve esistere.
+// L'INVARIANTE VERO è altrove: `tests/types/slotref-brand.ts` + il marchio di
+// conio di `SlotRef` in residency.ts, che il COMPILATORE sorveglia — un'arena
+// parallela non può fabbricare il riferimento che i kernel esigono.
+// Questo file è un RATCHET su impronte NOTE: alza il costo di una deriva
+// distratta e tiene il debito dichiarato (le voci DEBITO NOTO). Non è una
+// prova, ed è sbagliato usarlo come tale.
+//
 // STORIA DI QUESTO GATE (tenuta qui perché è la lezione, non un dettaglio):
 //  - it.1: firme TESTUALI ricalcate sul testo degli offender. Il verifier
 //    dimostrò che una copia con spaziatura diversa sfuggiva.
@@ -31,14 +44,20 @@ import {
 //    esenzioni per import. Chi alloca memoria GPU va dichiarato; chi nomina i
 //    tensori expert va dichiarato. Nessuna congiunzione da spezzare.
 
-const SRC = globSync("src/engine/**/*.ts").filter((f) => !f.endsWith(".d.ts"));
+// Scansione ancorata a __dirname e su TUTTO src/ (non solo engine): a it.5 il
+// glob era relativo alla cwd e limitato a src/engine — il verifier è passato
+// da `src/microbench/` e da un file `.mts` senza far scattare niente.
+const SRC = globSync(join(__dirname, "../src/**/*.{ts,mts,cts,tsx}"))
+  .filter((f) => !f.endsWith(".d.ts"))
+  .map((f) => relative(join(__dirname, ".."), f))
+  .sort();
 const read = (f: string): string => readFileSync(f, "utf8");
 
 // --- I PREDICATI: definiti UNA VOLTA e usati sia dalle asserzioni sia dai
 // test anti-marciume (il verifier ha mostrato che ricomporli nei test
 // sintetici lascia svuotare il ciclo dell'asserzione senza accorgersene).
 /** allocazione di memoria GPU: l'unica porta, come `requestDevice` */
-export const allocatesGpu = (src: string): boolean => /createBuffer\s*\(/.test(src);
+export const allocatesGpu = (src: string): boolean => /\bcreateBuffer\b/.test(src);
 /** NOMI dei tensori expert nel GGUF, anche costruiti per parti */
 export const namesExpertTensors = (src: string): boolean => /ffn_[A-Za-z0-9_${}.[\]]*_exps/.test(src);
 /** il clamp di `build_moe_ffn`: un router GLM-fedele non può evitarlo */
@@ -54,6 +73,7 @@ const ALLOC_ALLOWED: Record<string, string> = {
   "src/engine/engine.worker.ts": "worker di bring-up: buffer di diagnostica",
   "src/engine/ktest/ktest.worker.ts": "harness dei kernel: alloca a mano per confrontare la meccanica con riferimenti indipendenti",
   "src/engine/glmbench/glmbench.worker.ts": "harness di bench: buffer di telemetria e staging",
+  "src/microbench/runner.ts": "microbench dei kernel: alloca buffer di prova, nessun expert e nessuna residenza",
   "src/engine/q35gpumodel.ts": "DEBITO NOTO (docket fase-D item 4): arena expert propria, da migrare a ExpertCache — la riga sparisce con la migrazione",
 };
 const EXPERT_NAME_ALLOWED: Record<string, string> = {
@@ -77,7 +97,7 @@ const ROUTER_CLAMP_ALLOWED: Record<string, string> = {
 const offendersOf = (hit: (s: string) => boolean, allowed: Record<string, string>): string[] =>
   SRC.filter((f) => hit(read(f)) && !(f in allowed)).sort();
 
-describe("una meccanica, una implementazione — INVARIANTI (gate strutturale fase-D)", () => {
+describe("ratchet sulle impronte note (NON una prova: v. il commento in testa)", () => {
   it("la scansione non è vuota (senza questo guard, un gate rotto è verde)", () => {
     // il guard che gpudevice.test ha e che a it.4 mancava
     expect(SRC.length).toBeGreaterThan(30);

@@ -24,14 +24,23 @@
 
 4. **DA CHIUDERE PRIMA DEL DONE DI FASE 1 (2026-08-10, verifier it.2)** —
    STATO al 2026-08-10 it.5: **(a) (c) (d) CHIUSI** in it.3 (verificati);
-   **(b) CHIUSO in it.5** — il gate è ora fatto di invarianti su ATTI SINGOLI
+   **(b) CHIUSO in it.6, MA NON come previsto** — il gate è ora fatto di invarianti su ATTI SINGOLI
    (allocazione GPU; nomi dei tensori expert; clamp del router), ognuno con
    allowlist motivata, senza esenzioni per import e senza congiunzioni da
-   spezzare. Le tre evasioni che il verifier aveva ESEGUITO contro la
-   versione di it.4 (nome per parti, split su due file, import come
-   lasciapassare) sono state riprovate e ora fanno TUTTE rosso. **Docket
-   item 4 CHIUSO per intero.** Resta la migrazione di q35gpumodel (it.6),
-   che il gate ESIGE: le sue tre voci di allowlist sono marcate DEBITO NOTO. Rilievi minori del verifier it.3 chiusi in it.4: flushSlotTable
+   spezzare. MA il verifier ha bocciato anche quella versione con 5 evasioni
+   eseguite, di cui una (un router Qwen legittimo) NON è catturabile da
+   nessuna scansione del sorgente: la differenza fra duplicazione e seconda
+   famiglia è SEMANTICA. ESITO di it.6: l'invariante è stato spostato nel
+   SISTEMA DI TIPI — marchio di conio su `SlotRef` (solo residency.ts può
+   produrlo; un'arena parallela viene rifiutata da tsc) + test di tipo
+   `tests/types/slotref-brand.ts` che va rosso se il marchio sparisce. La
+   scansione del sorgente resta come RATCHET su impronte note, con la
+   pretesa ridimensionata PER ISCRITTO nel file. Evasioni N3/N4/N5 chiuse
+   allargando la scansione a tutto src/ (ancorata a __dirname, estensioni
+   incluse) e correggendo il predicato di allocazione. **Docket item 4
+   CHIUSO.** Resta la migrazione di q35gpumodel (it.7), che è ciò che
+   elimina DAVVERO la duplicazione: le tre voci DEBITO NOTO dell'allowlist
+   spariscono lì. Rilievi minori del verifier it.3 chiusi in it.4: flushSlotTable
    dimensionata sulla shadow e non sulla costante GLM; getter compat non
    enumerabili (spread/JSON di un layout K-quant non esplodono);
    `slotsOverride` con chiavi validate contro le classi della config (prima

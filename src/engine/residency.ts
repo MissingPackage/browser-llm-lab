@@ -120,7 +120,27 @@ export type ExpertReader =
       slab?: (layer: number, expert: number) => Uint8Array;
     };
 
+/**
+ * MARCHIO DI CONIO (goal fase-D it.6). `SlotRef` è ciò che i kernel esigono
+ * per bindare un expert: senza, non si può eseguire un blocco MoE. Il campo
+ * privato qui sotto fa sì che un `SlotRef` valido possa nascere SOLO dentro
+ * questo modulo — un'arena parallela non può fabbricarne uno senza che
+ * `tsc` la rifiuti.
+ *
+ * PERCHÉ COSÌ (lezione di it.4-5, tre gate bocciati): un test che scansiona
+ * il sorgente NON può distinguere una duplicazione da una seconda famiglia
+ * legittima — è una distinzione semantica, e ogni impronta testuale è
+ * aggirabile con un refactoring ordinario (il verifier l'ha dimostrato con
+ * cinque evasioni eseguite). `gpudevice.test` funziona perché `requestDevice`
+ * è un nome della PIATTAFORMA: non esiste altra porta. Per la residenza degli
+ * expert quella porta non esisteva, e va CREATA — qui, nel sistema di tipi,
+ * dove il compilatore la sorveglia invece di una regex.
+ */
+declare const SLOT_REF_BRAND: unique symbol;
+
 export interface SlotRef {
+  /** conio: solo `residency.ts` può produrlo (vedi il commento sopra) */
+  readonly [SLOT_REF_BRAND]: true;
   cls: ExpertClass;
   layout: SlabLayout;
   buffer: GPUBuffer;
@@ -658,13 +678,14 @@ export class ExpertCache {
     return this.slotRef(c, cls, idx);
   }
 
+  /** L'UNICO sito di conio di uno `SlotRef` in tutto il motore. */
   private slotRef(c: ClassState, cls: ExpertClass, idx: number): SlotRef {
     return {
       cls, layout: c.layout,
       buffer: c.buffers[Math.floor(idx / c.slabsPerBuffer)],
       offset: (idx % c.slabsPerBuffer) * c.layout.bytes,
       idx,
-    };
+    } as SlotRef; // il marchio si applica QUI e in nessun altro posto
   }
 
   // Garantisce l'expert residente e ritorna lo slot. `readRaw` viene chiamata

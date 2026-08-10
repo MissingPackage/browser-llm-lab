@@ -219,8 +219,55 @@ SINGOLO. Riscritto:
 - Processo: docket item 4 e HANDOFF allineati allo stato reale (il verifier
   li aveva trovati stale — stessa svista di it.3, questa volta chiusa nella
   stessa iterazione).
-- GATE: suite **392**; tsc pulito; ktest invariato (nessun file di src toccato
+- GATE: suite **396** (correzione: avevo scritto 392, il verifier l'ha rilevato); tsc pulito; ktest invariato (nessun file di src toccato
   in questa iterazione: solo il test e i documenti).
 - STATO FASE 1: docket item 4 CHIUSO per intero. Resta la migrazione di
   `q35gpumodel`, che il gate ora ESIGE (tre voci DEBITO NOTO). È it.6 e
   chiude la fase 1.
+
+## it.6 (2026-08-10) — l'invariante si sposta nel SISTEMA DI TIPI (e la pretesa del gate si ridimensiona)
+
+Il verifier ha bocciato ANCHE la versione di it.5, con **cinque** evasioni
+eseguite. La più importante non è un'evasione: **N1 = un router Qwen**
+(softmax puro, niente clamp, niente nomi di tensori, niente VRAM) è
+invisibile a ogni impronta testuale — ed è codice che DEVE esistere dopo la
+migrazione. Diagnosi, dopo tre tentativi sbagliati sullo stesso bersaglio:
+
+> Fallisce perché sto cercando di rilevare un MECCANISMO duplicato tramite
+> IMPRONTE TESTUALI: ogni impronta è o specifica della forma GLM (il clamp) o
+> aggirabile con un refactoring ordinario. Mostrato da: le 5 evasioni.
+> `gpudevice.test` funziona perché `requestDevice` è un nome della
+> PIATTAFORMA — non esiste altra porta. Per la residenza expert quella porta
+> non esisteva: va CREATA, non cercata.
+
+Cosa ho fatto:
+- **MARCHIO DI CONIO su `SlotRef`** (`residency.ts`): il riferimento che i
+  kernel esigono per bindare un expert ha ora un campo con `unique symbol`
+  ⇒ può nascere SOLO dentro residency.ts (un solo sito, marcato). Un'arena
+  parallela che provi a fabbricarne uno **viene rifiutata da `tsc`** —
+  verificato con una sonda temporanea. È l'evasione N2 del verifier, chiusa
+  dal compilatore invece che da una regex.
+- **`tests/types/slotref-brand.ts`**: test DI TIPO con `@ts-expect-error`.
+  Se qualcuno togliesse il marchio, la direttiva diventerebbe inutilizzata e
+  **tsc andrebbe rosso**. L'invariante si sorveglia da solo, in un gate che
+  il progetto esegue già.
+- **Scansione allargata e ancorata**: tutto `src/` (non solo engine), via
+  `__dirname` (non la cwd), estensioni `.ts/.mts/.cts/.tsx`. Uccide N3 e N4.
+  Ha subito trovato `src/microbench/runner.ts` — dichiarato con razionale.
+- **`allocatesGpu`** su identificatore e non su token con parentesi: uccide
+  N5 (`createBuffer.bind(dev)`).
+- **PRETESA RIDIMENSIONATA, per iscritto nel file**: quel test NON garantisce
+  "una meccanica, una implementazione" — non può, perché la differenza fra
+  duplicazione e seconda famiglia legittima è semantica. È un RATCHET su
+  impronte note che alza il costo di una deriva distratta e tiene il debito
+  dichiarato. L'invariante vero è il marchio. Il `describe` è stato
+  rinominato di conseguenza.
+- Correzione: suite 392 → **396** nel journal di it.5 (numero stale rilevato
+  dal verifier).
+- GATE: suite 397; tsc pulito (incluso il test di tipo); nessun tocco ai
+  path GLM oltre il marchio, che è additivo.
+
+**LEZIONE, e cambio di rotta**: ho speso tre iterazioni a costruire un
+poliziotto quando la cosa che elimina davvero la duplicazione è LA
+MIGRAZIONE. Il gate serve contro le derive future, non come precondizione.
+Da qui si migra `q35gpumodel` (it.7) e la fase 1 si chiude lì.
