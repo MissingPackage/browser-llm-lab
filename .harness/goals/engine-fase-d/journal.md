@@ -610,3 +610,51 @@ ktest **87/87, 0 non-pass**; GLM invariato (`router-top4-gpu-vs-cpu` maxRel
 Prossima fetta (3): cablare tutto in `q35gpumodel` — arena + slotTable +
 router su GPU per layer, miss rilevato su GPU (`dirty`) e repair+replay dalla
 CPU ⇒ 1 submit/token a residenza piena.
+
+### Progetto della fetta 3 (cablaggio in `q35gpumodel`) — scritto PRIMA, per riprendere da disco
+
+Ricognizione fatta su `glmmodel.ts`, che ha gia' tutto: la fetta 3 e' un
+PORT, non un'invenzione. I pezzi, nell'ordine in cui vanno montati:
+
+1. **Cache in regime arena**: `new ExpertCache(device, {..., arena: true,
+   slotTable: true})`. Cambia la taglia dei buffer (bindati interi) e accende
+   la tabella expertKey→slot in VRAM. `arenaGeometry(cls)` da' gia'
+   {layout, nBuf, slabsPerBuf, slabWords, nSlots}: e' esattamente ciò che
+   serve per costruire i `KArenaOpts` dei kernel di it.11.
+2. **Bind group layout ESPLICITO** per le pipeline expert e per il router:
+   `hasDynamicOffset: true` NON e' esprimibile con `layout: "auto"`
+   (glmmodel.ts:556 e 1052 lo fanno cosi'). `moeIdx` viaggia come uniform a
+   dynamic offset con `minBindingSize: MOE_IDX_BYTES` e `size` ESPLICITA nel
+   binding (glmmodel.ts:1007 dice perche': con hasDynamicOffset la
+   validazione la pretende).
+   ⇒ 3 bind group per classe (gate, up, down) + 1 per il router, e l'offset
+   dinamico seleziona la entry di Sel. NON 320 bind group.
+3. **`Sel`**: nLayerMoE x topK entry da 16 B. `moeIdx = {selIdx, tableBase,
+   moeLayer, pad}` con stride `MOE_IDX_STRIDE` (256, allineamento uniform).
+4. **Router per layer**: `routerTopKWgsl({nExpert, nUsed, weightsScale: 1,
+   clampMin, gating: "softmax", resolve: {..., dirty: true}})`, bindings
+   [routerLogits, biasZeri, ids, wts, selBuf, slotTable, moeIdx, dirtyB].
+5. **`dirty`**: [0] = primo layer MoE con miss (atomicMin, sentinella
+   0xffffffff azzerata dalla CPU per token), [1] = conteggio miss (atomicAdd).
+6. **Esecuzione**: un encoder per token — per ogni layer: segmento statico
+   (attn + shexp + gemv del router) → routerTopK+resolve → topK x (gate, up,
+   silu, down, axpy) che leggono Sel → add. Alla fine argmax. UN readback:
+   dirty + argmax.
+7. **Repair+replay**: se `dirty[1] > 0`, la CPU rilegge Sel, fa `ensure` sugli
+   expert con flag MISS, `flushSlotTable()` e RIESEGUE dal layer `dirty[0]`.
+   A residenza piena non scatta mai ⇒ 1 submit/token.
+
+**Ordine di montaggio proposto** (ogni passo con un gate proprio, come le
+fette 1 e 2): (3a) arena + Sel riempita dalla CPU, tutto il resto invariato —
+gate: bit-identico al path attuale sul 35B; (3b) router su GPU in OMBRA (Sel
+di produzione ancora dalla CPU, quella GPU in una regione parallela, e si
+confrontano) — gate: selezione e pesi entro le tolleranze di it.13 sui layer
+VERI; (3c) Sel di produzione dal router GPU + dirty + repair/replay — gate:
+argmax identico e submit/token misurati.
+
+Rischio principale identificato: il regime arena cambia la TAGLIA dei buffer
+di classe (bindati interi ⇒ cappati anche da maxStorageBufferBindingSize, non
+solo da maxBufferSize). Sul 35B con budget 12 GiB significa piu' buffer per
+classe, e `nBuf` entra nei kernel come numero di binding: va verificato che
+stia nel limite di binding per bind group del device (glmmodel.ts:551 ha
+gia' un assert di questa forma).

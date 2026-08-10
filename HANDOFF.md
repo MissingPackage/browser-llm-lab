@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2 fatte, 3b in corso; next = ruling PI su docket item 9 (fase 3: -3,3 contro -5,1 richiesti))
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2 fatte, 3b fette 1-2 fatte; next = fetta 3a (arena in q35gpumodel) + ruling PI su docket item 9)
 
 ## 1. Next decidable
 
@@ -93,9 +93,20 @@ ms/token con 562 dispatch), non qui.
 FATTA (it.11): `gemvQ4K`/`gemvQ6K` accettano l'indirizzamento d'ARENA (slot
 da `Sel`, buffer bindato intero, testa di GLM riusata) e il gate nuovo sul
 35B reale dice **BIT-A-BIT identico** contro il binding a sotto-range, su
-entrambe le classi. ktest 86/86. Prossime fette: (2) router+resolve su GPU
-in regione ombra, con confronto contro la selezione CPU; (3) selezione di
-produzione + miss rilevato su GPU + repair/replay ⇒ 1 submit/token.
+entrambe le classi. ktest 86/86. Fetta 2 FATTA (it.13): `routerTopKWgsl` parametrico sul gating
+(sigmoid GLM / softmax Qwen), col binding `bias` tenuto in entrambi i casi e
+zeri per chi non lo usa — per GLM il testo emesso resta byte-identico. Gate
+su 64 estrazioni 256x8: **0 flip d'insieme, 0 d'ordine, 0 resolve errati**,
+errore sui pesi 2,32e-7 (soglia 1e-5); il resolve si prova con una slotTable
+che ha UN MISS di proposito. ktest 87/87.
+
+**PROSSIMO: fetta 3**, il cablaggio in `q35gpumodel`. E' un PORT da
+`glmmodel.ts`, non un'invenzione, e il **progetto e' scritto nel journal di
+it.13** (pezzi, ordine di montaggio 3a/3b/3c, rischio identificato). In
+breve: arena + slotTable, bind group layout ESPLICITO perche'
+`hasDynamicOffset` non si esprime con `layout: "auto"`, router per layer che
+scrive `Sel` e `dirty`, e repair+replay dalla CPU solo quando `dirty[1] > 0`
+⇒ 1 submit/token a residenza piena.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

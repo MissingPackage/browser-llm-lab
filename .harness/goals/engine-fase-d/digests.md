@@ -127,3 +127,16 @@ dispersione. **Valore onesto: -3,33 ms/token (-8,3%)**, spread 0,19/0,10. La
 serializzazione vera a caldo e' 4,58 ms/token, non 15, e il batch ne recupera
 il 73%. Il done-when della fase 3 chiedeva >= -5,1: **NON e' soddisfatto**,
 docket item 9 al PI. Regola nuova per l'harness a docket item 10.
+
+## it.13 (2026-08-10) — fase 3b fetta 2: router+resolve Qwen su GPU
+
+`routerTopKWgsl` parametrico sul gating (sigmoid GLM / softmax Qwen), col
+binding `bias` tenuto in entrambi i casi e un buffer di zeri per chi non lo
+usa — cosi' il layout non dipende dalla famiglia e per GLM il testo emesso
+resta byte-identico. Gate nuovo su 64 estrazioni 256x8: **0 flip d'insieme,
+0 flip d'ordine, 0 resolve errati**, errore sui pesi 2,32e-7 contro soglia
+1e-5. Il resolve si prova con una slotTable finta che ha UN MISS di
+proposito: slot e flag sono interi, confronto secco. ktest 87/87. Progetto
+della fetta 3 (cablaggio in q35gpumodel) scritto nel journal PRIMA di
+iniziarla, con l'ordine di montaggio 3a/3b/3c e il rischio identificato
+(l'arena cappa i buffer anche col limite di BINDING, non solo di taglia).
