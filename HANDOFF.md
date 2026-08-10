@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: IL 35B GIRA SU GPU CON PAGING (5/5 vs oracolo, residenza 70.3%); in coda: golden full 35B CPU → conf GPU ~12h per la soglia ratchet)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: FASI 1-7/9 COMPLETE — 3 modelli conformi (98.83/97.66/98.93% ratchet), paging 35B con 121k eviction reali; next = fase 8)
 
 ## 1. Next decidable
 
@@ -66,15 +66,23 @@ Q6_K 210→212). **it.17 DONE nella sostanza** (verifier: 5/5 ricalcolato, root-
 corroborato al byte; FAIL puntuale sanato — la run full era abortita per
 golden mancante): 35B su GPU con paging (arena a CHUNK ≤2 GiB, LRU
 on-miss, residenza 70.3% al budget 12 GiB, firma routing, zero OOM;
-esecuzione segmentata correttezza-prima 1 sync/layer). **IN CODA**: (1)
-golden full 35B su CPU in generazione (task bo9rnqy88, ~30-60 min; arch
-fix golden.cpp fatto — item 7 mezzo sanato, restano i campi dei golden
-4B/9B da rigenerare prima del paper); (2) al termine: conf GPU full 35B
-(~11-12 h, ALBERO CONGELATO, scripts/q35-conf-run.mjs --model 35b
---golden-kind full --timeout-min 900) → SOGLIA RATCHET 35B a docket coi
-numeri. Nel frattempo il loop può fare solo lavoro documentale o
-attendere (GPU e albero vincolati). Dopo: fase 8 (tier+recall+bandmodel)
-e fase 9 (chiusura). Perimetro: path testo Qwen
+esecuzione segmentata correttezza-prima 1 sync/layer). **it.18 DONE — FASE 7 COMPLETA**:
+soglia ratchet 35B **1013/1024 = 98.926%** (11 miss tutti near-tie,
+mediana 0.204); paging vero: 9.06M selezioni, hit 98.55%, 121 421
+eviction, 234.7 GB on-miss, zero OOM (run 122 min); golden full con arch
+reale. **Al lavoro: it.19 = fase 8 — tier + recall + bandmodel** (PHASES
+riga 8): (a) recall prefetch sul router 256-wide — nota: il paging q35
+NON ha prefetch (LRU pura on-miss): il recall qui è la MISURA
+dell'oracolo lookahead (tap hidden L → router L+1) sul 35B, da
+confrontare col 91.92% GLM e SPIEGARE (metodo C1, magari via cpuref o
+tap nel forward GPU); (b) bandmodel rifittato coi punti nuovi (fit sui
+JSON: costo per-miss slot 1.77 MB vs 5.3 GLM); (c) bench JSON tier
+mobile(4B cap 3 GiB spec §6) + 8/12/16 GiB(35B, arenaGiB param) con
+hostState, prefill/TTFT e gap UX; (d) collasso in scarsità rimisurato con
+attribuzione. Restano i vincoli: run GPU ad albero congelato, 60 s fra
+run. Item 7: golden 4B/9B con arch stale da rigenerare (campi) prima del
+paper. Poi fase 9 (chiusura: checklist contratto voce-voce + non-reg GLM
+piena + direction/ledger/HANDOFF). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

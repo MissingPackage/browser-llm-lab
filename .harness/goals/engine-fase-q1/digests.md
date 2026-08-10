@@ -195,3 +195,14 @@ ricalcoli al byte; FAIL puntuale (la run full era abortita: mancava il
 golden full 35B) SANATO — fix arch golden.cpp (item 7), golden full in
 generazione, conf GPU full (~12 h) a seguire per la soglia ratchet.
 TUTTI E TRE i modelli della famiglia girano su GPU nel motore.
+
+## it.18 (2026-08-10)
+
+**FASE 7 COMPLETA** (7/9), verifier PASS (top-1 e paging ricalcolati al
+numero). **Soglia ratchet 35B: 1013/1024 = 98.926%** — la migliore dei
+tre; 11 miss tutti near-tie (mediana 0.204 logit). E il paging ha
+lavorato SUL SERIO: 9.06M selezioni, hit 98.55%, **121 421 eviction LRU**,
+234.7 GB on-miss, zero OOM al budget — il regime C3c del done-when con
+evidenza piena. Run 122 min (stima 12h pessimista 6×). Golden full con
+arch reale (fix golden.cpp). Next: it.19 = fase 8 (tier mobile/8/12/16 +
+recall 256-wide + bandmodel rifittato), poi fase 9 chiusura.
