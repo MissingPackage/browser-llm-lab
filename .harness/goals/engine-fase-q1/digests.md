@@ -41,3 +41,14 @@ trovato un buco di discriminanza nel test dell'ordine (variante
 decay-dopo-update mascherata da cancellazione esatta) → chiuso subito con
 il caso v₂≠0 che separa TUTTI e tre gli ordinamenti. Suite 371 (+7).
 Next: it.5 = kernel WGSL DeltaNet + ktest vs cpuref sul campione.
+
+## it.5 (2026-08-10)
+
+FASE 3 DONE, verifier PASS (ktest rieseguiti indipendentemente). 3 kernel
+WGSL nuovi (conv+shift, gates, core un-workgroup-per-v-head con decay fuso
+— equivalenza al cpuref verificata per linearità); 6 ktest nuovi TUTTI
+PASS al primo run reale, inclusa la catena T=12 con stato persistente su
+GPU (maxAbs 5.4e-7) e il core a dims REALI hd128. Totale 75/75, GLM
+intatto. Il rischio dominante del goal è dimezzato: la numerica ricorrente
+regge kernel-level. Next: fase 4 — 4B end-to-end (GQA+mrope+ibrido+ffn,
+argmax==cpuref, golden a ratchet).

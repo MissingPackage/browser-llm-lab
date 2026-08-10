@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1 IN CORSO: fasi 1-2 DONE, fase 3 a metà; next = kernel WGSL DeltaNet)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1 IN CORSO: fasi 1-3 DONE su 9, ktest 75/75; next = fase 4, 4B end-to-end)
 
 ## 1. Next decidable
 
@@ -20,11 +20,15 @@ casa e SHA-verificati (~29 GB, q35-verify-sha exit 0); reader parametrico
 (`q35shape.ts`: shape dai metadata, inventario 426/427/733); primo
 tokenizer in-engine (`q35tokenizer.ts`: BPE byte-level, id==oracolo sul
 corpus 12 file, protocollo v2 `--no-escape`, semantica USER_DEFINED
-llama.cpp:3171); oracolo b10333 supporta la famiglia senza upgrade. Suite
-364 PASS, tsc pulito, GLM intatto. **Al lavoro: it.4 = fase 3 — kernel
-DeltaNet WGSL kernel-level** (il rischio dominante: prima cpuref-f64 della
-catena conv4→delta rule→stato, poi ktest WGSL vs cpuref, spec §4; ktest
-preesistenti 69/69 come gate GLM). Perimetro: path testo Qwen
+llama.cpp:3171); oracolo b10333 supporta la famiglia senza upgrade. **Fase 3 DONE
+(it.4-5)**: cpuref-f64 DeltaNet dalla fonte b10333 + 3 kernel WGSL
+(`kernels/deltanet.ts`) — ktest 75/75 (69 GLM intatti + 6 nuovi, catena
+T=12 stato-persistente maxAbs 5.4e-7, core a dims reali hd128). Suite 371
+PASS, tsc pulito. **Al lavoro: it.6 = fase 4 — path 4B end-to-end**
+(GQA variante con q+gate fusi e QK-norm, mrope sections dal GGUF
+(`rope.dimension_sections` da leggere in apertura), ibrido 3:1, ffn denso;
+argmax==cpuref-f64 sul campione ratificato; golden 4B full-corpus a soglia
+RATCHET; riferimenti full-resident con hostState). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.
