@@ -206,3 +206,15 @@ lavorato SUL SERIO: 9.06M selezioni, hit 98.55%, **121 421 eviction LRU**,
 evidenza piena. Run 122 min (stima 12h pessimista 6×). Golden full con
 arch reale (fix golden.cpp). Next: it.19 = fase 8 (tier mobile/8/12/16 +
 recall 256-wide + bandmodel rifittato), poi fase 9 chiusura.
+
+## it.19 (2026-08-10)
+
+Fase 8 slice 1, verifier PASS (numeri ricalcolati, onestà giudicata).
+**Bench per tier 35B con hostState**: 8/12/16 GB → decode 0.79/2.00/3.40
+tok/s, residenza 23/47/64%, hit 77/91/94% — il COLLASSO IN SCARSITÀ
+misurato (4.3×) con attribuzione al hit-rate (~73 miss/token al tier 8).
+Frame correttezza-prima dichiarato ovunque. Tier mobile 4B: cap 3 GiB
+rispettato (2.48), proiezione parametrica → conferma prefill-bound.
+Fix await-prefill (mapAsync concorrenti sul MoE); device-lost arena 12
+(baseline VRAM +240 MB vs fase 7) risolto con arena 11 + margine
+dichiarato. Next: it.20 = recall oracolo 256-wide + bandmodel rifit.

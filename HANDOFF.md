@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: FASI 1-7/9 COMPLETE — 3 modelli conformi (98.83/97.66/98.93% ratchet), paging 35B con 121k eviction reali; next = fase 8)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-7 + 8.1 DONE (tier 0.79/2.00/3.40 tok/s = collasso attribuito); next = it.20 recall+bandmodel, poi fase 9)
 
 ## 1. Next decidable
 
@@ -70,19 +70,19 @@ esecuzione segmentata correttezza-prima 1 sync/layer). **it.18 DONE — FASE 7 C
 soglia ratchet 35B **1013/1024 = 98.926%** (11 miss tutti near-tie,
 mediana 0.204); paging vero: 9.06M selezioni, hit 98.55%, 121 421
 eviction, 234.7 GB on-miss, zero OOM (run 122 min); golden full con arch
-reale. **Al lavoro: it.19 = fase 8 — tier + recall + bandmodel** (PHASES
-riga 8): (a) recall prefetch sul router 256-wide — nota: il paging q35
-NON ha prefetch (LRU pura on-miss): il recall qui è la MISURA
-dell'oracolo lookahead (tap hidden L → router L+1) sul 35B, da
-confrontare col 91.92% GLM e SPIEGARE (metodo C1, magari via cpuref o
-tap nel forward GPU); (b) bandmodel rifittato coi punti nuovi (fit sui
-JSON: costo per-miss slot 1.77 MB vs 5.3 GLM); (c) bench JSON tier
-mobile(4B cap 3 GiB spec §6) + 8/12/16 GiB(35B, arenaGiB param) con
-hostState, prefill/TTFT e gap UX; (d) collasso in scarsità rimisurato con
-attribuzione. Restano i vincoli: run GPU ad albero congelato, 60 s fra
-run. Item 7: golden 4B/9B con arch stale da rigenerare (campi) prima del
-paper. Poi fase 9 (chiusura: checklist contratto voce-voce + non-reg GLM
-piena + direction/ledger/HANDOFF). Perimetro: path testo Qwen
+reale. **it.19 DONE (slice 1)**: bench tier 35B con hostState — 8/12/16 GB =
+decode 0.79/2.00/3.40 tok/s (residenza 23/47/64%, hit 77/91/94%),
+collasso 4.3× attribuito al hit-rate; tier mobile 4B (cap 2.48/3 GiB,
+proiezione parametrica = prefill-bound confermato); fix await-prefill;
+device-lost arena12 documentato (baseline VRAM). **Al lavoro: it.20 =
+fase 8 slice 2**: (a) recall oracolo lookahead sul router 256-wide del
+35B (tap hidden L → router L+1, metodo C1; via cpuref su un campione del
+corpus o tap nel forward — confronto DICHIARATO col 91.92% GLM,
+scostamento spiegato non gateato); (b) bandmodel rifittato sui 3 punti
+tier misurati (fit dichiarato, forma f(hit, banda, costo-miss) — nota:
+qui il costo-miss include repack JS, diverso da GLM). Poi fase 9
+(chiusura: checklist contratto voce-voce + non-reg GLM piena ad albero
+congelato + direction/ledger/HANDOFF + docket triage). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.
