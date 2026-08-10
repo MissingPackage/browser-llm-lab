@@ -14,7 +14,8 @@ const arg = (name, dflt) => {
 };
 const ROOT = new URL("..", import.meta.url).pathname;
 const modelTag = arg("model", "4b");
-const golden = arg("golden", join(ROOT, `results/engine/golden/q35/golden-q35-${modelTag}-full-2026-08-10.json`));
+const goldenKind = arg("golden-kind", "full");
+const golden = arg("golden", join(ROOT, `results/engine/golden/q35/golden-q35-${modelTag}-${goldenKind}-2026-08-10.json`));
 const prompts = arg("prompts", null);
 const maxGen = arg("max-gen", null);
 const out = arg("out", join(ROOT, `results/engine/q35-conf-${modelTag}-${new Date().toISOString().slice(0, 10)}.json`));
@@ -33,11 +34,14 @@ const qs = new URLSearchParams();
 if (modelTag !== "4b") qs.set("model", modelTag);
 if (prompts) qs.set("prompts", prompts);
 if (maxGen) qs.set("maxgen", maxGen);
+const tap = arg("tap", null);
+if (tap !== null) qs.set("tap", tap);
 
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
 page.on("pageerror", (e) => console.log("[q35conf][pageerror]", e.message.slice(0, 300)));
+page.on("console", (m) => { const t = m.text(); if (/gpu-error|GPU error|WGSL|validation/i.test(t)) console.log("[q35conf][console]", t.slice(0, 400)); });
 await page.goto(`${BASE_URL}/q35conf.html?${qs}`, { waitUntil: "load" });
 
 let lastLive = "";
@@ -62,7 +66,7 @@ for (;;) {
       process.exit(1);
     }
     writeFileSync(out, JSON.stringify(report, null, 1));
-    const r = report.top1;
+    const r = report.top1 ?? { ok: "-", positions: "-", rate: 0 };
     console.log(`[q35conf] done: top1 ${r.ok}/${r.positions} = ${(r.rate * 100).toFixed(3)}% -> ${out}`);
     process.exit(0);
   }

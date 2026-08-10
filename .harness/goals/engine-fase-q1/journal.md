@@ -390,3 +390,36 @@
 - RESTA fase 7 (it.17): forward GPU 35B completo (denso path di
   q35gpumodel + MoE con arena e LRU minima on-miss), gate argmax==oracolo
   sul golden smoke, run 16 GB senza OOM con JSON, firma routing.
+
+## it.17 (2026-08-10) — IL 35B-A3B GIRA SU GPU CON PAGING: 5/5 vs oracolo
+
+- q35gpumodel esteso a qwen35moe: loadW TYPE-DRIVEN (gemv dal tipo reale:
+  35B attn/shexp/ssm_out Q8_0, alpha/beta F32 — il denso non cambia),
+  esecuzione SEGMENTATA (per layer: statico attn+shexp+router → readback
+  logits router → selezione CPU stessa matematica cpuref → ensure arena →
+  pass dinamico expert + residuo; 1 sync/layer/token DICHIARATO
+  correttezza-prima), arena per classe down con LRU on-miss via
+  reader.readRange, embd Q8_0, moeStats (hit/miss/upload/routing esatto/
+  residenza).
+- ROOT-CAUSE HUNT da manuale (0/5 al primo run): tap di debug nel modello
+  → selezione router IDENTICA al cpuref → x post-attn PERFETTO (9.8e-8) →
+  tap post-layer == pre-MoE ⇒ pass dinamico NO-OP silenzioso → console del
+  worker catturata dal runner: **arena monolitica 11.8 GB > maxBufferSize
+  negoziato (421 MB) E > cap adapter (4 GB)** — buffer invalido, submit
+  no-op (l'uncapturederror urlava solo nella console worker). Esperimento
+  discriminante intermedio: ktest MoE block portato a SINGLE-PASS (replica
+  esatta del runtime) = PASS e-7 ⇒ ordering in-pass sano.
+- FIX: arena A CHUNK ≤ 2 GiB (slot → chunk+offset locale) + needs del
+  device con slabClassBytes=2 GiB nel conf worker. Runner: cattura console
+  gpu-error (permanente).
+- **GATE: top1 5/5 = 100% vs oracolo sul golden smoke** (59 s, 39
+  posizioni, upload 5.9 GB on-miss). JSON committato con: residenza arena
+  70.3% al budget 12 GiB (nSlots 6657+539 / park 9472+768), hit 8846 /
+  miss 3314 (= unique, zero eviction), FIRMA ROUTING esatta (3314 chiavi
+  con conteggi). Run al budget SENZA OOM ✓.
+- SOGLIA RATCHET 35B: richiede il full-corpus (~11-12 h GPU a ~1.5
+  s/posizione sequenziale) — run lanciata in background ad albero
+  congelato a valle di questo commit; soglia da fissare al termine
+  (docket). Lo smoke 5/5 NON è la soglia: è il gate di correttezza.
+- ktest 84/84 (single-pass variant inclusa), suite 375/9, tsc pulito,
+  GLM intatto.

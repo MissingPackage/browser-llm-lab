@@ -21,7 +21,11 @@ interface Cfg {
   /** modalità BENCH (it.10): riferimenti decode/prefill/TTFT full-resident. */
   bench?: { promptIdx: number; nDecode: number };
   /** modello (it.11): default 4b. */
-  model?: "4b" | "9b";
+  model?: "4b" | "9b" | "35b";
+  /** budget arena expert in GiB (solo MoE; default 12) */
+  arenaGiB?: number;
+  /** DEBUG (it.17): dump hidden dopo il layer N sul PRIMO token, poi stop. */
+  debugTap?: number;
 }
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
@@ -31,6 +35,7 @@ const progress = (msg: string) => post({ type: "progress", msg });
 const MODELS = {
   "4b": { url: "/models/Qwen3.5-4B-Q4_0.gguf", file: "Qwen3.5-4B-Q4_0.gguf", sha: "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb" },
   "9b": { url: "/models/Qwen3.5-9B-Q4_0.gguf", file: "Qwen3.5-9B-Q4_0.gguf", sha: "17670346b4260ddcb0173965145155885024f3c9a4a24389a3370751edbcde24" },
+  "35b": { url: "/models/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf", file: "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf", sha: "a8138f183e3993f12cdc23afd2babb8cdb084e64088ce4a256d49101d47b949c" },
 } as const;
 let URL_GGUF: string = MODELS["4b"].url;
 
@@ -58,9 +63,15 @@ async function main(cfg: Cfg): Promise<void> {
   const f = parseGguf(header.buffer.slice(header.byteOffset, header.byteOffset + header.byteLength) as ArrayBuffer);
   const { shape, byName } = validateQwen35(f);
 
+  const isMoe = shape.arch === "qwen35moe";
   const { device } = await createEngineDevice({
     label: "q35conf",
-    needs: { ctxMax, head: { vocab: shape.vocab, dModel: shape.dModel } },
+    needs: {
+      ctxMax,
+      head: { vocab: shape.vocab, dModel: shape.dModel },
+      // MoE (it.17): i chunk dell'arena expert sono buffer da 2 GiB
+      ...(isMoe ? { slabClassBytes: 2 * (1 << 30) } : {}),
+    },
   });
   const model = await createQ35GpuModel(device, {
     shape,
@@ -74,9 +85,24 @@ async function main(cfg: Cfg): Promise<void> {
       if (!t) throw new Error(`q35conf: tensore ${name} assente`);
       return range(f.dataOffset + t.offset, q35TensorBytes(t));
     },
-  }, ctxMax);
+    readRange: (name, off, len) => {
+      const t = byName.get(name);
+      if (!t) throw new Error(`q35conf: tensore ${name} assente`);
+      return range(f.dataOffset + t.offset + off, len);
+    },
+  }, ctxMax, Math.floor((cfg.arenaGiB ?? 12) * (1 << 30)));
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
+
+  if (cfg.debugTap !== undefined) {
+    const p0 = golden.prompts[0];
+    model.resetState();
+    await model.readTap(cfg.debugTap); // arma il tap
+    await model.step(p0.promptTokens[0], 0, false);
+    const tap = await model.readTap(-2); // leggi e disarma
+    post({ type: "done", report: { kind: "q35-debug-tap", layer: cfg.debugTap, token: p0.promptTokens[0], hidden: Array.from(tap), moe: model.moeStats ? model.moeStats() : null } });
+    return;
+  }
 
   if (cfg.bench) {
     // Riferimenti full-resident (fase 4, it.10): prefill sequenziale
@@ -117,6 +143,7 @@ async function main(cfg: Cfg): Promise<void> {
       decode: { n: cfg.bench.nDecode, msPerTokenP50: p50, tokS: 1000 / p50, firstMs: Math.round(firstMs) },
       ttftMs: Math.round(loadMs + prefillMs + firstMs),
       dispatchesPerToken: model.dispatchesPerToken,
+      moe: model.moeStats ? model.moeStats() : null,
     };
     post({ type: "done", report });
     return;
@@ -159,6 +186,7 @@ async function main(cfg: Cfg): Promise<void> {
     oracleCommit: golden.oracle.commit,
     corpusHash: golden.corpusHash,
     engine: { orchestrator: "q35gpumodel correttezza-prima", dispatchesPerToken: model.dispatchesPerToken, loadMs: Math.round(loadMs) },
+    moe: model.moeStats ? model.moeStats() : null,
     top1: { ok: okTot, positions: posTot, rate: okTot / posTot },
     perPrompt: perPrompt.map(({ engineArgmax, ...r }) => r),
     engineArgmaxByPrompt: Object.fromEntries(perPrompt.map((r, i) => [String(i), r.engineArgmax])),

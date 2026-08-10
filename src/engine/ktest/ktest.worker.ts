@@ -689,17 +689,38 @@ async function testQ35MoeBlockReal(g: Gpu): Promise<KResult[]> {
     });
     const xB = g.buf(Float32Array.from(x64));
     const out = g.buf(new Float32Array(d));
-    const gateT = g.empty(dE * 4), upT = g.empty(dE * 4), dnT = g.empty(d * 4), wB = g.empty(4);
+    const gateT = g.empty(dE * 4), upT = g.empty(dE * 4), dnT = g.empty(d * 4);
     const gemvGate = gemvQ4KWgsl({ K: d, N: dE });
     const gemvDown = dU.bb === 144 ? gemvQ4KWgsl({ K: dE, N: d }) : gemvQ6KWgsl({ K: dE, N: d });
-    for (let k = 0; k < topK; k++) {
-      const base = k * slotBytes;
-      await g.run(gemvGate, [{ buffer: arena, offset: base, size: gU.rp }, xB, gateT], dE);
-      await g.run(gemvGate, [{ buffer: arena, offset: base + gU.rp, size: uU.rp }, xB, upT], dE);
-      await g.run(siluMulWgsl(dE), [gateT, upT], Math.ceil(dE / 64));
-      await g.run(gemvDown, [{ buffer: arena, offset: base + gU.rp + uU.rp, size: dU.rp }, gateT, dnT], [...gemvGrid(d), 1] as [number, number, number]);
-      g.device.queue.writeBuffer(wB, 0, new Float32Array([weights[k]]));
-      await g.run(axpyWgsl(d), [out, dnT, wB], Math.ceil(d / 64));
+    // SINGLE-PASS come il modello (it.17): un encoder, un pass, scratch riusati
+    // fra gli 8 expert, pesi in wBufs dedicati — replica ESATTA del runtime.
+    const mkP = (code: string) => g.device.createComputePipeline({ layout: "auto", compute: { module: g.device.createShaderModule({ code }), entryPoint: "main" } });
+    const pG = mkP(gemvGate), pS = mkP(siluMulWgsl(dE)), pD = mkP(gemvDown), pA = mkP(axpyWgsl(d));
+    const wBufsK = weights.map((w) => {
+      const bwk = g.device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      g.device.queue.writeBuffer(bwk, 0, new Float32Array([w, 0, 0, 0]));
+      return bwk;
+    });
+    const mb = (pp: GPUComputePipeline, es: (GPUBuffer | GPUBufferBinding)[]) => g.device.createBindGroup({
+      layout: pp.getBindGroupLayout(0),
+      entries: es.map((e, i) => ({ binding: i, resource: (e as GPUBufferBinding).buffer ? (e as GPUBufferBinding) : { buffer: e as GPUBuffer } })),
+    });
+    {
+      const enc = g.device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      const dsp = (pp: GPUComputePipeline, bgx: GPUBindGroup, wx: number, wy = 1) => { pass.setPipeline(pp); pass.setBindGroup(0, bgx); pass.dispatchWorkgroups(wx, wy, 1); };
+      const bgS = mb(pS, [gateT, upT]);
+      for (let k = 0; k < topK; k++) {
+        const base = k * slotBytes;
+        dsp(pG, mb(pG, [{ buffer: arena, offset: base, size: gU.rp }, xB, gateT]), dE);
+        dsp(pG, mb(pG, [{ buffer: arena, offset: base + gU.rp, size: uU.rp }, xB, upT]), dE);
+        dsp(pS, bgS, Math.ceil(dE / 64));
+        const gg3 = gemvGrid(d);
+        dsp(pD, mb(pD, [{ buffer: arena, offset: base + gU.rp + uU.rp, size: dU.rp }, gateT, dnT]), gg3[0], gg3[1]);
+        dsp(pA, mb(pA, [out, dnT, wBufsK[k]]), Math.ceil(d / 64));
+      }
+      pass.end();
+      g.device.queue.submit([enc.finish()]);
     }
     // shared expert Q8_0 + gate sigmoid su GPU
     const shg = repackQ8_0(shTens.gate, 0, (d / 32) * dE);
