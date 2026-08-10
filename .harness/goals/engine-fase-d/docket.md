@@ -148,3 +148,8 @@ quei 41 round-trip, non dal calcolo. Le opzioni:
 MoE si misurano male finche' ogni token paga 41 round-trip: rischiamo di
 ottimizzare sopra un collo di bottiglia che poi sparisce, cioe' di rifare le
 misure due volte. Registrato it.10 (2026-08-10).
+
+### RULING PI 2026-08-10: (a) — FASE 3-BIS
+
+"(a), fai la fase 3-bis". Riga aggiunta a PHASES fra la 3 e la 4.
+**Item 8 CHIUSO.**

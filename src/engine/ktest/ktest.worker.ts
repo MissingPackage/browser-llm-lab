@@ -7,7 +7,7 @@
 // int8, indici argmax) devono essere esatte.
 import {
   gemvQuantWgsl, gemvF32Wgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
-  attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl,
+  attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, type KArenaOpts,
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
   routerTopKWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl, gemvGrid, type ArenaOpts,
   pairGemvSiluGatherWgsl, gemvDownSlotsWgsl, moeCombineWgsl,
@@ -760,6 +760,62 @@ async function testQ35MoeBlockReal(g: Gpu): Promise<KResult[]> {
       pass.end();
       g.device.queue.submit([enc.finish()]);
     }
+
+    // --- ARENA vera (fase D fase 3b): stesso buffer bindato INTERO, lo slot
+    // arriva da `Sel` e il kernel ricava da solo (binding, base). E' il regime
+    // che toglie alla CPU il calcolo degli indirizzi — e quindi il readback
+    // per layer. Qui si prova che produce gli STESSI BIT del binding a
+    // sotto-range: un offset sbagliato darebbe un risultato plausibile ma
+    // diverso, che e' il modo peggiore di sbagliare.
+    const outArena = g.buf(new Float32Array(d));
+    {
+      const kar = (tensorWords: number): KArenaOpts => ({
+        nBuf: 1, slabWords: slotBytes / 4, slabsPerBuf: topK, tensorWords,
+      });
+      const pGA = mkP(gemvQ4KWgsl({ K: d, N: dE, arena: kar(0) }));
+      const pUA = mkP(gemvQ4KWgsl({ K: d, N: dE, arena: kar(gU.rp / 4) }));
+      const dnArena = { K: dE, N: d, arena: kar((gU.rp + uU.rp) / 4) };
+      const pDA = mkP(dU.bb === 144 ? gemvQ4KWgsl(dnArena) : gemvQ6KWgsl(dnArena));
+      // Sel: una entry per k — {id, slot, w, flags}. Qui la riempie la CPU,
+      // come nella slice A di GLM; il router su GPU la scrivera' al suo posto.
+      const selData = new ArrayBuffer(topK * 16);
+      const selU = new Uint32Array(selData), selF = new Float32Array(selData);
+      sel.forEach((e, k) => { selU[k * 4] = e; selU[k * 4 + 1] = k; selF[k * 4 + 2] = weights[k]; });
+      const selBuf = g.device.createBuffer({ size: topK * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      g.device.queue.writeBuffer(selBuf, 0, new Uint8Array(selData));
+      // moeIdx: un sotto-range per k (l'offset uniform vuole 256 byte di
+      // allineamento). NON si puo' riscrivere lo stesso buffer in ciclo:
+      // queue.writeBuffer e' ordinata prima del submit e tutti gli step
+      // vedrebbero l'ultimo valore.
+      const idxBuf = g.device.createBuffer({ size: topK * 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      for (let k = 0; k < topK; k++) g.device.queue.writeBuffer(idxBuf, k * 256, new Uint32Array([k, 0, L, 0]));
+      const gateA = g.empty(dE * 4), upA = g.empty(dE * 4), dnA = g.empty(d * 4);
+      const enc = g.device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      const dsp = (pp: GPUComputePipeline, bgx: GPUBindGroup, wx: number, wy = 1) => { pass.setPipeline(pp); pass.setBindGroup(0, bgx); pass.dispatchWorkgroups(wx, wy, 1); };
+      const bgSA = mb(pS, [gateA, upA]);
+      for (let k = 0; k < topK; k++) {
+        const idx: GPUBufferBinding = { buffer: idxBuf, offset: k * 256, size: 16 };
+        dsp(pGA, mb(pGA, [arena, xB, gateA, selBuf, idx]), dE);
+        dsp(pUA, mb(pUA, [arena, xB, upA, selBuf, idx]), dE);
+        dsp(pS, bgSA, Math.ceil(dE / 64));
+        const gg4 = gemvGrid(d);
+        dsp(pDA, mb(pDA, [arena, gateA, dnA, selBuf, idx]), gg4[0], gg4[1]);
+        dsp(pA, mb(pA, [outArena, dnA, wBufsK[k]]), Math.ceil(d / 64));
+      }
+      pass.end();
+      g.device.queue.submit([enc.finish()]);
+    }
+    // Confronto PRIMA che il shared expert si accumuli su `out`: qui i due
+    // buffer contengono solo il contributo degli expert, calcolato nei due
+    // regimi di indirizzamento.
+    const subRangeF = new Float32Array(await g.read(out, d * 4));
+    const arenaF = new Float32Array(await g.read(outArena, d * 4));
+    let arenaDiff = -1;
+    for (let i = 0; i < d; i++) {
+      if (!Object.is(subRangeF[i], arenaF[i])) { arenaDiff = i; break; }
+    }
+
     // shared expert Q8_0 + gate sigmoid su GPU
     const shg = repackQ8_0(shTens.gate, 0, (d / 32) * dE);
     const shu = repackQ8_0(shTens.up, 0, (d / 32) * dE);
@@ -782,6 +838,14 @@ async function testQ35MoeBlockReal(g: Gpu): Promise<KResult[]> {
       if (Math.abs(refF[i]) > 1e-4) maxRel = Math.max(maxRel, dif / Math.abs(refF[i]));
     }
     const l2 = Math.sqrt(l2n / Math.max(l2d, 1e-12));
+    results.push({
+      kernel: `q35-arena-vs-slotrange-blk${L}-${dU.bb === 144 ? "q4k" : "q6k"}down`,
+      pass: arenaDiff === -1,
+      maxAbs: 0, maxRel: 0,
+      note: arenaDiff === -1
+        ? `BIT-A-BIT identico su ${d} f32 (arena bindata intera, slot da Sel) vs binding a sotto-range`
+        : `DIVERSO all'indice ${arenaDiff}: sotto-range ${subRangeF[arenaDiff]} vs arena ${arenaF[arenaDiff]}`,
+    });
     results.push({
       kernel: `q35-moe-block-real-blk${L}-${dU.bb === 144 ? "q4k" : "q6k"}down`,
       pass: l2 <= 1e-3 && maxAbs <= 5e-2,

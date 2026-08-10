@@ -1462,28 +1462,47 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // w = d·sc6bit·(nibble + bit_alto·16) − dmin·min6bit.
 // Q4_K: 36 word/superblocco (144 B) = [d,dmin f16][scales 12 B 6-bit][qs 128 B].
 // È gemvQ5K SENZA il piano qh (q1 fase 7: expert del 35B-A3B UD-Q4_K_S).
-export function gemvQ4KWgsl(opts: { K: number; N: number }): string {
-  const { K, N } = opts;
+export function gemvQ4KWgsl(opts: { K: number; N: number; arena?: KArenaOpts }): string {
+  const { K, N, arena } = opts;
   if (K % 256 !== 0) throw new Error("gemvQ4K: K non multiplo di 256");
   const sbPerRow = K / 256;
-  return `
-@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+  // UN SOLO corpo aritmetico per i due regimi: cambia da dove arrivano le
+  // parole del blocco. Senza `arena` l'accesso resta `blocks[i]` diretto.
+  const head = arena
+    ? `${arenaHeadWgsl(arena, [
+      "var<storage, read> x: array<f32>",
+      "var<storage, read_write> y: array<f32>",
+    ])}
+var<private> gBase: u32;
+var<private> gBi: u32;
+fn blkw(i: u32) -> u32 { return ldw(gBi, gBase + i); }`
+    : `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
 @group(0) @binding(1) var<storage, read> x: array<f32>;
 @group(0) @binding(2) var<storage, read_write> y: array<f32>;
+fn blkw(i: u32) -> u32 { return blocks[i]; }`;
+  // preambolo di main: nel regime d'arena lo slot di `Sel` diventa (binding, base)
+  const pre = arena
+    ? `${arenaSlotWgsl}
+  gBi = bi;
+  gBase = base + ${arena.tensorWords}u;
+  if (!ok) { return; }`
+    : "";
+  return `
+${head}
 const SB_PER_ROW = ${sbPerRow}u;
 var<workgroup> partial: array<f32, 64>;
 fn sbyte(base: u32, i: u32) -> u32 {
-  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+  return (blkw(base + (i >> 2u)) >> ((i & 3u) * 8u)) & 0xffu;
 }
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
   let r = wid.x + wid.y * ${GEMV_GRID_X}u;
-  if (r >= ${N}u) { return; }
+  if (r >= ${N}u) { return; }${pre}
   let t = lid.x;
   var acc = 0.0;
   for (var sb = t; sb < SB_PER_ROW; sb = sb + 64u) {
     let wb = (r * SB_PER_ROW + sb) * 36u;   // base word del superblocco
-    let dm = unpack2x16float(blocks[wb]);   // (d, dmin)
+    let dm = unpack2x16float(blkw(wb));   // (d, dmin)
     let xBase = sb * 256u;
     for (var j = 0u; j < 4u; j = j + 1u) {  // 4 gruppi da 64 elementi
       let is = 2u * j;
@@ -1596,18 +1615,37 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 
 // Q6_K: 53 word/superblocco (210 B + 2 pad) = [ql 128 B][qh 64 B][scales int8
 // 16 B][d f16]. w = d·sc_int8·(q6 − 32), q6 = nibble | 2 bit alti.
-export function gemvQ6KWgsl(opts: { K: number; N: number }): string {
-  const { K, N } = opts;
+export function gemvQ6KWgsl(opts: { K: number; N: number; arena?: KArenaOpts }): string {
+  const { K, N, arena } = opts;
   if (K % 256 !== 0) throw new Error("gemvQ6K: K non multiplo di 256");
   const sbPerRow = K / 256;
-  return `
-@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+  // UN SOLO corpo aritmetico per i due regimi: cambia da dove arrivano le
+  // parole del blocco. Senza `arena` l'accesso resta `blocks[i]` diretto.
+  const head = arena
+    ? `${arenaHeadWgsl(arena, [
+      "var<storage, read> x: array<f32>",
+      "var<storage, read_write> y: array<f32>",
+    ])}
+var<private> gBase: u32;
+var<private> gBi: u32;
+fn blkw(i: u32) -> u32 { return ldw(gBi, gBase + i); }`
+    : `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
 @group(0) @binding(1) var<storage, read> x: array<f32>;
 @group(0) @binding(2) var<storage, read_write> y: array<f32>;
+fn blkw(i: u32) -> u32 { return blocks[i]; }`;
+  // preambolo di main: nel regime d'arena lo slot di `Sel` diventa (binding, base)
+  const pre = arena
+    ? `${arenaSlotWgsl}
+  gBi = bi;
+  gBase = base + ${arena.tensorWords}u;
+  if (!ok) { return; }`
+    : "";
+  return `
+${head}
 const SB_PER_ROW = ${sbPerRow}u;
 var<workgroup> partial: array<f32, 64>;
 fn sbyte(base: u32, i: u32) -> u32 {
-  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+  return (blkw(base + (i >> 2u)) >> ((i & 3u) * 8u)) & 0xffu;
 }
 fn sint8(base: u32, i: u32) -> f32 {
   return f32((i32(sbyte(base, i)) << 24u) >> 24u);
@@ -1615,12 +1653,12 @@ fn sint8(base: u32, i: u32) -> f32 {
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
   let r = wid.x + wid.y * ${GEMV_GRID_X}u;
-  if (r >= ${N}u) { return; }
+  if (r >= ${N}u) { return; }${pre}
   let t = lid.x;
   var acc = 0.0;
   for (var sb = t; sb < SB_PER_ROW; sb = sb + 64u) {
     let wb = (r * SB_PER_ROW + sb) * 53u;
-    let d = unpack2x16float(blocks[wb + 52u]).x; // d f16 a byte offset 208
+    let d = unpack2x16float(blkw(wb + 52u)).x; // d f16 a byte offset 208
     let xBase = sb * 256u;
     for (var n = 0u; n < 2u; n = n + 1u) {       // 2 gruppi da 128
       let qlO = n * 64u;        // byte offset dentro ql (0 o 64)
@@ -2123,6 +2161,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 //
 // Gli offset dei sei segmenti arrivano in WORD (u32) da `SlabLayout` (moe.ts):
 // qui non si riscrive nessuna costante di layout.
+/**
+ * Arena per i kernel K-quant (goal fase-D fase 3b): un solo offset, perche' un
+ * tensore K-quant e' UN segmento (niente scale separate). `tensorWords` e'
+ * l'offset del tensore dentro lo slab, in parole.
+ */
+export interface KArenaOpts {
+  nBuf: number;
+  slabWords: number;
+  slabsPerBuf: number;
+  tensorWords: number;
+}
+
 export interface ArenaOpts {
   nBuf: number;          // buffer d'arena della classe: binding 0..nBuf-1
   slabWords: number;     // SlabLayout.bytes / 4
@@ -2150,7 +2200,7 @@ const MOE_IDX_STRUCT_WGSL = "struct MoeIdx { selIdx: u32, tableBase: u32, moeLay
  * `ld4` fa uno switch sui binding: il ramo e' UNIFORME sull'intero dispatch (un
  * expert per dispatch) ⇒ scalare, senza divergenza fra lane.
  */
-function arenaHeadWgsl(a: ArenaOpts, mid: string[]): string {
+function arenaHeadWgsl(a: Pick<ArenaOpts, "nBuf" | "slabWords" | "slabsPerBuf">, mid: string[]): string {
   const lines = [SEL_STRUCT_WGSL, MOE_IDX_STRUCT_WGSL];
   for (let j = 0; j < a.nBuf; j++) {
     lines.push(`@group(0) @binding(${j}) var<storage, read> arena${j}: array<vec4<u32>>;`);
