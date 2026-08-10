@@ -27,8 +27,14 @@ export interface Q35RawReader {
 interface Step { pipe: GPUComputePipeline; bind: GPUBindGroup; wgs: [number, number, number] }
 
 export interface Q35GpuModel {
-  /** un token teacher-forced; ritorna l'argmax dei logits. */
-  step(token: number, pos: number): Promise<number>;
+  /**
+   * Un token teacher-forced; ritorna l'argmax dei logits. Con read=false
+   * NON copia/mappa i logits (prefill sequenziale: gli step si accodano
+   * senza sync; tornare -1) — la conformance legge solo dove serve.
+   */
+  step(token: number, pos: number, read?: boolean): Promise<number>;
+  /** azzera gli stati ricorrenti (conv + S) di tutti i layer linear: nuovo prompt. */
+  resetState(): void;
   dispatchesPerToken: number;
   destroy(): void;
 }
@@ -116,6 +122,7 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
   const staging = device.createBuffer({ size: S.vocab * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
   const steps: Step[] = [];
+  const stateBufs: { buf: GPUBuffer; bytes: number }[] = [];
   const push = (code: string, bufs: GPUBuffer[], wgs: number | [number, number], withUni = false): void => {
     const p = pipe(code);
     const entries: GPUBindGroupEntry[] = bufs.map((b, i) => ({ binding: i, resource: { buffer: b } }));
@@ -169,6 +176,8 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
       const wOut = await kquant(`${b}ssm_out.weight`, Q5_K_BLOCK_BYTES);
       const convSt = sbuf(new Float32Array((S.linConvK - 1) * qkvDim));
       const stateS = sbuf(new Float32Array(S.linVHead * S.linHeadDim * S.linHeadDim));
+      stateBufs.push({ buf: convSt, bytes: (S.linConvK - 1) * qkvDim * 4 });
+      stateBufs.push({ buf: stateS, bytes: S.linVHead * S.linHeadDim * S.linHeadDim * 4 });
       gemv(wqkv, xn, qkv);
       gemv(wz, xn, z);
       gemv(wb, xn, bRaw, "q8_0");
@@ -200,7 +209,7 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
 
   return {
     dispatchesPerToken,
-    async step(token: number, pos: number): Promise<number> {
+    async step(token: number, pos: number, read = true): Promise<number> {
       dequantQ6_K(embdRaw, token * rowBlocks * 210, rowBlocks, embRow);
       device.queue.writeBuffer(x, 0, embRow);
       device.queue.writeBuffer(uni, 0, new Uint32Array([pos, pos, 0, 0]));
@@ -212,14 +221,18 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
         pass.dispatchWorkgroups(s.wgs[0], s.wgs[1], s.wgs[2]);
       }
       pass.end();
-      enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4);
+      if (read) enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4);
       device.queue.submit([enc.finish()]);
+      if (!read) return -1;
       await staging.mapAsync(GPUMapMode.READ);
       const lg = new Float32Array(staging.getMappedRange().slice(0));
       staging.unmap();
       let best = -Infinity, bi = -1;
       for (let i = 0; i < S.vocab; i++) if (lg[i] > best) { best = lg[i]; bi = i; }
       return bi;
+    },
+    resetState(): void {
+      for (const s of stateBufs) device.queue.writeBuffer(s.buf, 0, new Float32Array(s.bytes / 4));
     },
     destroy(): void {
       for (const [, p] of pipes) void p;

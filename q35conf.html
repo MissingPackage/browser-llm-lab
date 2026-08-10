@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>browser-llm-lab — q35 4B logits conformance</title>
+  </head>
+  <body>
+    <h1>Qwen3.5-4B logits conformance (dev-only, q1 fase 4)</h1>
+    <p>Replay teacher-forced dei golden full-corpus sull'orchestratore GPU; top-1 vs oracolo per posizione generata.</p>
+    <p>Status: <span id="status">running…</span></p>
+    <p><strong id="live"></strong></p>
+    <section id="log" style="font-family: monospace; font-size: 12px"></section>
+    <script type="module" src="/src/engine/q35conf/page.ts"></script>
+  </body>
+</html>
