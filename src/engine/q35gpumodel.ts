@@ -14,7 +14,7 @@ import {
 } from "./kernels/wgsl";
 import { deltaNetConvWgsl, deltaNetCoreWgsl, deltaNetGatesWgsl } from "./kernels/deltanet";
 import { GGML_TYPE, tensorByteSize, type GgufTensorInfo } from "./gguf";
-import { dequantQ6_K, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
+import { dequantQ4_0, dequantQ6_K, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { q35IsFullAttn, type Q35Shape } from "./q35shape";
 
 export interface Q35RawReader {
@@ -110,8 +110,12 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
 
   // embedding: raw Q6_K tenuto CPU-side per il gather della riga; head = stesso
   // tensore (tied) o output.weight, su GPU
+  // embd: Q6_K (4B) o Q4_0 (9B — che tiene invece la HEAD in Q6_K: inverso
+  // del 4B, scoperto dal file in it.11)
   const embdInfo = r.info("token_embd.weight");
-  if (embdInfo.type !== GGML_TYPE.Q6_K) throw new Error("q35gpumodel: embd atteso Q6_K (4B)");
+  if (embdInfo.type !== GGML_TYPE.Q6_K && embdInfo.type !== GGML_TYPE.Q4_0) {
+    throw new Error(`q35gpumodel: embd tipo ${embdInfo.type}, atteso Q6_K/Q4_0`);
+  }
   const embdRaw = await r.read("token_embd.weight");
   // head: Q6_K (4B tied) o Q4_0 (9B non-tied, output.weight) — it.11
   const headName = S.tiedEmbeddings ? "token_embd.weight" : "output.weight";
@@ -212,14 +216,17 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
   push(rmsnormWgsl(d, S.rmsEps), [x, outNorm, xn], 1);
   headStep(xn, logits);
 
-  const rowBlocks = d / 256;
+  const embdQ6 = embdInfo.type === GGML_TYPE.Q6_K;
+  const rowBlocks = embdQ6 ? d / 256 : d / 32;
+  const rowBytes = embdQ6 ? (d / 256) * 210 : (d / 32) * 18;
   const embRow = new Float32Array(d);
   const dispatchesPerToken = steps.length;
 
   return {
     dispatchesPerToken,
     async step(token: number, pos: number, read = true): Promise<number> {
-      dequantQ6_K(embdRaw, token * rowBlocks * 210, rowBlocks, embRow);
+      if (embdQ6) dequantQ6_K(embdRaw, token * rowBytes, rowBlocks, embRow);
+      else dequantQ4_0(embdRaw, token * rowBytes, rowBlocks, embRow);
       device.queue.writeBuffer(x, 0, embRow);
       device.queue.writeBuffer(uni, 0, new Uint32Array([pos, pos, 0, 0]));
       const enc = device.createCommandEncoder();

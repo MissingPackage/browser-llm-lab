@@ -253,3 +253,24 @@
 - Next: it.11 = fase 5 — 9B (golden MODEL=9B, conformance riusando
   l'infra parametrica) + WP decomposizione gap full-residency vs
   llama.cpp Vulkan (stesso GGUF/protocollo p512/n64).
+
+## it.11 (2026-08-10) — fase 5 prima metà: 9B CONFORME, soglia ratchet
+
+- Infra parametrizzata sul modello (worker/page/runner con --model, tabella
+  URL+SHA pinnata; run-golden-q35.sh con TAG nel filename — preso PRIMA
+  che il 9B sovrascrivesse il golden 4B, run killata e rilanciata).
+- SORPRESA DAL FILE (fail veloce, poi fix): il 9B ha embd Q4_0 e head
+  Q6_K — INVERSO del 4B. q35gpumodel ora gestisce entrambi gli
+  orientamenti (embd Q6_K|Q4_0, head Q6_K|Q4_0); il cpuref li gestiva già.
+- Golden 9B committato (1024 pos, provenance piena). Conformance GPU
+  (42 min, albero congelato): **top-1 = 1000/1024 = 97.65625%** → SOGLIA
+  9B FISSATA (docket item 9) CON ANALISI NEAR-TIE: tutti i 24 miss sono
+  near-tie oracolo (23/24 = top-2, margine mediano 0.066 logit, zero >1)
+  — firma benigna f32, near-tie mai gateati (C2).
+- Riferimenti full-resident 9B (host dichiarato): **decode 14.55 tok/s ·
+  prefill seq 15.4 · TTFT 40.3 s** (load 15.6 s) — scala ~coerente col
+  rapporto parametri attivi vs 4B (22.9→14.55 ≈ 0.63× per 2.1× parametri:
+  la banda pesi domina, come atteso su gemv-bound).
+- RESTA per fase 5 (it.12): WP decomposizione gap — llama.cpp Vulkan
+  stesso GGUF 9B p512/n64 vs questi riferimenti, scomposizione
+  kernel/dispatch/safety-check nel doc di studio, leve per ROI.

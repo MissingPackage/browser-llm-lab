@@ -1,5 +1,17 @@
 # Docket — engine-fase-q1
 
+9. **SOGLIA GOLDEN 9B FISSATA — RATCHET (2026-08-10, it.11, fase 5; stesso
+   regime pre-autorizzato di item 8)** — golden top-1 full-corpus del 9B su
+   GPU: **1000/1024 = 97.65625%** (q35-conf-9b-2026-08-10.json vs
+   golden-q35-9b-full; per-prompt 120-128/128, load 15.6 s, 42 min).
+   ANALISI NEAR-TIE allegata al pin: TUTTI i 24 miss sono near-tie
+   dell'oracolo — 23/24 il motore sceglie il top-2, margine mediano 0.066
+   logit, max 0.557, ZERO miss con margine >1 logit (firma benigna del
+   rounding f32; regola C2 near-tie rispettata). Gate 9B da qui in avanti:
+   top-1 ≥ 1000/1024 AL PIN. Riferimenti full-resident 9B (stesso JSON di
+   bench, host dichiarato): decode 14.55 tok/s (p50 68.7 ms), prefill seq
+   15.4 tok/s, TTFT 40.3 s — frame correttezza-prima.
+
 8. **SOGLIA GOLDEN 4B FISSATA — RATCHET (2026-08-10, it.9, fase 4; spec §5
    punto 3, pre-autorizzata dal contratto: "soglia FISSATA alla prima run
    verificata e mai più abbassata")** — golden top-1 full-corpus del 4B su
