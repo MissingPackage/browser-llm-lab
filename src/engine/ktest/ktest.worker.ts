@@ -35,6 +35,7 @@ import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 import { createEngineDevice } from "../gpudevice";
 import { planMoeChunk } from "../glmprefillplan";
 import { deltaNetConvWgsl, deltaNetGatesWgsl, deltaNetCoreWgsl } from "../kernels/deltanet";
+import { sigmoidMulWgsl } from "../kernels/wgsl";
 import { deltaNetStepCore, softplusGgml, Q35DeltaNetRef } from "../q35cpuref";
 import { SAMPLE_DIMS, SAMPLE_T, sampleWeights, sampleInputs } from "../q35sample";
 
@@ -344,6 +345,171 @@ async function testDeltaNetChain(g: Gpu): Promise<KResult> {
     pass = pass && r.pass;
   }
   return { kernel: "deltanet-chain-T12", pass, maxAbs, maxRel, note: `campione pinnato ${SAMPLE_T} token, stato persistente su GPU` };
+}
+
+// --- q35 fase 4 slice 2: micro-kernel nuovi + assembly layer con pesi REALI ---
+
+async function testRopePartial(g: Gpu): Promise<KResult> {
+  // rope NEOX parziale (64 su 256, qwen35): rotazione solo sui primi 64
+  // canali di ogni head, il resto DEVE restare invariato bit-a-bit.
+  const nHead = 16, hd = 256, dims = 64, pos = 7;
+  const v = randF32(nHead * hd, 911);
+  const ref = v.slice();
+  const half = dims / 2;
+  for (let h = 0; h < nHead; h++) {
+    for (let j = 0; j < half; j++) {
+      const theta = pos / 1e7 ** (j / half);
+      const c = Math.cos(theta), s = Math.sin(theta);
+      const a = ref[h * hd + j], b = ref[h * hd + j + half];
+      ref[h * hd + j] = a * c - b * s;
+      ref[h * hd + j + half] = a * s + b * c;
+    }
+  }
+  const buf = g.buf(v);
+  await g.run(ropeNeoxWgsl(nHead, hd, 1e7, dims), [buf], Math.ceil((nHead * half) / 64), g.uniform(pos, 0));
+  const got = new Float32Array(await g.read(buf, v.byteLength));
+  // canali non ruotati: identita' esatta
+  let untouched = true;
+  for (let h = 0; h < nHead; h++) {
+    for (let i = dims; i < hd; i++) if (got[h * hd + i] !== v[h * hd + i]) untouched = false;
+  }
+  const r = compare("rope-neox-partial-64of256", got, ref, 5e-4, 1e-4);
+  return { ...r, pass: r.pass && untouched, note: `canali ≥64 invariati: ${untouched}` };
+}
+
+async function testSigmoidMul(g: Gpu): Promise<KResult> {
+  const D = 4096;
+  const x = randF32(D, 921), gg = randF32(D, 922, 3);
+  const ref = new Float32Array(D);
+  for (let i = 0; i < D; i++) ref[i] = x[i] / (1 + Math.exp(-gg[i]));
+  const buf = g.buf(x);
+  await g.run(sigmoidMulWgsl(D), [buf, g.buf(gg)], Math.ceil(D / 64));
+  return compare("sigmoid-mul", new Float32Array(await g.read(buf, D * 4)), ref, 1e-5, 1e-6);
+}
+
+/** Assembly GPU dei layer attention qwen35 con pesi REALI del 4B vs cpuref (fixture). */
+async function testQ35AttnLayersReal(g: Gpu): Promise<KResult[]> {
+  const metaRes = await fetch("/models/q35-attn/meta.json");
+  if (!metaRes.ok) {
+    return [{ kernel: "q35-attn-real", pass: false, maxAbs: NaN, maxRel: NaN, note: "fixture assente: npx vite-node scripts/q35-attn-fixture-gen.mjs" }];
+  }
+  interface TensorEntry { suffix: string; type: number; dims: number[]; offset: number; bytes: number }
+  const meta = (await metaRes.json()) as {
+    dims: { d: number; nHead: number; nKvHead: number; headDim: number; ropeDims: number; freqBase: number; rmsEps: number; nK: number; nV: number; hd: number; convK: number };
+    T: number;
+    layers: { l: number; kind: string; tensors: TensorEntry[] }[];
+    inputs: { offset: number; bytes: number };
+    expected: { l: number; offset: number; bytes: number }[];
+  };
+  const bin = new Uint8Array(await (await fetch("/models/q35-attn/fixture.bin")).arrayBuffer());
+  const D = meta.dims;
+  const f32c = (off: number, bytes: number): Float32Array => new Float32Array(bin.slice(off, off + bytes).buffer);
+  const results: KResult[] = [];
+
+  for (const L of meta.layers) {
+    const tn = new Map(L.tensors.map((t) => [t.suffix, t]));
+    const raw = (s: string): TensorEntry => {
+      const t = tn.get(s);
+      if (!t) throw new Error(`fixture: ${s} assente`);
+      return t;
+    };
+    const q40 = (s: string): { qs: GPUBuffer; scales: GPUBuffer; n: number; k: number } => {
+      const t = raw(s);
+      const nBlocks = (t.dims[0] / 32) * t.dims[1];
+      const { qs, scales } = repackQ4_0(bin, t.offset, nBlocks);
+      return { qs: g.buf(qs), scales: g.buf(scales), n: t.dims[1], k: t.dims[0] };
+    };
+    const exp = meta.expected.find((e) => e.l === L.l);
+    if (!exp) throw new Error("fixture: expected assente");
+    const expected = f32c(exp.offset, exp.bytes);
+    const attnNorm = g.buf(f32c(raw("attn_norm.weight").offset, raw("attn_norm.weight").bytes));
+    let l2n = 0, l2d = 0, maxAbs = 0, maxRel = 0;
+
+    if (L.kind === "linear") {
+      const qkvW = q40("attn_qkv.weight");
+      const zW = q40("attn_gate.weight");
+      const bT = raw("ssm_beta.weight"), aT = raw("ssm_alpha.weight");
+      const bRk = repackQ8_0(bin, bT.offset, (bT.dims[0] / 32) * bT.dims[1]);
+      const aRk = repackQ8_0(bin, aT.offset, (aT.dims[0] / 32) * aT.dims[1]);
+      const outT = raw("ssm_out.weight");
+      const outBlocks = repackKQuant(bin, outT.offset, (outT.dims[0] / 256) * outT.dims[1], Q5_K_BLOCK_BYTES);
+      const convW = g.buf(f32c(raw("ssm_conv1d.weight").offset, raw("ssm_conv1d.weight").bytes));
+      const aBuf = g.buf(f32c(raw("ssm_a").offset, raw("ssm_a").bytes));
+      const dtBuf = g.buf(f32c(raw("ssm_dt.bias").offset, raw("ssm_dt.bias").bytes));
+      const nrmBuf = g.buf(f32c(raw("ssm_norm.weight").offset, raw("ssm_norm.weight").bytes));
+      const qkvDim = (2 * D.nK + D.nV) * D.hd;
+      const inner = D.nV * D.hd;
+      const convSt = g.buf(new Float32Array((D.convK - 1) * qkvDim));
+      const S = g.buf(new Float32Array(D.nV * D.hd * D.hd));
+      const xn = g.empty(D.d * 4), qkv = g.empty(qkvDim * 4), z = g.empty(inner * 4);
+      const bRaw = g.empty(D.nV * 4), aRaw = g.empty(D.nV * 4), bSig = g.empty(D.nV * 4), gVal = g.empty(D.nV * 4);
+      const convOut = g.empty(qkvDim * 4), gated = g.empty(inner * 4), y = g.empty(D.d * 4);
+      for (let t = 0; t < meta.T; t++) {
+        const x = g.buf(f32c(meta.inputs.offset + t * D.d * 4, D.d * 4));
+        await g.run(rmsnormWgsl(D.d, D.rmsEps), [x, attnNorm, xn], 1);
+        await g.run(gemvQuantWgsl({ kind: "q4_0", K: qkvW.k, N: qkvW.n, hasBias: false }), [qkvW.qs, qkvW.scales, xn, qkv], qkvW.n);
+        await g.run(gemvQuantWgsl({ kind: "q4_0", K: zW.k, N: zW.n, hasBias: false }), [zW.qs, zW.scales, xn, z], zW.n);
+        await g.run(gemvQuantWgsl({ kind: "q8_0", K: bT.dims[0], N: bT.dims[1], hasBias: false }), [g.buf(bRk.qs), g.buf(bRk.scales), xn, bRaw], bT.dims[1]);
+        await g.run(gemvQuantWgsl({ kind: "q8_0", K: aT.dims[0], N: aT.dims[1], hasBias: false }), [g.buf(aRk.qs), g.buf(aRk.scales), xn, aRaw], aT.dims[1]);
+        await g.run(deltaNetGatesWgsl(D.nV), [bRaw, aRaw, aBuf, dtBuf, bSig, gVal], 1);
+        await g.run(deltaNetConvWgsl(qkvDim, D.convK), [convSt, qkv, convW, convOut], Math.ceil(qkvDim / 64));
+        await g.run(deltaNetCoreWgsl({ hd: D.hd, nK: D.nK, nV: D.nV, eps: D.rmsEps }), [convOut, S, bSig, gVal, z, nrmBuf, gated], D.nV);
+        await g.run(gemvQ5KWgsl({ K: inner, N: outT.dims[1] }), [g.buf(outBlocks), gated, y], outT.dims[1]);
+        const got = new Float32Array(await g.read(y, D.d * 4));
+        for (let i = 0; i < D.d; i++) {
+          const e = expected[t * D.d + i], dif = Math.abs(got[i] - e);
+          l2n += dif * dif; l2d += e * e;
+          if (dif > maxAbs) maxAbs = dif;
+          if (Math.abs(e) > 1e-4) maxRel = Math.max(maxRel, dif / Math.abs(e));
+        }
+      }
+    } else {
+      const wq = q40("attn_q.weight"), wk = q40("attn_k.weight"), wv = q40("attn_v.weight"), wo = q40("attn_output.weight");
+      const qNormW = g.buf(f32c(raw("attn_q_norm.weight").offset, raw("attn_q_norm.weight").bytes));
+      const kNormW = g.buf(f32c(raw("attn_k_norm.weight").offset, raw("attn_k_norm.weight").bytes));
+      const hd = D.headDim, qDim = D.nHead * hd, kvDim = D.nKvHead * hd;
+      const kCache = g.buf(new Float32Array(meta.T * kvDim));
+      const vCache = g.buf(new Float32Array(meta.T * kvDim));
+      const xn = g.empty(D.d * 4), qFull = g.empty(2 * qDim * 4), kBuf = g.empty(kvDim * 4), vBuf = g.empty(kvDim * 4);
+      const qB = g.empty(qDim * 4), gateB = g.empty(qDim * 4), qN = g.empty(qDim * 4), kN = g.empty(kvDim * 4);
+      const attnO = g.empty(qDim * 4), y = g.empty(D.d * 4);
+      for (let t = 0; t < meta.T; t++) {
+        const u = g.uniform(t, t);
+        const x = g.buf(f32c(meta.inputs.offset + t * D.d * 4, D.d * 4));
+        await g.run(rmsnormWgsl(D.d, D.rmsEps), [x, attnNorm, xn], 1);
+        await g.run(gemvQuantWgsl({ kind: "q4_0", K: wq.k, N: wq.n, hasBias: false }), [wq.qs, wq.scales, xn, qFull], wq.n);
+        await g.run(gemvQuantWgsl({ kind: "q4_0", K: wk.k, N: wk.n, hasBias: false }), [wk.qs, wk.scales, xn, kBuf], wk.n);
+        await g.run(gemvQuantWgsl({ kind: "q4_0", K: wv.k, N: wv.n, hasBias: false }), [wv.qs, wv.scales, xn, vBuf], wv.n);
+        await g.run(stridedCopyWgsl({ nVec: D.nHead, len: hd, srcStride: 2 * hd, srcOffset: 0, dstStride: hd, dstOffset: 0 }), [qFull, qB], Math.ceil(qDim / 64));
+        await g.run(stridedCopyWgsl({ nVec: D.nHead, len: hd, srcStride: 2 * hd, srcOffset: hd, dstStride: hd, dstOffset: 0 }), [qFull, gateB], Math.ceil(qDim / 64));
+        await g.run(rmsnormWgsl(hd, D.rmsEps, true), [qB, qNormW, qN], D.nHead);
+        await g.run(rmsnormWgsl(hd, D.rmsEps, true), [kBuf, kNormW, kN], D.nKvHead);
+        await g.run(ropeNeoxWgsl(D.nHead, hd, D.freqBase, D.ropeDims), [qN], Math.ceil((D.nHead * D.ropeDims / 2) / 64), u);
+        await g.run(ropeNeoxWgsl(D.nKvHead, hd, D.freqBase, D.ropeDims), [kN], Math.ceil((D.nKvHead * D.ropeDims / 2) / 64), u);
+        await g.run(kvAppendWgsl(kvDim), [kN, kCache], Math.ceil(kvDim / 64), u);
+        await g.run(kvAppendWgsl(kvDim), [vBuf, vCache], Math.ceil(kvDim / 64), u);
+        await g.run(attnDecodeWgsl({ nHead: D.nHead, nKvHead: D.nKvHead, headDim: hd, ctxMax: meta.T }), [qN, kCache, vCache, attnO], D.nHead, u);
+        await g.run(sigmoidMulWgsl(qDim), [attnO, gateB], Math.ceil(qDim / 64));
+        await g.run(gemvQuantWgsl({ kind: "q4_0", K: wo.k, N: wo.n, hasBias: false }), [wo.qs, wo.scales, attnO, y], wo.n);
+        const got = new Float32Array(await g.read(y, D.d * 4));
+        for (let i = 0; i < D.d; i++) {
+          const e = expected[t * D.d + i], dif = Math.abs(got[i] - e);
+          l2n += dif * dif; l2d += e * e;
+          if (dif > maxAbs) maxAbs = dif;
+          if (Math.abs(e) > 1e-4) maxRel = Math.max(maxRel, dif / Math.abs(e));
+        }
+      }
+    }
+    const l2 = Math.sqrt(l2n / Math.max(l2d, 1e-12));
+    results.push({
+      kernel: `q35-attn-${L.kind}-real-blk${L.l}`,
+      pass: l2 <= 1e-3 && maxAbs <= 5e-2,
+      maxAbs, maxRel,
+      note: `pesi reali 4B, T=${meta.T}, L2rel=${l2.toExponential(2)}`,
+      metrics: { l2rel: l2 },
+    });
+  }
+  return results;
 }
 
 async function testGemv(g: Gpu, kind: "q4_0" | "q8_0", K: number, N: number, hasBias: boolean): Promise<KResult> {
@@ -2585,6 +2751,11 @@ async function main(): Promise<void> {
     results.push(await testDeltaNetCore(g, 16, 4, 8));    // dims campione
     results.push(await testDeltaNetCore(g, 128, 16, 32)); // dims reali 4B/9B/35B
     results.push(await testDeltaNetChain(g));
+
+    // --- q35 fase 4 slice 2: micro-kernel + assembly layer con pesi REALI 4B ---
+    results.push(await testRopePartial(g));
+    results.push(await testSigmoidMul(g));
+    results.push(...await testQ35AttnLayersReal(g));
 
     // --- kernel MLA absorbed (C2 fase 4 slice 2), dims reali GLM ---
     const HL = G.qkNope + G.ropeDims; // 256: head len di q

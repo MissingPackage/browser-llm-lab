@@ -202,8 +202,12 @@ ${sig}
 }
 
 // RoPE NEOX in-place: coppie (j, j+half) per head. pos dall'uniform.
-export function ropeNeoxWgsl(nHead: number, headDim: number, freqBase: number): string {
-  const half = headDim / 2;
+// ropeDims (q1 fase 4): rotazione PARZIALE sui primi ropeDims canali di ogni
+// head (qwen35: 64 su 256, partial_rotary 0.25 — il mrope text-only collassa
+// qui, spec q1 + cpuref ropeText), il resto passa invariato. Default =
+// headDim: testo storico INVARIATO per i chiamanti esistenti.
+export function ropeNeoxWgsl(nHead: number, headDim: number, freqBase: number, ropeDims = headDim): string {
+  const half = ropeDims / 2;
   return `${TOK_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read_write> v: array<f32>;
 @group(0) @binding(1) var<uniform> P: TokParams;
@@ -337,6 +341,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (i >= D) { return; }
   let g = gate[i];
   gate[i] = (g / (1.0 + exp(-g))) * up[i];
+}`;
+}
+
+// x *= sigmoid(g) — output gate dell'attention qwen35 (q1 fase 4:
+// attn_output_gate, il gate viaggia fuso in attn_q e NON riceve norm/rope).
+export function sigmoidMulWgsl(D: number): string {
+  return `
+@group(0) @binding(0) var<storage, read_write> x: array<f32>;
+@group(0) @binding(1) var<storage, read> g: array<f32>;
+const D = ${D}u;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= D) { return; }
+  x[i] = x[i] / (1.0 + exp(-g[i]));
 }`;
 }
 

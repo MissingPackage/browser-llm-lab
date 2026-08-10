@@ -137,11 +137,61 @@ export class Q35CpuRefModel {
     for (let l = 0; l < S.nLayer; l++) {
       onLayer?.(l);
       const b = `blk.${l}.`;
-      const attnNorm = this.dequant(`${b}attn_norm.weight`);
       const postNorm = this.dequant(`${b}post_attention_norm.weight`);
-      const attnOut: Float64Array[] = [];
+      const attnOut = this.attnLayerRef(l, hidden);
+      const wg = this.dequant(`${b}ffn_gate.weight`);
+      const wu = this.dequant(`${b}ffn_up.weight`);
+      const wd = this.dequant(`${b}ffn_down.weight`);
+      const dFfn = S.dFfn as number;
+      for (let t = 0; t < T; t++) {
+        const afterAttn = new Float64Array(d);
+        for (let i = 0; i < d; i++) afterAttn[i] = hidden[t][i] + attnOut[t][i];
+        const xn = rmsnormF64(afterAttn, postNorm, S.rmsEps);
+        const gt = matVecF64(wg, xn, dFfn);
+        const up = matVecF64(wu, xn, dFfn);
+        for (let i = 0; i < dFfn; i++) gt[i] = silu(gt[i]) * up[i];
+        const dn = matVecF64(wd, gt, d);
+        for (let i = 0; i < d; i++) afterAttn[i] += dn[i];
+        hidden[t] = afterAttn;
+      }
+    }
 
-      if (q35IsFullAttn(S, l)) {
+    const outNorm = this.dequant("output_norm.weight");
+    const head = this.head();
+    const argmax = new Int32Array(T);
+    let lastLogits = new Float32Array(0);
+    for (let t = 0; t < T; t++) {
+      const xn = rmsnormF64(hidden[t], outNorm, S.rmsEps);
+      let best = -Infinity, bi = -1;
+      const logits = new Float32Array(S.vocab);
+      for (let r = 0; r < S.vocab; r++) {
+        let acc = 0;
+        const base = r * d;
+        for (let i = 0; i < d; i++) acc += head[base + i] * xn[i];
+        logits[r] = acc;
+        if (acc > best) { best = acc; bi = r; }
+      }
+      argmax[t] = bi;
+      if (t === T - 1) lastLogits = logits;
+    }
+    return { argmax, lastLogits };
+  }
+
+  /**
+   * Ramo ATTENTION del layer l (pre-residual), teacher-forced su tutte le
+   * posizioni: attn_norm + (full-attn | DeltaNet). Fonte unica anche per i
+   * fixture del ktest GPU (fase 4 slice 2): il riferimento del layer è
+   * QUESTO, non una copia.
+   */
+  attnLayerRef(l: number, hidden: Float64Array[]): Float64Array[] {
+    const S = this.shape;
+    const T = hidden.length;
+    const d = S.dModel;
+    const b = `blk.${l}.`;
+    const attnNorm = this.dequant(`${b}attn_norm.weight`);
+    const attnOut: Float64Array[] = [];
+
+    if (q35IsFullAttn(S, l)) {
         const wq = this.dequant(`${b}attn_q.weight`);
         const wk = this.dequant(`${b}attn_k.weight`);
         const wv = this.dequant(`${b}attn_v.weight`);
@@ -218,42 +268,6 @@ export class Q35CpuRefModel {
         );
         for (let t = 0; t < T; t++) attnOut.push(ref.step(rmsnormF64(hidden[t], attnNorm, S.rmsEps)));
       }
-
-      const wg = this.dequant(`${b}ffn_gate.weight`);
-      const wu = this.dequant(`${b}ffn_up.weight`);
-      const wd = this.dequant(`${b}ffn_down.weight`);
-      const dFfn = S.dFfn as number;
-      for (let t = 0; t < T; t++) {
-        const afterAttn = new Float64Array(d);
-        for (let i = 0; i < d; i++) afterAttn[i] = hidden[t][i] + attnOut[t][i];
-        const xn = rmsnormF64(afterAttn, postNorm, S.rmsEps);
-        const gt = matVecF64(wg, xn, dFfn);
-        const up = matVecF64(wu, xn, dFfn);
-        for (let i = 0; i < dFfn; i++) gt[i] = silu(gt[i]) * up[i];
-        const dn = matVecF64(wd, gt, d);
-        for (let i = 0; i < d; i++) afterAttn[i] += dn[i];
-        hidden[t] = afterAttn;
-      }
-    }
-
-    const outNorm = this.dequant("output_norm.weight");
-    const head = this.head();
-    const argmax = new Int32Array(T);
-    let lastLogits = new Float32Array(0);
-    for (let t = 0; t < T; t++) {
-      const xn = rmsnormF64(hidden[t], outNorm, S.rmsEps);
-      let best = -Infinity, bi = -1;
-      const logits = new Float32Array(S.vocab);
-      for (let r = 0; r < S.vocab; r++) {
-        let acc = 0;
-        const base = r * d;
-        for (let i = 0; i < d; i++) acc += head[base + i] * xn[i];
-        logits[r] = acc;
-        if (acc > best) { best = acc; bi = r; }
-      }
-      argmax[t] = bi;
-      if (t === T - 1) lastLogits = logits;
-    }
-    return { argmax, lastLogits };
+    return attnOut;
   }
 }

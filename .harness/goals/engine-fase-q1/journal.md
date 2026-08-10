@@ -168,3 +168,24 @@
   (engine path), argmax==cpuref sul campione ratificato via GPU, golden
   full-corpus a soglia ratchet, riferimenti full-resident con hostState.
 - Next: it.7 = forward GPU 4B (orchestratore: kernel esistenti + deltanet).
+
+## it.7 (2026-08-10) — fase 4 slice 2: assembly GPU layer reali (verifier gate)
+
+- Kernel: ropeNeoxWgsl esteso con `ropeDims` opzionale (default headDim =
+  testo storico INVARIATO; qwen35 usa 64 su 256, il corpo era già corretto
+  per il parziale) + `sigmoidMulWgsl` (output gate attn).
+- cpuref: estratto `attnLayerRef(l, hidden)` da forward (fonte unica per i
+  fixture); guardia e2e RIESEGUITA post-refactor: PASS identico (130 s).
+- Fixture attn con pesi REALI (public/models/q35-attn, 46 MB, NON in git,
+  rigenerabile: scripts/q35-attn-fixture-gen.mjs, SHA GGUF pinnata dentro):
+  byte raw quantizzati di blk.0 (linear) e blk.3 (full) + input seeded T=3
+  + attesi dal cpuref.
+- ktest +4, TUTTI PASS al primo run: rope-partial (canali ≥64 invariati
+  bit-a-bit), sigmoid-mul, e i due ASSEMBLY con pesi reali —
+  q35-attn-linear-real-blk0 L2rel 7.7e-7 (gemv q4_0/q8_0 + gates + conv +
+  core + gemv Q5_K, stato persistente), q35-attn-full-real-blk3 L2rel
+  2.1e-7 (gemv + deinterleave stridedCopy + QK-norm batch + rope parziale +
+  kvAppend + attnDecode 16/4/256 + sigmoidMul + wo). Totale 79/79.
+- Ogni PEZZO del forward 4B è ora provato su GPU con pesi veri: l'it.8
+  è solo orchestrazione (loop 32 layer + embed + head) + gate argmax.
+- Suite node 371/8 skip, tsc pulito, GLM intatto (69 ktest verdi dentro i 79).
