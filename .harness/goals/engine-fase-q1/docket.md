@@ -1,5 +1,16 @@
 # Docket — engine-fase-q1
 
+12. **SOGLIA GOLDEN 35B FISSATA — RATCHET (2026-08-10, it.18, fase 7;
+   stesso regime pre-autorizzato di item 8/9)** — golden top-1 full-corpus
+   del 35B-A3B su GPU CON PAGING: **1013/1024 = 98.925781%** (la migliore
+   dei tre; q35-conf-35b-full-2026-08-10.json vs golden full, 122 min).
+   ANALISI NEAR-TIE al pin: 11 miss TUTTI near-tie (11/11 = top-2 oracolo,
+   margine mediano 0.204 logit, max 0.431, ZERO >1). REGIME C3c
+   ESERCITATO SUL SERIO: 9.06M selezioni, hit-rate arena 98.55%, 121 421
+   EVICTION LRU, 234.7 GB uploadati on-miss, residenza 70.3% al budget
+   12 GiB, ZERO OOM a ctxMax 6469 (15.9 GiB VRAM di picco). Gate 35B da
+   qui in avanti: top-1 ≥ 1013/1024 AL PIN. FASE 7 COMPLETA.
+
 11. **FASE 6 — ESITO LEVE BOUNDED (2026-08-10, it.13; registrazione nel
    perimetro del done-when "O esclusione motivata coi numeri del WP")** —
    (i) dot4I8Packed: ESCLUSA PER ORA (il collo del decode è readback 12%

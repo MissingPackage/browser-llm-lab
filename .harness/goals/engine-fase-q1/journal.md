@@ -432,3 +432,24 @@
   (2) golden full 35B in generazione su CPU (~30-60 min), (3) la conf GPU
   full (~11-12 h) parte alla fine del golden. La sostanza di it.17 (5/5,
   arena, root-cause) è tutta confermata dal verifier con ricalcoli.
+
+## it.18 (2026-08-10) — FASE 7 COMPLETA: soglia ratchet 35B col paging vero
+
+- Golden full 35B committato (arch REALE qwen35moe dal fix; 8 prompt,
+  1024 pos, provenance piena). Conf GPU full lanciata CON PROGRESSO
+  OSSERVATO prima di dichiararla (lezione it.17): 782 dispatch/token,
+  GPU 14%, 15.9 GiB.
+- Run completata in **122 min** (la stima 12h era pessimista ~6×: il
+  forward segmentato coi hit d'arena fa ~4 pos/s medi sui prompt lunghi).
+- **SOGLIA RATCHET 35B: 1013/1024 = 98.925781%** — la MIGLIORE dei tre
+  modelli (4B 98.828, 9B 97.656). Analisi near-tie: 11 miss TUTTI
+  near-tie (11/11 top-2, mediana 0.204, zero >1 logit). Docket item 12.
+- **IL PAGING HA LAVORATO SUL SERIO** (non lo smoke zero-eviction):
+  9.06M selezioni, hit-rate 98.55%, 121 421 eviction LRU, 234.7 GB
+  uploadati on-miss, parco toccato 10 175/10 240, residenza 70.3% al
+  budget 12 GiB, ZERO OOM a ctxMax 6469 (picco 15.9 GiB) — il "run
+  regime C3c al budget 16 GB senza OOM con JSON" del done-when, con
+  evidenza forte. PHASES fase 7 → done (it.14-18).
+- Next: it.19 = fase 8 — tier + recall + bandmodel (recall prefetch
+  256-wide vs 91.92% GLM spiegato; bandmodel rifittato; bench tier
+  mobile(4B) + 8/12/16(35B) emulati con hostState; collasso scarsità).
