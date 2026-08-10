@@ -920,3 +920,33 @@ e miss invariati (done-when (d)). Va detto prima, non dopo aver visto i numeri.
 **Gate di questa iterazione**: tsc pulito, suite 410|9, 0 gpu-error nel run,
 JSON committato (`results/engine/q35-misstrace-35b-it16.json`). Lo strumento
 resta: serve di nuovo alla 3c per il gate, e alla fase 5 per la policy.
+
+### it.16 — CORREZIONE DI SCOPO, stesso giorno, prima di iniziare la 3c
+
+Ho riletto il contratto invece di fidarmi di quello che avevo appena scritto, e
+il pezzo (3c-ii) qui sopra E' FUORI POSTO. La riga 5 di PHASES si intitola
+"**Decode ottimistico + policy sul MoE q35**" e dice, testualmente: "decode
+ottimistico (1 submit/token, repair+replay) **attivo dove la residenza lo
+consente**". La policy d'ingresso e' gia' assegnata, ed e' della fase 5.
+
+E la riga 3b chiede solo: "(a) submit/token e readback/token MISURATI prima e
+dopo nello stesso JSON, **con il caso a residenza piena a 1 submit/token**".
+Il caso freddo NON e' un suo done-when.
+
+Quindi la fetta 3c e' UNA cosa sola, non due:
+
+- **3c** = il MECCANISMO: path a submit unico, `Sel` di produzione dal router
+  GPU, `dirty`, `hiddenCkpt`, repair+replay al confine di token. **Opt-in**
+  (come `select` in GLM), col path sync di oggi che resta il default: cosi' non
+  puo' regredire niente mentre il meccanismo esiste ma non conviene ancora.
+  Il gate misura ENTRAMBE le passate e le riporta separate — il caso caldo
+  soddisfa il done-when, il caso freddo si riporta perche' e' vero, non perche'
+  sia richiesto.
+- **La soglia d'ingresso va alla FASE 5**, dov'era gia'. La misura di it.16
+  (39/39 sporchi a freddo, 0/39 a caldo) e' il dato con cui la fase 5 la
+  tarera': la lascio qui come input, non come lavoro da fare adesso.
+
+Perche' scrivo la correzione invece di riscrivere il paragrafo: un pezzo di
+fase 5 assorbito dentro la 3b sarebbe scope creep travestito da completezza —
+la fase 3b avrebbe "finito" facendo anche altro, e la fase 5 sarebbe arrivata
+con una decisione gia' presa altrove e senza i suoi numeri.

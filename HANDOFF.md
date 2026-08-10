@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a-3b fatte; next = fetta 3c in due pezzi (path a submit unico + policy d'ingresso), progettata su disco in it.16)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a-3b fatte; next = fetta 3c (meccanismo a submit unico, opt-in), progettata su disco in it.16)
 
 ## 1. Next decidable
 
@@ -139,16 +139,19 @@ residenza raggiunta l'ottimistico da' **1 submit/token** (ed e' misurabile su
 questo stesso smoke, seconda passata); a cache fredda il repair+replay e' il
 REGIME e il path ottimistico NUDO sarebbe una regressione sul prefill.
 
-**PROSSIMO: fetta 3c, in DUE pezzi** (progetto scritto nel journal it.16):
-(3c-i) path a submit unico — `Sel` di produzione dal router GPU, `dirty`
+**PROSSIMO: fetta 3c** (progetto nel journal it.16, con la CORREZIONE DI SCOPO
+dello stesso giorno: la policy d'ingresso NON e' della 3b — la riga 5 di PHASES
+si intitola "decode ottimistico + policy" e dice "attivo dove la residenza lo
+consente", quindi la soglia e' della FASE 5, che usera' i numeri di it.16 per
+tararla). La 3c e' UNA cosa: il MECCANISMO, **opt-in**, col path sync di oggi
+che resta il default cosi' niente puo' regredire —
+path a submit unico — `Sel` di produzione dal router GPU, `dirty`
 (atomicMin primo layer sporco + atomicAdd conteggio), `hiddenCkpt` come input
 del replay, repair+replay al confine di token; pezzi noti da risolvere:
 `clearBuffer` per `moeAcc` dentro l'encoder, un axpy che legge il peso da
 `Sel.w` (i pesi ora nascono su GPU), il guard `setInFlight`, e `routing`
 ricostruita dalla `Sel` letta in coda (nessuno sulla CPU vede piu' la
-selezione). (3c-ii) POLICY d'ingresso tarata sui numeri: sync finche' i
-miss/token stanno sopra soglia, ottimistico sotto, con isteresi.
-**GATE della 3c**: due passate con submit/token e readback/token riportati
+selezione). **GATE della 3c**: due passate con submit/token e readback/token riportati
 SEPARATI per freddo e caldo (mediarli nasconderebbe il fenomeno), piu' argmax
 identico e routing/miss invariati. **La 3c NON sara' bit-identica** per
 costruzione: i pesi arrivano dal router GPU in f32 (3,80e-7 misurato in it.15),
