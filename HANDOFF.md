@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: FASI 1-6/9 COMPLETE; next = it.14 fase 7, MoE 35B-A3B parametrizzato)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-6 DONE + fase 7 slice 1 (Q4_K ancorato, cpuref MoE dalla fonte); next = it.15 cpuref e2e 35B)
 
 ## 1. Next decidable
 
@@ -52,16 +52,17 @@ di regime. **it.13 DONE — FASE 6 COMPLETA**:
 dot4I8Packed/tuning escluse coi numeri del WP (rami previsti dal
 done-when); probe subgroup-matrix committato — feature ESPOSTA sul nostro
 harness ma INT8-ONLY, converge con dot4I8Packed post-prefill-batched;
-spec §7 corretta. **Al lavoro: it.14 = fase 7 — MoE 35B-A3B
-parametrizzato** (3-4 it. stimate): slotTable/classi/nExpert/topK/shapes
-parametrici con GLM INVARIATO (non-reg verde); dequant Q4_K expert (nuovo,
-kernel gemv da estendere o classe slab dedicata); 35B forward con paging
-C3c al budget 16 GB senza OOM; argmax==cpuref sul campione, golden a
-soglia fissata (run-golden-q35.sh MODEL=35B... NOTA: golden 35B su CPU
-oracolo sarà LENTO — valutare NPREDICT/corpus del protocollo in apertura),
-firma routing registrata. Riancorarsi da residency.ts/moe.ts/glmmodel.ts
-(la meccanica da parametrizzare) + spec §3 (mix UD: expert Q4_K 117 +
-Q6_K 3) + header dump. Perimetro: path testo Qwen
+spec §7 corretta. **Slice 1 DONE (it.14)**: dequantQ4_K
+ancorato a gguf-py su byte reali + gemvQ4K ktestato a dims expert (82/82)
++ `q35MoeFfnRefF64` dalla fonte (softmax→top8→norm clamp esatto→no scale;
+shared con gate sigmoid scalare — TUTTO diverso da GLM). **Al lavoro:
+it.15 = fase 7 slice 2 — cpuref e2e 35B**: reader LAZY per il 20.9 GB
+(range da fd, non whole-buffer: 31 GB RAM), estensione Q35CpuRefModel a
+qwen35moe (ffn → q35MoeFfnRefF64 con cache expert per layer; embd Q8_0
+row; nKvHead 2), golden smoke 35B (run-golden-q35.sh MODEL=35B, prompt
+smoke: il full-corpus CPU sul 35B sarà LENTO — prima lo smoke), gate
+argmax==oracolo. Poi slice 3: forward GPU 35B con paging C3c
+(slotTable/classi parametrici, GLM invariato). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

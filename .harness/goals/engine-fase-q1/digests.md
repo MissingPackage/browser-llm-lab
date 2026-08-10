@@ -147,3 +147,14 @@ runner), ma INT8-ONLY (16×16×32, {u8,i8}→{u32,i32}); la misura di
 throughput richiede l'infra int8-packed = converge con dot4I8Packed,
 rivalutazione dopo il prefill batched. Spec §7 corretta subito. Next:
 it.14 = fase 7 — il MoE 35B-A3B parametrizzato (il pezzo grosso rimasto).
+
+## it.14 (2026-08-10)
+
+Fase 7 slice 1, verifier PASS (semantica confrontata riga-riga con la
+fonte, oracolo gguf-py rigenerato = identico). **Q4_K expert in casa**:
+dequant ancorato a gguf-py su byte REALI del 35B (<1e-7), gemv ktestato a
+dims expert reali (82/82). **cpuref MoE dalla fonte** (softmax 256 senza
+bias → top-8 → norm con clamp esatto → NESSUNO scale → shared con gate
+sigmoid SCALARE — tutto diverso da GLM, letto non assunto), 3 property
+test. Suite 375. Next: it.15 = reader lazy (20.9 GB) + cpuref e2e 35B
+vs golden smoke, poi forward GPU con paging C3c.
