@@ -25,7 +25,19 @@
    (>100 GB disco, must-docket "quant nuove", perde il GGUF maturo). Se
    preferisci l'auto-quant, è un RULING che riapre authority disco.
 
-4. **REGISTRAZIONE CONDIZIONALE (2026-08-10, it.1)** — oracolo llama.cpp:
-   il supporto `qwen3_5(_moe)` del binario locale b10333 si verifica al
-   primo run di fase 2; se servisse un upgrade, build nuova PINNATA e
-   dichiarata, stesso protocollo (registrazione, non ruling).
+4. **RISOLTO (2026-08-10, it.2)** — oracolo llama.cpp b10333 (build
+   08659901c) supporta la famiglia SENZA upgrade: llama-bench sul 4B
+   `qwen35` carica e genera (pp16 36.1 / tg8 17.2 t/s CPU, exit 0);
+   llama-tokenize funziona (protocollo fissato: `--ids --no-bos
+   --no-parse-special`). Arch GGUF reali: `qwen35`/`qwen35moe`.
+
+5. **REGISTRAZIONE (2026-08-10, it.2 — non richiede decisione)** — header
+   dump dei 3 GGUF (`results/engine/q35-header-dump-2026-08-10.json`):
+   (i) [VERIFY] spec §3 tutti chiusi, tabella aggiornata coi valori veri
+   (9B non-tied, 35B head_count_kv 2 ⇒ KV 40 960 B/token, 2.6× meno di
+   GLM); (ii) mix UD del 35B enumerato: expert Q4_K 117 + Q6_K 3 — il
+   dequant nuovo resta SOLO Q4_K (+ classe slot Q6_K, macchineria
+   esistente); (iii) densi interamente nel set type già supportato
+   (Q5_K sulle proiezioni linear-attn: kquantfast si riusa); (iv) vocab
+   IDENTICO su tutta la famiglia (cross-check 4B==35B nel generatore del
+   fixture, 12 file / 27 714 token).

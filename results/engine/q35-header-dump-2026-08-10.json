@@ -1,0 +1,230 @@
+[
+ {
+  "file": "/home/neuromancer/.cache/blab-models/q35/Qwen3.5-4B-Q4_0.gguf",
+  "nTensors": 426,
+  "meta": {
+   "general.architecture": "qwen35",
+   "general.name": "Qwen3.5-4B",
+   "qwen35.block_count": 32,
+   "qwen35.context_length": 262144,
+   "qwen35.embedding_length": 2560,
+   "qwen35.feed_forward_length": 9216,
+   "qwen35.attention.head_count": 16,
+   "qwen35.attention.head_count_kv": 4,
+   "qwen35.rope.freq_base": 10000000.0,
+   "qwen35.attention.layer_norm_rms_epsilon": 9.999999974752427e-07,
+   "qwen35.attention.key_length": 256,
+   "qwen35.attention.value_length": 256,
+   "qwen35.ssm.conv_kernel": 4,
+   "qwen35.ssm.state_size": 128,
+   "qwen35.ssm.group_count": 16,
+   "qwen35.ssm.time_step_rank": 32,
+   "qwen35.ssm.inner_size": 4096,
+   "qwen35.full_attention_interval": 4,
+   "qwen35.rope.dimension_count": 64,
+   "tokenizer.ggml.model": "gpt2",
+   "tokenizer.ggml.pre": "qwen35",
+   "tokenizer.ggml.tokens#count": 248320,
+   "tokenizer.ggml.eos_token_id": 248046
+  },
+  "typeHistogram": {
+   "embd/head:F32": {
+    "n": 1,
+    "bytes": 10240
+   },
+   "embd/head:Q6_K": {
+    "n": 1,
+    "bytes": 521472000
+   },
+   "attn:Q4_0": {
+    "n": 80,
+    "bytes": 589824000
+   },
+   "attn:F32": {
+    "n": 48,
+    "bytes": 344064
+   },
+   "ffn/shexp:Q4_1": {
+    "n": 4,
+    "bytes": 58982400
+   },
+   "ffn/shexp:Q4_0": {
+    "n": 92,
+    "bytes": 1220935680
+   },
+   "other:F32": {
+    "n": 32,
+    "bytes": 327680
+   },
+   "linear_attn:F32": {
+    "n": 96,
+    "bytes": 3164160
+   },
+   "linear_attn:Q8_0": {
+    "n": 48,
+    "bytes": 4177920
+   },
+   "linear_attn:Q5_K": {
+    "n": 24,
+    "bytes": 173015040
+   }
+  }
+ },
+ {
+  "file": "/home/neuromancer/.cache/blab-models/q35/Qwen3.5-9B-Q4_0.gguf",
+  "nTensors": 427,
+  "meta": {
+   "general.architecture": "qwen35",
+   "general.name": "Qwen3.5-9B",
+   "qwen35.block_count": 32,
+   "qwen35.context_length": 262144,
+   "qwen35.embedding_length": 4096,
+   "qwen35.feed_forward_length": 12288,
+   "qwen35.attention.head_count": 16,
+   "qwen35.attention.head_count_kv": 4,
+   "qwen35.rope.freq_base": 10000000.0,
+   "qwen35.attention.layer_norm_rms_epsilon": 9.999999974752427e-07,
+   "qwen35.attention.key_length": 256,
+   "qwen35.attention.value_length": 256,
+   "qwen35.ssm.conv_kernel": 4,
+   "qwen35.ssm.state_size": 128,
+   "qwen35.ssm.group_count": 16,
+   "qwen35.ssm.time_step_rank": 32,
+   "qwen35.ssm.inner_size": 4096,
+   "qwen35.full_attention_interval": 4,
+   "qwen35.rope.dimension_count": 64,
+   "tokenizer.ggml.model": "gpt2",
+   "tokenizer.ggml.pre": "qwen35",
+   "tokenizer.ggml.tokens#count": 248320,
+   "tokenizer.ggml.eos_token_id": 248046
+  },
+  "typeHistogram": {
+   "embd/head:Q6_K": {
+    "n": 1,
+    "bytes": 834355200
+   },
+   "embd/head:F32": {
+    "n": 1,
+    "bytes": 16384
+   },
+   "embd/head:Q4_0": {
+    "n": 1,
+    "bytes": 572129280
+   },
+   "attn:Q4_0": {
+    "n": 80,
+    "bytes": 943718400
+   },
+   "attn:F32": {
+    "n": 48,
+    "bytes": 540672
+   },
+   "ffn/shexp:Q4_1": {
+    "n": 4,
+    "bytes": 125829120
+   },
+   "ffn/shexp:Q4_0": {
+    "n": 92,
+    "bytes": 2604662784
+   },
+   "other:F32": {
+    "n": 32,
+    "bytes": 524288
+   },
+   "linear_attn:F32": {
+    "n": 96,
+    "bytes": 3164160
+   },
+   "linear_attn:Q8_0": {
+    "n": 48,
+    "bytes": 6684672
+   },
+   "linear_attn:Q5_K": {
+    "n": 24,
+    "bytes": 276824064
+   }
+  }
+ },
+ {
+  "file": "/home/neuromancer/.cache/blab-models/q35/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+  "nTensors": 733,
+  "meta": {
+   "general.architecture": "qwen35moe",
+   "general.name": "Qwen3.6-35B-A3B",
+   "qwen35moe.block_count": 40,
+   "qwen35moe.context_length": 262144,
+   "qwen35moe.embedding_length": 2048,
+   "qwen35moe.attention.head_count": 16,
+   "qwen35moe.attention.head_count_kv": 2,
+   "qwen35moe.rope.freq_base": 10000000.0,
+   "qwen35moe.attention.layer_norm_rms_epsilon": 9.999999974752427e-07,
+   "qwen35moe.expert_count": 256,
+   "qwen35moe.expert_used_count": 8,
+   "qwen35moe.attention.key_length": 256,
+   "qwen35moe.attention.value_length": 256,
+   "qwen35moe.expert_feed_forward_length": 512,
+   "qwen35moe.ssm.conv_kernel": 4,
+   "qwen35moe.ssm.state_size": 128,
+   "qwen35moe.ssm.group_count": 16,
+   "qwen35moe.ssm.time_step_rank": 32,
+   "qwen35moe.ssm.inner_size": 4096,
+   "qwen35moe.full_attention_interval": 4,
+   "qwen35moe.rope.dimension_count": 64,
+   "tokenizer.ggml.model": "gpt2",
+   "tokenizer.ggml.pre": "qwen35",
+   "tokenizer.ggml.tokens#count": 248320,
+   "tokenizer.ggml.eos_token_id": 248046,
+   "tokenizer.ggml.bos_token_id": 248044
+  },
+  "typeHistogram": {
+   "embd/head:Q6_K": {
+    "n": 1,
+    "bytes": 417177600
+   },
+   "embd/head:F32": {
+    "n": 1,
+    "bytes": 8192
+   },
+   "embd/head:Q8_0": {
+    "n": 1,
+    "bytes": 540344320
+   },
+   "attn:Q8_0": {
+    "n": 100,
+    "bytes": 1091829760
+   },
+   "attn:F32": {
+    "n": 60,
+    "bytes": 348160
+   },
+   "expert:Q4_K": {
+    "n": 117,
+    "bytes": 17666408448
+   },
+   "ffn/shexp:Q8_0": {
+    "n": 120,
+    "bytes": 133693440
+   },
+   "ffn/shexp:F32": {
+    "n": 80,
+    "bytes": 84213760
+   },
+   "other:F32": {
+    "n": 40,
+    "bytes": 327680
+   },
+   "linear_attn:F32": {
+    "n": 180,
+    "bytes": 19683840
+   },
+   "linear_attn:Q8_0": {
+    "n": 30,
+    "bytes": 267386880
+   },
+   "expert:Q6_K": {
+    "n": 3,
+    "bytes": 660602880
+   }
+  }
+ }
+]

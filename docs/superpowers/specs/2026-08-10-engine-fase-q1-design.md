@@ -84,19 +84,29 @@ autosufficiente).
 
 | | 4B | 9B | 35B-A3B |
 |---|---|---|---|
-| layer (full-attn) | 32 (8) | 32 (8) [VERIFY fase 2 dal GGUF] | 40 (10) |
-| hidden | 2560 | ~4096 [VERIFY fase 2] | 2048 |
-| head Q/KV | 16/4 | [VERIFY fase 2] | [VERIFY fase 2] |
-| FFN / MoE | inter 9216 | inter [VERIFY] | 256 expert top-8 + 1 shared, moe_inter 512 |
-| tie embeddings | **true** | [VERIFY fase 2] | [VERIFY fase 2] |
+| layer (full-attn) | 32 (8) | 32 (8) | 40 (10) |
+| hidden | 2560 | 4096 | 2048 |
+| head Q/KV | 16/4 | 16/4 | **16/2** |
+| FFN / MoE | inter 9216 | inter 12288 | 256 expert top-8 + shared, moe_inter 512 |
+| tie embeddings | true (head Q6_K 521 MB) | **false** (embd Q6_K 834 MB + head Q4_0 572 MB) | false (embd Q6_K + head Q8_0 540 MB) |
 | Q4 file | 2.58 GB | 5.38 GB | 20.9 GB |
 
-I [VERIFY] si chiudono in fase 2 dal header GGUF (fonte più vicina ai byte
-che eseguiamo); nessun gate dipende da essi prima di fase 2. Il conto KV:
-KV vive SOLO sui layer full (8/32 o 10/40) ⇒ a parità di contesto ~4× meno
-di un GQA pieno; lo stato lineare è O(1)/layer (16×128×128 f32 + conv
-state). La formula slab ctx-aware si parametrizza su
-`nLayerFull × kvPerLayer(headDim, nKvHead)` in fase 4.
+[VERIFY] CHIUSI in it.2 dal header GGUF
+(`results/engine/q35-header-dump-2026-08-10.json`): arch `qwen35`/
+`qwen35moe`; key/value_length 256, rope dim 64 (=256×0.25), freq_base 1e7,
+rms_eps 1e-6; ssm: conv 4, state 128, group 16 (=K-head), time_step_rank
+32 (=V-head), inner 4096 (=32×128); tokenizer `gpt2` pre=`qwen35`, vocab
+248 320, eos 248 046 su tutti e tre (bos 248 044 dichiarato solo dal MoE).
+**Type inventory** (carico-portante): densi = {Q4_0, Q4_1, Q5_K, Q8_0,
+Q6_K, F32} — TUTTI già supportati dal motore (le proiezioni grandi della
+linear-attn sono Q5_K; conv/norme F32); 35B expert = **Q4_K 117 tensori
+(17.67 GB) + Q6_K 3 tensori (0.66 GB)** — il mix UD enumerato: l'unico
+dequant NUOVO del goal resta il Q4_K expert (+ classe slot Q6_K expert,
+macchineria esistente); attn/shexp del MoE in Q8_0. KV dai numeri veri:
+KV solo sui layer full ⇒ 35B = 10×2×256×2×4 B = **40 960 B/token** (2.6×
+meno di GLM 108 288); densi = 8×4×256×2×4 = 65 536 B/token. Lo stato
+lineare è O(1)/layer. La formula slab ctx-aware si parametrizza su
+`nLayerFull × nKvHead × keyLen` in fase 4.
 
 ## 4. Piano numerico DeltaNet (il rischio dominante)
 

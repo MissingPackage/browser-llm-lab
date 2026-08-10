@@ -52,3 +52,22 @@
   poi reader+tokenizer (grosso di fase 2, it.3).
 - Oracolo localizzato: ~/.cache/llamacpp-vulkan/llama-b10333/ (include
   llama-tokenize, llama-quantize, llama-perplexity).
+
+## it.2 seguito (2026-08-10) — download DONE, misure a valle DONE
+
+- SHA: `node scripts/q35-verify-sha.mjs` → 3× PASS, exit 0 (done-when
+  punto 1 di fase 2 CHIUSO).
+- Header dump committato (`results/engine/q35-header-dump-2026-08-10.json`):
+  [VERIFY] spec §3 CHIUSI (tabella aggiornata), mix UD enumerato (expert
+  Q4_K 117 + Q6_K 3), densi nel set type già supportato, KV 35B
+  40 960 B/token. Docket item 5.
+- Oracolo b10333: supporto famiglia PROVATO (llama-bench 4B pp16 36.1 /
+  tg8 17.2 CPU; llama-tokenize ok). Docket item 4 RISOLTO, no upgrade.
+  Nota: llama-cli -no-cnv si impianta (probabile stdin) — llama-bench e
+  llama-tokenize sono gli strumenti del protocollo, nessun impatto.
+- Fixture tokenizer: `tests/fixtures/q35-tok-oracle.json` via
+  `scripts/q35-tok-oracle-gen.mjs` — 12 file, 27 714 token, protocollo
+  `--ids --no-bos --no-parse-special`, cross-check 4B==35B PASS in
+  generazione (vocab di famiglia identico).
+- RESTANO per chiudere fase 2 (it.3): reader TS `qwen35`/`qwen35moe`
+  (load test sui 3), tokenizer TS con id==fixture in npm test, tsc.
