@@ -8,7 +8,7 @@
 // darebbe un errore, darebbe pesi Q6_K leggermente diversi — il tipo di bug
 // che si vede solo come qualità che cala.
 import { describe, expect, it } from "vitest";
-import { repackKQuant } from "../src/engine/quant";
+import { repackKQuant, repackKQuantInto } from "../src/engine/quant";
 
 const scalare = (src: Uint8Array, off: number, nBlocks: number, bb: number): Uint32Array => {
   const wpb = Math.ceil(bb / 4);
@@ -52,5 +52,28 @@ describe("repackKQuant veloce == scalare", () => {
       expect(bytes[b * 212 + 211], `superblocco ${b}, byte 211`).toBe(0);
     }
     expect(bytes[0]).toBe(0xff); // ...e i dati veri ci sono
+  });
+});
+
+describe("repackKQuantInto non ha precondizioni su dst", () => {
+  // Il rilievo del verifier di it.8: con la sola `set()` i byte di padding
+  // restavano quelli che c'erano. Oggi nell'unico chiamante `dst` e' fresco,
+  // ma un generatore di slab che riusi il buffer produrrebbe pesi Q6_K
+  // sporchi IN SILENZIO. Qui il contratto e' fissato: dst sporco, padding 0.
+  it.each([144, 210])("blockBytes %i su dst pre-sporcato", (bb) => {
+    const nB = 5, stride = Math.ceil(bb / 4) * 4;
+    const src = synth(nB * bb, 3);
+    const dst = new Uint8Array(64 + nB * stride).fill(0xee);
+    repackKQuantInto(src, 0, nB, bb, dst, 64);
+    const pulito = new Uint8Array(nB * stride);
+    repackKQuantInto(src, 0, nB, bb, pulito, 0);
+    expect([...dst.subarray(64)]).toEqual([...pulito]);
+    for (let b = 0; b < nB; b++) {
+      for (let j = bb; j < stride; j++) {
+        expect(dst[64 + b * stride + j], `superblocco ${b}, padding ${j}`).toBe(0);
+      }
+    }
+    // ...e non ha scritto fuori dalla finestra
+    expect(dst[63]).toBe(0xee);
   });
 });

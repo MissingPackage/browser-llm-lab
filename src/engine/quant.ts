@@ -287,6 +287,13 @@ const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
  * aritmetica. Con `set()` diventa memcpy. La forma scalare resta come
  * DEFINIZIONE del risultato (e per big-endian, dove non e' una copia).
  */
+/**
+ * Scrive i superblocchi K-quant DIRETTAMENTE in `dst` a partire da
+ * `dstOffset`. Nessuna precondizione su `dst`: i byte di padding vengono
+ * azzerati esplicitamente, quindi la funzione e' corretta anche su un buffer
+ * riusato (uno slot d'arena riciclato dopo un'eviction, o un generatore di
+ * slab che riusi il destinatario).
+ */
 export function repackKQuantInto(
   src: Uint8Array, srcOffset: number, nBlocks: number, blockBytes: number,
   dst: Uint8Array, dstOffset: number,
@@ -299,9 +306,14 @@ export function repackKQuantInto(
     }
     for (let b = 0; b < nBlocks; b++) {
       const o = srcOffset + b * blockBytes;
-      dst.set(src.subarray(o, o + blockBytes), dstOffset + b * stride);
-      // i byte di coda (Q6_K: 2) restano quelli che erano: `dst` arriva
-      // azzerato da chi lo alloca, ed e' l'unico requisito di questa forma.
+      const d = dstOffset + b * stride;
+      dst.set(src.subarray(o, o + blockBytes), d);
+      // AZZERAMENTO ESPLICITO della coda (Q6_K: 2 byte per superblocco).
+      // Senza, la funzione avrebbe una PRECONDIZIONE non dichiarabile nel
+      // tipo — "dst deve arrivare azzerato" — e violarla non darebbe un
+      // errore: darebbe pesi Q6_K sporchi, cioe' qualita' che cala senza
+      // che nulla fallisca. Il costo e' 2 byte su 212 (verifier it.8).
+      for (let j = blockBytes; j < stride; j++) dst[d + j] = 0;
     }
     return;
   }

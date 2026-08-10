@@ -93,3 +93,24 @@ cambio di contratto, non una decisione di meccanismo: la lascio qui.
 lavoro fatto resta valido comunque (il pack veloce serve anche all'import).
 
 Registrato it.8 (2026-08-10).
+
+
+## item 6 — la telemetria read/pack/upload esiste su q35 ma non su GLM (io, fase 5/6)
+
+Rilievo del verifier di it.8: `timing: true` è ora permanente sul path q35
+(costa 4 `performance.now()` per MISS) ed è ciò che ha reso DECIDIBILE la
+fase 2 — senza la scomposizione non avrei saputo che il pack era il 22%.
+Su GLM la telemetria è opt-in dal chiamante e i worker non la accendono.
+Alla fase 5 (policy) e alla 6 (checkpoint) serve lo stesso strumento sui due
+path, altrimenti si confrontano due cose misurate diversamente.
+NON è una decisione da PI: è mio, e lo faccio quando serve. Registrato qui
+per non perderlo. it.9 (2026-08-10).
+
+## item 7 — il costo di I/O per miss NON è misurato (io, fase 5)
+
+`readMs` misura la finestra dentro `ensure`, dove per q35 l'I/O non c'è per
+costruzione (la lettura Range sta nell'`await` prima). Il campo ora lo dice
+nel tipo (it.9), ma il NUMERO manca: e la fase 5 deve decidere se il
+prefetch si giustifica, il che dipende esattamente da quanto costa una
+lettura. Va strumentato l'`await` in `runLayer` prima di attaccare la fase 5.
+it.9 (2026-08-10).

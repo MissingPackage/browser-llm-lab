@@ -1,0 +1,34 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-pack-microbench",
+ "goal": "engine-fase-d fase 2",
+ "geometria": {
+  "dModel": 2048,
+  "dFfnExpert": 512,
+  "elemsPerExpert": 1048576,
+  "superblocchi": 4096
+ },
+ "note": "PRIMA = repack scalare (|= per byte) + array temporaneo ricopiato nello slab; DOPO = repackKQuantInto diretto. Stessi byte in uscita (asserito nel test).",
+ "righe": [
+  {
+   "classe": "q4_K",
+   "slabBytes": 1769472,
+   "ripetizioni": 20,
+   "msPrima": 2.691,
+   "msDopo": 0.463,
+   "fattore": 5.81,
+   "mbsPrima": 658,
+   "mbsDopo": 3823
+  },
+  {
+   "classe": "q6_K",
+   "slabBytes": 2048000,
+   "ripetizioni": 20,
+   "msPrima": 2.424,
+   "msDopo": 0.305,
+   "fattore": 7.95,
+   "mbsPrima": 845,
+   "mbsDopo": 6715
+  }
+ ]
+}

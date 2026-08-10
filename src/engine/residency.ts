@@ -247,6 +247,14 @@ export interface ExpertCacheStats {
   /** 1 − evictions/requests — null senza richieste (mai NaN nel JSON). */
   retention: number | null;
   bytesRead: number; bytesUploaded: number;
+  /**
+   * ATTENZIONE a `readMs` (rilievo del verifier, fase-D it.8): misura la
+   * chiamata a `readRaw` DENTRO `ensure`, che è sincrona. Le sorgenti che
+   * leggono in modo asincrono (q35: fetch Range sul GGUF) fanno l'I/O
+   * PRIMA di chiamare `ensure` e consegnano byte già in memoria — per loro
+   * `readMs` è ~0 e NON significa "I/O gratuito": significa che l'I/O sta
+   * fuori da questa finestra e non è misurato qui.
+   */
   readMs: number; packMs: number; uploadMs: number;
   occupied: Record<ExpertClass, number>;
   slots: Record<ExpertClass, number>;

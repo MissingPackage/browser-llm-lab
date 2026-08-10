@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; FASE 1 CHIUSA it.7 (q35 migrato, GLM bit-identico); next = fase 2)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2 fatte (q35 migrato + pack 6,24x); next = fase 3 (decode multi-step))
 
 ## 1. Next decidable
 
@@ -46,10 +46,32 @@ Prove: parità slab CPU-only 6/6 (stessi byte agli stessi offset), ktest
 smoke 35B sul path migrato **top1 5/5** con hits/misses/uploadedBytes
 IDENTICI al pre-migrazione (8846 / 3314 / 5.916.950.528).
 
-**Al lavoro: fase 2** (slab pre-impacchettati all'import: il repack K-quant
-esce dal path on-miss), poi 3-5 (decode multi-step, prefill batched, policy
-MoE). **Regola del goal**: bench pieni SOLO alle fasi 6 e 8 — durante lo
-sviluppo micro-bench e ktest.
+**FASE 2 (it.8-9)**: misurato prima di scrivere. Il repack K-quant costava
+3,50 ms/miss = **il 22% del prompt** sullo smoke 35B, per due ragioni
+entrambe di scrittura: `repackKQuant` ricostruiva le parole con un `|=` per
+BYTE (ma su little-endian è una COPIA travestita da aritmetica) e
+`packExpertSlab` passava da un array temporaneo (ogni byte toccato 3 volte).
+Ora memcpy + `repackKQuantInto` diretto nello slab: **pack 11.585 → 1.856 ms
+(6,24x)**, 3,50 → 0,56 ms/miss, prompt 53,0 → 42,5 s, con top1 5/5 e
+hits/miss IDENTICI. ktest 84/84 con valori uguali cifra per cifra: è
+bit-a-bit lo stesso repack. Micro-bench committato e riproducibile
+(`PACK_BENCH=1`, JSON con prima+dopo). Eliminata la precondizione "dst
+azzerato" di `repackKQuantInto` (rilievo del verifier: un generatore di slab
+che riusi il buffer avrebbe prodotto pesi Q6_K sporchi IN SILENZIO).
+
+**PI-GATED, docket item 5**: il done-when della fase 2 dice "il repack esce
+dal path on-miss (import-time)". Non l'ho fatto: l'ho reso quasi gratis
+dov'era. Residuo ~1,7 s su 45 (~4%); spostarlo all'import costa **~18 GB di
+slab su disco**. Parere: non conviene, e la riga andrebbe riscritta come "il
+costo di pack per miss scende di >=4x, misurato". **Riscrivere un done-when
+è un cambio di contratto, non una decisione di meccanismo: decide il PI.**
+Se dice "fallo all'import", la fase 2 si riapre e il lavoro fatto resta buono.
+
+**Al lavoro: fase 3** (decode multi-step senza readback: argmax on-GPU +
+embed gather, K step/submit — atteso >=-5,1 ms/token dal q1), poi 4-5
+(prefill batched, policy MoE). Docket 6 (telemetria anche su GLM) e 7 (il
+costo di I/O per miss NON è misurato: serve alla fase 5) sono miei, non
+bloccano. **Regola del goal**: bench pieni SOLO alle fasi 6 e 8.
 
 ## 2. State delta (sessione 27, 2026-08-10 — goal q1 intero, it.0-21)
 
