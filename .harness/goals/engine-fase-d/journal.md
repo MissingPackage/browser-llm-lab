@@ -566,3 +566,47 @@ fase): il primo passaggio dopo `createQ35GpuModel` non e' comparabile con
 nulla. Ogni micro-bench futuro — incluso quello del prefill alla fase 4, che
 e' formulato allo stesso modo — deve scartare una passata e interleavare i
 bracci. Registrato a docket item 10.
+
+## it.13 (2026-08-10) — fase 3b, fetta 2: router+resolve QWEN su GPU, fedele
+
+`routerTopKWgsl` diventa parametrico sul GATING: `sigmoid` (GLM, col bias di
+selezione) o `softmax` (qwen35moe). E' la trascrizione in WGSL dello stesso
+`RouterConfig` che `moe.ts` porta su CPU, non una seconda verita'.
+
+Scelta di forma che vale la pena registrare: il binding `bias` resta
+dichiarato in ENTRAMBI i casi e chi non lo usa ci lega un buffer di ZERI.
+`probs[i] + 0.0` e' esatto in floating point, ed e' letteralmente cio' che
+`routerSelect` fa con `sel.set(probs)` quando `usesBias` e' false. Cosi' il
+layout dei binding non dipende dalla famiglia e — verificato — con
+`gating: "sigmoid"` il testo emesso resta BYTE-IDENTICO a prima.
+
+Il softmax ha bisogno del massimo globale prima di esponenziare, quindi il
+prefill parallelo mette via i logit grezzi e la normalizzazione la fa il
+thread 0: tre passate su 256 expert, niente rispetto alle 256x8 della
+selezione che segue.
+
+**GATE NUOVO `q35-router-resolve-gpu-vs-cpu`** (64 estrazioni, 256 expert,
+top-8), stessa metodologia del caso GLM — separazione come gate, non
+tolleranza cieca:
+
+| | |
+|---|---|
+| flip d'insieme (sep >= 1e-5) | **0** |
+| flip d'ordine | **0** |
+| resolve errati (slot/flag/peso in Sel) | **0** |
+| errore relativo max sui pesi | **2,32e-7** (soglia 1e-5) |
+| separazione minima retta | 1,92e-5 |
+
+Il resolve si prova nello stesso caso: una slotTable finta mappa i
+selezionati su slot noti e **uno di loro su MISS di proposito**, e si pretende
+che `Sel` riporti slot e flag esatti — slot e flag sono interi, quindi il
+confronto e' secco, non una tolleranza. E' l'unico punto in cui l'indirizzo
+dell'expert smette di passare dalla CPU: se sbagliasse, il kernel leggerebbe
+byte di un altro expert senza che nulla fallisca.
+
+ktest **87/87, 0 non-pass**; GLM invariato (`router-top4-gpu-vs-cpu` maxRel
+1.6400254653154082e-7, `router-top4-near-tie` tenuto fino a eps=1e-6).
+
+Prossima fetta (3): cablare tutto in `q35gpumodel` — arena + slotTable +
+router su GPU per layer, miss rilevato su GPU (`dirty`) e repair+replay dalla
+CPU ⇒ 1 submit/token a residenza piena.

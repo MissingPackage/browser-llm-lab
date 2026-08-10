@@ -22,7 +22,7 @@ import {
 } from "../cpuref";
 import { createGlmModel, type GlmWeightSource } from "../glmmodel";
 import {
-  routerSelect, ROUTER_GLM47, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
+  routerSelect, ROUTER_GLM47, ROUTER_QWEN35MOE, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
 } from "../moe";
 import { ExpertOpfsStore } from "../expertstore";
 import { ExpertCache, arenaNeeds, expertKey, modelExpertPark, type ExpertRawBytes } from "../residency";
@@ -2916,6 +2916,101 @@ async function testRouterTopK(g: Gpu, draws: number): Promise<KResult> {
   };
 }
 
+
+// Router+resolve QWEN su GPU vs `routerSelect` (CPU, f64) — fase D fase 3b,
+// fetta 2. Stessa metodologia del caso GLM qui sopra, con due differenze che
+// contano:
+//  - gating SOFTMAX senza bias (`ROUTER_QWEN35MOE`), 256 expert, top-8;
+//  - la selezione softmax e' MONOTONA nei logit, quindi la separazione che
+//    decide se f32 puo' sbagliare e' quella fra l'8o e il 9o LOGIT, non fra
+//    due punteggi derivati. Il kernel pero' confronta le probs, e li' l'exp
+//    in f32 puo' ancora invertire due valori vicinissimi: il gate resta a
+//    separazione, come su GLM.
+// La coda di RESOLVE si prova nello stesso caso: una slotTable finta mappa i
+// selezionati su slot noti e uno di loro su MISS, e si pretende che `Sel`
+// riporti slot e flag esatti — e' l'unico punto in cui l'indirizzo dell'expert
+// smette di passare dalla CPU.
+async function testRouterQwenGpuVsCpu(g: Gpu, draws: number): Promise<KResult> {
+  const NE = 256, NU = 8;
+  const code = routerTopKWgsl({
+    nExpert: NE, nUsed: NU, weightsScale: 1, clampMin: WEIGHTS_SUM_CLAMP_MIN,
+    gating: "softmax", resolve: { nExpert: NE, nUsed: NU },
+  });
+  const cfg = { ...ROUTER_QWEN35MOE, nUsed: NU };
+  const zeros = new Float32Array(NE); // bias assente: `probs + 0.0` e' esatto
+  let maxRelW = 0, maxAbsW = 0, setFlips = 0, orderFlips = 0, belowGate = 0;
+  let minSepHeld = Infinity, maxSepFlipped = 0, resolveBad = 0;
+
+  for (let dr = 0; dr < draws; dr++) {
+    const logits = randF32(NE, 7717 + dr * 11, 4);
+    const ref = routerSelect(logits, null, cfg);
+    // separazione fra ultimo selezionato e primo escluso, in probabilita' f64
+    const mx = Math.max(...logits);
+    const ex = Array.from(logits, (v) => Math.exp(v - mx));
+    const zs = ex.reduce((a, b) => a + b, 0);
+    const probs = ex.map((v) => v / zs);
+    const ranked = probs.slice().sort((a, b) => b - a);
+    const sep = ranked[NU - 1] - ranked[NU];
+
+    // slotTable finta: i selezionati su slot noti, uno su MISS
+    const table = new Uint32Array(NE).fill(0xffffffff);
+    const attesoSlot = new Map<number, number>();
+    Array.from(ref.experts).forEach((e, k) => {
+      if (k === 3) return;               // il quarto resta MISS di proposito
+      table[e] = 100 + k;
+      attesoSlot.set(e, 100 + k);
+    });
+
+    const lb = g.buf(logits), bb = g.buf(zeros);
+    const idsB = g.empty(NU * 4), wtsB = g.empty(NU * 4);
+    const selB = g.empty(NU * 16), tabB = g.buf(table);
+    const idxB = g.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    g.device.queue.writeBuffer(idxB, 0, new Uint32Array([0, 0, 0, 0]));
+    await g.run(code, [lb, bb, idsB, wtsB, selB, tabB, idxB], 1);
+    const ids = new Uint32Array(await g.read(idsB, NU * 4));
+    const wts = new Float32Array(await g.read(wtsB, NU * 4));
+    const selRaw = await g.read(selB, NU * 16);
+    const selU = new Uint32Array(selRaw), selF = new Float32Array(selRaw);
+    for (const b of [lb, bb, idsB, wtsB, selB, tabB, idxB]) b.destroy();
+
+    const sameSet = new Set(ids).size === NU
+      && Array.from(ids).every((e) => Array.from(ref.experts).includes(e));
+    const sameOrder = Array.from(ids).every((e, k) => e === ref.experts[k]);
+    if (sep < ROUTER_SEP_GATE) belowGate++;
+    if (!sameSet) { setFlips += sep >= ROUTER_SEP_GATE ? 1 : 0; maxSepFlipped = Math.max(maxSepFlipped, sep); }
+    else { minSepHeld = Math.min(minSepHeld, sep); }
+    if (!sameOrder) orderFlips++;
+
+    // RESOLVE: slot e flag devono essere ESATTI (sono interi, non numerica)
+    for (let k = 0; k < NU; k++) {
+      const e = selU[k * 4];
+      const atteso = attesoSlot.get(e) ?? 0xffffffff;
+      const flagAtteso = atteso === 0xffffffff ? 1 : 0;
+      if (selU[k * 4 + 1] !== atteso || selU[k * 4 + 3] !== flagAtteso || e !== ids[k]) resolveBad++;
+    }
+
+    if (sameSet) {
+      for (let k = 0; k < NU; k++) {
+        const want = ref.weights[Array.from(ref.experts).indexOf(ids[k])];
+        const d1 = Math.abs(wts[k] - want);
+        maxAbsW = Math.max(maxAbsW, d1);
+        maxRelW = Math.max(maxRelW, d1 / Math.max(Math.abs(want), 1e-6));
+        // il peso deve arrivare anche dentro Sel, dove lo leggono i kernel
+        if (Math.abs(selF[k * 4 + 2] - wts[k]) > 0) resolveBad++;
+      }
+    }
+  }
+  const note = `softmax 256x8, draws=${draws} setFlips(sep>=${ROUTER_SEP_GATE})=${setFlips} `
+    + `orderFlips=${orderFlips} sottoSoglia=${belowGate} resolveErrati=${resolveBad} `
+    + `minSepRetto=${minSepHeld === Infinity ? "-" : minSepHeld.toExponential(2)}`
+    + (maxSepFlipped > 0 ? ` maxSepFlippato=${maxSepFlipped.toExponential(2)}` : "");
+  return {
+    kernel: "q35-router-resolve-gpu-vs-cpu",
+    pass: setFlips === 0 && resolveBad === 0 && maxRelW <= 1e-5,
+    maxAbs: maxAbsW, maxRel: maxRelW, note,
+  };
+}
+
 // Near-tie COSTRUITO. Il caso random sopra non esercita mai il gate: con 64
 // expert e punteggi sparsi la separazione fra 4o e 5o non scende sotto ~3e-5 da
 // sola. Qui la separazione si impone — si sposta il bias del primo escluso
@@ -3110,6 +3205,7 @@ async function main(): Promise<void> {
 
     // --- router top-4 su GPU (C3a fase 4 strato 1): fedelta' f32 vs CPU f64 ---
     results.push(await testRouterTopK(g, 64));
+    results.push(await testRouterQwenGpuVsCpu(g, 64));
     results.push(await testRouterNearTie(g, [1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8], 8));
     // slice B: la coda di resolve scrive Sel leggendo la slotTable vera
     results.push(await testRouterResolveSlotTable(g));

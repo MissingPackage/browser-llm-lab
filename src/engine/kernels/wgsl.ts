@@ -2893,6 +2893,19 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 export function routerTopKWgsl(opts: {
   nExpert: number; nUsed: number; weightsScale: number; clampMin: number;
   /**
+   * Funzione di gating (goal fase-D fase 3b). GLM-4.7-Flash usa sigmoid +
+   * bias di selezione; qwen35moe usa softmax puro. E' lo stesso parametro che
+   * `RouterConfig` porta su CPU in `moe.ts`: qui e' la sua trascrizione in
+   * WGSL, non una seconda verita'.
+   *
+   * Il binding `bias` resta dichiarato in ENTRAMBI i casi: chi non lo usa ci
+   * lega un buffer di zeri, e `probs[i] + 0.0` e' esatto — esattamente quello
+   * che `routerSelect` fa con `sel.set(probs)` quando `usesBias` e' false.
+   * Cosi' il layout dei binding non dipende dalla famiglia, e con
+   * `gating: "sigmoid"` il testo emesso resta BYTE-IDENTICO a prima.
+   */
+  gating?: "sigmoid" | "softmax";
+  /**
    * Coda di resolve. I due campi ripetono nExpert/nUsed perche' qui contano
    * come PASSI di indicizzazione (stride della slotTable per layer, stride di
    * Sel per layer MoE) e non come dimensioni del router: si asserta che
@@ -2907,6 +2920,7 @@ export function routerTopKWgsl(opts: {
   resolve?: { nExpert: number; nUsed: number; dirty?: boolean };
 }): string {
   const { nExpert, nUsed, weightsScale, clampMin } = opts;
+  const gating = opts.gating ?? "sigmoid";
   const WG = 64;
   const res = opts.resolve;
   const dirty = res?.dirty === true;
@@ -2932,6 +2946,24 @@ export function routerTopKWgsl(opts: {
   // Il binding si chiama `selBuf` e non `sel` perche' in questo kernel `sel` e'
   // gia' l'array workgroup dei punteggi di selezione (probs+bias); `selBuf` e'
   // anche il nome che la stessa struttura ha nei kernel d'arena.
+  // sigmoid: probs e score di selezione si calcolano in parallelo, il bias
+  // entra SOLO nella selezione. softmax: serve il massimo su tutti gli expert
+  // PRIMA di esponenziare, quindi il prefill parallelo mette via i logit
+  // grezzi e la normalizzazione la fa il thread 0 (tre passate su nExpert:
+  // niente rispetto alle nExpert*nUsed della selezione che segue).
+  const gatingFill = gating === "sigmoid"
+    ? `
+    let p = 1.0 / (1.0 + exp(-logits[i]));
+    probs[i] = p;
+    sel[i] = p + bias[i];   // il bias entra SOLO nella selezione`
+    : `
+    probs[i] = logits[i];   // grezzi: la softmax ha bisogno del massimo globale`;
+  const gatingNorm = gating === "sigmoid" ? "" : `
+  var mx = probs[0];
+  for (var i = 1u; i < NE; i = i + 1u) { if (probs[i] > mx) { mx = probs[i]; } }
+  var z = 0.0;
+  for (var i = 0u; i < NE; i = i + 1u) { let e2 = exp(probs[i] - mx); probs[i] = e2; z = z + e2; }
+  for (var i = 0u; i < NE; i = i + 1u) { probs[i] = probs[i] / z; sel[i] = probs[i] + bias[i]; }`;
   // Con `dirty` la coda cambia in 3 punti (var, conteggio, atomiche); senza,
   // il testo emesso resta BYTE-IDENTICO a prima — shadow e gpu non cambiano.
   const resTail = res
@@ -2975,13 +3007,10 @@ var<workgroup> sel: array<f32, ${nExpert}>;
 @compute @workgroup_size(${WG})
 fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
   let t = lid.x;
-  for (var i = t; i < NE; i = i + ${WG}u) {
-    let p = 1.0 / (1.0 + exp(-logits[i]));
-    probs[i] = p;
-    sel[i] = p + bias[i];   // il bias entra SOLO nella selezione
+  for (var i = t; i < NE; i = i + ${WG}u) {${gatingFill}
   }
   workgroupBarrier();
-  if (t != 0u) { return; }
+  if (t != 0u) { return; }${gatingNorm}
   var taken: array<bool, ${nExpert}>;
   for (var i = 0u; i < NE; i = i + 1u) { taken[i] = false; }  // var in loop: azzerata a mano
   var sum = 0.0;
