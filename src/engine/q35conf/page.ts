@@ -5,6 +5,7 @@ const cfg = {
   prompts: q.has("prompts") ? q.get("prompts")!.split(",").map(Number) : undefined,
   maxGen: q.has("maxgen") ? Number(q.get("maxgen")) : undefined,
   // ?bench=4,64 → riferimenti full-resident: prompt idx 4, 64 decode greedy
+  model: (q.get("model") === "9b" ? "9b" : undefined) as "9b" | undefined,
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

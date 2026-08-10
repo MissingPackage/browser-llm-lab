@@ -20,13 +20,19 @@ interface Cfg {
   maxGen?: number;
   /** modalità BENCH (it.10): riferimenti decode/prefill/TTFT full-resident. */
   bench?: { promptIdx: number; nDecode: number };
+  /** modello (it.11): default 4b. */
+  model?: "4b" | "9b";
 }
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
 const progress = (msg: string) => post({ type: "progress", msg });
 
-const URL_GGUF = "/models/Qwen3.5-4B-Q4_0.gguf";
-const Q35_4B_SHA = "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb";
+// SHA = Q35_SHA256 (q35shape, pinnate in spec §1)
+const MODELS = {
+  "4b": { url: "/models/Qwen3.5-4B-Q4_0.gguf", file: "Qwen3.5-4B-Q4_0.gguf", sha: "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb" },
+  "9b": { url: "/models/Qwen3.5-9B-Q4_0.gguf", file: "Qwen3.5-9B-Q4_0.gguf", sha: "17670346b4260ddcb0173965145155885024f3c9a4a24389a3370751edbcde24" },
+} as const;
+let URL_GGUF: string = MODELS["4b"].url;
 
 async function range(off: number, len: number): Promise<Uint8Array> {
   const rr = await fetch(URL_GGUF, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
@@ -38,8 +44,10 @@ async function range(off: number, len: number): Promise<Uint8Array> {
 
 async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
+  const M = MODELS[cfg.model ?? "4b"];
+  URL_GGUF = M.url;
   const golden = (await (await fetch("/models/q35/golden-full.json")).json()) as Golden;
-  if (golden.modelSha256 !== Q35_4B_SHA) throw new Error("q35conf: SHA GGUF del golden diverso dal pinnato");
+  if (golden.modelSha256 !== M.sha) throw new Error(`q35conf: SHA GGUF del golden (${golden.modelSha256.slice(0, 8)}) diverso dal pinnato per ${cfg.model ?? "4b"}`);
 
   const prompts = golden.prompts.filter((_, i) => !cfg.prompts || cfg.prompts.includes(i));
   const maxGen = cfg.maxGen ?? Infinity;
@@ -98,9 +106,9 @@ async function main(cfg: Cfg): Promise<void> {
     const p50 = sorted[Math.floor(sorted.length / 2)];
     const report = {
       schemaVersion: 1,
-      kind: "q35-bench-4b-fullresident",
+      kind: `q35-bench-${cfg.model ?? "4b"}-fullresident`,
       date: new Date().toISOString().slice(0, 10),
-      model: "Qwen3.5-4B-Q4_0.gguf",
+      model: M.file,
       modelSha256: golden.modelSha256,
       declared: "orchestratore correttezza-prima (562 dispatch/token, zero fusioni/batch, readback logits per token nel decode): FRAME DI PARTENZA pre-ottimizzazioni, non un numero competitivo",
       prompt: { idx: cfg.bench.promptIdx, file: p.file, tokens: P },
@@ -144,9 +152,9 @@ async function main(cfg: Cfg): Promise<void> {
 
   const report = {
     schemaVersion: 1,
-    kind: "q35-conf-4b",
+    kind: `q35-conf-${cfg.model ?? "4b"}`,
     date: new Date().toISOString().slice(0, 10),
-    model: "Qwen3.5-4B-Q4_0.gguf",
+    model: M.file,
     modelSha256: golden.modelSha256,
     oracleCommit: golden.oracle.commit,
     corpusHash: golden.corpusHash,

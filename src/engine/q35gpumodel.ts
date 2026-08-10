@@ -113,10 +113,19 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
   const embdInfo = r.info("token_embd.weight");
   if (embdInfo.type !== GGML_TYPE.Q6_K) throw new Error("q35gpumodel: embd atteso Q6_K (4B)");
   const embdRaw = await r.read("token_embd.weight");
+  // head: Q6_K (4B tied) o Q4_0 (9B non-tied, output.weight) — it.11
   const headName = S.tiedEmbeddings ? "token_embd.weight" : "output.weight";
   const headT = r.info(headName);
-  if (headT.type !== GGML_TYPE.Q6_K) throw new Error(`q35gpumodel: head ${headName} tipo ${headT.type}, atteso Q6_K`);
-  const head = await kquant(headName, Q6_K_BLOCK_BYTES);
+  let headStep: (src: GPUBuffer, dst: GPUBuffer) => void;
+  if (headT.type === GGML_TYPE.Q6_K) {
+    const head = await kquant(headName, Q6_K_BLOCK_BYTES);
+    headStep = (src, dst) => push(gemvQ6KWgsl({ K: head.k, N: head.n }), [head.blocks, src, dst], gemvGrid(head.n));
+  } else if (headT.type === GGML_TYPE.Q4_0) {
+    const head = await q40(headName);
+    headStep = (src, dst) => gemv(head, src, dst);
+  } else {
+    throw new Error(`q35gpumodel: head ${headName} tipo ${headT.type}, atteso Q6_K/Q4_0`);
+  }
   const outNorm = await f32buf("output_norm.weight");
   const logits = empty(S.vocab * 4);
   const staging = device.createBuffer({ size: S.vocab * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -201,7 +210,7 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
   }
 
   push(rmsnormWgsl(d, S.rmsEps), [x, outNorm, xn], 1);
-  push(gemvQ6KWgsl({ K: head.k, N: head.n }), [head.blocks, xn, logits], gemvGrid(head.n));
+  headStep(xn, logits);
 
   const rowBlocks = d / 256;
   const embRow = new Float32Array(d);

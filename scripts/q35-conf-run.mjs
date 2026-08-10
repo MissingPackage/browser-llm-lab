@@ -13,10 +13,11 @@ const arg = (name, dflt) => {
   return i >= 0 ? process.argv[i + 1] : dflt;
 };
 const ROOT = new URL("..", import.meta.url).pathname;
-const golden = arg("golden", join(ROOT, "results/engine/golden/q35/golden-q35-4b-full-2026-08-10.json"));
+const modelTag = arg("model", "4b");
+const golden = arg("golden", join(ROOT, `results/engine/golden/q35/golden-q35-${modelTag}-full-2026-08-10.json`));
 const prompts = arg("prompts", null);
 const maxGen = arg("max-gen", null);
-const out = arg("out", join(ROOT, `results/engine/q35-conf-4b-${new Date().toISOString().slice(0, 10)}.json`));
+const out = arg("out", join(ROOT, `results/engine/q35-conf-${modelTag}-${new Date().toISOString().slice(0, 10)}.json`));
 const timeoutMin = Number(arg("timeout-min", "240"));
 const PROFILE = process.env.E2E_PROFILE ?? join(homedir(), ".cache/blab-q35conf-profile");
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:5199";
@@ -29,6 +30,7 @@ copyFileSync(golden, join(ROOT, "public/models/q35/golden-full.json"));
 mkdirSync(PROFILE, { recursive: true });
 
 const qs = new URLSearchParams();
+if (modelTag !== "4b") qs.set("model", modelTag);
 if (prompts) qs.set("prompts", prompts);
 if (maxGen) qs.set("maxgen", maxGen);
 

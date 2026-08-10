@@ -17,8 +17,9 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const promptIdx = arg("prompt-idx", "4");
 const nDecode = arg("n-decode", "64");
 const declared = arg("declared", "undeclared");
-const out = arg("out", join(ROOT, `results/engine/q35-bench-4b-fullresident-${new Date().toISOString().slice(0, 10)}.json`));
-const golden = join(ROOT, "results/engine/golden/q35/golden-q35-4b-full-2026-08-10.json");
+const modelTag = arg("model", "4b");
+const out = arg("out", join(ROOT, `results/engine/q35-bench-${modelTag}-fullresident-${new Date().toISOString().slice(0, 10)}.json`));
+const golden = arg("golden", join(ROOT, `results/engine/golden/q35/golden-q35-${modelTag}-full-2026-08-10.json`));
 const PROFILE = process.env.E2E_PROFILE ?? join(homedir(), ".cache/blab-q35conf-profile");
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:5199";
 
@@ -33,7 +34,7 @@ const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService"
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
 page.on("pageerror", (e) => console.log("[q35bench][pageerror]", e.message.slice(0, 300)));
-await page.goto(`${BASE_URL}/q35conf.html?bench=${promptIdx},${nDecode}`, { waitUntil: "load" });
+await page.goto(`${BASE_URL}/q35conf.html?bench=${promptIdx},${nDecode}${modelTag !== "4b" ? `&model=${modelTag}` : ""}`, { waitUntil: "load" });
 
 const t0 = Date.now();
 for (;;) {
