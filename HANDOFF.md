@@ -1,25 +1,29 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL engine-fase-q1 CHIUSO: famiglia Qwen 3.5/3.6 conforme; next = decisione PI + rerun non-reg a boot pulito)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — q1 RIAPERTO: correttezza fatta, PARITÀ DI OTTIMIZZAZIONI MANCANTE; next = goal parità+fase D)
 
 ## 1. Next decidable
 
-**DECISIONE PI: prossimo passo dopo q1.** Il goal `engine-fase-q1`
-(generalizzazione) è **CHIUSO** (it.21, checklist DONE WHEN 11/11 nel
-journal, tag `goal-engine-fase-q1-done`): il motore esegue il path testo
-della famiglia Qwen 3.5/3.6 — **4B 98.828% · 9B 97.656% · 35B-A3B 98.926%
-top-1 vs oracolo** (ratchet full-corpus, near-tie analizzati), il 35B col
-paging VERO (121k eviction, zero OOM). Gap nativo **4.6-5.2× decode a
-parità di regime** (scomposto con misura); tier 8/12/16 GB misurati col
-collasso attribuito; recall lookahead 82.67%@8 spiegato. Numeri =
-CORRETTEZZA-PRIMA dichiarata (i moltiplicatori sono fase D).
-**PRIMA DI TUTTO alla riapertura: rerun non-reg GLM a boot pulito**
-(docket q1 item 13 — HOST-GATED in questa sessione: page cache + VRAM
-baseline; correttezza GLM piena e verde, 84/84). Poi la sequenza congelata
-(docket c3c item 10): **release = split repo + paper Zenodo + blog** —
-oppure fase D (moltiplicatori sul modello target: prefill batched = leva
-1, decode no-readback −5.1 ms misurati, poi spec-dec MTP). Riancorarsi:
+**AL LAVORO: goal PARITÀ + FASE D** (contratto da approvare). Il goal
+`engine-fase-q1` era stato dichiarato chiuso a it.21 sulla sua checklist
+(11/11): **la checklist era soddisfatta, il contratto era sbagliato** —
+l'ho scritto io lasciando fuori le ottimizzazioni. Ruling PI 2026-08-10,
+ora su disco (direction §7-ter): **una famiglia nuova non è importata
+finché non ha le stesse ottimizzazioni di quelle esistenti; il codice si
+uniforma**. q35 oggi gira con LRU nuda + repack JS on-miss, zero batching
+di prefill, readback per token, 40 sync router/token: la meccanica che
+GLM ha risolto in C3a/C3b/C3c. Docket q1 item 14.
+
+**COSA RESTA VALIDO** (non si rifà): tutta la correttezza — kernel
+DeltaNet, tokenizer in-engine, reader parametrico, cpuref di famiglia e i
+**tre ratchet golden 98.828 / 97.656 / 98.926%**, gate bit-fedeli che
+ogni ottimizzazione deve preservare (sono lo strumento che rende sicura
+la fase D). **COSA È STALE**: tutti i numeri di performance q35
+(direction §7-bis marcato), da rimisurare a parità raggiunta. **NON si
+pubblica nulla su q35 prima della parità.**
+
+Prima run utile alla riapertura: rerun non-reg GLM a boot pulito (docket
+q1 item 13) — 10 minuti, poi si sviluppa. Riancorarsi:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`,
-direction §7-bis (i numeri), `docs/publishing/{split-plan,
-paper-contract-draft}.md`.
+direction §7-bis (baseline storica) e §7-ter (le due regole permanenti).
 
 ## 2. State delta (sessione 27, 2026-08-10 — goal q1 intero, it.0-21)
 

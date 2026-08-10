@@ -1,5 +1,26 @@
 # Docket — engine-fase-q1
 
+14. **GOAL RIAPERTO — PARITÀ DI OTTIMIZZAZIONI MANCANTE (2026-08-10, ruling
+   PI a valle della chiusura).** Il goal era stato dichiarato chiuso con la
+   checklist del contratto 11/11: la checklist era soddisfatta, IL CONTRATTO
+   ERA SBAGLIATO. Regola (ora su disco, direction §7-ter): una famiglia
+   nuova non è importata finché non ha le STESSE ottimizzazioni di quelle
+   esistenti; il codice si uniforma, non si affianca un path di serie B.
+   q35 oggi ha: LRU nuda con repack JS on-miss, zero batching di prefill,
+   nessun decode multi-step (readback per token), 40 sync router/token,
+   nessuno slab pre-impacchettato, nessun prefetch/tier — mentre GLM ha
+   tutto questo da C3a/C3b/C3c. CONSEGUENZE registrate: (a) i numeri di
+   performance q1 sono BASELINE STORICA, non riferimenti (direction §7-bis
+   marcato stale); (b) ~2 h di GPU su tier sweep e riferimenti sono da
+   rifare (violata anche la regola bench-lunghi-solo-su-codice-finale,
+   direction §7-ter punto 2); (c) NON si pubblica nulla su q35 prima della
+   parità. RESTA VALIDO e non si rifà: tutto il lavoro di correttezza
+   (kernel DeltaNet, tokenizer, reader, cpuref, e i tre ratchet golden
+   98.828/97.656/98.926% — gate bit-fedeli che le ottimizzazioni devono
+   preservare, e che rendono sicura la fase D). Il tag
+   goal-engine-fase-q1-done resta come marcatore storico dell'it.21, NON
+   come stato del goal. Chiusura vera: al termine del goal di parità+D.
+
 13. **NON-REG NUMERICA GLM = HOST-GATED (2026-08-10, it.21, fase 9 —
    registrazione con rerun programmato)** — la non-regressione di
    CORRETTEZZA GLM è PIENA e fresca (ktest 84/84 con pesi reali inclusi

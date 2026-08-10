@@ -267,10 +267,15 @@ llama.cpp b10333, provenance piena):
 | 9B denso | **1000/1024 = 97.656%** | 24/24 near-tie (23 top-2, mediana 0.066 logit) | 14.55 · 15.4 · 40.3 s |
 | 35B-A3B MoE | **1013/1024 = 98.926%** | 11/11 near-tie (mediana 0.204, zero >1 logit) | col paging: v. tier |
 
-I riferimenti sono DICHIARATI correttezza-prima (562-782 dispatch/token,
-zero fusioni, readback per token nel decode; sul MoE 1 sync router/layer):
-sono il FRAME su cui i moltiplicatori (fase D) lavorano, non numeri
-competitivi. Pezzi nuovi permanenti: tokenizer in-engine (BPE byte-level,
+⚠️ **I NUMERI DI PERFORMANCE DI QUESTA SEZIONE SONO STALE — NON CITABILI**
+(ruling PI 2026-08-10, a valle della chiusura q1). Misurano il motore
+q35 PRIMA della parità di ottimizzazioni con GLM (nessun decode
+multi-step, nessun prefill batched, nessuno slab pre-impacchettato,
+nessun prefetch/tier: LRU nuda con repack JS a ogni miss, 40 sync
+router/token). Restano qui come BASELINE STORICA di partenza; i
+riferimenti veri nascono a valle del goal di parità+moltiplicatori.
+Le soglie di CORRETTEZZA (i tre ratchet golden) NON sono stale: sono
+gate bit-fedeli che ogni ottimizzazione deve preservare. Pezzi nuovi permanenti: tokenizer in-engine (BPE byte-level,
 id==oracolo, protocollo `--no-escape`+USER_DEFINED), reader parametrico
 (shape dai metadata), kernel DeltaNet WGSL (ktest vs cpuref-f64 dalla
 fonte b10333), dequant/gemv Q4_K, paging MoE parametrico (arena a chunk
@@ -312,6 +317,29 @@ Artefatti: journal/docket `.harness/goals/engine-fase-q1/`; JSON in
 `docs/superpowers/specs/2026-08-10-engine-fase-q1-design.md`. Tutti i
 numeri destinati al writeup si RIMISURANO al tag di release
 (paper-contract-draft, ruling 2026-08-10).
+
+## 7-ter. Regole permanenti sull'IMPORT DI UNA FAMIGLIA (ruling PI 2026-08-10)
+
+Scritte dopo il goal q1, che le ha violate entrambe (il PI le aveva date a
+voce; non erano su disco — la mancata scrittura è essa stessa il difetto
+di processo che questa sezione chiude).
+
+1. **PARITÀ DI OTTIMIZZAZIONI — condizione di "fatto".** Una famiglia di
+   modelli nuova NON è importata finché non ha le STESSE ottimizzazioni
+   delle famiglie già supportate. Il codice si UNIFORMA: si porta il
+   meccanismo esistente, non se ne scrive uno di serie B accanto. Un goal
+   di generalizzazione che finisce senza parità è un goal NON CHIUSO,
+   qualunque cosa dica la sua checklist. Corollario per i contratti: la
+   parità va scritta come DONE WHEN, non rimandata a un goal successivo.
+2. **BENCH LUNGHI SOLO SU CODICE RAGIONEVOLMENTE FINALE.** Le run di
+   misura costose (sweep di tier, riferimenti decode/prefill/TTFT,
+   conformance full-corpus a scopo di performance) si eseguono per
+   VALIDARE uno stato che si ritiene finito, mai per fotografare uno
+   stato intermedio: i numeri nascono già morti e — peggio — inquinano i
+   documenti di direzione. Durante lo sviluppo: sim, subset di prompt
+   interi, micro-bench. Eccezione unica: le run di CORRETTEZZA che fissano
+   un gate bit-fedele (golden/ratchet), che sopravvivono alle
+   ottimizzazioni per costruzione.
 
 ## 8. Rischi dichiarati
 
