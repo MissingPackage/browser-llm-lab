@@ -65,6 +65,69 @@ function ropeText(vec: Float64Array, nVec: number, stride: number, nDims: number
   }
 }
 
+/**
+ * FFN MoE qwen35moe (f64) — semantica dalla FONTE llama.cpp b10333
+ * (qwen35moe.cpp build_layer_ffn + llama-graph.cpp build_moe_ffn, letti
+ * 2026-08-10), NON da GLM (che usa sigmoid+bias+scale 1.8):
+ *   logits = Wrouter·x (F32, [256]); probs = softmax(logits); top-8 per
+ *   probs (nessun bias); weights = probs[sel] / clamp(Σ, 6.103515625e-5)
+ *   (norm_w=true; il clamp è ESATTO da build_moe_ffn); w_scale non letto
+ *   dall'arch ⇒ 0 ⇒ NESSUNO scale; out = Σ w_e · SwiGLU_e(x) (pesatura
+ *   DOPO il down); shared: SwiGLU_sh(x) · sigmoid(w_gate_sh·x) (gate
+ *   SCALARE) sommato a out.
+ * `experts.get(e)` fornisce i pesi dell'expert e on-demand (il chiamante
+ * decide dequant/caching: 256 expert f32 interi = 3.2 GB/layer).
+ */
+export interface Q35MoeLayerWeights {
+  router: Float32Array; // [nExpert, d] F32
+  sharedGate: Float32Array; // [d] F32 (ffn_gate_inp_shexp)
+  shGate: Float32Array; // [dE, d]... convenzione ggml: [d in, dE out] → righe dE
+  shUp: Float32Array;
+  shDown: Float32Array; // [dE in, d out] → righe d
+  expert: (e: number) => { gate: Float32Array; up: Float32Array; down: Float32Array };
+}
+
+export function q35MoeFfnRefF64(
+  x: Float64Array, w: Q35MoeLayerWeights, nExpert: number, topK: number, dFfnExpert: number,
+): { out: Float64Array; selected: number[]; weights: number[] } {
+  const d = x.length;
+  const logits = matVecF64(w.router, x, nExpert);
+  // softmax f64 su tutti gli expert
+  let m = -Infinity;
+  for (let e = 0; e < nExpert; e++) if (logits[e] > m) m = logits[e];
+  const probs = new Float64Array(nExpert);
+  let sum = 0;
+  for (let e = 0; e < nExpert; e++) { probs[e] = Math.exp(logits[e] - m); sum += probs[e]; }
+  for (let e = 0; e < nExpert; e++) probs[e] /= sum;
+  // top-K per probs (argsort stabile come ggml_argsort_top_k)
+  const idx = Array.from({ length: nExpert }, (_, e) => e).sort((a, b) => probs[b] - probs[a] || a - b);
+  const selected = idx.slice(0, topK);
+  let wSum = 0;
+  for (const e of selected) wSum += probs[e];
+  const wClamp = Math.max(wSum, 6.103515625e-5); // clamp ESATTO di build_moe_ffn
+  const weights = selected.map((e) => probs[e] / wClamp);
+  const out = new Float64Array(d);
+  for (let k = 0; k < topK; k++) {
+    const ex = w.expert(selected[k]);
+    const g = matVecF64(ex.gate, x, dFfnExpert);
+    const u = matVecF64(ex.up, x, dFfnExpert);
+    for (let i = 0; i < dFfnExpert; i++) g[i] = silu(g[i]) * u[i];
+    const dn = matVecF64(ex.down, g, d);
+    const wk = weights[k];
+    for (let i = 0; i < d; i++) out[i] += wk * dn[i];
+  }
+  // shared expert: SwiGLU · sigmoid(gate scalare)
+  const sg = matVecF64(w.shGate, x, dFfnExpert);
+  const su = matVecF64(w.shUp, x, dFfnExpert);
+  for (let i = 0; i < dFfnExpert; i++) sg[i] = silu(sg[i]) * su[i];
+  const sd = matVecF64(w.shDown, sg, d);
+  let gateRaw = 0;
+  for (let i = 0; i < d; i++) gateRaw += w.sharedGate[i] * x[i];
+  const gateS = sigmoid(gateRaw);
+  for (let i = 0; i < d; i++) out[i] += gateS * sd[i];
+  return { out, selected, weights };
+}
+
 export class Q35CpuRefModel {
   readonly shape: Q35Shape;
   private f: GgufFile;

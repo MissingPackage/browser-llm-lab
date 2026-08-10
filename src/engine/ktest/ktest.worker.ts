@@ -28,14 +28,14 @@ import { ExpertOpfsStore } from "../expertstore";
 import { ExpertCache, arenaNeeds, expertKey, modelExpertPark, type ExpertRawBytes } from "../residency";
 import {
   repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
-  dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ5_K, dequantQ6_K,
-  Q4_1_BLOCK_BYTES, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES,
+  dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ4_K, dequantQ5_K, dequantQ6_K,
+  Q4_1_BLOCK_BYTES, Q4_K_BLOCK_BYTES, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES,
 } from "../quant";
 import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 import { createEngineDevice } from "../gpudevice";
 import { planMoeChunk } from "../glmprefillplan";
 import { deltaNetConvWgsl, deltaNetGatesWgsl, deltaNetCoreWgsl } from "../kernels/deltanet";
-import { sigmoidMulWgsl } from "../kernels/wgsl";
+import { gemvQ4KWgsl, sigmoidMulWgsl } from "../kernels/wgsl";
 import { createQ35GpuModel, q35TensorBytes } from "../q35gpumodel";
 import { validateQwen35 } from "../q35shape";
 import { parseGguf } from "../gguf";
@@ -618,16 +618,16 @@ function fixScalesAt(src: Uint8Array, blockBytes: number, hiByteOffsets: number[
 
 // GEMV dei formati GLM (goal C2 fase 4): kernel vs dequant CPU di riferimento
 // (a loro volta validate su byte reali del GGUF contro gguf-py, it.2).
-async function testGemvC2(g: Gpu, kind: "q4_1" | "q5_K" | "q6_K", K: number, N: number): Promise<KResult> {
+async function testGemvC2(g: Gpu, kind: "q4_1" | "q4_K" | "q5_K" | "q6_K", K: number, N: number): Promise<KResult> {
   const blockWeights = kind === "q4_1" ? 32 : 256;
-  const blockBytes = kind === "q4_1" ? Q4_1_BLOCK_BYTES : kind === "q5_K" ? Q5_K_BLOCK_BYTES : Q6_K_BLOCK_BYTES;
+  const blockBytes = kind === "q4_1" ? Q4_1_BLOCK_BYTES : kind === "q4_K" ? Q4_K_BLOCK_BYTES : kind === "q5_K" ? Q5_K_BLOCK_BYTES : Q6_K_BLOCK_BYTES;
   const nBlocks = (K / blockWeights) * N;
   const src = randBytes(nBlocks * blockBytes, 4321 + K + N);
   if (kind === "q4_1") fixScalesAt(src, blockBytes, [1, 3]);       // d, m
-  else if (kind === "q5_K") fixScalesAt(src, blockBytes, [1, 3]);  // d, dmin
+  else if (kind === "q4_K" || kind === "q5_K") fixScalesAt(src, blockBytes, [1, 3]);  // d, dmin
   else fixScalesAt(src, blockBytes, [209]);                        // d in coda
   const w = new Float32Array(nBlocks * blockWeights);
-  (kind === "q4_1" ? dequantQ4_1 : kind === "q5_K" ? dequantQ5_K : dequantQ6_K)(src, 0, nBlocks, w);
+  (kind === "q4_1" ? dequantQ4_1 : kind === "q4_K" ? dequantQ4_K : kind === "q5_K" ? dequantQ5_K : dequantQ6_K)(src, 0, nBlocks, w);
   const x = randF32(K, 77 + K);
   const ref = new Float32Array(N);
   for (let r = 0; r < N; r++) {
@@ -641,7 +641,7 @@ async function testGemvC2(g: Gpu, kind: "q4_1" | "q5_K" | "q6_K", K: number, N: 
     await g.run(gemvQuantWgsl({ kind, K, N, hasBias: false }), [g.buf(qs), g.buf(scales), g.buf(x), y], N);
   } else {
     const blocks = repackKQuant(src, 0, nBlocks, blockBytes);
-    const code = kind === "q5_K" ? gemvQ5KWgsl({ K, N }) : gemvQ6KWgsl({ K, N });
+    const code = kind === "q4_K" ? gemvQ4KWgsl({ K, N }) : kind === "q5_K" ? gemvQ5KWgsl({ K, N }) : gemvQ6KWgsl({ K, N });
     await g.run(code, [g.buf(blocks), g.buf(x), y], N);
   }
   const got = new Float32Array(await g.read(y, N * 4));
@@ -2780,6 +2780,8 @@ async function main(): Promise<void> {
     // GEMV formati GLM (C2 fase 4), taglie reali del modello-tesi
     results.push(await testGemvC2(g, "q4_1", G.dFfnExpert, G.dModel));  // expert down blk.1-4
     results.push(await testGemvC2(g, "q4_1", G.dFfnDense, 256));        // dense down (righe ridotte)
+    results.push(await testGemvC2(g, "q4_K", 2048, 512));               // expert 35B gate/up (q1 fase 7)
+    results.push(await testGemvC2(g, "q4_K", 512, 2048));               // expert 35B down (q1 fase 7)
     results.push(await testGemvC2(g, "q5_K", G.dModel, G.dFfnExpert));  // gate/up shexp
     results.push(await testGemvC2(g, "q6_K", G.dFfnExpert, G.dModel));  // down shexp
     results.push(await testGemvC2(g, "q6_K", G.dModel, 1024));          // output head (N ridotto)

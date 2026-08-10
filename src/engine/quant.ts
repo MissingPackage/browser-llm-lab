@@ -145,6 +145,38 @@ function scaleMinK4(j: number, q: Uint8Array, qo: number): [number, number] {
 export const Q5_K_BLOCK_WEIGHTS = QK_K;
 export const Q5_K_BLOCK_BYTES = 176;
 
+// Q4_K (144 byte, 256 pesi): [d f16][dmin f16][scales 12 B 6-bit][qs 128 B].
+// w = d·sc·q4 − dmin·m — è Q5_K SENZA il piano qh. Riferimento:
+// dequantize_row_q4_K. Layout q1: gli EXPERT del 35B-A3B UD-Q4_K_S
+// (117/120 tensori expert; spec q1 §2-3, header dump 2026-08-10).
+export const Q4_K_BLOCK_WEIGHTS = QK_K;
+export const Q4_K_BLOCK_BYTES = 144;
+
+export function dequantQ4_K(
+  src: Uint8Array, srcOffset: number, nBlocks: number, dst: Float32Array, dstOffset = 0,
+): number {
+  let w = dstOffset;
+  for (let b = 0; b < nBlocks; b++) {
+    const o = srcOffset + b * Q4_K_BLOCK_BYTES;
+    const d = f16ToF32(src[o] | (src[o + 1] << 8));
+    const dmin = f16ToF32(src[o + 2] | (src[o + 3] << 8));
+    const scalesO = o + 4;
+    const qsO = o + 16;
+    let is = 0;
+    let ql = 0;
+    for (let j = 0; j < QK_K; j += 64) {
+      const [sc1, m1] = scaleMinK4(is, src, scalesO);
+      const [sc2, m2] = scaleMinK4(is + 1, src, scalesO);
+      const d1 = d * sc1, min1 = dmin * m1;
+      const d2 = d * sc2, min2 = dmin * m2;
+      for (let l = 0; l < 32; l++) dst[w++] = d1 * (src[qsO + ql + l] & 0x0f) - min1;
+      for (let l = 0; l < 32; l++) dst[w++] = d2 * (src[qsO + ql + l] >> 4) - min2;
+      ql += 32; is += 2;
+    }
+  }
+  return w - dstOffset;
+}
+
 export function dequantQ5_K(
   src: Uint8Array, srcOffset: number, nBlocks: number, dst: Float32Array, dstOffset = 0,
 ): number {

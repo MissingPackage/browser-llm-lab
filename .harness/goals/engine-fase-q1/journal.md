@@ -321,3 +321,24 @@
 - Next: it.14 = fase 7 — MoE 35B-A3B parametrizzato (il pezzo grosso
   rimasto: slotTable/classi parametrici con GLM invariato, dequant Q4_K
   expert, forward 35B con paging C3c).
+
+## it.14 (2026-08-10) — fase 7 slice 1: Q4_K + cpuref MoE (verifier gate)
+
+- SEMANTICA MoE dalla FONTE b10333 (qwen35moe.cpp + build_moe_ffn), NON
+  da GLM: router F32 → softmax 256 (niente bias) → top-8 per probs →
+  norm sum-1 con clamp ESATTO 6.103515625e-5 → NESSUNO scale
+  (expert_weights_scale non letto ⇒ 0 ⇒ ramo skip) → pesatura DOPO il
+  down; shared expert = SwiGLU · sigmoid(gate SCALARE ffn_gate_inp_shexp).
+  (GLM: sigmoid+bias+norm+scale 1.8 — tutto diverso: letto, non assunto.)
+- `dequantQ4_K` (quant.ts, 144 B/superblocco = Q5_K senza qh) ancorato a
+  ORACOLO ESTERNO: gguf-py dequantize sugli stessi byte REALI del 35B
+  (blk.0.ffn_gate_exps, fixture con base64) — 1024 valori identici <1e-7.
+- `gemvQ4KWgsl` (wgsl.ts, 36 word/sb) + testGemvC2 esteso: ktest
+  gemv-q4_K-2048x512 e 512x2048 (dims expert reali) PASS al primo run —
+  ktest TOTALE 82/82.
+- `q35MoeFfnRefF64` (q35cpurefmodel.ts) + 3 property test: pesi sum-1
+  ordinati; topK=nExpert ≡ mixture densa (ricalcolo indipendente <1e-12);
+  shared gate scalare isolato. Suite 375 (+4).
+- RESTA fase 7 (it.15+): estensione Q35CpuRefModel a qwen35moe con reader
+  LAZY (20.9 GB non stanno in RAM insieme al resto: range da fd),
+  cpuref e2e vs golden smoke 35B, poi forward GPU con paging C3c.
