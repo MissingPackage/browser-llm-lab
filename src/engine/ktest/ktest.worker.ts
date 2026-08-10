@@ -22,7 +22,7 @@ import {
 } from "../cpuref";
 import { createGlmModel, type GlmWeightSource } from "../glmmodel";
 import {
-  routerSelect, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
+  routerSelect, ROUTER_GLM47, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
 } from "../moe";
 import { ExpertOpfsStore } from "../expertstore";
 import { ExpertCache, arenaNeeds, expertKey, modelExpertPark, type ExpertRawBytes } from "../residency";
@@ -1024,7 +1024,7 @@ async function testMoeFfnBlock(g: Gpu, downKind: "q4_0" | "q4_1"): Promise<KResu
   const logitsBuf = g.empty(G.nExpert * 4);
   await g.run(gemvF32Wgsl({ K: G.dModel, N: G.nExpert }), [g.buf(routerW), fnBuf, logitsBuf], G.nExpert);
   const logits = new Float32Array(await g.read(logitsBuf, G.nExpert * 4));
-  const sel = routerSelect(logits, bias);
+  const sel = routerSelect(logits, bias, ROUTER_GLM47);
   const refSet = new Set(Array.from(ref.experts));
   if (sel.experts.length !== 4 || !Array.from(sel.experts).every((e) => refSet.has(e))) {
     return {
@@ -2738,7 +2738,7 @@ async function testRouterTopK(g: Gpu, draws: number): Promise<KResult> {
   for (let d = 0; d < draws; d++) {
     const logits = randF32(G.nExpert, 9001 + d * 7, 4);
     const bias = randF32(G.nExpert, 4201 + d * 13, 0.1);
-    const ref = routerSelect(logits, bias);
+    const ref = routerSelect(logits, bias, ROUTER_GLM47);
 
     // separazione fra ultimo selezionato e primo escluso, in f64: e' la
     // grandezza che decide se f32 puo' sbagliare insieme
@@ -2815,7 +2815,7 @@ async function testRouterNearTie(g: Gpu, epsList: number[], bases: number): Prom
       // il bias entra additivamente in sel ⇒ la separazione si impone esatta
       bias[first] = sel[last] - eps - probs[first];
 
-      const ref = routerSelect(logits, bias);
+      const ref = routerSelect(logits, bias, ROUTER_GLM47);
       const lb = g.buf(logits), bb = g.buf(bias);
       const idsB = g.empty(nU * 4), wtsB = g.empty(nU * 4);
       await g.run(code, [lb, bb, idsB, wtsB], 1);
@@ -2869,7 +2869,7 @@ async function testRouterResolveSlotTable(g: Gpu): Promise<KResult> {
 
   const logits = randF32(G.nExpert, 8811, 4);
   const bias = randF32(G.nExpert, 8822, 0.1);
-  const ref = routerSelect(logits, bias);
+  const ref = routerSelect(logits, bias, ROUTER_GLM47);
   const sel4 = Array.from(ref.experts);
   // residenti: il 1o e il 3o dei quattro selezionati, piu' un expert ESTRANEO
   // alla selezione (se il resolve sbagliasse base della tabella, il suo slot

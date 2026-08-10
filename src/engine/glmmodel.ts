@@ -30,7 +30,7 @@
 // l'encode del blocco expert dietro al sync per layer.
 import { GLM47_FLASH as G } from "./shape";
 import { repackQ4_0, repackQ4_1, repackQ8_0, repackKQuant, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
-import { routerSelect, WEIGHTS_SUM_CLAMP_MIN, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, type SlabLayout } from "./moe";
+import { routerSelect, ROUTER_GLM47, WEIGHTS_SUM_CLAMP_MIN, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, type SlabLayout } from "./moe";
 import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen, mlaSplitWorkgroupStorageBytes } from "./mlasplit";
 import {
   pairGemvSiluQ5KFastWorkgroupStorageBytes, gemvQ6KFastWorkgroupStorageBytes,
@@ -1343,7 +1343,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         pf.logitsMStaging.unmap();
         const sels = [];
         for (let r = 0; r < m; r++) {
-          const sel = routerSelect(lg.subarray(r * G.nExpert, (r + 1) * G.nExpert), mo.bias);
+          const sel = routerSelect(lg.subarray(r * G.nExpert, (r + 1) * G.nExpert), mo.bias, ROUTER_GLM47);
           routing[r].push({ layer: l, experts: sel.experts, weights: sel.weights });
           sels.push(sel);
         }
@@ -1351,7 +1351,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
         if (tapB) {
           const uni = new Set<number>();
           for (let r = 0; r < m; r++) {
-            const p = routerSelect(lg.subarray(MPF * G.nExpert + r * G.nExpert, MPF * G.nExpert + (r + 1) * G.nExpert), tapB.bias);
+            const p = routerSelect(lg.subarray(MPF * G.nExpert + r * G.nExpert, MPF * G.nExpert + (r + 1) * G.nExpert), tapB.bias, ROUTER_GLM47);
             for (const e of p.experts) uni.add(e);
           }
           pendingPrefetchP = { layer: tapB.layer, ids: [...uni] };
@@ -1557,7 +1557,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
             const logits = prefetchOn ? mapped.subarray(0, G.nExpert) : mapped;
             if (telemOn) tSeg = performance.now();
             if (telemOn) T.routerWaitMs += tSeg - tWait;
-            const sel = routerSelect(logits, m.bias);
+            const sel = routerSelect(logits, m.bias, ROUTER_GLM47);
             // policy tier (C3c fase 5): registra la selezione (no-op in lru)
             cache.noteSelection(l, sel.experts);
             // ---- recall in-engine + prossima predizione (C3c fase 4) ----
@@ -1572,10 +1572,10 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
               lastPredRecall = null;
               if (m.tapNext) {
                 const lg2 = mapped.subarray(G.nExpert, 2 * G.nExpert);
-                const pred = routerSelect(lg2, m.tapNext.bias); // K=4 (spec §3)
+                const pred = routerSelect(lg2, m.tapNext.bias, ROUTER_GLM47); // K=4 (spec §3)
                 pendingPrefetch = { layer: m.tapNext.layer, ids: Array.from(pred.experts) };
                 if (telemOn) {
-                  const p8 = routerSelect(lg2, m.tapNext.bias, 8).experts;
+                  const p8 = routerSelect(lg2, m.tapNext.bias, { ...ROUTER_GLM47, nUsed: 8 }).experts;
                   lastPredRecall = { layer: m.tapNext.layer, p4: new Set(pred.experts), p8: new Set(p8) };
                 }
               }

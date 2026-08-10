@@ -4,7 +4,7 @@
 // slab expert (packExpertSlab) contro i repack di riferimento.
 import { describe, expect, it } from "vitest";
 import {
-  routerSelect, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
+  routerSelect, ROUTER_GLM47, packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
 } from "../src/engine/moe";
 import { repackQ4_0, repackQ4_1 } from "../src/engine/quant";
 import { GLM47_FLASH as G } from "../src/engine/shape";
@@ -15,7 +15,7 @@ describe("routerSelect (replica build_moe_ffn)", () => {
   it("tie-break: a parità di score vince l'indice minore", () => {
     const logits = new Float32Array(G.nExpert); // tutti 0 ⇒ probs tutti 0.5
     const bias = new Float32Array(G.nExpert);
-    const { experts, weights } = routerSelect(logits, bias);
+    const { experts, weights } = routerSelect(logits, bias, ROUTER_GLM47);
     expect(Array.from(experts)).toEqual([0, 1, 2, 3]);
     // pesi uniformi: 0.5/2.0 × 1.8
     for (const w of weights) expect(w).toBeCloseTo(0.45, 12);
@@ -26,7 +26,7 @@ describe("routerSelect (replica build_moe_ffn)", () => {
     logits.set([2, 1.5, 1.0, 0.5, 0]);
     const bias = new Float32Array(G.nExpert);
     bias[4] = 0.4; // σ(0)+0.4 = 0.9 > σ(2) = 0.8808 ⇒ expert 4 primo
-    const { experts, weights } = routerSelect(logits, bias);
+    const { experts, weights } = routerSelect(logits, bias, ROUTER_GLM47);
     expect(Array.from(experts)).toEqual([4, 0, 1, 2]);
     const probs = [sigmoid(0), sigmoid(2), sigmoid(1.5), sigmoid(1)];
     const sum = probs.reduce((a, b) => a + b, 0);
@@ -41,7 +41,7 @@ describe("routerSelect (replica build_moe_ffn)", () => {
     for (let trial = 0; trial < 50; trial++) {
       const logits = Float32Array.from({ length: G.nExpert }, () => (rand() * 2 - 1) * 3);
       const bias = Float32Array.from({ length: G.nExpert }, () => (rand() * 2 - 1) * 0.5);
-      const { weights } = routerSelect(logits, bias);
+      const { weights } = routerSelect(logits, bias, ROUTER_GLM47);
       const sum = weights.reduce((a, b) => a + b, 0);
       expect(sum).toBeCloseTo(G.weightsScale, 9);
     }
@@ -50,7 +50,7 @@ describe("routerSelect (replica build_moe_ffn)", () => {
   it("denominatore clampato a 6.103515625e-5 (niente divisione per ~0)", () => {
     const logits = new Float32Array(G.nExpert).fill(-20); // probs ≈ 2e-9
     const bias = new Float32Array(G.nExpert);
-    const { experts, weights } = routerSelect(logits, bias);
+    const { experts, weights } = routerSelect(logits, bias, ROUTER_GLM47);
     expect(Array.from(experts)).toEqual([0, 1, 2, 3]);
     const p = sigmoid(-20);
     for (const w of weights) {
@@ -65,7 +65,7 @@ describe("routerSelect (replica build_moe_ffn)", () => {
     for (let trial = 0; trial < 200; trial++) {
       const logits = Float32Array.from({ length: G.nExpert }, () => (rand() * 2 - 1) * 4);
       const bias = Float32Array.from({ length: G.nExpert }, () => (rand() * 2 - 1) * 0.6);
-      const sel = routerSelect(logits, bias);
+      const sel = routerSelect(logits, bias, ROUTER_GLM47);
       const scored = Array.from({ length: G.nExpert }, (_, i) => ({ i, s: sigmoid(logits[i]) + bias[i] }))
         .sort((a, b) => (b.s !== a.s ? b.s - a.s : a.i - b.i));
       expect(Array.from(sel.experts)).toEqual(scored.slice(0, 4).map((e) => e.i));
