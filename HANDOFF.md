@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a fatte; next = fetta 3b (router GPU in ombra sui layer veri))
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a-3b fatte; next = fetta 3c (Sel di produzione dal router GPU + dirty + repair/replay = 1 submit/token))
 
 ## 1. Next decidable
 
@@ -117,12 +117,23 @@ spezza in 5-6 buffer ⇒ 8-9 storage binding contro i 7 del path Qwen, e
 `q35conf.worker` ora negozia `arenaNeeds`. NON coperto, detto: nessuna
 eviction in questo run (3314 miss = 3314 expert distinti su 6006 slot).
 
-**PROSSIMO: fetta 3b** — router GPU in OMBRA sui layer veri: la `Sel` di
-produzione resta quella della CPU, il resolve GPU scrive una regione parallela
-dello stesso buffer e si confrontano. Il kernel c'e' da it.13, la slotTable la
-popola gia' la fetta 3a: manca il cablaggio e il confronto. Poi 3c (Sel di
-produzione dal router + `dirty` + repair/replay ⇒ 1 submit/token a residenza
-piena).
+**FETTA 3b FATTA (it.15)**: router+resolve su GPU in OMBRA sui layer VERI —
+`Sel` raddoppia (produzione CPU + ombra GPU nello stesso buffer), il dispatch
+gira nello stesso submit del segmento statico e si confrontano. Opt-in
+(`routerShadow` / `--shadow`), spento di default. **Smoke 35B, 1520 confronti
+(38 token x 40 layer), 12.160 selezioni: 0 flip d'insieme, 0 flip d'ordine,
+errore max sui pesi 3,80e-7 (soglia 1e-5), slotMismatch 0, miss GPU/CPU
+3314/3314 con 0 disaccordi**, e produzione IDENTICA a it.14. Il numero che
+qualifica il gate NON sono gli zeri ma il **margine minimo: 1,0e-5** fra
+l'ultimo expert preso e il primo scartato (sui logit) — una decade sopra la
+risoluzione dell'f32 a quella scala. Sotto ~1e-6 sarebbe testa-o-croce e qui
+non e' capitato: da rifare sul corpus pieno alla fase 6.
+
+**PROSSIMO: fetta 3c** — la `Sel` di produzione la scrive il router GPU, entra
+`dirty` (atomicMin sul primo layer con miss + atomicAdd sul conteggio) e il
+repair+replay dalla CPU solo quando `dirty[1] > 0` ⇒ 1 submit/token a residenza
+piena. E' li' che cadono i 40 submit e i 40 readback per token; la precondizione
+(selezione e resolve fedeli sui layer veri) e' ora verificata.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

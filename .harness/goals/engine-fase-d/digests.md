@@ -173,3 +173,29 @@ di GLM). Tempi non misurati per bene (un campione per braccio): non si
 dichiara nulla.
 
 ktest 87/87, suite 410|9, tsc pulito.
+
+## it.15 (2026-08-11) — fase 3b fetta 3b: router GPU in ombra sui layer VERI
+
+`Sel` raddoppia (produzione + ombra nello stesso buffer), il router+resolve di
+it.13 gira nello stesso submit del segmento statico e scrive l'ombra; la
+selezione di produzione resta della CPU e si confrontano. Opt-in
+(`routerShadow` / `--shadow`), spento di default.
+
+**Smoke 35B, 1520 confronti (38 token x 40 layer), 12.160 selezioni**: 0 flip
+d'insieme, 0 flip d'ordine, errore max sui pesi 3,80e-7 (soglia 1e-5),
+**slotMismatch 0**, miss GPU/CPU 3314/3314 con 0 disaccordi. Produzione
+IDENTICA a it.14 (routing, argmax, top1): l'ombra e' davvero un'ombra.
+
+**Il numero che qualifica il gate e' il MARGINE, non gli zeri**: il caso
+peggiore aveva 1,0e-5 fra l'ultimo expert preso e il primo scartato (sui
+logit), cioe' una decade sopra la risoluzione dell'f32 a quella scala. Sotto
+~1e-6 sarebbe testa-o-croce e in questo corpus non e' capitato: non si conclude
+"non flippera' mai", si conclude "su 12.160 selezioni vere non ha flippato, col
+caso peggiore a 1e-5". Da rifare sul corpus pieno alla fase 6.
+
+`slotMismatch = 0` prova il resolve end-to-end: per ogni expert residente la
+GPU ha letto dalla slotTable lo slot che la CPU ha poi usato — `tableBase` e il
+mantenimento della tabella dentro `ensure` sono giusti sul modello vero, non
+solo nel caso finto di it.13.
+
+tsc pulito, suite 410|9, 0 gpu-error.

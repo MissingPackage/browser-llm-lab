@@ -765,3 +765,78 @@ che con lo spostamento delle costanti e' il modo di verificare che l'ABI di
 produzione ancora dalla CPU, quella GPU in una regione parallela dello stesso
 buffer, e si confrontano). Il kernel c'e' gia' da it.13, la slotTable e'
 popolata da questa fetta: manca il cablaggio e il confronto.
+
+## it.15 (2026-08-11) — fase 3b fetta 3b: il router GPU in OMBRA sui layer veri
+
+**Perche' questa fetta esiste anche se it.13 aveva gia' gateato lo stesso
+kernel**: it.13 lo ha provato su 64 estrazioni SINTETICHE 256x8. La domanda
+che la sintetica non poteva porre e' se la DISTRIBUZIONE vera dei logits del
+35B produca margini sotto la risoluzione dell'f32 — la CPU sceglie in f64, la
+GPU in f32, e dove due score sono piu' vicini della risoluzione le due
+scelgono expert diversi. Il gate serve a rispondere con un numero.
+
+**Cablaggio**: `Sel` RADDOPPIA — `[0, nSel)` produzione (la riempie la CPU),
+`[nSel, 2nSel)` ombra (ci scrive il resolve GPU). Due regioni dello stesso
+buffer, non due buffer: la fetta 3c cambiera' solo la entry di `MoeIdx` che
+indirizza il kernel, non il kernel. `MoeIdx` guadagna una entry per layer col
+`selIdx` gia' spostato nell'ombra. Il dispatch del router gira **nello STESSO
+submit del segmento statico**, in coda al GEMV che ha appena scritto i logits
+(dentro il `tail` dell'encoder: `steps[]` non sa fare offset dinamici e non
+l'ho toccato). Il binding `bias` c'e' anche qui con un buffer di ZERI, come
+deciso in it.13.
+
+**Il confronto e' appaiato per EXPERT, non per posizione** — con un flip
+d'ordine la posizione k porterebbe expert diversi, e il confronto per indice
+darebbe un falso allarme sui pesi o, peggio, un falso via libera sugli slot.
+I miss si prendono PRIMA degli `ensure` del layer: dopo, `isResident` direbbe
+sempre si'.
+
+**RISULTATI, smoke 35B, 38 token x 40 layer = 1520 confronti, 12.160 selezioni**:
+
+| | misurato | soglia / atteso |
+|---|---|---|
+| flip d'insieme (top-8 diverso) | **0** | 0 |
+| flip d'ordine | **0** | 0 |
+| errore relativo max sui pesi | **3,80e-7** | < 1e-5 (it.13: 2,32e-7) |
+| **margine minimo sui logit** | **1,0014e-5** | — e' il numero che qualifica il gate |
+| slot risolti diversi dalla CPU | **0** | 0 |
+| miss GPU / miss CPU / disaccordi | **3314 / 3314 / 0** | uguali |
+
+**Il numero che conta e' il margine, non gli zeri.** 0 flip su 1520 layer non
+dice niente se il caso peggiore era facile. Il caso peggiore aveva un margine
+di **1,0e-5 fra l'ultimo expert preso e il primo scartato** (sui logit: la
+softmax e' monotona, quindi e' li' che si decide l'ordinamento). Con logit
+dell'ordine dell'unita', la risoluzione dell'f32 e' ~1e-6: il caso piu' stretto
+che questo corpus ha prodotto sta **una decade sopra la risoluzione**, e la GPU
+l'ha risolto come la CPU. **Cio' che NON e' provato, detto**: un margine sotto
+~1e-6 sarebbe un testa-o-croce, e in questo run non ce n'e' stato nessuno.
+Non si puo' concludere "il router GPU non flippera' mai": si puo' concludere
+che su 12.160 selezioni vere non ha flippato e che il margine peggiore visto
+e' 1e-5. Il gate va rifatto sul corpus pieno alla fase 6.
+
+**Il resolve e' l'altra meta', e passa secca**: `slotMismatch = 0` significa
+che per OGNI expert gia' residente la GPU ha letto dalla slotTable esattamente
+lo slot che la CPU ha poi usato — cioe' che `tableBase` (layer assoluto x
+nExpert) e il mantenimento della tabella dentro `ensure` sono giusti end-to-end,
+non solo nel caso finto di it.13. E `missDisagree = 0` con 3314 miss per parte
+significa che la residenza vista da GPU e quella vista dalla CPU sono la stessa,
+miss per miss. L'ombra gira PRIMA degli `ensure` del suo layer, quindi un
+expert che sta per essere caricato si risolve MISS: e' la residenza parziale
+vista da GPU, ed e' anche la ragione per cui la fetta 3c pretende il
+repair+replay invece di sperare.
+
+**La produzione non si e' mossa**: routing, argmax generati e top1 sono
+IDENTICI a quelli di it.14 (stesso confronto chiave per chiave). L'ombra e'
+davvero un'ombra — un dispatch e una copia da 128 B per layer, spenta di
+default (`routerShadow`, opt-in; `--shadow` nel runner).
+
+**Gate permanenti**: tsc pulito, suite **410 passed | 9 skipped**, 0 gpu-error
+nel run. ktest non ri-eseguito in questa iterazione: nessun kernel e' stato
+toccato (il WGSL del router e' quello di it.13, generato con gli stessi
+parametri) e il path GLM non e' stato sfiorato.
+
+**Prossimo: fetta 3c** — la `Sel` di produzione la scrive il router GPU, entra
+`dirty` (atomicMin sul primo layer con miss, atomicAdd sul conteggio) e il
+repair+replay dalla CPU quando `dirty[1] > 0`. E' li' che cadono i 40 submit e
+i 40 readback per token. Precondizione ora verificata: la selezione e il
+resolve su GPU sono fedeli sui layer veri.

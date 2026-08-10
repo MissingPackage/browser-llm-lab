@@ -28,6 +28,8 @@ interface Cfg {
   arenaGiB?: number;
   /** DEBUG (it.17): dump hidden dopo il layer N sul PRIMO token, poi stop. */
   debugTap?: number;
+  /** fase-D 3b fetta 3b: router GPU in OMBRA, con report di fedelta'. */
+  routerShadow?: boolean;
 }
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
@@ -100,7 +102,7 @@ async function main(cfg: Cfg): Promise<void> {
     info,
     read: (name) => range(f.dataOffset + info(name).offset, q35TensorBytes(info(name))),
     readRange: (name, off, len) => range(f.dataOffset + info(name).offset + off, len),
-  }, ctxMax, arenaBudgetBytes);
+  }, ctxMax, arenaBudgetBytes, { routerShadow: cfg.routerShadow === true });
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
 
@@ -214,6 +216,7 @@ async function main(cfg: Cfg): Promise<void> {
     corpusHash: golden.corpusHash,
     engine: { orchestrator: "q35gpumodel correttezza-prima", dispatchesPerToken: model.dispatchesPerToken, loadMs: Math.round(loadMs), perToken: model.perf() },
     moe: model.moeStats ? model.moeStats() : null,
+    routerShadow: model.routerShadowStats ? model.routerShadowStats() : null,
     top1: { ok: okTot, positions: posTot, rate: okTot / posTot },
     perPrompt: perPrompt.map(({ engineArgmax, ...r }) => r),
     engineArgmaxByPrompt: Object.fromEntries(perPrompt.map((r, i) => [String(i), r.engineArgmax])),

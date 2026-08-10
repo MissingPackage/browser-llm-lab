@@ -39,6 +39,10 @@ if (maxGen) qs.set("maxgen", maxGen);
 // sono, quindi hits/misses — due bracci a budget diverso NON sono confrontabili.
 const arenaGiB = arg("arena-gib", null);
 if (arenaGiB) qs.set("arena", arenaGiB);
+// Router GPU in OMBRA (fase-D 3b, fetta 3b): la selezione di produzione resta
+// quella della CPU, il resolve GPU scrive una regione parallela di Sel e il
+// report porta la fedelta' misurata sui layer VERI.
+if (process.argv.includes("--shadow")) qs.set("shadow", "1");
 const tap = arg("tap", null);
 if (tap !== null) qs.set("tap", tap);
 

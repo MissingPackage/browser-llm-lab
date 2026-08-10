@@ -12,7 +12,7 @@ import {
   addInPlaceWgsl, ARGMAX_CHUNK, argmaxStage1Wgsl, argmaxStage2Wgsl, attnDecodeWgsl, axpyWgsl,
   gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
   gemvQ6KWgsl, gemvQuantWgsl, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
-  siluMulWgsl, stridedCopyWgsl,
+  siluMulWgsl, stridedCopyWgsl, routerTopKWgsl,
   SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE, type KArenaOpts,
 } from "./kernels/wgsl";
 import { expertArenaBindings } from "./gpulimits";
@@ -21,7 +21,7 @@ import { deltaNetConvWgsl, deltaNetCoreWgsl, deltaNetGatesWgsl } from "./kernels
 import { GGML_TYPE, tensorByteSize, type GgufTensorInfo } from "./gguf";
 import { dequantQ4_0, dequantQ6_K, dequantQ8_0, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { q35IsFullAttn, type Q35Shape } from "./q35shape";
-import { ROUTER_QWEN35MOE, routerSelect, type RouterConfig } from "./moe";
+import { ROUTER_QWEN35MOE, routerSelect, WEIGHTS_SUM_CLAMP_MIN, type RouterConfig } from "./moe";
 import {
   ExpertCache, moeParkOf, type ExpertClass, type ExpertRawBytes, type SlotRef,
 } from "./residency";
@@ -37,6 +37,39 @@ export interface Q35RawReader {
 }
 
 interface Step { pipe: GPUComputePipeline; bind: GPUBindGroup; wgs: [number, number, number] }
+
+/**
+ * Esito del confronto ROUTER GPU (in ombra) vs selezione CPU, sui layer VERI
+ * (goal fase-D fase 3b, fetta 3b). it.13 ha già gateato lo stesso kernel su 64
+ * estrazioni sintetiche 256x8: qui la domanda è diversa e la sintetica non la
+ * poteva porre — se la DISTRIBUZIONE vera dei logits del 35B produce margini
+ * sotto la risoluzione dell'f32, la GPU (f32) e la CPU (f64) sceglierebbero
+ * expert diversi. Per questo si riporta anche il margine minimo osservato: un
+ * conteggio di flip a zero senza sapere quanto era stretto il caso peggiore
+ * non dice se il gate ha visto il caso difficile.
+ */
+export interface Q35RouterShadowStats {
+  /** confronti = layer MoE x token */
+  comparisons: number;
+  /** selezioni confrontate = comparisons x topK */
+  picks: number;
+  /** l'INSIEME dei top-K differisce: è il difetto che conta */
+  setFlips: number;
+  /** stesso insieme, ordine diverso (i pesi seguono l'expert, ma l'ordine
+   *  decide quale slot finisce in quale entry di Sel) */
+  orderFlips: number;
+  /** errore relativo massimo sui pesi di mixing (CPU f64 come riferimento) */
+  maxWeightRelErr: number;
+  /** margine minimo sui logit fra l'ultimo preso e il primo scartato: la
+   *  softmax è monotona, quindi è questo il numero che decide l'ordinamento */
+  minLogitMargin: number;
+  /** slot risolti dalla GPU diversi da quelli che la CPU ha poi usato, ESCLUSI
+   *  i miss: l'ombra gira PRIMA degli `ensure` del suo layer, quindi un expert
+   *  che sta per essere caricato si risolve MISS ed è corretto così */
+  slotMismatch: number;
+  /** miss visti dalla GPU (flag di Sel) e dalla CPU (`isResident`) */
+  missGpu: number; missCpu: number; missDisagree: number;
+}
 
 export interface Q35GpuModel {
   /**
@@ -82,10 +115,27 @@ export interface Q35GpuModel {
   perf(): { tokens: number; embedMs: number; readbackMs: number; argmaxMs: number };
   /** DEBUG (it.17): dopo step(), hidden x a valle del layer indicato (solo MoE). */
   readTap(layer: number): Promise<Float32Array>;
+  /** Esito dell'OMBRA del router GPU; `null` se non è stata accesa. */
+  routerShadowStats: (() => Q35RouterShadowStats) | null;
   destroy(): void;
 }
 
-export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxMax = 64, arenaBudgetBytes = 12 * (1 << 30)): Promise<Q35GpuModel> {
+export interface Q35GpuModelOpts {
+  /**
+   * Accende il router+resolve su GPU in OMBRA (fase 3b, fetta 3b): gira in
+   * coda al GEMV del router, nello stesso submit, e scrive una regione
+   * PARALLELA di `Sel` che nessun kernel expert legge. La selezione di
+   * produzione resta quella della CPU: qui si misura la fedeltà sui layer
+   * veri, non si cambia il risultato. Costa un dispatch e una copia da 128 B
+   * per layer, e si spegne di default.
+   */
+  routerShadow?: boolean;
+}
+
+export async function createQ35GpuModel(
+  device: GPUDevice, r: Q35RawReader, ctxMax = 64, arenaBudgetBytes = 12 * (1 << 30),
+  opts: Q35GpuModelOpts = {},
+): Promise<Q35GpuModel> {
   const S = r.shape;
   const isMoe = S.arch === "qwen35moe";
   if (isMoe && !r.readRange) throw new Error("q35gpumodel: MoE richiede reader.readRange");
@@ -346,6 +396,16 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
     routing: Map<number, number>;
     stats(): { hits: number; misses: number; uploadedBytes: number; readMs: number; packMs: number; uploadMs: number };
     runLayer(l: number, logitsF32: Float32Array): Promise<void>;
+    /**
+     * OMBRA (fase 3b, fetta 3b): accoda il router+resolve su GPU nello STESSO
+     * encoder del segmento statico, subito dopo il GEMV che ha scritto i
+     * logits, e copia la `Sel` d'ombra nella staging. `null` se l'ombra è
+     * spenta — il path di produzione non cambia di una riga.
+     */
+    shadowEncode: ((enc: GPUCommandEncoder, m: number) => void) | null;
+    /** Confronta l'ombra col la selezione CPU del layer appena eseguito. */
+    shadowCompare: (() => Promise<void>) | null;
+    shadowStats: (() => Q35RouterShadowStats) | null;
     destroy(): void;
   }
   let moe: MoeRt | null = null;
@@ -385,6 +445,7 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
       slotTable: true,
     });
     const routerCfg: RouterConfig = { ...ROUTER_QWEN35MOE, nUsed: topK };
+    const shadowOn = opts.routerShadow === true;
     const nMoeLayer = cuts.length;
     const nSel = nMoeLayer * topK;
     // `MoeIdx` si binda a dynamic offset: la spaziatura delle entry deve essere
@@ -400,8 +461,14 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
     // toccherà più questo buffer nel path caldo. È dimensionata per tutto il
     // token (40×8 entry, 5 120 B) e non per un layer: il layout non deve
     // cambiare quando i 40 submit diventano uno.
+    // In modo OMBRA il buffer RADDOPPIA (design §4 di GLM): [0, nSel) è la
+    // produzione — quella che i kernel expert leggono e che riempie la CPU —,
+    // [nSel, 2·nSel) è l'ombra dove scrive il resolve GPU. Due regioni dello
+    // stesso buffer e non due buffer: lo stesso kernel serve la fetta 3c
+    // cambiando solo la entry di uniform che lo indirizza.
+    const nSelTot = shadowOn ? 2 * nSel : nSel;
     const selBuf = device.createBuffer({
-      size: nSel * SEL_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+      size: nSelTot * SEL_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
     const selScratch = new ArrayBuffer(topK * SEL_BYTES);
     const selU32 = new Uint32Array(selScratch);
@@ -409,17 +476,26 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
     // `MoeIdx` è STATICA: contenuto noto al load, una scrittura sola. Il dynamic
     // offset sceglie la entry, la entry dice quale `Sel` leggere. `tableBase` è
     // la base del layer nella slotTable e la userà il resolve GPU (fetta 3b).
+    // In ombra servono nMoeLayer entry IN PIÙ, una per layer, che indirizzano
+    // il router: stesso `tableBase`, ma `selIdx` già spostato nell'ombra. È
+    // così che il kernel di resolve resta identico fra ombra e produzione —
+    // cambia la entry, non il WGSL.
+    const nIdx = nSel + (shadowOn ? nMoeLayer : 0);
     const moeIdxUni = device.createBuffer({
-      size: nSel * MOE_IDX_STRIDE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      size: nIdx * MOE_IDX_STRIDE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     {
-      const u = new Uint32Array(nSel * (MOE_IDX_STRIDE / 4));
+      const u = new Uint32Array(nIdx * (MOE_IDX_STRIDE / 4));
       for (let m = 0; m < nMoeLayer; m++) {
         const tableBase = moeLayerAbs[m] * cfg.nExpert;
         for (let k = 0; k < topK; k++) {
           const selIdx = m * topK + k;
           const w = selIdx * (MOE_IDX_STRIDE / 4);
           u[w] = selIdx; u[w + 1] = tableBase; u[w + 2] = m; u[w + 3] = 0;
+        }
+        if (shadowOn) {
+          const w = (nSel + m) * (MOE_IDX_STRIDE / 4);
+          u[w] = nSel + m * topK; u[w + 1] = tableBase; u[w + 2] = m; u[w + 3] = 0;
         }
       }
       device.queue.writeBuffer(moeIdxUni, 0, u as unknown as BufferSource);
@@ -507,6 +583,132 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
     const bgSilu = mkBg(pSilu, [gateE, upE]);
     const bgAxpy = wBufs.map((w) => mkBg(pAxpy, [moeAcc, dnE, w]));
     const bgAddRes = mkBg(pAdd, [x, moeAcc]);
+    // ---- OMBRA: router + resolve su GPU accanto alla selezione CPU (fetta 3b) ----
+    // Il kernel è quello di it.13, in configurazione qwen35moe (softmax). Il
+    // binding `bias` resta dichiarato anche qui e ci si lega un buffer di ZERI:
+    // `probs[i] + 0.0` è esatto ed è letteralmente ciò che `routerSelect` fa
+    // quando la config non usa il bias — così il layout non dipende dalla
+    // famiglia (scelta motivata in it.13).
+    const shadow = shadowOn ? ((): {
+      encode: (enc: GPUCommandEncoder, m: number) => void;
+      compare: () => Promise<void>;
+      stats: () => Q35RouterShadowStats;
+      note: (sel: { experts: ArrayLike<number>; weights: ArrayLike<number> }, slots: SlotRef[], missing: Set<number>, logits: Float32Array) => void;
+    } => {
+      const bgl = device.createBindGroupLayout({
+        entries: [
+          ...[0, 1].map((b) => ({ binding: b, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } })),
+          ...[2, 3, 4].map((b) => ({ binding: b, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" as const } })),
+          { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } },
+          {
+            binding: 6, visibility: GPUShaderStage.COMPUTE,
+            buffer: { type: "uniform" as const, hasDynamicOffset: true, minBindingSize: MOE_IDX_BYTES },
+          },
+        ],
+      });
+      const code = routerTopKWgsl({
+        nExpert: nE, nUsed: topK, weightsScale: routerCfg.weightsScale,
+        clampMin: WEIGHTS_SUM_CLAMP_MIN, gating: routerCfg.gating,
+        resolve: { nExpert: nE, nUsed: topK },
+      });
+      const pipeR = device.createComputePipeline({
+        layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+        compute: { module: device.createShaderModule({ code }), entryPoint: "main" },
+      });
+      const zeroBias = sbuf(new Float32Array(nE));
+      const ids = empty(topK * 4), wts = empty(topK * 4);
+      const bind = device.createBindGroup({
+        layout: bgl,
+        entries: [
+          { binding: 0, resource: { buffer: routerLogits } },
+          { binding: 1, resource: { buffer: zeroBias } },
+          { binding: 2, resource: { buffer: ids } },
+          { binding: 3, resource: { buffer: wts } },
+          { binding: 4, resource: { buffer: selBuf } },
+          { binding: 5, resource: { buffer: cache.slotTableBuffer() } },
+          { binding: 6, resource: { buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES } },
+        ],
+      });
+      const selStaging = device.createBuffer({
+        size: topK * SEL_BYTES, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+      const st: Q35RouterShadowStats = {
+        comparisons: 0, picks: 0, setFlips: 0, orderFlips: 0, maxWeightRelErr: 0,
+        minLogitMargin: Infinity, slotMismatch: 0, missGpu: 0, missCpu: 0, missDisagree: 0,
+      };
+      // ultima selezione CPU del layer, messa da parte per il confronto
+      let cpuIds: number[] = [], cpuW: number[] = [], cpuSlots: number[] = [], cpuMiss: boolean[] = [];
+      let cpuMargin = Infinity;
+      return {
+        encode: (enc, m) => {
+          const p2 = enc.beginComputePass();
+          p2.setPipeline(pipeR);
+          p2.setBindGroup(0, bind, [(nSel + m) * MOE_IDX_STRIDE]);
+          p2.dispatchWorkgroups(1);
+          p2.end();
+          enc.copyBufferToBuffer(selBuf, (nSel + m * topK) * SEL_BYTES, selStaging, 0, topK * SEL_BYTES);
+        },
+        note: (sel, slots, missing, lg) => {
+          cpuIds = Array.from(sel.experts as ArrayLike<number>).slice(0, topK);
+          cpuW = Array.from(sel.weights as ArrayLike<number>).slice(0, topK);
+          cpuSlots = slots.map((s) => s.idx);
+          cpuMiss = cpuIds.map((e) => missing.has(e));
+          // margine sui LOGIT fra l'ultimo preso e il primo scartato: la
+          // softmax è monotona, quindi l'ordinamento lo decide questo numero.
+          // È la misura di "quanto era difficile il caso", senza la quale uno
+          // zero flip non dice se il gate ha visto il caso stretto.
+          const taken = new Set(cpuIds);
+          let lastIn = Infinity, firstOut = -Infinity;
+          for (let i = 0; i < nE; i++) {
+            if (taken.has(i)) { if (lg[i] < lastIn) lastIn = lg[i]; }
+            else if (lg[i] > firstOut) firstOut = lg[i];
+          }
+          cpuMargin = lastIn - firstOut;
+        },
+        compare: async () => {
+          await selStaging.mapAsync(GPUMapMode.READ);
+          const raw = selStaging.getMappedRange().slice(0);
+          selStaging.unmap();
+          const u = new Uint32Array(raw), fl = new Float32Array(raw);
+          st.comparisons++;
+          st.picks += topK;
+          if (cpuMargin < st.minLogitMargin) st.minLogitMargin = cpuMargin;
+          const gpuIds: number[] = [];
+          for (let k = 0; k < topK; k++) gpuIds.push(u[k * 4]);
+          const same = new Set(gpuIds);
+          let setEq = same.size === cpuIds.length;
+          if (setEq) for (const e of cpuIds) if (!same.has(e)) { setEq = false; break; }
+          if (!setEq) st.setFlips++;
+          else if (gpuIds.some((e, k) => e !== cpuIds[k])) st.orderFlips++;
+          for (let k = 0; k < topK; k++) if (cpuMiss[k]) st.missCpu++;
+          // Slot e miss si appaiano per EXPERT, non per posizione: con un flip
+          // d'ordine la posizione k porterebbe expert diversi e il confronto
+          // sarebbe un falso allarme (o peggio, un falso via libera).
+          const cpuSlotOf = new Map<number, number>();
+          const cpuMissOf = new Map<number, boolean>();
+          const cpuWOf = new Map<number, number>();
+          cpuIds.forEach((e, i) => { cpuSlotOf.set(e, cpuSlots[i]); cpuMissOf.set(e, cpuMiss[i]); cpuWOf.set(e, cpuW[i]); });
+          for (let k = 0; k < topK; k++) {
+            const e = gpuIds[k], slotGpu = u[k * 4 + 1], missFlag = (u[k * 4 + 3] & 1) === 1;
+            if (missFlag) st.missGpu++;
+            if (!cpuSlotOf.has(e)) continue; // expert non scelto dalla CPU: è già un setFlip
+            const wGpu = fl[k * 4 + 2], wCpu = cpuWOf.get(e)!;
+            if (Math.abs(wCpu) > 1e-12) {
+              const rel = Math.abs(wGpu - wCpu) / Math.abs(wCpu);
+              if (rel > st.maxWeightRelErr) st.maxWeightRelErr = rel;
+            }
+            // L'ombra gira PRIMA degli `ensure` del layer: un expert che la CPU
+            // sta per caricare si risolve MISS, ed è la residenza parziale vista
+            // da GPU, non un errore. Il disaccordo è l'altro verso: la GPU dice
+            // MISS su un expert che era GIÀ residente, o dà uno slot diverso da
+            // quello che la CPU ha poi usato per un expert residente.
+            if (missFlag !== cpuMissOf.get(e)) st.missDisagree++;
+            else if (!missFlag && slotGpu !== cpuSlotOf.get(e)) st.slotMismatch++;
+          }
+        },
+        stats: () => ({ ...st }),
+      };
+    })() : null;
     const routing = new Map<number, number>();
     const parkSlots = moeParkOf(cfg);
     const slotBytes: Record<string, number> = {};
@@ -521,6 +723,9 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
       };
     },
       destroy: () => cache.destroy(),
+      shadowEncode: shadow ? (enc, m) => shadow.encode(enc, m) : null,
+      shadowCompare: shadow ? () => shadow.compare() : null,
+      shadowStats: shadow ? () => shadow.stats() : null,
       async runLayer(m: number, logitsF32: Float32Array): Promise<void> {
         const l = moeLayerAbs[m];
         // Selezione: IL router unico, in configurazione qwen35moe (softmax,
@@ -548,6 +753,9 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
           slots.push(cache.ensure(l, e, (_ly, ex) => raw.get(ex)!, pinned).slot);
         }
         cache.noteSelection(l, sel.experts);
+        // l'ombra confronta contro CIÒ CHE LA CPU HA DECISO, e i miss vanno
+        // presi PRIMA degli `ensure`: dopo, `isResident` direbbe sempre sì.
+        shadow?.note(sel, slots, new Set(missing), logitsF32);
         // `Sel` del layer. L'indirizzo dell'expert è `slot.idx` — l'indice
         // GLOBALE dello slot nella classe — e da qui in poi è il KERNEL a
         // ricavarne (binding, base): la CPU non calcola più sotto-range. Lo
@@ -721,12 +929,18 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
         for (let li = 0; li < cuts.length; li++) {
           device.queue.writeBuffer(moeAcc, 0, zeroAcc);
           runSeg(from, cuts[li], (enc) => {
+            // OMBRA (fetta 3b): il router GPU gira nello STESSO submit del
+            // segmento statico, in coda al GEMV che ha appena scritto i logits.
+            // Scrive la regione d'ombra di Sel, che nessun kernel expert legge.
+            moe.shadowEncode?.(enc, li);
             enc.copyBufferToBuffer(routerLogits, 0, routerStaging, 0, nE * 4);
             if (tapWanted === -100 - li) enc.copyBufferToBuffer(x, 0, tapStaging, 0, d * 4);
           });
           if (tapWanted === -100 - li) tapValue = await readStaging(tapStaging, d * 4);
           const lg = await readStaging(routerStaging, nE * 4);
           await moe.runLayer(li, lg);
+          // dopo runLayer: il confronto vuole la selezione CPU e i suoi slot
+          await moe.shadowCompare?.();
           if (tapWanted === li) {
             const enc2 = device.createCommandEncoder();
             enc2.copyBufferToBuffer(x, 0, tapStaging, 0, d * 4);
@@ -753,6 +967,7 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
       tapValue = null;
       return v ?? new Float32Array(0);
     },
+    routerShadowStats: moe?.shadowStats ? () => moe!.shadowStats!() : null,
     moeStats: moe
       ? () => ({
           ...moe!.stats(),
