@@ -451,6 +451,22 @@ export class ExpertCache {
   constructor(device: GPUDevice, opts: ExpertCacheOpts) {
     this.device = device;
     this.cfg = opts.cfg ?? MOE_CFG_GLM47;
+    // GUARD (fase-D it.2, nota del verifier): la config è parametrica nei
+    // DERIVATI (chiavi, parco, minimi, slotTable) ma il MOTORE della cache
+    // costruisce ancora gli stati di classe dalle classi GLM. Finché la
+    // slice C non lo rende cfg-driven, una config diversa va RIFIUTATA qui
+    // e non accettata in silenzio per fallire dopo con un TypeError.
+    if (this.cfg !== MOE_CFG_GLM47) {
+      const glm = MOE_CFG_GLM47;
+      const same = this.cfg.nExpert === glm.nExpert && this.cfg.nExpertUsed === glm.nExpertUsed
+        && this.cfg.classes.length === glm.classes.length
+        && this.cfg.classes.every((c, i) => c === glm.classes[i]);
+      if (!same) {
+        throw new Error(
+          `residency: config "${this.cfg.id}" non ancora onorata dal motore della cache ` +
+          "(stati di classe, expertSlots, arenaNeeds ed ensure sono GLM-shaped: slice C della fase 1 del goal engine-fase-d)");
+      }
+    }
     for (const c of this.cfg.classes) this.pins[c] = new Set();
     this.timing = opts.timing ?? false;
     this.policy = opts.policy ?? "lru";

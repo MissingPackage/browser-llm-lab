@@ -21,3 +21,15 @@
    è il riferimento del differential testing, se usasse `routerSelect` un
    bug del router sarebbe invisibile al confronto. Il gate strutturale la
    elenca come eccezione, non come debito.
+
+4. **DA CHIUDERE PRIMA DEL DONE DI FASE 1 (2026-08-10, verifier it.2)** —
+   (a) motore di `ExpertCache` cfg-driven (stati di classe, `expertSlots`,
+   `arenaNeeds`, `ensure`, `repinPass`, `stats`, `destroy`): oggi c'è un
+   GUARD che rifiuta le config non onorate, che è onesto ma non è la parità;
+   (b) gate strutturale da firme TESTUALI a invariante non aggirabile
+   (modello: il nome-API di `gpudevice.test`, che non si può eludere);
+   (c) campi compat di `SlabLayout`: sui K-quant fabbricano un offset
+   `scales` finto (bytes 0) — o si rimuovono o si fa fallire chi li usa su
+   un layout K-quant, prima che q35 passi da `slotBindRanges`;
+   (d) `expertSlots` ripartisce sul parco GLM: renderlo cfg-driven, altrimenti
+   q35 girerebbe solo via `slotsOverride` = un bypass.

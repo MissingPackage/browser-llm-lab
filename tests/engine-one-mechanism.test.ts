@@ -27,11 +27,15 @@ const read = (f: string): string => readFileSync(f, "utf8");
 // se una sparisce senza aggiornare la lista — così la parità non si può né
 // perdere né dichiarare a voce. A fase 1 completa: liste vuote (tranne le
 // eccezioni dichiarate).
+// ECCEZIONE DICHIARATA PERMANENTE, come CATEGORIA (non come lista di file —
+// nota del verifier it.2): i CPUREF di famiglia sono riferimenti INDIPENDENTI
+// per il differential testing. Se usassero il codice del motore, un bug
+// condiviso sarebbe invisibile al confronto. `cpuref.ts` (GLM) e
+// `q35cpurefmodel.ts` (Qwen) sono entrambi in questa categoria.
+const CPUREF = /cpuref/;
+
 const DUP_NOTE = {
-  // ECCEZIONE DICHIARATA E PERMANENTE: il cpuref è un riferimento
-  // INDIPENDENTE per il differential testing — se usasse lo stesso codice
-  // del motore, un bug del router sarebbe invisibile al confronto. Resta.
-  router: ["src/engine/q35cpurefmodel.ts", "src/engine/q35gpumodel.ts"],
+  router: ["src/engine/q35gpumodel.ts"],
   slab: ["src/engine/q35gpumodel.ts"],
   arena: ["src/engine/q35gpumodel.ts"],
 };
@@ -46,7 +50,7 @@ describe("una meccanica, una implementazione (gate strutturale fase-D)", () => {
       // selezione top-K nello stesso file
       const hasGating = /Math\.exp\(-?logits?\[/.test(s) || /probs\[e\] = Math\.exp\(/.test(s);
       const hasTopK = /\.slice\(0, *(topK|nUsed|nExpertUsed)\)/.test(s) || /taken\[best\] = 1/.test(s);
-      if (hasGating && hasTopK) offenders.push(f);
+      if (hasGating && hasTopK && !CPUREF.test(f)) offenders.push(f);
     }
     expect(offenders.sort(), "ratchet router: la lista può solo accorciarsi (usa routerSelect); il cpuref è eccezione dichiarata").toEqual(DUP_NOTE.router);
   });

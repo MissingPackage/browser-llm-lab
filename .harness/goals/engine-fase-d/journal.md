@@ -52,7 +52,7 @@
   table/arena/eviction su config di modello invece che su G.*), poi la
   migrazione di q35gpumodel che fa sparire due voci del ratchet.
 
-## it.2 (2026-08-10) — fase 1 slice B: residency.ts PARAMETRICA
+## it.2 (2026-08-10) — fase 1 slice B: residency.ts parametrica NEI DERIVATI (titolo corretto dopo il verifier: il MOTORE della cache è ancora GLM-shaped)
 
 - `MoeModelConfig` (id, nLayer, denseLead, nExpert, nExpertUsed, classes,
   classOf(layer), layout(cls)) è ora la struttura da cui la residenza
@@ -80,3 +80,34 @@
 - Next: it.3 = migrazione di `q35gpumodel` a ExpertCache+mkSlabLayout+
   routerSelect ⇒ due voci del ratchet spariscono (arena e slab), il router
   resta solo nel cpuref (eccezione dichiarata).
+
+### it.2 — correzioni dal verifier (stesso giorno, PRIMA di proseguire)
+
+Il verifier ha dato PASS ma con tre rilievi che accolgo per intero: il titolo
+"residency PARAMETRICA" era un OVERCLAIM — corretto sopra.
+
+1. **Parametrizzazione a metà, e ora lo dice il codice.** Derivati (chiavi,
+   parco, minimi, slotTable) sì; ma il motore della cache costruisce ancora
+   gli stati di classe da `SLAB_DOWN_Q4_0/Q4_1`, e `expertSlots`,
+   `arenaNeeds`, `ensure()`, `repinPass`, `stats`, `destroy` iterano la lista
+   letterale delle classi GLM. `keyOf()`/`classOfLayer()` non avevano NEMMENO
+   UN chiamante. Conseguenza reale: una cfg qwen sarebbe stata accettata in
+   silenzio e sarebbe esplosa dopo con un TypeError. AGGIUNTO UN GUARD che
+   la RIFIUTA rumorosamente citando la slice C. La parametrizzazione vera è
+   il lavoro di it.3.
+2. **Il gate strutturale era disonesto su un punto**: l'asserzione "il router
+   vive solo in moe.ts" era già FALSA — `src/engine/cpuref.ts` (il cpuref
+   GLM) ha un terzo router che la regex non prendeva. Sanato: l'eccezione è
+   ora una CATEGORIA (`/cpuref/` = riferimenti indipendenti per contratto,
+   sia GLM sia Qwen), non una lista di file.
+3. **Limite noto del gate, registrato**: i predicati sono FIRME TESTUALI, non
+   invarianti non aggirabili come il `requestDevice` di gpudevice.test — il
+   verifier ha provato che una copia con spaziatura diversa sfugge. Da
+   irrobustire PRIMA di dichiarare done la fase 1 (docket item 4).
+4. Altri due blocker registrati a docket: i campi compat di `SlabLayout`
+   fabbricano un offset `scales` finto sui K-quant (trappola per it.3), e
+   `expertSlots` ripartisce il budget sul parco GLM (finché non è cfg-driven,
+   q35 potrebbe passare solo da `slotsOverride`, cioè da un bypass).
+
+Processo: digests.md era vuoto e il verifier è arrivato dopo DUE iterazioni
+invece che dopo ognuna — entrambe le cose sanate qui.
