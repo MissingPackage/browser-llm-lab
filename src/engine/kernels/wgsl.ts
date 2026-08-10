@@ -2194,6 +2194,21 @@ const SEL_STRUCT_WGSL = "struct Sel { id: u32, slot: u32, w: f32, flags: u32 }";
 const MOE_IDX_STRUCT_WGSL = "struct MoeIdx { selIdx: u32, tableBase: u32, moeLayer: u32, pad: u32 }";
 
 /**
+ * Le TAGLIE delle due struct qui sopra, esportate perche' chi riempie i buffer
+ * sta fuori da questo file (glmmodel, q35gpumodel). Stanno accanto al WGSL che
+ * le definisce e non nei modelli: due famiglie che scrivono la stessa `Sel` con
+ * due costanti proprie sono due ABI che nessun compilatore confronta.
+ */
+export const SEL_BYTES = 16;
+export const MOE_IDX_BYTES = 16;
+/**
+ * Le entry di `MoeIdx` vanno spaziate a `minUniformBufferOffsetAlignment`
+ * perche' l'uniform si binda a dynamic offset. 256 e' il default di spec e il
+ * massimo che un device possa chiedere (chi la usa lo ASSERTA sul device).
+ */
+export const MOE_IDX_STRIDE = 256;
+
+/**
  * Testa comune dei kernel d'arena: struct, i nBuf binding d'arena, i binding
  * propri del kernel (`mid`, che partono da nBuf), `Sel` e l'uniform a dynamic
  * offset, i due accessori e le costanti di classe.

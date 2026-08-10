@@ -140,3 +140,36 @@ proposito: slot e flag sono interi, confronto secco. ktest 87/87. Progetto
 della fetta 3 (cablaggio in q35gpumodel) scritto nel journal PRIMA di
 iniziarla, con l'ordine di montaggio 3a/3b/3c e il rischio identificato
 (l'arena cappa i buffer anche col limite di BINDING, non solo di taglia).
+
+## it.14 (2026-08-11) — fase 3b fetta 3a: q35 in regime d'arena
+
+Ruling PI su docket item 9 incassato (opzione (a)): la fase 3 sui densi e'
+chiusa col numero misurato, -3,33 ms/token, e la soglia ex-ante cade.
+
+`q35gpumodel` monta la `ExpertCache` in regime `arena + slotTable`: i buffer
+di classe si bindano INTERI e l'indirizzo dello slab lo ricava il kernel dallo
+slot che legge in `Sel`. Bind group layout ESPLICITO (`hasDynamicOffset` non
+esiste con `layout: "auto"`) ⇒ **3 bind group per classe** invece di 3 per
+slot. Le costanti dell'ABI di `Sel`/`MoeIdx` si spostano accanto alle struct
+WGSL: una sola verita' per le due famiglie.
+
+**GATE, due bracci nella stessa sessione (worktree su HEAD vs modificato,
+stesso golden, stesso budget 10 GiB dichiarato)**: **istogramma di routing
+IDENTICO chiave per chiave** (3314 chiavi, 12.160 selezioni = 38 token x 40
+layer x 8), argmax generati identici, top1 5/5, hits/misses 8846/3314,
+uploadedBytes identici, 782 dispatch/token. Il routing e' il numero che porta
+il peso: dipende dallo stato nascosto di ogni layer, quindi un offset d'arena
+sbagliato divergerebbe subito.
+
+**Rischio di it.13 confermato reale**: la classe q4k si spezza in 5-6 buffer ⇒
+8-9 storage binding contro i 7 del path Qwen. `q35conf.worker` ora negozia
+`arenaNeeds` (buffer e finestra) con la config dedotta dal GGUF; senza, la
+pipeline sarebbe stata invalida al primo bind.
+
+**OOM a 12 GiB**: prima diagnosi, poi codice — il braccio PRIMA (HEAD, non
+modificato) muore allo stesso budget sullo stesso host ⇒ non e' la modifica, e'
+il tetto VRAM (docket item 11: il budget del 35B non e' ctx-aware come quello
+di GLM). Tempi non misurati per bene (un campione per braccio): non si
+dichiara nulla.
+
+ktest 87/87, suite 410|9, tsc pulito.

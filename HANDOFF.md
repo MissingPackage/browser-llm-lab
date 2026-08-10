@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2 fatte, 3b fette 1-2 fatte; next = fetta 3a (arena in q35gpumodel) + ruling PI su docket item 9)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a fatte; next = fetta 3b (router GPU in ombra sui layer veri))
 
 ## 1. Next decidable
 
@@ -83,11 +83,12 @@ scartato, bracci interleavati, 3 ripetizioni, mediana + dispersione):
 | pavimento senza sync | 35,44 | 35,4-35,5 |
 | **delta** | **-3,33 (-8,3%)** | spread 0,19/0,10 |
 
-**PI-GATED, docket item 9**: la riga 3 chiede >= -5,1 ms; misurati -3,33, e
-non e' rumore (dispersione 0,1-0,2). Parere: accettare il numero misurato e
-riscrivere la riga — il -5,1 era una stima ex-ante di q1, non un requisito
-del prodotto, e il guadagno vero sui densi sta nei kernel (pavimento 35,4
-ms/token con 562 dispatch), non qui.
+**RULING PI 2026-08-11 (docket item 9): opzione (a) — CHIUSO.** La riga 3 non
+chiede piu' `>= -5,1 ms`: chiede il delta MISURATO a caldo con dispersione,
+qualunque sia. Il -5,1 era una stima ex-ante di q1, non un requisito del
+prodotto. **Fase 3 chiusa sui densi anche per contratto**, col numero vero
+(-3,33). Il guadagno residuo sui densi sta nei kernel (pavimento 35,44
+ms/token con 562 dispatch), non nel batching del decode.
 
 **AL LAVORO: fase 3b** (resolve MoE su GPU, ruling PI 2026-08-10). Fetta 1
 FATTA (it.11): `gemvQ4K`/`gemvQ6K` accettano l'indirizzamento d'ARENA (slot
@@ -100,17 +101,40 @@ su 64 estrazioni 256x8: **0 flip d'insieme, 0 d'ordine, 0 resolve errati**,
 errore sui pesi 2,32e-7 (soglia 1e-5); il resolve si prova con una slotTable
 che ha UN MISS di proposito. ktest 87/87.
 
-**PROSSIMO: fetta 3**, il cablaggio in `q35gpumodel`. E' un PORT da
-`glmmodel.ts`, non un'invenzione, e il **progetto e' scritto nel journal di
-it.13** (pezzi, ordine di montaggio 3a/3b/3c, rischio identificato). In
-breve: arena + slotTable, bind group layout ESPLICITO perche'
-`hasDynamicOffset` non si esprime con `layout: "auto"`, router per layer che
-scrive `Sel` e `dirty`, e repair+replay dalla CPU solo quando `dirty[1] > 0`
-⇒ 1 submit/token a residenza piena.
+**FETTA 3a FATTA (it.14)**: `q35gpumodel` monta la cache in regime
+`arena + slotTable`. I buffer di classe si bindano INTERI e l'indirizzo dello
+slab lo ricava il KERNEL dallo slot che legge in `Sel` (riempita ancora dalla
+CPU); bind group layout ESPLICITO perche' `hasDynamicOffset` non esiste con
+`layout: "auto"` ⇒ **3 bind group per classe** invece di 3 per slot. Le
+costanti dell'ABI (`SEL_BYTES`, `MOE_IDX_BYTES`, `MOE_IDX_STRIDE`) si spostano
+accanto alle struct WGSL: una sola verita' per le due famiglie.
+**GATE, due bracci nella stessa sessione** (worktree su HEAD vs modificato,
+stesso golden smoke 35B, budget 10 GiB DICHIARATO): **istogramma di routing
+IDENTICO chiave per chiave** (3314 chiavi, 12.160 selezioni), argmax generati
+identici, top1 5/5, hits/misses 8846/3314, uploadedBytes identici, 782
+dispatch/token. Il rischio previsto in it.13 era reale: la classe q4k si
+spezza in 5-6 buffer ⇒ 8-9 storage binding contro i 7 del path Qwen, e
+`q35conf.worker` ora negozia `arenaNeeds`. NON coperto, detto: nessuna
+eviction in questo run (3314 miss = 3314 expert distinti su 6006 slot).
+
+**PROSSIMO: fetta 3b** — router GPU in OMBRA sui layer veri: la `Sel` di
+produzione resta quella della CPU, il resolve GPU scrive una regione parallela
+dello stesso buffer e si confrontano. Il kernel c'e' da it.13, la slotTable la
+popola gia' la fetta 3a: manca il cablaggio e il confronto. Poi 3c (Sel di
+produzione dal router + `dirty` + repair/replay ⇒ 1 submit/token a residenza
+piena).
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
 mediana e dispersione.
+
+**Landmine nuova (it.14, docket 11)**: il budget dell'arena del 35B NON e'
+ctx-aware come quello di GLM — e' un parametro fisso, default 12 GiB, e su
+questo host (14,4 GiB liberi) sfonda con `VK_ERROR_OUT_OF_DEVICE_MEMORY`. I
+buffer diventano invalidi e il modello CONTINUA a girare producendo numeri
+plausibili (top1 1/5): senza il listener `uncapturederror` sarebbe muto. I run
+di correttezza sul 35B dichiarano il budget (`q35-conf-run.mjs --arena-gib`,
+nuovo in it.14).
 
 ## 2. State delta (sessione 27, 2026-08-10 — goal q1 intero, it.0-21)
 

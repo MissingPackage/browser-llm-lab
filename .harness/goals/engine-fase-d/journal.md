@@ -658,3 +658,110 @@ solo da maxBufferSize). Sul 35B con budget 12 GiB significa piu' buffer per
 classe, e `nBuf` entra nei kernel come numero di binding: va verificato che
 stia nel limite di binding per bind group del device (glmmodel.ts:551 ha
 gia' un assert di questa forma).
+
+## it.14 (2026-08-11) — fase 3b fetta 3a: q35 in regime d'ARENA (Sel dalla CPU)
+
+**Ruling PI incassato prima di iniziare**: docket item 9 chiuso con l'opzione
+(a) — la riga 3 di PHASES non chiede piu' `>= -5,1 ms` ma il delta MISURATO a
+caldo con dispersione. La fase 3 e' chiusa sui densi anche per contratto.
+
+**Cosa e' cambiato** (il PORT progettato in it.13, passo 3a):
+
+1. `ExpertCache` di q35 nasce con `arena: true, slotTable: true`. Non cambia
+   ne' quanti slot ci sono ne' quanta VRAM costano (`expertSlots` non guarda il
+   regime): cambia che i buffer di classe si bindano INTERI.
+2. Nascono `Sel` (40x8 entry da 16 B, tutto il token — non un layer: il layout
+   non deve cambiare quando i 40 submit diventeranno uno) e `MoeIdx` statica
+   (40x8 entry a stride 256, `{selIdx, tableBase, moeLayer}` note al load).
+3. **Bind group layout ESPLICITO** per la catena expert: `hasDynamicOffset` non
+   si esprime con `layout: "auto"`. Risultato: **3 bind group per classe**
+   (gate, up, down) invece di 3 per slot — l'indirizzo non sta piu' nel bind
+   group, sta in `Sel`, e l'offset dinamico sceglie quale entry leggere.
+4. `runLayer` scrive `Sel` (id, `slot.idx`, peso) dopo gli `ensure` e chiama
+   `flushSlotTable()`. L'indirizzo continua a venire da uno `SlotRef` coniato
+   da `residency.ts`: cambia la RAPPRESENTAZIONE (l'indice globale dello slot
+   invece di buffer+offset), non la provenienza — il marchio di conio resta
+   sul path.
+5. `moeLayerAbs[]`: il layer ASSOLUTO di ogni segmento MoE. Oggi coincide con
+   l'indice del segmento (`denseLead: 0`), ma la chiave della slotTable e la
+   classe dello slab si leggono col layer assoluto: tenerlo esplicito evita che
+   un modello della famiglia con layer densi in testa indirizzi la classe
+   sbagliata SENZA fallire.
+6. `SEL_BYTES`/`MOE_IDX_BYTES`/`MOE_IDX_STRIDE` **si spostano in
+   `kernels/wgsl.ts`**, accanto alle struct WGSL che descrivono, e glmmodel le
+   importa da li'. Due famiglie che scrivono la stessa `Sel` con due costanti
+   locali sono due ABI che nessun compilatore confronta.
+7. `q35conf.worker` negozia i due limiti nuovi dell'arena (`arenaNeeds` con la
+   config dedotta dal GGUF): buffer d'arena => `maxStorageBuffersPerShaderStage`,
+   finestra => `maxStorageBufferBindingSize`. E il runner `q35-conf-run.mjs`
+   guadagna `--arena-gib`, che HANDOFF gli attribuiva ma non aveva: il budget
+   decide gli slot, quindi i miss — due bracci a budget diverso non sono
+   confrontabili.
+
+**IL RISCHIO DI it.13 ERA REALE E STA NEI NUMERI**: in regime arena la classe
+q4k del 35B si spezza in 5-6 buffer, e ogni pipeline expert li binda TUTTI =
+8-9 storage binding contro i 7 del path Qwen. Senza la negoziazione al punto 7
+il device ne concede 8 di default e la pipeline sarebbe stata invalida. Il
+controllo esplicito (`expertArenaBindings` > limite ⇒ errore parlante) c'e'.
+
+**IL GATE** (bit-identita' end-to-end sul 35B vero, due bracci nella stessa
+sessione, stesso host, stesso golden smoke, stesso budget):
+
+| | prima (HEAD 863b641) | dopo (arena) | |
+|---|---|---|---|
+| top1 | 5/5 | 5/5 | identico |
+| argmax generati | [248068, 271, 248069, 271, 29292] | idem | **identico** |
+| routing (istogramma completo) | 3314 chiavi, 12160 selezioni | idem, **mappa uguale** | **identico** |
+| hits / misses | 8846 / 3314 | 8846 / 3314 | identico |
+| uploadedBytes | 5.916.950.528 | 5.916.950.528 | identico |
+| nSlots q4k/q6k | 5613 / 393 | 5613 / 393 | identico |
+| dispatch/token | 782 | 782 | identico |
+
+Il numero che porta il peso e' **l'istogramma di routing**, non il top1 da 5
+posizioni: sono 12.160 selezioni (38 token x 40 layer x 8) e ognuna dipende
+dai logits del router, cioe' dallo stato nascosto prodotto dagli expert del
+layer precedente. Un offset d'arena sbagliato darebbe un risultato plausibile
+ma diverso, e la mappa divergerebbe al primo layer. E' uguale chiave per
+chiave. Il braccio PRIMA e' girato da un `git worktree` su HEAD (niente `git
+stash` con lavoro non committato: e' la landmine di it.11), con lo STESSO
+runner copiato nei due bracci — cambia il motore, non l'harness.
+
+**COSA IL GATE NON COPRE, detto**: con 6006 slot e 3314 expert distinti
+toccati, i miss sono 3314 = il numero di chiavi di routing ⇒ ogni expert e'
+stato caricato UNA volta e **non c'e' stata nessuna eviction**. Il riuso di
+uno slot dopo eviction non e' esercitato qui. Attenuante strutturale: l'eviction
+cambia i BYTE dentro uno slot, non il suo indirizzo, e l'aritmetica
+slot -> (binding, base) e' gia' gateata bit-a-bit in it.11. Resta una casella
+vuota da riempire alla fase 6 (dove il corpus pieno evince davvero).
+
+**OOM E COSA HA INSEGNATO**: il primo tentativo, a budget 12 GiB (il default,
+quello di it.7), e' morto con `VK_ERROR_OUT_OF_DEVICE_MEMORY` alla
+costruzione dell'arena. Prima di toccare qualunque cosa ho preso l'osservazione
+che DISCRIMINA: ho girato il braccio PRIMA — codice HEAD, non modificato —
+allo stesso budget, ed e' morto allo stesso modo. Non e' la modifica: e' lo
+stato VRAM dell'host (14,4 GiB liberi contro 12 di arena + densi + KV; it.7
+girava con piu' margine). Entrambi i bracci sono quindi a **10 GiB DICHIARATI**.
+Conferma aritmetica indipendente: `expertSlots` non guarda il regime e i buffer
+di classe hanno la stessa taglia nei due regimi (min(maxBuffer, maxBinding) =
+2.146.369.536 B ⇒ 1213 slab/buffer per q4k in entrambi), quindi l'arena non
+chiede un byte in piu'. **Lezione per la fase 6**: il budget del 35B non e'
+ctx-aware come quello di GLM (`slabBudgetCtxAware`) — e' un parametro fisso, e
+a 12 GiB e' sopra il tetto di questo host. Va al docket (item 11).
+
+**Tempi, e perche' NON sono un dato**: prompt 42 s (prima) contro 44 s (dopo).
+E' UN campione per braccio, senza warm-up scartato e senza interleaving: per la
+regola del docket item 10 non e' una misura, e non la chiamo ne' regressione ne'
+rumore. Cio' che si puo' dire per costruzione: la fetta 3a AGGIUNGE due
+writeBuffer per layer (Sel + flush della slotTable) e non toglie ancora niente,
+perche' i 40 submit e i 40 readback del router sono ancora tutti li'. Il
+guadagno e' la fetta 3c; questa fetta compra la PRECONDIZIONE.
+
+**Gate permanenti**: `npx tsc --noEmit` pulito, `npm test` **410 passed | 9
+skipped** (invariato), ktest GPU reale **87/87, 0 non-pass** — GLM compreso,
+che con lo spostamento delle costanti e' il modo di verificare che l'ABI di
+`Sel` non si sia mossa.
+
+**Prossimo**: fetta 3b — il router GPU in OMBRA sui layer veri (Sel di
+produzione ancora dalla CPU, quella GPU in una regione parallela dello stesso
+buffer, e si confrontano). Il kernel c'e' gia' da it.13, la slotTable e'
+popolata da questa fetta: manca il cablaggio e il confronto.

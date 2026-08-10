@@ -47,18 +47,16 @@ import {
   siluMulWgsl, stridedCopyWgsl, pairGemvSiluFastWgsl, pairGemvSiluQ5KFastWgsl,
   gemvAccumFastWgsl, routerTopKWgsl, type ArenaOpts,
   pairGemvSiluGatherWgsl, gemvDownSlotsWgsl, moeCombineWgsl,
+  SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE,
 } from "./kernels/wgsl";
 
 const HL = G.qkNope + G.ropeDims; // 256
 
 // Indirezione dell'arena expert (C3a fase 4 strato 1, design §2).
 // `Sel` = una entry per (layer MoE, k): {id, slot, w già ×1.8, flags}, 16 B.
-const SEL_BYTES = 16;
-// `MoeIdx` = 16 B utili, ma le entry vanno spaziate a
-// minUniformBufferOffsetAlignment perché l'uniform si binda a dynamic offset.
-// 256 è il default di spec e il massimo che un device possa chiedere.
-const MOE_IDX_BYTES = 16;
-const MOE_IDX_STRIDE = 256;
+// Le taglie stanno in kernels/wgsl accanto alle struct WGSL che descrivono
+// (fase-D it.14): q35gpumodel scrive la STESSA Sel, e due costanti locali
+// sarebbero due ABI che nessun compilatore confronta.
 
 // Sorgente pesi: byte GREZZI GGUF. In produzione è OPFS (ExpertOpfsStore +
 // GgufExpertIndex); nei test un mock sintetico. `nonExpert` riceve il nome

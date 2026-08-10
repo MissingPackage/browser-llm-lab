@@ -34,6 +34,11 @@ const qs = new URLSearchParams();
 if (modelTag !== "4b") qs.set("model", modelTag);
 if (prompts) qs.set("prompts", prompts);
 if (maxGen) qs.set("maxgen", maxGen);
+// Budget dell'arena expert in GiB (solo MoE; la pagina lo legge da `?arena=`).
+// Serve DICHIARATO nei run di correttezza: il budget decide quanti slot ci
+// sono, quindi hits/misses — due bracci a budget diverso NON sono confrontabili.
+const arenaGiB = arg("arena-gib", null);
+if (arenaGiB) qs.set("arena", arenaGiB);
 const tap = arg("tap", null);
 if (tap !== null) qs.set("tap", tap);
 

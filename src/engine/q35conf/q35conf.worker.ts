@@ -8,8 +8,10 @@
 // readback solo alle posizioni golden. Pattern glmconf; modello via fetch
 // Range per-tensore (it.8).
 import { createEngineDevice } from "../gpudevice";
-import { parseGguf } from "../gguf";
+import { parseGguf, type GgufTensorInfo } from "../gguf";
 import { createQ35GpuModel, q35TensorBytes } from "../q35gpumodel";
+import { q35MoeConfig } from "../q35expertstore";
+import { arenaNeeds } from "../residency";
 import { validateQwen35 } from "../q35shape";
 
 interface GoldenPos { argmax: number; top: Array<[number, number]> }
@@ -64,33 +66,41 @@ async function main(cfg: Cfg): Promise<void> {
   const { shape, byName } = validateQwen35(f);
 
   const isMoe = shape.arch === "qwen35moe";
+  const info = (name: string): GgufTensorInfo => {
+    const t = byName.get(name);
+    if (!t) throw new Error(`q35conf: tensore ${name} assente`);
+    return t;
+  };
+  const arenaBudgetBytes = Math.floor((cfg.arenaGiB ?? 12) * (1 << 30));
+  // La config di residenza si deduce dal GGUF (q35expertstore) e serve QUI,
+  // prima del device: `arenaNeeds` deve sapere quante classi ci sono e quanto
+  // pesa uno slab per dire quanti buffer d'arena servono. È la stessa config
+  // che il modello passerà alla cache — una sola verità, non due stime.
+  const moeCfg = isMoe ? q35MoeConfig(shape, info) : null;
   const { device } = await createEngineDevice({
     label: "q35conf",
-    needs: {
+    needs: (adapter) => ({
       ctxMax,
       head: { vocab: shape.vocab, dModel: shape.dModel },
       // MoE (it.17): i chunk dell'arena expert sono buffer da 2 GiB
       ...(isMoe ? { slabClassBytes: 2 * (1 << 30) } : {}),
-    },
+      // Regime d'arena (fase-D fase 3b, fetta 3a): i buffer di classe si
+      // bindano INTERI ⇒ due requisiti nuovi, e nessuno dei due è inventato
+      // qui — li calcola `arenaNeeds` con l'aritmetica della cache.
+      ...(moeCfg ? arenaNeeds({
+        budgetBytes: arenaBudgetBytes,
+        maxBufferBytes: adapter.limits.maxBufferSize,
+        maxBindingBytes: adapter.limits.maxStorageBufferBindingSize,
+        cfg: moeCfg,
+      }) : {}),
+    }),
   });
   const model = await createQ35GpuModel(device, {
     shape,
-    info: (name) => {
-      const t = byName.get(name);
-      if (!t) throw new Error(`q35conf: tensore ${name} assente`);
-      return t;
-    },
-    read: (name) => {
-      const t = byName.get(name);
-      if (!t) throw new Error(`q35conf: tensore ${name} assente`);
-      return range(f.dataOffset + t.offset, q35TensorBytes(t));
-    },
-    readRange: (name, off, len) => {
-      const t = byName.get(name);
-      if (!t) throw new Error(`q35conf: tensore ${name} assente`);
-      return range(f.dataOffset + t.offset + off, len);
-    },
-  }, ctxMax, Math.floor((cfg.arenaGiB ?? 12) * (1 << 30)));
+    info,
+    read: (name) => range(f.dataOffset + info(name).offset, q35TensorBytes(info(name))),
+    readRange: (name, off, len) => range(f.dataOffset + info(name).offset + off, len),
+  }, ctxMax, arenaBudgetBytes);
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
 

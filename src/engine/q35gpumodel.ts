@@ -13,14 +13,17 @@ import {
   gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
   gemvQ6KWgsl, gemvQuantWgsl, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
   siluMulWgsl, stridedCopyWgsl,
+  SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE, type KArenaOpts,
 } from "./kernels/wgsl";
+import { expertArenaBindings } from "./gpulimits";
+import type { SlabTensorLayout } from "./moe";
 import { deltaNetConvWgsl, deltaNetCoreWgsl, deltaNetGatesWgsl } from "./kernels/deltanet";
 import { GGML_TYPE, tensorByteSize, type GgufTensorInfo } from "./gguf";
 import { dequantQ4_0, dequantQ6_K, dequantQ8_0, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { q35IsFullAttn, type Q35Shape } from "./q35shape";
 import { ROUTER_QWEN35MOE, routerSelect, type RouterConfig } from "./moe";
 import {
-  ExpertCache, moeParkOf, slotTensorRanges, type ExpertRawBytes, type SlotRef,
+  ExpertCache, moeParkOf, type ExpertClass, type ExpertRawBytes, type SlotRef,
 } from "./residency";
 import { q35ExpertReader, q35MoeConfig } from "./q35expertstore";
 
@@ -185,6 +188,15 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
   const gateE = empty(Math.max(dE, 4) * 4), upE = empty(Math.max(dE, 4) * 4), dnE = empty(d * 4);
   /** confini dei segmenti statici: segmento i = steps[cuts[i-1]..cuts[i]) */
   const cuts: number[] = [];
+  /**
+   * Layer ASSOLUTO dell'i-esimo segmento MoE. Nella famiglia Qwen 3.5/3.6 gli
+   * expert ci sono da blk.0 (`denseLead: 0`) e i due indici coincidono, ma la
+   * chiave della slotTable e la classe dello slab si leggono col layer
+   * assoluto: tenerlo esplicito costa un array di 40 interi ed evita che un
+   * modello della famiglia con dei layer densi in testa indirizzi la classe
+   * sbagliata SENZA fallire.
+   */
+  const moeLayerAbs: number[] = [];
 
   // embedding: raw Q6_K tenuto CPU-side per il gather della riga; head = stesso
   // tensore (tied) o output.weight, su GPU
@@ -309,6 +321,7 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
       const router = await loadW(`${b}ffn_gate_inp.weight`);
       router.push(xn, routerLogits);
       cuts.push(steps.length);
+      moeLayerAbs.push(l);
     }
   }
 
@@ -356,21 +369,133 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
       // scomposizione read/pack/upload, che è il numero su cui la fase 2
       // decide.
       timing: true,
+      // REGIME D'ARENA (fase 3b, fetta 3a). I buffer di classe si bindano
+      // INTERI e l'indirizzo dello slab lo ricava il KERNEL dallo slot che
+      // legge in `Sel`. È la precondizione per togliere il readback per layer:
+      // finché è la CPU a calcolare i sotto-range, deve conoscere la selezione
+      // PRIMA di poter accodare il layer, e quindi deve leggere i logits del
+      // router. Non cambia né quanti slot ci sono né quanta VRAM costano
+      // (`expertSlots` non guarda il regime): cambia la taglia dei buffer di
+      // classe, e con essa quanti sono.
+      arena: true,
+      // La tabella expertKey→slot in VRAM non la legge ancora nessuno in
+      // questa fetta (il router è su CPU). Si accende qui perché è lo stesso
+      // `ensure` a tenerla aggiornata: in fetta 3b il resolve su GPU la trova
+      // popolata dal primo token invece che dal secondo.
+      slotTable: true,
     });
     const routerCfg: RouterConfig = { ...ROUTER_QWEN35MOE, nUsed: topK };
+    const nMoeLayer = cuts.length;
+    const nSel = nMoeLayer * topK;
+    // `MoeIdx` si binda a dynamic offset: la spaziatura delle entry deve essere
+    // un multiplo dell'allineamento CONCESSO, non del 256 di spec.
+    if (MOE_IDX_STRIDE % device.limits.minUniformBufferOffsetAlignment !== 0) {
+      throw new Error(
+        `q35 MoE arena: stride ${MOE_IDX_STRIDE} non multiplo di ` +
+        `minUniformBufferOffsetAlignment ${device.limits.minUniformBufferOffsetAlignment}`);
+    }
+    // `Sel`: una entry per (layer MoE, k) — {id, slot, w, flags}. In questa
+    // fetta la riempie la CPU dopo gli `ensure`, esattamente come faceva con i
+    // sotto-range; in fetta 3c ci scriverà il router su GPU e la CPU non
+    // toccherà più questo buffer nel path caldo. È dimensionata per tutto il
+    // token (40×8 entry, 5 120 B) e non per un layer: il layout non deve
+    // cambiare quando i 40 submit diventano uno.
+    const selBuf = device.createBuffer({
+      size: nSel * SEL_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    const selScratch = new ArrayBuffer(topK * SEL_BYTES);
+    const selU32 = new Uint32Array(selScratch);
+    const selF32 = new Float32Array(selScratch);
+    // `MoeIdx` è STATICA: contenuto noto al load, una scrittura sola. Il dynamic
+    // offset sceglie la entry, la entry dice quale `Sel` leggere. `tableBase` è
+    // la base del layer nella slotTable e la userà il resolve GPU (fetta 3b).
+    const moeIdxUni = device.createBuffer({
+      size: nSel * MOE_IDX_STRIDE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    {
+      const u = new Uint32Array(nSel * (MOE_IDX_STRIDE / 4));
+      for (let m = 0; m < nMoeLayer; m++) {
+        const tableBase = moeLayerAbs[m] * cfg.nExpert;
+        for (let k = 0; k < topK; k++) {
+          const selIdx = m * topK + k;
+          const w = selIdx * (MOE_IDX_STRIDE / 4);
+          u[w] = selIdx; u[w + 1] = tableBase; u[w + 2] = m; u[w + 3] = 0;
+        }
+      }
+      device.queue.writeBuffer(moeIdxUni, 0, u as unknown as BufferSource);
+    }
     // i kernel si scelgono dal LAYOUT della classe, non da un'assunzione sul
     // formato: se un GGUF della famiglia arrivasse con gate/up diversi, qui
     // si ferma con un messaggio invece di dequantizzare byte sbagliati.
     const gk = cfg.layout(cfg.classes[0]).gate.kind;
     if (gk !== "q4_K") throw new Error(`q35 MoE: nessun kernel gemv per gate/up ${gk}`);
-    const pGate = pipe(gemvQ4KWgsl({ K: d, N: dE }));
-    const pSilu = pipe(siluMulWgsl(dE));
-    const pDown: Record<string, GPUComputePipeline> = {};
-    for (const c of cfg.classes) {
-      const dk = cfg.layout(c).down.kind;
+    /**
+     * La catena expert di UNA classe in regime d'arena (PORT da `glmmodel`).
+     * Il bind group layout è ESPLICITO e non `"auto"`: `hasDynamicOffset` non
+     * si esprime con layout auto, ed è l'offset dinamico a scegliere la entry
+     * di `Sel`. Il risultato è che i bind group sono TRE per classe — gate, up,
+     * down — invece di tre per slot: l'indirizzo non è più nel bind group.
+     */
+    const mkExpertClass = (cls: ExpertClass) => {
+      const geo = cache.arenaGeometry(cls);
+      const need = expertArenaBindings(geo.nBuf);
+      if (need > device.limits.maxStorageBuffersPerShaderStage) {
+        throw new Error(
+          `q35 MoE arena: la classe ${cls} ha ${geo.nBuf} buffer d'arena ⇒ ${need} storage binding, ` +
+          `il device ne concede ${device.limits.maxStorageBuffersPerShaderStage} — negoziare ` +
+          "maxStorageBuffersPerShaderStage con arenaBuffers (gpulimits/arenaNeeds)");
+      }
+      const L = cfg.layout(cls);
+      const dk = L.down.kind;
       if (dk !== "q4_K" && dk !== "q6_K") throw new Error(`q35 MoE: nessun kernel gemv per down ${dk}`);
-      pDown[c] = pipe(dk === "q6_K" ? gemvQ6KWgsl({ K: dE, N: d }) : gemvQ4KWgsl({ K: dE, N: d }));
-    }
+      const kar = (t: SlabTensorLayout): KArenaOpts => ({
+        nBuf: geo.nBuf, slabWords: geo.slabWords, slabsPerBuf: geo.slabsPerBuf, tensorWords: t.data / 4,
+      });
+      const bgl = device.createBindGroupLayout({
+        entries: [
+          ...Array.from({ length: geo.nBuf }, (_, j) => ({
+            binding: j, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const },
+          })),
+          { binding: geo.nBuf, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } },
+          { binding: geo.nBuf + 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" as const } },
+          { binding: geo.nBuf + 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } },
+          {
+            binding: geo.nBuf + 3, visibility: GPUShaderStage.COMPUTE,
+            buffer: { type: "uniform" as const, hasDynamicOffset: true, minBindingSize: MOE_IDX_BYTES },
+          },
+        ],
+      });
+      const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
+      const mkPipe = (code: string): GPUComputePipeline => device.createComputePipeline({
+        layout, compute: { module: device.createShaderModule({ code }), entryPoint: "main" },
+      });
+      const bg = (src: GPUBuffer, dst: GPUBuffer): GPUBindGroup => device.createBindGroup({
+        layout: bgl,
+        entries: [
+          ...cache.arenaBuffers(cls).map((b, j) => ({ binding: j, resource: { buffer: b } })),
+          { binding: geo.nBuf, resource: { buffer: src } },
+          { binding: geo.nBuf + 1, resource: { buffer: dst } },
+          { binding: geo.nBuf + 2, resource: { buffer: selBuf } },
+          // `size` ESPLICITA: con hasDynamicOffset la validazione pretende
+          // offset+dynamicOffset+size <= buffer.size, e senza `size` il binding
+          // varrebbe l'intero buffer ⇒ qualunque offset dinamico > 0 sarebbe
+          // illegale (glmmodel:1007 documenta la stessa trappola).
+          { binding: geo.nBuf + 3, resource: { buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES } },
+        ],
+      });
+      return {
+        nBuf: geo.nBuf,
+        pGate: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.gate) })),
+        pUp: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.up) })),
+        pDown: mkPipe(dk === "q6_K"
+          ? gemvQ6KWgsl({ K: dE, N: d, arena: kar(L.down) })
+          : gemvQ4KWgsl({ K: dE, N: d, arena: kar(L.down) })),
+        bgGate: bg(xn, gateE), bgUp: bg(xn, upE), bgDown: bg(gateE, dnE),
+      };
+    };
+    const expertCls: Record<ExpertClass, ReturnType<typeof mkExpertClass>> = {};
+    for (const c of cfg.classes) expertCls[c] = mkExpertClass(c);
+    const pSilu = pipe(siluMulWgsl(dE));
     const pAxpy = pipe(axpyWgsl(d));
     const pAdd = pipe(addInPlaceWgsl(d));
     const wBufs = Array.from({ length: topK }, () => device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
@@ -382,20 +507,6 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
     const bgSilu = mkBg(pSilu, [gateE, upE]);
     const bgAxpy = wBufs.map((w) => mkBg(pAxpy, [moeAcc, dnE, w]));
     const bgAddRes = mkBg(pAdd, [x, moeAcc]);
-    // I bind group dipendono dallo SLOT (buffer + offset), non dall'expert che
-    // ci abita: si costruiscono una volta per slot e non si invalidano mai —
-    // l'eviction cambia i byte, non l'indirizzo.
-    const bgBySlot = new Map<string, GPUBindGroup[]>();
-    const slotBgs = (s: SlotRef): GPUBindGroup[] => {
-      const k = `${s.cls}:${s.idx}`;
-      let b2 = bgBySlot.get(k);
-      if (!b2) {
-        const rg = slotTensorRanges(s);
-        b2 = [mkBg(pGate, [rg.gate, xn, gateE]), mkBg(pGate, [rg.up, xn, upE]), mkBg(pDown[s.cls], [rg.down, gateE, dnE])];
-        bgBySlot.set(k, b2);
-      }
-      return b2;
-    };
     const routing = new Map<number, number>();
     const parkSlots = moeParkOf(cfg);
     const slotBytes: Record<string, number> = {};
@@ -410,7 +521,8 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
       };
     },
       destroy: () => cache.destroy(),
-      async runLayer(l: number, logitsF32: Float32Array): Promise<void> {
+      async runLayer(m: number, logitsF32: Float32Array): Promise<void> {
+        const l = moeLayerAbs[m];
         // Selezione: IL router unico, in configurazione qwen35moe (softmax,
         // niente bias, niente scale). Stessa matematica del cpuref, che prima
         // era ricopiata qui a mano.
@@ -436,23 +548,44 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
           slots.push(cache.ensure(l, e, (_ly, ex) => raw.get(ex)!, pinned).slot);
         }
         cache.noteSelection(l, sel.experts);
+        // `Sel` del layer. L'indirizzo dell'expert è `slot.idx` — l'indice
+        // GLOBALE dello slot nella classe — e da qui in poi è il KERNEL a
+        // ricavarne (binding, base): la CPU non calcola più sotto-range. Lo
+        // `SlotRef` resta il solo modo di ottenerlo (marchio di conio,
+        // `residency.ts`): l'indirizzo cambia rappresentazione, non provenienza.
+        for (let k2 = 0; k2 < topK; k2++) {
+          selU32[k2 * 4] = sel.experts[k2];
+          selU32[k2 * 4 + 1] = slots[k2].idx;
+          selF32[k2 * 4 + 2] = sel.weights[k2];
+          selU32[k2 * 4 + 3] = 0;
+        }
+        device.queue.writeBuffer(selBuf, m * topK * SEL_BYTES, selScratch);
+        // La tabella si pubblica DOPO gli `ensure` del layer: le writeBuffer
+        // degli slab sono già in coda, quindi la tabella arriva dopo il dato che
+        // indirizza (R5 del design d'arena — l'ordine inverso pubblicherebbe uno
+        // slot ancora vuoto). Qui non la legge nessuno: serve dalla fetta 3b.
+        cache.flushSlotTable();
         for (let k2 = 0; k2 < topK; k2++) {
           device.queue.writeBuffer(wBufs[k2], 0, new Float32Array([sel.weights[k2], 0, 0, 0]));
         }
+        const E = expertCls[cfg.classOf(l)];
         const enc = device.createCommandEncoder();
         const pass = enc.beginComputePass();
-        const disp = (p2: GPUComputePipeline, b2: GPUBindGroup, wg: [number, number, number]): void => {
+        const disp = (p2: GPUComputePipeline, b2: GPUBindGroup, wg: [number, number, number], dyn?: number): void => {
           pass.setPipeline(p2);
-          pass.setBindGroup(0, b2);
+          if (dyn === undefined) pass.setBindGroup(0, b2);
+          else pass.setBindGroup(0, b2, [dyn]);
           pass.dispatchWorkgroups(wg[0], wg[1], wg[2]);
         };
         const gg2 = gemvGrid(d);
         for (let k2 = 0; k2 < topK; k2++) {
-          const [bGate, bUp, bDown] = slotBgs(slots[k2]);
-          disp(pGate, bGate, [dE, 1, 1]);
-          disp(pGate, bUp, [dE, 1, 1]);
+          // l'offset dinamico sceglie la entry (layer, k) di MoeIdx, che punta
+          // alla Sel di quell'expert: è l'unico parametro per-expert rimasto.
+          const dyn = (m * topK + k2) * MOE_IDX_STRIDE;
+          disp(E.pGate, E.bgGate, [dE, 1, 1], dyn);
+          disp(E.pUp, E.bgUp, [dE, 1, 1], dyn);
           disp(pSilu, bgSilu, [Math.ceil(dE / 64), 1, 1]);
-          disp(pDown[slots[k2].cls], bDown, [gg2[0], gg2[1], 1]);
+          disp(E.pDown, E.bgDown, [gg2[0], gg2[1], 1], dyn);
           disp(pAxpy, bgAxpy[k2], [Math.ceil(d / 64), 1, 1]);
         }
         disp(pAdd, bgAddRes, [Math.ceil(d / 64), 1, 1]); // x += moeAcc (shexp + expert)

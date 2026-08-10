@@ -191,6 +191,19 @@ prodotto; il numero misurato e' positivo, verificato e con dispersione
 dichiarata, e il guadagno vero sui densi non e' li' ma nei kernel (il
 pavimento a 35,4 ms/token con 562 dispatch). Registrato it.12 (2026-08-10).
 
+### RULING PI 2026-08-11: (a) — ACCOLTO
+
+"(a) sul docket item 9". Il done-when della fase 3 e' RISCRITTO in PHASES.md:
+il delta si riporta **MISURATO a caldo con dispersione, qualunque sia**, e la
+soglia ex-ante di -5,1 ms cade (era una stima della decomposizione del gap di
+q1, misurata in un altro regime, non un requisito del prodotto). Il numero di
+riferimento della fase 3 sui densi resta **-3,33 ms/token (-8,3%)**, spread
+0,19/0,10, e il gate secco (argmax identico su 39 token) e' quello che
+qualifica la fase. Il guadagno residuo sui densi sta nei kernel (pavimento
+35,44 ms/token con 562 dispatch), non nel batching del decode.
+**Item 9 CHIUSO.** La fase 3 e' chiusa sui densi anche per contratto; il MoE
+resta alla fase 3b.
+
 ## item 10 — regola nuova per l'harness: il primo passaggio non si misura (io)
 
 Osservazione del verifier di it.10, che vale oltre quella fase: il primo
@@ -201,3 +214,20 @@ una passata e interleava i bracci, e riporta mediana + dispersione, non un
 campione.** Applicato al bench della fase 3 (it.12); da applicare al bench
 del prefill della fase 4, che e' formulato allo stesso modo. Mio, non PI.
 Registrato it.12 (2026-08-10).
+
+## item 11 — il budget dell'arena del 35B non e' ctx-aware (io, fase 6)
+
+Emerso da un OOM in it.14. GLM calcola il budget slab con
+`slabBudgetCtxAware(allocCeiling, ctx)`: tetto MISURATO meno non-expert, KV,
+buffer di lavoro e riserva. Il 35B no: `createQ35GpuModel` prende
+`arenaBudgetBytes` come parametro, default **12 GiB fissi**, e nessuno
+controlla che ci stia. Su questo host (14,4 GiB liberi) 12 GiB + densi + KV
+sfonda, e il fallimento e' `VK_ERROR_OUT_OF_DEVICE_MEMORY` alla createBuffer:
+rumoroso, ma solo perche' c'e' il listener `uncapturederror` — i buffer
+diventano invalidi e il modello continua a girare producendo numeri plausibili
+(top1 1/5 nel run viziato).
+
+Non e' una decisione da PI: e' mia, ed e' lavoro della fase 6 (il checkpoint
+che misura il 35B ai tier). Registrato qui per non perderlo. Nel frattempo i
+run di correttezza dichiarano il budget (`--arena-gib`, nuovo in it.14).
+it.14 (2026-08-11).
