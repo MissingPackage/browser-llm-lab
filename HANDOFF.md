@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-7 + 8.1 DONE (tier 0.79/2.00/3.40 tok/s = collasso attribuito); next = it.20 recall+bandmodel, poi fase 9)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: FASI 1-8/9 COMPLETE (recall 82.67%@8 spiegato, bandmodel 17.6 ms/miss); next = it.21 FASE 9 CHIUSURA)
 
 ## 1. Next decidable
 
@@ -74,15 +74,20 @@ reale. **it.19 DONE (slice 1)**: bench tier 35B con hostState — 8/12/16 GB =
 decode 0.79/2.00/3.40 tok/s (residenza 23/47/64%, hit 77/91/94%),
 collasso 4.3× attribuito al hit-rate; tier mobile 4B (cap 2.48/3 GiB,
 proiezione parametrica = prefill-bound confermato); fix await-prefill;
-device-lost arena12 documentato (baseline VRAM). **Al lavoro: it.20 =
-fase 8 slice 2**: (a) recall oracolo lookahead sul router 256-wide del
-35B (tap hidden L → router L+1, metodo C1; via cpuref su un campione del
-corpus o tap nel forward — confronto DICHIARATO col 91.92% GLM,
-scostamento spiegato non gateato); (b) bandmodel rifittato sui 3 punti
-tier misurati (fit dichiarato, forma f(hit, banda, costo-miss) — nota:
-qui il costo-miss include repack JS, diverso da GLM). Poi fase 9
-(chiusura: checklist contratto voce-voce + non-reg GLM piena ad albero
-congelato + direction/ledger/HANDOFF + docket triage). Perimetro: path testo Qwen
+device-lost arena12 documentato (baseline VRAM). **it.20 DONE — FASE 8 COMPLETA**: recall lookahead 256-wide 82.67%@8 /
+47.74%@4 (denominatore 8, tetto 50% — esplicitare nei doc) vs GLM 91.92%
+con scostamento spiegato; bandmodel q35 fit 17.64 ms/miss (residui
+≤6.3%, limiti dichiarati); GLM bandmodel intatto. **Al lavoro: it.21 =
+FASE 9 — CHIUSURA DEL GOAL**: (1) checklist DONE WHEN del contratto
+voce per voce con evidenza puntuale (GOAL.md); (2) non-reg GLM PIENA
+fresca ad albero congelato: ktest 84/84 + conformance GLM (golden AL PIN
+98.828%, cpuref, firma) + bench b12 in banda ±5% + Qwen2.5 + suite +
+tsc — run GPU sequenziali 60 s; (3) direction: sezione generalizzazione
+COI NUMERI (3 ratchet, tier, gap 4.6-5.2×, recall spiegato + nota @4,
+leve ROI) + ledger; (4) docket q1 triage + HANDOFF refresh compatto
+(pattern 78 righe); (5) verifier finale su sostanza. PI-gated dopo:
+merge già autorizzato a goal chiuso e verificato (ruling merge-at-goal-
+close; siamo già su main), tag goal-engine-fase-q1-done. Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

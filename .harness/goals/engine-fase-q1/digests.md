@@ -218,3 +218,17 @@ rispettato (2.48), proiezione parametrica → conferma prefill-bound.
 Fix await-prefill (mapAsync concorrenti sul MoE); device-lost arena 12
 (baseline VRAM +240 MB vs fase 7) risolto con arena 11 + margine
 dichiarato. Next: it.20 = recall oracolo 256-wide + bandmodel rifit.
+
+## it.20 (2026-08-10)
+
+**FASE 8 COMPLETA** (8/9), verifier PASS (LSQ ricalcolata a mano, JSON
+deterministici). **Recall lookahead 256-wide: 82.67% @8** (GLM 91.92%)
+con scostamento SPIEGATO: softmax-256 senza bias vs sigmoid+bias-64,
+bersaglio 3.1% vs 6.25%, profilo per-layer (L0 44%, max 90%) — prefetch
+utilizzabile ma beneficio minore, registrato non promesso. **Bandmodel
+q35: 17.64 ms/miss** (residui ≤6.3%, limiti dichiarati: 3 punti, base
+negativa, regime correttezza-prima col repack JS). Note per fase 9: la
+spiegazione va in direction (lettera del done-when); recall@4 ha
+denominatore 8 (tetto 50%) — esplicitare nella migrazione ai doc.
+Next: it.21 = FASE 9 — LA CHIUSURA (checklist contratto voce-voce,
+non-reg GLM piena, direction/ledger/HANDOFF, docket triage).
