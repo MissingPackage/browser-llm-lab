@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-6 DONE + fase 7 slice 1 (Q4_K ancorato, cpuref MoE dalla fonte); next = it.15 cpuref e2e 35B)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-6 DONE + fase 7 slice 1-2 (cpuref 35B==oracolo, 3 modelli provati); next = it.16 forward GPU 35B con paging)
 
 ## 1. Next decidable
 
@@ -55,14 +55,19 @@ harness ma INT8-ONLY, converge con dot4I8Packed post-prefill-batched;
 spec §7 corretta. **Slice 1 DONE (it.14)**: dequantQ4_K
 ancorato a gguf-py su byte reali + gemvQ4K ktestato a dims expert (82/82)
 + `q35MoeFfnRefF64` dalla fonte (softmax→top8→norm clamp esatto→no scale;
-shared con gate sigmoid scalare — TUTTO diverso da GLM). **Al lavoro:
-it.15 = fase 7 slice 2 — cpuref e2e 35B**: reader LAZY per il 20.9 GB
-(range da fd, non whole-buffer: 31 GB RAM), estensione Q35CpuRefModel a
-qwen35moe (ffn → q35MoeFfnRefF64 con cache expert per layer; embd Q8_0
-row; nKvHead 2), golden smoke 35B (run-golden-q35.sh MODEL=35B, prompt
-smoke: il full-corpus CPU sul 35B sarà LENTO — prima lo smoke), gate
-argmax==oracolo. Poi slice 3: forward GPU 35B con paging C3c
-(slotTable/classi parametrici, GLM invariato). Perimetro: path testo Qwen
+shared con gate sigmoid scalare — TUTTO diverso da GLM). **Slice 2 DONE (it.15)**: cpuref
+35B-A3B == ORACOLO al primo run (130 s; reader lazy da fd; golden smoke
+35B committato; fix head non-tied). Verifier: FAIL amministrativo journal
+sanato; elevata a docket item 7 l'arch falsa nei metadata dei golden q35.
+**Al lavoro: it.16 = fase 7 slice 3 — forward GPU 35B con paging C3c
+parametrizzato**: ricognizione residency.ts/moe.ts/glmmodel.ts (costanti
+GLM: nExpert 64/topK 4/slot 5.3 MB q4_0+q4_1 → 256/top-8/~1.15 MB
+Q4_K+Q6_K — slot BYTES da ricalcolare dai superblocchi), slotTable/classi
+parametrici con GLM INVARIATO (non-reg 82 ktest + suite), poi forward 35B
+GPU (assemblare da q35gpumodel il path denso + MoE con expert paging) e
+gate argmax==oracolo sul golden smoke; run regime C3c 16 GB senza OOM.
+Stimate 2-3 iterazioni: spezzare (slice 3a = parametrizzazione+ktest MoE
+block q4_K; 3b = forward full + paging). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

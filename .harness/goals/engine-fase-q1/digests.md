@@ -158,3 +158,15 @@ bias → top-8 → norm con clamp esatto → NESSUNO scale → shared con gate
 sigmoid SCALARE — tutto diverso da GLM, letto non assunto), 3 property
 test. Suite 375. Next: it.15 = reader lazy (20.9 GB) + cpuref e2e 35B
 vs golden smoke, poi forward GPU con paging C3c.
+
+## it.15 (2026-08-10)
+
+Fase 7 slice 2. **cpuref 35B-A3B == ORACOLO al primo run (130 s)**: il
+terzo modello della famiglia — e il primo MoE — ha la comprensione
+provata (router softmax-top8-clamp, shared gate scalare, DeltaNet,
+Q4_K/Q6_K, reader lazy da fd per il 20.9 GB). Verifier: FAIL
+amministrativo (entry journal mancante al commit — sanata; sostanza
+tutta PASS con e2e rieseguito e oracolo rigenerato identico). Elevata a
+docket item 7: i golden q35 committati portano "arch":"deepseek2" falsa
+in metadata (tool da sanare prima del paper). Next: it.16 = forward GPU
+35B con paging C3c parametrizzato — l'ultimo grosso pezzo di fase 7.

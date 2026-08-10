@@ -342,3 +342,26 @@
 - RESTA fase 7 (it.15+): estensione Q35CpuRefModel a qwen35moe con reader
   LAZY (20.9 GB non stanno in RAM insieme al resto: range da fd),
   cpuref e2e vs golden smoke 35B, poi forward GPU con paging C3c.
+
+## it.15 (2026-08-10) — fase 7 slice 2: cpuref e2e 35B == ORACOLO
+   (verifier: FAIL amministrativo sanato — questa entry mancava al commit
+   di lavoro 96e25aa, prima volta in 8 iterazioni; sostanza tutta PASS
+   con e2e rieseguito e oracolo rigenerato identico)
+
+- Reader LAZY `Q35ByteSource` (slice-copia byteOffset-0; wrap ArrayBuffer
+  per 4B/9B, fd+pread nel test): il 20.9 GB non entra mai in RAM intero.
+- Q35CpuRefModel esteso a qwen35moe: ffn MoE via q35MoeFfnRefF64 (cache
+  expert per-layer rilasciata), dequantExpert su slice stacked
+  (Q4_K/Q6_K/Q8_0 per-type), embd Q8_0 row, FIX head non-tied (usava
+  token_embd hardcoded — toccava anche il 9B, mai esercitato su cpuref).
+- Golden smoke 35B committato (CORPUS_DIR param nello script + fix ordine
+  SUFFIX; eos al 5° gen gestito con min(positions, generated)).
+- GATE: argmax cpuref == ORACOLO su tutte le posizioni generate, primo
+  run, 130 s (l'A3B attivo è ~3B: veloce quanto il 4B). Il TERZO modello
+  della famiglia — e il primo MoE — ha la comprensione PROVATA.
+- Nota verifier (load-bearing, estende docket item 7): golden.cpp:148
+  hardcoda "arch":"deepseek2" — i golden q35 committati portano arch
+  FALSA nel metadata; da sanare nel tool PRIMA che diventino input paper.
+- Suite 375/9 skip, tsc pulito, GLM intatto.
+- Next: it.16 = fase 7 slice 3 — forward GPU 35B con paging C3c
+  (slotTable/classi/nExpert/topK parametrici, GLM invariato).
