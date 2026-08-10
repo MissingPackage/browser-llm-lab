@@ -77,3 +77,13 @@ deinterleave + QK-norm + rope64 + attnDecode 16/4/256 + gate). Kernel
 nuovi: ropeDims opzionale su ropeNeoxWgsl, sigmoidMul. ktest 79/79.
 Ogni pezzo del forward è provato: it.8 = pura orchestrazione (32 layer +
 embed + head) + gate argmax GPU == oracolo sul golden smoke.
+
+## it.8 (2026-08-10)
+
+Fase 4 slice 3, verifier PASS. **IL 4B GIRA SU GPU: argmax == oracolo
+6/6** sul golden smoke (orchestratore q35gpumodel.ts, 562 dispatch/token,
+39 posizioni in 1.9 s, full residency). Due pareti Chromium risolte
+(fetch/ArrayBuffer 2.6 GB → Range per-tensore; head 527 MB → limiti
+device). ktest 80/80. Il motore ESEGUE la famiglia Qwen 3.5 — prima
+inferenza browser end-to-end del goal. Restano per fase 4: golden
+full-corpus a soglia RATCHET + riferimenti full-resident (it.9).

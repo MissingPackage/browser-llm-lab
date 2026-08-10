@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-3 DONE, fase 4 slice 1-2 DONE (assembly GPU reale L2rel ~1e-7, ktest 79/79); next = orchestrazione full-model + argmax gate)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: IL 4B GIRA SU GPU, argmax==oracolo 6/6, ktest 80/80; next = golden full-corpus RATCHET + riferimenti)
 
 ## 1. Next decidable
 
@@ -29,11 +29,14 @@ PASS, tsc pulito. **Fase 4 slice 1 DONE (it.6)**: cpuref-f64
 golden smoke committato; mrope text-only = NEOX-64 provato dalla fonte;
 `q35cpurefmodel.ts`, test gated Q35_E2E=1). **Slice 2 DONE (it.7)**: assembly GPU
 dei layer attn con pesi REALI == cpuref a L2rel ~1e-7 (ktest 79/79; fixture
-q35-attn rigenerabile, rope parziale + sigmoidMul nuovi). **Al lavoro:
-it.8 = orchestrazione full-model GPU 4B** (loop 32 layer + embed row +
-ffn + head Q6_K argmax; gate = argmax GPU == oracolo sulle posizioni del
-golden smoke; poi golden full-corpus a soglia RATCHET con run-golden-q35.sh
-con provenance, e riferimenti full-resident hostState). Perimetro: path testo Qwen
+q35-attn rigenerabile, rope parziale + sigmoidMul nuovi). **Slice 3 DONE (it.8): IL 4B GIRA
+SU GPU** — orchestratore `q35gpumodel.ts` (562 dispatch/token, piano
+precostruito, full residency), argmax GPU == ORACOLO 6/6 sul golden smoke,
+ktest 80/80; pareti Chromium risolte (Range per-tensore; maxBufferSize per
+la head 527 MB). **Al lavoro: it.9 = chiusura fase 4** — golden 4B
+full-corpus con run-golden-q35.sh (provenance: SHA/commit/corpus-hash),
+golden top-1 GPU misurato e SOGLIA FISSATA (ratchet, mai import del PIN
+GLM), riferimenti decode/prefill/TTFT full-resident con hostState. Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.
