@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1 IN CORSO: fasi 1-3 DONE su 9, ktest 75/75; next = fase 4, 4B end-to-end)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-3 DONE, fase 4 slice 1 DONE (cpuref 4B == oracolo); next = forward GPU 4B)
 
 ## 1. Next decidable
 
@@ -24,11 +24,13 @@ llama.cpp:3171); oracolo b10333 supporta la famiglia senza upgrade. **Fase 3 DON
 (it.4-5)**: cpuref-f64 DeltaNet dalla fonte b10333 + 3 kernel WGSL
 (`kernels/deltanet.ts`) — ktest 75/75 (69 GLM intatti + 6 nuovi, catena
 T=12 stato-persistente maxAbs 5.4e-7, core a dims reali hd128). Suite 371
-PASS, tsc pulito. **Al lavoro: it.6 = fase 4 — path 4B end-to-end**
-(GQA variante con q+gate fusi e QK-norm, mrope sections dal GGUF
-(`rope.dimension_sections` da leggere in apertura), ibrido 3:1, ffn denso;
-argmax==cpuref-f64 sul campione ratificato; golden 4B full-corpus a soglia
-RATCHET; riferimenti full-resident con hostState). Perimetro: path testo Qwen
+PASS, tsc pulito. **Fase 4 slice 1 DONE (it.6)**: cpuref-f64
+4B e2e == ORACOLO al primo run (argmax su tutte le posizioni generate del
+golden smoke committato; mrope text-only = NEOX-64 provato dalla fonte;
+`q35cpurefmodel.ts`, test gated Q35_E2E=1). **Al lavoro: it.7 = forward
+GPU 4B** (orchestratore engine sui kernel esistenti + deltanet;
+argmax==cpuref via GPU; poi golden full-corpus a soglia RATCHET con
+run-golden-q35.sh con provenance, e riferimenti full-resident hostState). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

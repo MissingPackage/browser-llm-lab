@@ -52,3 +52,17 @@ GPU (maxAbs 5.4e-7) e il core a dims REALI hd128. Totale 75/75, GLM
 intatto. Il rischio dominante del goal è dimezzato: la numerica ricorrente
 regge kernel-level. Next: fase 4 — 4B end-to-end (GQA+mrope+ibrido+ffn,
 argmax==cpuref, golden a ratchet).
+
+## it.6 (2026-08-10)
+
+Fase 4 slice 1, verifier PASS con controlli indipendenti forti (golden
+rigenerato = identico al committato; mrope e GQA verificati dalla fonte).
+**Il cpuref 4B end-to-end CONCORDA con l'oracolo al primo run numerico**:
+argmax == llama.cpp su tutte le 6 posizioni generate, teacher-forced su 39
+posizioni × 32 layer con pesi reali (130 s, gated Q35_E2E=1). Chiavi:
+mrope text-only collassa a NEOX-64 (provato dalla fonte); q+gate fusi;
+GQA grouping vs DeltaNet tiling (due mapping diversi, entrambi fedeli).
+La comprensione del modello è PROVATA — da qui ogni divergenza GPU è bug
+di kernel. Note per fase 4: run-golden-q35.sh con provenance per i golden
+full-corpus; binario golden buildato da 5f55650 (≡ b10333 per qwen35).
+Next: it.7 = forward GPU 4B (orchestratore sui kernel esistenti+deltanet).
