@@ -71,3 +71,28 @@
   generazione (vocab di famiglia identico).
 - RESTANO per chiudere fase 2 (it.3): reader TS `qwen35`/`qwen35moe`
   (load test sui 3), tokenizer TS con id==fixture in npm test, tsc.
+
+## it.3 (2026-08-10) — fase 2 DONE (verifier PASS)
+
+- Inventario nomi-tensori completo dei 3 file (q35-header-dump esteso ai
+  nomi): qkv FUSA sui layer DeltaNet [d,(2·nK+nV)·hd], attn_q dei full =
+  q+gate fusi [d,2·nHead·256] (attn_output_gate), QK-norm per-head, pattern
+  UD sui down_exps (Q4_1 su 4 layer del 4B, Q6_K su 3 del 35B).
+- `src/engine/q35shape.ts`: shape DERIVATA dai metadata + validazione hard
+  dell'inventario completo (dims calcolate, allow-list tipi chiusa, throw su
+  tensori extra) — la parametrizzazione di spec §3, primo pezzo. gguf.ts:
+  aggiunta SOLO additiva Q4_K (superblocco 144 B).
+- `src/engine/q35tokenizer.ts`: PRIMO tokenizer in-engine — BPE byte-level
+  GPT-2, regex pre `qwen35` verbatim da llama.cpp (verifier: riscontrata
+  IDENTICA nel binario b10333 via strings), partizionamento special fedele
+  (USER_DEFINED sempre, CONTROL solo con parseSpecial — llama-vocab.cpp:3171).
+- DUE correzioni di protocollo scoperte dal gate secco (docket item 6):
+  `--no-escape` obbligatorio (corpus 11: \\ processato) e semantica
+  USER_DEFINED (corpus 12: <think> = token singolo). Fixture v2 rigenerato,
+  cross-check 4B==35B PASS. Il gate secco ha pagato: 2 bug di fedeltà presi
+  PRIMA di toccare i kernel.
+- Gate: SHA 3/3 exit 0; shape test 4/4 (426/427/733 tensori); tokenizer
+  12 file id-identici + roundtrip decode; suite 364 PASS (+5) | 7 skip;
+  tsc pulito. Verifier PASS con spot-check oracolo indipendente.
+- Next: it.4 = fase 3 (kernel DeltaNet WGSL kernel-level vs cpuref-f64;
+  prima il cpuref TS della catena linear-attn, spec §4).

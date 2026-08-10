@@ -1,6 +1,9 @@
 // Genera il riferimento oracolo del tokenizer q35 (fase 2, spec §5 punto 1).
 // Per ogni file del corpus (01-08 GLM + 09-12 edge) esegue llama-tokenize
-// b10333 con protocollo FISSO: --ids --no-bos --no-parse-special.
+// b10333 con protocollo FISSO v2: --ids --no-bos --no-parse-special
+// --no-escape. Il --no-escape è OBBLIGATORIO: senza, llama-tokenize processa
+// gli escape (\\ → \, \n → newline) e il riferimento non è più il testo raw
+// che il motore tokenizza (scoperto in it.3 su corpus 11, "\\n letterale").
 // Cross-check: gli id devono essere IDENTICI fra 4B (denso) e 35B (MoE) —
 // vocab di famiglia; divergenza = errore secco, il fixture non si scrive.
 // Output: tests/fixtures/q35-tok-oracle.json
@@ -12,7 +15,7 @@ import { basename, join } from "node:path";
 const BIN = join(homedir(), ".cache/llamacpp-vulkan/llama-b10333/llama-tokenize");
 const M4 = join(homedir(), ".cache/blab-models/q35/Qwen3.5-4B-Q4_0.gguf");
 const M35 = join(homedir(), ".cache/blab-models/q35/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf");
-const PROTOCOL = ["--ids", "--no-bos", "--no-parse-special"];
+const PROTOCOL = ["--ids", "--no-bos", "--no-parse-special", "--no-escape"];
 
 function tokenize(model, file) {
   const out = execFileSync(BIN, ["-m", model, "-f", file, ...PROTOCOL], {

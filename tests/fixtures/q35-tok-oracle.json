@@ -1,6 +1,6 @@
 {
  "note": "Riferimento oracolo tokenizer q1 fase 2. llama-tokenize b10333 (build 08659901c). Cross-check 4B==35B eseguito alla generazione.",
- "protocol": "--ids --no-bos --no-parse-special",
+ "protocol": "--ids --no-bos --no-parse-special --no-escape",
  "files": {
   "09-emoji-cjk.txt": [
    1289,
@@ -314,7 +314,7 @@
    378,
    1142,
    48569,
-   1088,
+   24193,
    77,
    6321,
    1519,

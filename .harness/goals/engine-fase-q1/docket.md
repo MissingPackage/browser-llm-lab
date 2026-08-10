@@ -31,6 +31,21 @@
    llama-tokenize funziona (protocollo fissato: `--ids --no-bos
    --no-parse-special`). Arch GGUF reali: `qwen35`/`qwen35moe`.
 
+6. **REGISTRAZIONE (2026-08-10, it.3 — non richiede decisione)** — due
+   correzioni di protocollo tokenizer scoperte dal gate secco, entrambe
+   verso la fedeltà al testo RAW: (i) protocollo oracolo v2 = `--ids
+   --no-bos --no-parse-special --no-escape` — senza `--no-escape`
+   llama-tokenize processa gli escape (\\→\) e il riferimento non è il
+   testo che il motore tokenizza (scoperto su corpus 11); fixture
+   rigenerato, cross-check 4B==35B PASS, stesso totale 27 714; (ii)
+   semantica special ESATTA di llama.cpp replicata (llama-vocab.cpp:3171):
+   parse_special=false salta SOLO CONTROL/UNKNOWN, i 6 USER_DEFINED della
+   famiglia (<tool_call>/<tool_response>/<think> + chiusure) si matchano
+   SEMPRE nel partizionamento pre-BPE (scoperto su corpus 12: <think> =
+   token singolo 248068 anche con --no-parse-special). Il commento nel
+   corpus 12 ("trattarli da testo") è impreciso per i USER_DEFINED ma il
+   file NON si tocca: è input del fixture, i byte sono congelati.
+
 5. **REGISTRAZIONE (2026-08-10, it.2 — non richiede decisione)** — header
    dump dei 3 GGUF (`results/engine/q35-header-dump-2026-08-10.json`):
    (i) [VERIFY] spec §3 tutti chiusi, tabella aggiornata coi valori veri
