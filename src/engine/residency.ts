@@ -237,7 +237,18 @@ export interface ArenaGeometry {
 export function expertSlots(
   o: { budgetBytes: number; slotsOverride?: Record<ExpertClass, number>; cfg?: MoeModelConfig },
 ): Record<ExpertClass, number> {
-  if (o.slotsOverride) return o.slotsOverride;
+  if (o.slotsOverride) {
+    // le chiavi dell'override devono essere le classi DELLA CONFIG: senza
+    // questo controllo una cache si costruisce con zero classi, in silenzio
+    // (degradazione trovata dal verifier it.3).
+    const cfgO = o.cfg ?? MOE_CFG_GLM47;
+    for (const c of cfgO.classes) {
+      if (!(c in o.slotsOverride)) {
+        throw new Error(`expertSlots: slotsOverride senza la classe "${c}" della config "${cfgO.id}"`);
+      }
+    }
+    return o.slotsOverride;
+  }
   const cfg = o.cfg ?? MOE_CFG_GLM47;
   const park = moeParkOf(cfg);
   let total = 0;
@@ -561,7 +572,7 @@ export class ExpertCache {
     const t = this.table;
     if (!t || t.hi < t.lo) return;
     this.device.queue.writeBuffer(t.buf, t.lo * 4, t.shadow, t.lo, t.hi - t.lo + 1);
-    t.lo = SLOT_TABLE_ENTRIES;
+    t.lo = t.shadow.length; // (fase-D it.4) NON la costante GLM: la shadow è la verità
     t.hi = -1;
   }
 

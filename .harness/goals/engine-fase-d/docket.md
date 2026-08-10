@@ -23,6 +23,14 @@
    elenca come eccezione, non come debito.
 
 4. **DA CHIUDERE PRIMA DEL DONE DI FASE 1 (2026-08-10, verifier it.2)** —
+   STATO al 2026-08-10 it.4: **(a) CHIUSO** (it.3, verificato), **(c) CHIUSO**
+   (it.3), **(d) CHIUSO** (it.3), **(b) APERTO** = unico residuo, è il lavoro
+   di it.4. Rilievi minori del verifier it.3 chiusi in it.4: flushSlotTable
+   dimensionata sulla shadow e non sulla costante GLM; getter compat non
+   enumerabili (spread/JSON di un layout K-quant non esplodono);
+   `slotsOverride` con chiavi validate contro le classi della config (prima
+   costruiva una cache a zero classi in silenzio).
+
    (a) motore di `ExpertCache` cfg-driven (stati di classe, `expertSlots`,
    `arenaNeeds`, `ensure`, `repinPass`, `stats`, `destroy`): oggi c'è un
    GUARD che rifiuta le config non onorate, che è onesto ma non è la parità;

@@ -146,3 +146,18 @@ strutturale irrobustito (4b) resta a it.4).
 - Next: it.4 = gate strutturale da firme testuali a invariante non
   aggirabile (docket 4b) — l'ultimo blocco prima di poter dichiarare la
   fase 1; poi la migrazione di q35gpumodel alla ExpertCache unica.
+
+### it.3 — rilievi del verifier chiusi subito (it.4, prima di proseguire)
+
+Verifier PASS con 5 rilievi; i 4 minori chiusi immediatamente:
+- `flushSlotTable` usava la costante GLM `SLOT_TABLE_ENTRIES` per
+  l'intervallo sporco: su una config con parco diverso riscriveva ~7k
+  entry per flush invece di quelle sporche (dato corretto, banda sprecata).
+  Ora usa `t.shadow.length` — la shadow è la verità.
+- getter compat resi NON enumerabili: `{...layout}` e `JSON.stringify` su
+  un layout K-quant lanciavano con un messaggio fuorviante (trappola
+  latente per la telemetria delle fasi 2-5).
+- `slotsOverride` con chiavi di un'altra config costruiva una cache a
+  ZERO classi in silenzio: ora le chiavi si validano contro `cfg.classes`.
+- docket item 4 annotato con lo stato reale (a/c/d CHIUSI, b unico residuo).
+Il quinto (gate strutturale da irrobustire) È il lavoro di it.4.

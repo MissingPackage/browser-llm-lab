@@ -1,29 +1,31 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — q1 RIAPERTO: correttezza fatta, PARITÀ DI OTTIMIZZAZIONI MANCANTE; next = goal parità+fase D)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d APERTO e in corso: unificazione del core fatta, GLM bit-identico; next = it.4 gate strutturale)
 
 ## 1. Next decidable
 
-**AL LAVORO: goal PARITÀ + FASE D** (contratto da approvare). Il goal
-`engine-fase-q1` era stato dichiarato chiuso a it.21 sulla sua checklist
-(11/11): **la checklist era soddisfatta, il contratto era sbagliato** —
-l'ho scritto io lasciando fuori le ottimizzazioni. Ruling PI 2026-08-10,
-ora su disco (direction §7-ter): **una famiglia nuova non è importata
-finché non ha le stesse ottimizzazioni di quelle esistenti; il codice si
-uniforma**. q35 oggi gira con LRU nuda + repack JS on-miss, zero batching
-di prefill, readback per token, 40 sync router/token: la meccanica che
-GLM ha risolto in C3a/C3b/C3c. Docket q1 item 14.
+**AL LAVORO: goal `engine-fase-d`** (chartered 2026-08-10, tag
+`goal-engine-fase-d-start`, PHASES 9 fasi). Nasce dal ruling PI
+2026-08-10 (direction §7-ter) e dalla riapertura di q1 (docket q1 item
+14): una famiglia nuova non è importata finché non ha le stesse
+ottimizzazioni delle esistenti; il codice si UNIFORMA.
 
-**COSA RESTA VALIDO** (non si rifà): tutta la correttezza — kernel
-DeltaNet, tokenizer in-engine, reader parametrico, cpuref di famiglia e i
-**tre ratchet golden 98.828 / 97.656 / 98.926%**, gate bit-fedeli che
-ogni ottimizzazione deve preservare (sono lo strumento che rende sicura
-la fase D). **COSA È STALE**: tutti i numeri di performance q35
-(direction §7-bis marcato), da rimisurare a parità raggiunta. **NON si
-pubblica nulla su q35 prima della parità.**
+**Fatto (it.1-3, ogni iterazione verificata)**: `moe.ts` e `residency.ts`
+sono una meccanica sola — tabella di geometria dei quant, UN router con
+due configurazioni (GLM sigmoid+bias+1.8 / Qwen softmax), UN builder di
+slab, e il MOTORE della cache (stati di classe, ripartizione del budget,
+arena, repin, stats, path caldo `ensure`) guidato da `MoeModelConfig`.
+GLM è una configurazione e resta **BIT-IDENTICO** (ktest 84/84:
+2layer L2rel 2.07e-7, arena-vs-slotrange BIT-A-BIT, layer0 2.35e-7).
+Suite 387. Nato il GATE STRUTTURALE (`tests/engine-one-mechanism.test.ts`)
+che vieta un secondo router/layout/arena.
 
-Prima run utile alla riapertura: rerun non-reg GLM a boot pulito (docket
-q1 item 13) — 10 minuti, poi si sviluppa. Riancorarsi:
-`.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`,
-direction §7-bis (baseline storica) e §7-ter (le due regole permanenti).
+**Al lavoro: it.4** = docket item 4(b), l'unico residuo prima di poter
+dichiarare la fase 1: il gate strutturale va da FIRME TESTUALI (aggirabili
+— il verifier l'ha provato) a INVARIANTE non aggirabile, sul modello del
+nome-API di `gpudevice.test`. Poi: migrazione di `q35gpumodel` alla
+ExpertCache unica (fa sparire le voci del ratchet), e le fasi 2-5
+(slab pre-impacchettati, decode multi-step, prefill batched, policy MoE).
+**Regola del goal**: bench pieni SOLO alle fasi 6 e 8 — durante lo
+sviluppo micro-bench e ktest.
 
 ## 2. State delta (sessione 27, 2026-08-10 — goal q1 intero, it.0-21)
 

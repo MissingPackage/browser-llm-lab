@@ -218,7 +218,9 @@ export function mkSlabLayout(
   // Qui diventano getter che FALLISCONO, invece di mentire.
   const scaleField = (name: string, t: SlabTensorLayout): void => {
     Object.defineProperty(out, name, {
-      enumerable: true,
+      // NON enumerabile (verifier it.3): altrimenti {...layout} e JSON.stringify
+      // su un layout K-quant lancerebbero con un messaggio fuorviante.
+      enumerable: false,
       get(): number {
         if (t.scales === null) {
           throw new Error(
