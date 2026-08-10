@@ -34,6 +34,9 @@ import {
 import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 import { createEngineDevice } from "../gpudevice";
 import { planMoeChunk } from "../glmprefillplan";
+import { deltaNetConvWgsl, deltaNetGatesWgsl, deltaNetCoreWgsl } from "../kernels/deltanet";
+import { deltaNetStepCore, softplusGgml, Q35DeltaNetRef } from "../q35cpuref";
+import { SAMPLE_DIMS, SAMPLE_T, sampleWeights, sampleInputs } from "../q35sample";
 
 interface KResult {
   kernel: string; pass: boolean; maxAbs: number; maxRel: number; note?: string;
@@ -222,6 +225,125 @@ class Gpu {
     this.device.queue.writeBuffer(b, 0, new Uint32Array([pos, nPast, 0, 0]));
     return b;
   }
+}
+
+// --- DeltaNet q35 (q1 fase 3): ogni kernel vs cpuref-f64 (q35cpuref) ---
+
+async function testDeltaNetConv(g: Gpu, C: number): Promise<KResult> {
+  const convK = 4, K1 = convK - 1;
+  const state0 = randF32(K1 * C, 811, 0.8);
+  const x = randF32(C, 812, 0.8);
+  const w = randF32(C * convK, 813, 0.8);
+  const refOut = new Float32Array(C);
+  for (let c = 0; c < C; c++) {
+    let s = 0;
+    for (let i = 0; i < convK; i++) s += w[c * convK + i] * (i < K1 ? state0[i * C + c] : x[c]);
+    refOut[c] = s / (1 + Math.exp(-s));
+  }
+  const refState = new Float32Array(K1 * C);
+  for (let c = 0; c < C; c++) {
+    for (let i = 0; i + 1 < K1; i++) refState[i * C + c] = state0[(i + 1) * C + c];
+    refState[(K1 - 1) * C + c] = x[c];
+  }
+  const stBuf = g.buf(state0), out = g.empty(C * 4);
+  await g.run(deltaNetConvWgsl(C, convK), [stBuf, g.buf(x), g.buf(w), out], Math.ceil(C / 64));
+  const r1 = compare(`deltanet-conv-${C}`, new Float32Array(await g.read(out, C * 4)), refOut, 5e-4, 1e-5);
+  const r2 = compare(`deltanet-conv-${C}-state`, new Float32Array(await g.read(stBuf, K1 * C * 4)), refState, 0, 0);
+  return { kernel: r1.kernel, pass: r1.pass && r2.pass, maxAbs: Math.max(r1.maxAbs, r2.maxAbs), maxRel: Math.max(r1.maxRel, r2.maxRel), note: `out+shift stato (shift esatto: ${r2.pass})` };
+}
+
+async function testDeltaNetGates(g: Gpu): Promise<KResult> {
+  const nV = 32;
+  const betaRaw = randF32(nV, 821, 3), alphaRaw = randF32(nV, 822, 12), dt = randF32(nV, 823, 2);
+  const a = Float32Array.from(randF32(nV, 824, 1), (v) => -Math.exp(v));
+  const refB = new Float32Array(nV), refG = new Float32Array(nV);
+  for (let h = 0; h < nV; h++) {
+    refB[h] = 1 / (1 + Math.exp(-betaRaw[h]));
+    refG[h] = a[h] * softplusGgml(alphaRaw[h] + dt[h]);
+  }
+  const bB = g.empty(nV * 4), bG = g.empty(nV * 4);
+  await g.run(deltaNetGatesWgsl(nV), [g.buf(betaRaw), g.buf(alphaRaw), g.buf(a), g.buf(dt), bB, bG], 1);
+  const r1 = compare("deltanet-gates-beta", new Float32Array(await g.read(bB, nV * 4)), refB, 1e-5, 1e-6);
+  const r2 = compare("deltanet-gates-g", new Float32Array(await g.read(bG, nV * 4)), refG, 1e-4, 1e-5);
+  return { kernel: "deltanet-gates", pass: r1.pass && r2.pass, maxAbs: Math.max(r1.maxAbs, r2.maxAbs), maxRel: Math.max(r1.maxRel, r2.maxRel) };
+}
+
+async function testDeltaNetCore(g: Gpu, hd: number, nK: number, nV: number): Promise<KResult> {
+  const eps = 1e-6, keyDim = nK * hd, inner = nV * hd;
+  const convOut = randF32(2 * keyDim + inner, 831, 0.9);
+  const S0 = randF32(nV * hd * hd, 832, 0.3);
+  const beta = Float32Array.from(randF32(nV, 833, 3), (v) => 1 / (1 + Math.exp(-v)));
+  const gg = Float32Array.from(randF32(nV, 834, 1), (v) => -Math.exp(v)); // decay < 1
+  const z = randF32(inner, 835, 2);
+  const normW = Float32Array.from(randF32(hd, 836, 0.2), (v) => 1 + v);
+  // ref f64: l2norm(q,k) → core → gated norm (stessa catena del cpuref.step)
+  const refOut = new Float32Array(inner);
+  const refS = new Float32Array(nV * hd * hd);
+  for (let h = 0; h < nV; h++) {
+    const kh = (h % nK) * hd;
+    const l2 = (off: number): Float64Array => {
+      let ss = 0;
+      for (let i = 0; i < hd; i++) ss += convOut[off + i] ** 2;
+      const sc = 1 / Math.max(Math.sqrt(ss), eps);
+      return Float64Array.from({ length: hd }, (_, i) => convOut[off + i] * sc);
+    };
+    const q = l2(kh).map((v) => v / Math.sqrt(hd)) as Float64Array;
+    const k = l2(keyDim + kh);
+    const v = Float64Array.from({ length: hd }, (_, i) => convOut[2 * keyDim + h * hd + i]);
+    const Sh = Float64Array.from(S0.subarray(h * hd * hd, (h + 1) * hd * hd));
+    const o = deltaNetStepCore(Sh, q, k, v, gg[h], beta[h], hd);
+    let ss = 0;
+    for (let i = 0; i < hd; i++) ss += o[i] * o[i];
+    const inv = 1 / Math.sqrt(ss / hd + eps);
+    for (let i = 0; i < hd; i++) {
+      const zj = z[h * hd + i];
+      refOut[h * hd + i] = o[i] * inv * normW[i] * (zj / (1 + Math.exp(-zj)));
+    }
+    refS.set(Float32Array.from(Sh), h * hd * hd);
+  }
+  const sBuf = g.buf(S0), out = g.empty(inner * 4);
+  await g.run(deltaNetCoreWgsl({ hd, nK, nV, eps }), [g.buf(convOut), sBuf, g.buf(beta), g.buf(gg), g.buf(z), g.buf(normW), out], nV);
+  const r1 = compare(`deltanet-core-hd${hd}`, new Float32Array(await g.read(out, inner * 4)), refOut, 5e-4, 1e-4);
+  const r2 = compare(`deltanet-core-hd${hd}-S`, new Float32Array(await g.read(sBuf, nV * hd * hd * 4)), refS, 5e-4, 1e-4);
+  return { kernel: r1.kernel, pass: r1.pass && r2.pass, maxAbs: Math.max(r1.maxAbs, r2.maxAbs), maxRel: Math.max(r1.maxRel, r2.maxRel), note: "out + stato post-update" };
+}
+
+async function testDeltaNetChain(g: Gpu): Promise<KResult> {
+  // catena INTERA sul campione pinnato (proiezioni gemv-f32 + conv + gates +
+  // core + wout), stato persistente su GPU per T=12 token; riferimento =
+  // cpuref-f64 sugli STESSI input arrotondati a f32 (isola l'errore kernel).
+  const D = SAMPLE_DIMS;
+  const W = sampleWeights();
+  const keyDim = D.nK * D.hd, inner = D.nV * D.hd, qkvDim = 2 * keyDim + inner;
+  const ref = new Q35DeltaNetRef(D, W);
+  const wqkv = g.buf(W.wqkv), wgate = g.buf(W.wgate), wbeta = g.buf(W.wbeta), walpha = g.buf(W.walpha);
+  const wout = g.buf(W.wout), aBuf = g.buf(W.a), dtBuf = g.buf(W.dtBias), nrm = g.buf(W.ssmNorm);
+  const convW = g.buf(W.conv);
+  const convSt = g.buf(new Float32Array((D.convK - 1) * qkvDim));
+  const sBuf = g.buf(new Float32Array(D.nV * D.hd * D.hd));
+  const qkv = g.empty(qkvDim * 4), z = g.empty(inner * 4), bRaw = g.empty(D.nV * 4), aRaw = g.empty(D.nV * 4);
+  const bSig = g.empty(D.nV * 4), gVal = g.empty(D.nV * 4), convOut = g.empty(qkvDim * 4);
+  const gated = g.empty(inner * 4), y = g.empty(D.d * 4);
+  let maxAbs = 0, maxRel = 0, pass = true;
+  for (const x64 of sampleInputs()) {
+    const x32 = Float32Array.from(x64);
+    const refY = Float32Array.from(ref.step(Float64Array.from(x32)));
+    const xB = g.buf(x32);
+    await g.run(gemvF32Wgsl({ K: D.d, N: qkvDim }), [wqkv, xB, qkv], qkvDim);
+    await g.run(gemvF32Wgsl({ K: D.d, N: inner }), [wgate, xB, z], inner);
+    await g.run(gemvF32Wgsl({ K: D.d, N: D.nV }), [wbeta, xB, bRaw], D.nV);
+    await g.run(gemvF32Wgsl({ K: D.d, N: D.nV }), [walpha, xB, aRaw], D.nV);
+    await g.run(deltaNetGatesWgsl(D.nV), [bRaw, aRaw, aBuf, dtBuf, bSig, gVal], 1);
+    await g.run(deltaNetConvWgsl(qkvDim, D.convK), [convSt, qkv, convW, convOut], Math.ceil(qkvDim / 64));
+    await g.run(deltaNetCoreWgsl({ hd: D.hd, nK: D.nK, nV: D.nV, eps: D.eps }), [convOut, sBuf, bSig, gVal, z, nrm, gated], D.nV);
+    await g.run(gemvF32Wgsl({ K: inner, N: D.d }), [wout, gated, y], D.d);
+    const got = new Float32Array(await g.read(y, D.d * 4));
+    const r = compare("chain-step", got, refY, 2e-3, 5e-4);
+    maxAbs = Math.max(maxAbs, r.maxAbs);
+    maxRel = Math.max(maxRel, r.maxRel);
+    pass = pass && r.pass;
+  }
+  return { kernel: "deltanet-chain-T12", pass, maxAbs, maxRel, note: `campione pinnato ${SAMPLE_T} token, stato persistente su GPU` };
 }
 
 async function testGemv(g: Gpu, kind: "q4_0" | "q8_0", K: number, N: number, hasBias: boolean): Promise<KResult> {
@@ -2455,6 +2577,14 @@ async function main(): Promise<void> {
     results.push(await testPairGemvSiluQ5KFast(g));
     results.push(await testGemvQ6KFast(g, G.dFfnExpert, G.dModel)); // down shexp, K=1536 (6 superblocchi)
     results.push(await testGemvQ6KFast(g, G.dModel, 1024));         // output head, K=2048 (N ridotto)
+
+    // --- DeltaNet q35 (q1 fase 3): conv, gates, core, catena sul campione ---
+    results.push(await testDeltaNetConv(g, 256));   // dims campione
+    results.push(await testDeltaNetConv(g, 8192));  // dims reali 4B
+    results.push(await testDeltaNetGates(g));
+    results.push(await testDeltaNetCore(g, 16, 4, 8));    // dims campione
+    results.push(await testDeltaNetCore(g, 128, 16, 32)); // dims reali 4B/9B/35B
+    results.push(await testDeltaNetChain(g));
 
     // --- kernel MLA absorbed (C2 fase 4 slice 2), dims reali GLM ---
     const HL = G.qkNope + G.ropeDims; // 256: head len di q

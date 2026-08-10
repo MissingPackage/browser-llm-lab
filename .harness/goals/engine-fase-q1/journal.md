@@ -118,3 +118,24 @@
 - Suite 371 PASS (+7) / 7 skip, tsc pulito, GLM intatto.
 - RESTA per chiudere fase 3 (it.5): kernel WGSL DeltaNet + ktest vs cpuref
   sul campione (+ pesi reali 4B layer-scale), ktest 69/69 invariati.
+
+## it.5 (2026-08-10) — fase 3 DONE: kernel WGSL DeltaNet, ktest 75/75
+
+- `src/engine/kernels/deltanet.ts`: 3 kernel — conv causale k4 + SiLU +
+  shift stato (un thread/canale, colonna propria); gates β/g (softplus
+  gomito 20); CORE = un workgroup per v-head, thread = colonna j dello
+  stato, decay FUSO nelle due passate (mai sweep separata), l2norm q/k in
+  workgroup reduction, gated norm RMS·silu(z) in coda. Stato f32 (obbligo
+  config), accumulatori tutti inizializzati (landmine Tint).
+- Campione spostato in `src/engine/q35sample.ts` (il worker non importa da
+  tests/; helper re-esporta per i test node).
+- ktest 6 nuovi, TUTTI PASS al primo run reale: conv-256/conv-8192 (shift
+  ESATTO), gates, core-hd16 e core-hd128 (dims reali, out+stato), catena
+  T=12 col campione pinnato e stato PERSISTENTE su GPU (maxAbs 5.4e-7,
+  maxRel 1.1e-3 su near-zero). Proiezioni via gemv-f32 esistente.
+- Totale ktest 75/75 (69 preesistenti PASS = GLM intatto). Suite node 371
+  PASS / 7 skip, tsc pulito. FASE 3 done-when coperto per intero.
+- Il rischio dominante del goal (DeltaNet) è DIMEZZATO: numerica ricorrente
+  provata kernel-level a dims reali; resta l'e2e coi pesi veri (fase 4).
+- Next: it.6 = fase 4 (path 4B end-to-end: GQA variante + mrope + ibrido
+  3:1 + ffn denso; argmax==cpuref; golden 4B a soglia ratchet).
