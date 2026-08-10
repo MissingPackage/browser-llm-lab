@@ -268,7 +268,8 @@
   near-tie oracolo (23/24 = top-2, margine mediano 0.066 logit, zero >1)
   — firma benigna f32, near-tie mai gateati (C2).
 - Riferimenti full-resident 9B (host dichiarato): **decode 14.55 tok/s ·
-  prefill seq 15.4 · TTFT 40.3 s** (load 15.6 s) — scala ~coerente col
+  prefill seq 15.4 · TTFT 40.3 s** (load bench 15.1 s; correzione
+  verifier: il 15.6 era della run di conformance) — scala ~coerente col
   rapporto parametri attivi vs 4B (22.9→14.55 ≈ 0.63× per 2.1× parametri:
   la banda pesi domina, come atteso su gemv-bound).
 - RESTA per fase 5 (it.12): WP decomposizione gap — llama.cpp Vulkan

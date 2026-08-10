@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: FASI 1-4/9 COMPLETE, 4B su GPU a 22.9 tok/s correttezza-prima, golden 98.828% ratchet; next = fase 5: 9B + WP gap)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-4 DONE + 9B CONFORME (ratchet 97.656%, near-tie provati); next = it.12 WP decomposizione gap)
 
 ## 1. Next decidable
 
@@ -39,13 +39,16 @@ RATCHET: top-1 ≥ 1012/1024 = 98.828125% AL PIN** (docket q1 item 8; run
 GPU 29 min; conformance infra: q35conf + run-golden-q35.sh). **it.10 DONE — FASE 4 COMPLETA**:
 riferimenti full-resident 4B committati (decode 22.93 tok/s p50 43.6 ms,
 prefill seq 26.0, TTFT 25.8 s; hostState user-session-light; frame
-correttezza-prima dichiarato — zero fusioni, readback per token). **Al
-lavoro: it.11 = fase 5 — 9B + WP decomposizione gap**: golden 9B con
-`MODEL=~/.cache/blab-models/q35/Qwen3.5-9B-Q4_0.gguf run-golden-q35.sh`,
-conformance con l'infra parametrica (q35conf con URL/SHA parametrici da
-estendere al 9B), soglia ratchet 9B; poi confronto full-residency noi vs
-llama.cpp Vulkan (stesso GGUF 9B, p512/n64) e doc di studio con
-scomposizione del gap (kernel/dispatch/safety-check) e leve per ROI. Perimetro: path testo Qwen
+correttezza-prima dichiarato — zero fusioni, readback per token). **it.11 DONE**: 9B CONFORME —
+ratchet **1000/1024 = 97.656%** con analisi near-tie al pin (24 miss tutti
+near-tie, 23/24 top-2, mediana 0.066 logit; docket item 9); embd/head
+invertiti sul 9B gestiti (Q4_0/Q6_K); riferimenti 9B: decode 14.55, prefill
+15.4, TTFT 40.3 s. **Al lavoro: it.12 = fase 5 seconda metà — WP
+decomposizione gap**: llama-bench Vulkan sullo STESSO GGUF 9B (p512/n64,
+b10333, host dichiarato, GPU scarica 60 s) vs riferimenti browser
+committati; scomposizione kernel/dispatch/safety-check nel doc di studio
+(prior LlamaWeb: check 14-42%, tuning +41%) e leve ordinate per ROI
+misurato → decide la fase 6. Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

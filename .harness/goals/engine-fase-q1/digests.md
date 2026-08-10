@@ -109,3 +109,15 @@ per token). Lettura: il denso full-resident fa già 23 tok/s senza alcuna
 ottimizzazione (GLM paginato: 15.6 dopo tre fasi); la soglia UX 30 è a
 1.3× con tutte le leve in canna. Next: fase 5 — 9B + WP decomposizione
 gap vs llama.cpp Vulkan (il cuore del confronto onesto per il writeup).
+
+## it.11 (2026-08-10)
+
+Fase 5 prima metà, verifier PASS (top-1 e near-tie ricalcolati da zero).
+**9B CONFORME: soglia ratchet 1000/1024 = 97.656%** con analisi near-tie
+allegata al pin (24 miss TUTTI near-tie: 23/24 = top-2 oracolo, margine
+mediano 0.066 logit, zero >1 — firma benigna f32). Sorpresa dal file:
+il 9B ha embd/head INVERTITI rispetto al 4B (Q4_0/Q6_K) → orchestratore
+ora parametrico su entrambi gli orientamenti. Riferimenti 9B: decode
+14.55 tok/s · prefill 15.4 · TTFT 40.3 s (banda-pesi-bound, come atteso).
+Due modelli della famiglia CONFORMI in produzione GPU. Next: it.12 = WP
+decomposizione gap (llama.cpp Vulkan stesso GGUF 9B, p512/n64).
