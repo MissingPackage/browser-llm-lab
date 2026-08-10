@@ -1,0 +1,82 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-tier-mobile-4b",
+ "date": "2026-08-10",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "modelSha256": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
+ "declared": "tier mobile = classe 8 GB RAM unificata (S22, spec §6). Il 4B è FULL-RESIDENT sotto il cap: nessun paging da emulare (il paging è del MoE). I numeri di compute sono la MISURA su 4090 (frame correttezza-prima, NON proiettabili al silicio mobile); il TTFT mobile è una PROIEZIONE PARAMETRICA con banda storage e fattore compute LIBERI — i numeri veri arrivano solo dal device (PI-gated, docket).",
+ "capBytes": 3221225472,
+ "footprintBytes": {
+  "weights": 2583221408,
+  "kvCtx512": 16777216,
+  "scratchEst": 67108864,
+  "total": 2667107488
+ },
+ "capRespected": true,
+ "measured4090": {
+  "source": "results/engine/q35-bench-4b-fullresident-2026-08-10.json",
+  "decodeTokS": 22.925263638025765,
+  "prefillSeqTokS": 25.967281225647366,
+  "ttftMs": 25839,
+  "hostState": {
+   "before": {
+    "state": {
+     "declared": "user-session-light",
+     "before": {
+      "temperatureC": 31,
+      "smClockMHz": 210,
+      "powerW": 12.44,
+      "memUsedMiB": 953,
+      "utilizationPct": 0,
+      "throttleReasons": "0x0000000000000001"
+     },
+     "after": null
+    }
+   },
+   "after": {
+    "state": {
+     "declared": "user-session-light",
+     "before": {
+      "temperatureC": 39,
+      "smClockMHz": 2265,
+      "powerW": 35.73,
+      "memUsedMiB": 961,
+      "utilizationPct": 41,
+      "throttleReasons": "0x0000000000000024"
+     },
+     "after": null
+    }
+   }
+  }
+ },
+ "projectionMobile": {
+  "formula": "TTFT(bandaStorageGBs, computeFactor) = pesiGB/bandaStorageGBs + prefillTokens/(prefillSeqTokS_4090/computeFactor)",
+  "note": "computeFactor = rapporto compute 4090/mobile (LIBERO, tipico 5-15x per GPU mobile); bandaStorageGBs = banda lettura storage del device (LIBERO). Esempi ILLUSTRATIVI, non claim:",
+  "examples": [
+   {
+    "bandaStorageGBs": 1,
+    "computeFactor": 5,
+    "prefillTokens": 387,
+    "ttftS": 77.1
+   },
+   {
+    "bandaStorageGBs": 1,
+    "computeFactor": 10,
+    "prefillTokens": 387,
+    "ttftS": 151.6
+   },
+   {
+    "bandaStorageGBs": 2,
+    "computeFactor": 5,
+    "prefillTokens": 387,
+    "ttftS": 75.8
+   },
+   {
+    "bandaStorageGBs": 2,
+    "computeFactor": 10,
+    "prefillTokens": 387,
+    "ttftS": 150.3
+   }
+  ]
+ }
+}

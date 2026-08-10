@@ -7,6 +7,7 @@ const cfg = {
   // ?bench=4,64 → riferimenti full-resident: prompt idx 4, 64 decode greedy
   model: (["9b", "35b"].includes(q.get("model") ?? "") ? q.get("model") : undefined) as "9b" | "35b" | undefined,
   debugTap: q.has("tap") ? Number(q.get("tap")) : undefined,
+  arenaGiB: q.has("arena") ? Number(q.get("arena")) : undefined,
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

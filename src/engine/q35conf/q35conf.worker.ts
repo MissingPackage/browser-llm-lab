@@ -115,7 +115,10 @@ async function main(cfg: Cfg): Promise<void> {
     model.resetState();
     const P = p.promptTokens.length;
     const tPre = performance.now();
-    for (let t = 0; t < P - 1; t++) void model.step(p.promptTokens[t], t, false);
+    // await OBBLIGATORIO: sul MoE step() contiene i readback del router
+    // (fire-and-forget = mapAsync concorrenti sullo stesso staging, it.19);
+    // sul denso con read=false ritorna subito: semantica di misura invariata.
+    for (let t = 0; t < P - 1; t++) await model.step(p.promptTokens[t], t, false);
     await device.queue.onSubmittedWorkDone();
     const prefillMs = performance.now() - tPre;
     const tFirst = performance.now();

@@ -18,7 +18,9 @@ const promptIdx = arg("prompt-idx", "4");
 const nDecode = arg("n-decode", "64");
 const declared = arg("declared", "undeclared");
 const modelTag = arg("model", "4b");
-const out = arg("out", join(ROOT, `results/engine/q35-bench-${modelTag}-fullresident-${new Date().toISOString().slice(0, 10)}.json`));
+const arenaGiB = arg("arena-gib", null);
+const outTag = arenaGiB ? `arena${arenaGiB}` : "fullresident";
+const out = arg("out", join(ROOT, `results/engine/q35-bench-${modelTag}-${outTag}-${new Date().toISOString().slice(0, 10)}.json`));
 const golden = arg("golden", join(ROOT, `results/engine/golden/q35/golden-q35-${modelTag}-full-2026-08-10.json`));
 const PROFILE = process.env.E2E_PROFILE ?? join(homedir(), ".cache/blab-q35conf-profile");
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:5199";
@@ -34,7 +36,7 @@ const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService"
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
 page.on("pageerror", (e) => console.log("[q35bench][pageerror]", e.message.slice(0, 300)));
-await page.goto(`${BASE_URL}/q35conf.html?bench=${promptIdx},${nDecode}${modelTag !== "4b" ? `&model=${modelTag}` : ""}`, { waitUntil: "load" });
+await page.goto(`${BASE_URL}/q35conf.html?bench=${promptIdx},${nDecode}${modelTag !== "4b" ? `&model=${modelTag}` : ""}${arenaGiB ? `&arena=${arenaGiB}` : ""}`, { waitUntil: "load" });
 
 const t0 = Date.now();
 for (;;) {
@@ -53,7 +55,7 @@ for (;;) {
     }
     // hostState() restituisce già {declared, before, after}: niente doppio
     // annidamento (nota verifier it.10) — before campionato all'avvio, after qui
-    const full = { ...report, hostState: { declared, before: hostBefore.state?.before ?? hostBefore, after: hostState(declared).state?.before ?? null } };
+    const full = { ...report, arenaGiB: arenaGiB ? Number(arenaGiB) : null, hostState: { declared, before: hostBefore.state?.before ?? hostBefore, after: hostState(declared).state?.before ?? null } };
     writeFileSync(out, JSON.stringify(full, null, 1));
     console.log(`[q35bench] done: decode ${report.decode.tokS.toFixed(2)} tok/s (p50 ${report.decode.msPerTokenP50.toFixed(1)} ms), prefill ${report.prefill.tokS.toFixed(1)} tok/s, TTFT ${(report.ttftMs / 1000).toFixed(1)} s -> ${out}`);
     process.exit(0);

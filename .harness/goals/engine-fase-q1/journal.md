@@ -453,3 +453,35 @@
 - Next: it.19 = fase 8 — tier + recall + bandmodel (recall prefetch
   256-wide vs 91.92% GLM spiegato; bandmodel rifittato; bench tier
   mobile(4B) + 8/12/16(35B) emulati con hostState; collasso scarsità).
+
+## it.19 (2026-08-10) — fase 8 slice 1: BENCH PER TIER con hostState
+
+- Runner/page estesi con --arena-gib; FIX dal primo run: il prefill bench
+  faceva `void model.step(...)` fire-and-forget — sul MoE lo step CONTIENE
+  i mapAsync del router → mapAsync concorrenti sullo stesso staging;
+  ora `await` (denso invariato: read=false ritorna subito).
+- TIER 35B (prompt 05-math 387 tok + 64 decode greedy, host
+  user-session-light dichiarato, JSON committati con moe stats):
+  | tier (arena) | decode | prefill seq | TTFT | residenza | hit |
+  | 8 GB (4 GiB)  | 0.79 | 0.66 | 600 s | 23.4% | 77.33% |
+  | 12 GB (8 GiB) | 2.00 | 1.50 | 268 s | 46.8% | 91.43% |
+  | 16 GB (11 GiB)| 3.40 | 2.02 | 201 s | 64.4% | 94.36% |
+  COLLASSO IN SCARSITÀ misurato: 4.3× dal tier 16 all'8, attribuzione =
+  hit-rate (i miss costano fetch Range + repack JS + upload ~1.78 MB
+  ciascuno, ~73 miss/token al tier 8). DICHIARATO: numeri correttezza-
+  prima (40 sync router/token + miss on-demand SENZA prefetch né slab
+  pre-repacked) — il FRAME su cui la meccanica C3c (prefetch/tier/pin,
+  fase D) porta i moltiplicatori; il confronto con GLM C3c 15.6 tok/s
+  misura la distanza della meccanica, non del modello.
+- DEVICE-LOST ad arena 12 (2 tentativi): baseline VRAM 1225 MiB (era 985
+  in fase 7) → 12+2.6+KV+display > 16 GB fisici di ~200 MB. Risoluzione
+  onesta: punto tier-16 ad ARENA 11 con margine dichiarato; il punto
+  arena-12 resta dalla conf full di fase 7 (host baseline diverso,
+  dichiarato). Lezione host-state registrata.
+- TIER MOBILE 4B (results/engine/q35-tier-mobile-4b-2026-08-10.json):
+  cap 3 GiB RISPETTATO dal footprint contabile (2.48 GiB), misura 4090 =
+  frame; proiezione PARAMETRICA TTFT(banda, computeFactor) con esempi
+  illustrativi 76-152 s ⇒ CONFERMA la landmine "device piccoli =
+  prefill-bound": il batching (leva 1) è la porta del tier mobile.
+- RESTA fase 8 (it.20): recall oracolo lookahead 256-wide + bandmodel
+  rifittato sui 3 punti tier.
