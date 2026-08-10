@@ -485,3 +485,29 @@
   prefill-bound": il batching (leva 1) è la porta del tier mobile.
 - RESTA fase 8 (it.20): recall oracolo lookahead 256-wide + bandmodel
   rifittato sui 3 punti tier.
+
+## it.20 (2026-08-10) — FASE 8 COMPLETA: recall lookahead + bandmodel fit
+
+- RECALL LOOKAHEAD 256-wide (metodo C1 su cpuref-f64, subset dichiarato
+  p4+p7 = 657 posizioni intere, 23 min): **@8 = 82.67%, @4 = 47.74%**
+  vs GLM 91.92% @8. SCOSTAMENTO SPIEGATO (non gateato): (1) router
+  softmax 256-wide SENZA bias vs sigmoid+bias 64 GLM — distribuzione piu'
+  selettiva, predizione attraverso l'attn piu' fragile; (2) bersaglio
+  relativo piu' fine: top-8 su 256 = 3.1% del parco vs top-4 su 64 =
+  6.25%; (3) profilo per-layer: L0 = 44% (dall'embedding l'attn del primo
+  layer costruisce quasi tutto il segnale di routing), sale a ~90% max,
+  ultimi 10 layer ~82.6% — l'attn ibrida (3 DeltaNet ricorrenti : 1 GQA)
+  sposta il hidden piu' dell'MLA GLM. IMPLICAZIONE onesta per il prefetch
+  (fase D): 82.7% e' utilizzabile ma il beneficio sara' minore che su GLM
+  — da misurare, non promesso. JSON committato con per-layer.
+- BANDMODEL q35 FIT (3 punti tier, JSON): decodeMs = -6.1 + 17.64 x
+  missPerToken, residui 0.3/-4.5/6.3%. DICHIARATO: 3 punti = 1 grado di
+  liberta', niente out-of-sample (a differenza del GLM); base NEGATIVA =
+  la forma lineare sottostima la parte fissa (il costo/miss reale cala
+  coi miss per effetti di coda); hit cumulativo come proxy. Il costoMiss
+  17.6 ms = fetch 1.79 MB + REPACK JS + writeBuffer sequenziali (regime
+  correttezza-prima: con slab pre-repacked e prefetch C3c cambia natura).
+  bandmodel.ts GLM INTATTO col suo test permanente.
+- PHASES fase 8 -> done (it.19-20). Fasi 1-8 COMPLETE. Next: it.21 =
+  FASE 9 CHIUSURA (checklist contratto voce-voce, non-reg GLM piena ad
+  albero congelato, direction/ledger/HANDOFF, docket triage).

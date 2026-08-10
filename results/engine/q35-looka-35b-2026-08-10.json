@@ -1,0 +1,226 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-looka-35b",
+ "date": "2026-08-10",
+ "model": "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+ "method": "metodo C1 su cpuref-f64: predizione = router_l su rms(hidden pre-attn_l, postnorm_l), verita' = selezione con xn_l post-attn; recall@K = |topK(pred) ∩ top8(vero)|/8. NON un gate: scostamento da spiegare.",
+ "subset": {
+  "prompts": [
+   "/home/neuromancer/Projects/browser-llm-lab/tools/oracle-moe/corpus/05-math-en.txt",
+   "/home/neuromancer/Projects/browser-llm-lab/tools/oracle-moe/corpus/08-prosa-en-essay.txt"
+  ],
+  "positions": 657,
+  "declared": "subset di prompt INTERI (regola full-corpus)"
+ },
+ "glmReference": {
+  "recallAt8": 0.9192,
+  "note": "GLM C1: router sigmoid+bias 64-wide top-4, hidden L->router L+1"
+ },
+ "recall": {
+  "at4": 0.47744958143074584,
+  "at8": 0.8267218417047184
+ },
+ "perLayer": [
+  {
+   "layer": 0,
+   "at4": 0.2776,
+   "at8": 0.4441
+  },
+  {
+   "layer": 1,
+   "at4": 0.4009,
+   "at8": 0.64
+  },
+  {
+   "layer": 2,
+   "at4": 0.4043,
+   "at8": 0.6366
+  },
+  {
+   "layer": 3,
+   "at4": 0.4793,
+   "at8": 0.8069
+  },
+  {
+   "layer": 4,
+   "at4": 0.472,
+   "at8": 0.7835
+  },
+  {
+   "layer": 5,
+   "at4": 0.4722,
+   "at8": 0.7852
+  },
+  {
+   "layer": 6,
+   "at4": 0.485,
+   "at8": 0.8217
+  },
+  {
+   "layer": 7,
+   "at4": 0.4836,
+   "at8": 0.8295
+  },
+  {
+   "layer": 8,
+   "at4": 0.4678,
+   "at8": 0.7591
+  },
+  {
+   "layer": 9,
+   "at4": 0.4842,
+   "at8": 0.8135
+  },
+  {
+   "layer": 10,
+   "at4": 0.4905,
+   "at8": 0.8604
+  },
+  {
+   "layer": 11,
+   "at4": 0.4952,
+   "at8": 0.898
+  },
+  {
+   "layer": 12,
+   "at4": 0.4848,
+   "at8": 0.8347
+  },
+  {
+   "layer": 13,
+   "at4": 0.492,
+   "at8": 0.8668
+  },
+  {
+   "layer": 14,
+   "at4": 0.4878,
+   "at8": 0.8514
+  },
+  {
+   "layer": 15,
+   "at4": 0.4882,
+   "at8": 0.852
+  },
+  {
+   "layer": 16,
+   "at4": 0.4933,
+   "at8": 0.8744
+  },
+  {
+   "layer": 17,
+   "at4": 0.4911,
+   "at8": 0.8598
+  },
+  {
+   "layer": 18,
+   "at4": 0.4952,
+   "at8": 0.8855
+  },
+  {
+   "layer": 19,
+   "at4": 0.4935,
+   "at8": 0.8839
+  },
+  {
+   "layer": 20,
+   "at4": 0.4903,
+   "at8": 0.8508
+  },
+  {
+   "layer": 21,
+   "at4": 0.493,
+   "at8": 0.8693
+  },
+  {
+   "layer": 22,
+   "at4": 0.4943,
+   "at8": 0.8801
+  },
+  {
+   "layer": 23,
+   "at4": 0.4979,
+   "at8": 0.9051
+  },
+  {
+   "layer": 24,
+   "at4": 0.4941,
+   "at8": 0.8862
+  },
+  {
+   "layer": 25,
+   "at4": 0.4987,
+   "at8": 0.9037
+  },
+  {
+   "layer": 26,
+   "at4": 0.4962,
+   "at8": 0.8877
+  },
+  {
+   "layer": 27,
+   "at4": 0.4928,
+   "at8": 0.8845
+  },
+  {
+   "layer": 28,
+   "at4": 0.4947,
+   "at8": 0.8828
+  },
+  {
+   "layer": 29,
+   "at4": 0.4947,
+   "at8": 0.8676
+  },
+  {
+   "layer": 30,
+   "at4": 0.4958,
+   "at8": 0.89
+  },
+  {
+   "layer": 31,
+   "at4": 0.4905,
+   "at8": 0.8697
+  },
+  {
+   "layer": 32,
+   "at4": 0.4882,
+   "at8": 0.8339
+  },
+  {
+   "layer": 33,
+   "at4": 0.4863,
+   "at8": 0.8476
+  },
+  {
+   "layer": 34,
+   "at4": 0.4964,
+   "at8": 0.8995
+  },
+  {
+   "layer": 35,
+   "at4": 0.4878,
+   "at8": 0.8666
+  },
+  {
+   "layer": 36,
+   "at4": 0.477,
+   "at8": 0.7915
+  },
+  {
+   "layer": 37,
+   "at4": 0.4791,
+   "at8": 0.8073
+  },
+  {
+   "layer": 38,
+   "at4": 0.4736,
+   "at8": 0.7705
+  },
+  {
+   "layer": 39,
+   "at4": 0.4382,
+   "at8": 0.6872
+  }
+ ],
+ "minutes": 23.3
+}

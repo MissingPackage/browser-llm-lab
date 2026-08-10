@@ -1,0 +1,63 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-bandmodel-fit",
+ "date": "2026-08-10",
+ "model": "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+ "declared": "fit su 3 punti (gradi di liberta' 1): la forma lineare base+miss×costo e' il modello DICHIARATO, non validato out-of-sample come il bandmodel GLM (che ha il punto fuori-fit); hit CUMULATIVO prefill+decode usato come proxy del decode (approssimazione dichiarata); regime correttezza-prima (miss = fetch Range + repack JS + writeBuffer, sequenziale, MAI overlappato) — con la meccanica C3c (prefetch/slab pre-repacked) il costoMiss cambia natura.",
+ "points": [
+  {
+   "arenaGiB": 4,
+   "decodeMsP50": 1269.3849999904633,
+   "hitRate": 0.7733,
+   "missPerToken": 72.54,
+   "residency": 0.2342,
+   "costPerMissObs": 1.798
+  },
+  {
+   "arenaGiB": 8,
+   "decodeMsP50": 500.080000013113,
+   "hitRate": 0.9143,
+   "missPerToken": 27.44,
+   "residency": 0.4684,
+   "costPerMissObs": 1.796
+  },
+  {
+   "arenaGiB": 11,
+   "decodeMsP50": 293.75999999046326,
+   "hitRate": 0.9436,
+   "missPerToken": 18.05,
+   "residency": 0.6441,
+   "costPerMissObs": 1.792
+  }
+ ],
+ "fit": {
+  "formula": "decodeMsPerToken = base + missPerToken × costoMissMs",
+  "baseMs": -6.1,
+  "costoMissMs": 17.64,
+  "note": "costoMissMs ≈ fetch(~1.79 MB da localhost) + repack JS K-quant + writeBuffer; base = forward a cache calda (40 sync router inclusi)"
+ },
+ "residuals": [
+  {
+   "arenaGiB": 4,
+   "measuredMs": 1269.3849999904633,
+   "predictedMs": 1273.2,
+   "relErr": 0.003
+  },
+  {
+   "arenaGiB": 8,
+   "measuredMs": 500.080000013113,
+   "predictedMs": 477.8,
+   "relErr": -0.0445
+  },
+  {
+   "arenaGiB": 11,
+   "measuredMs": 293.75999999046326,
+   "predictedMs": 312.2,
+   "relErr": 0.0628
+  }
+ ],
+ "glmReference": {
+  "file": "src/engine/bandmodel.ts",
+  "note": "il modello GLM (base 167.43, F(h)×(bytes/banda+1.96)) resta INTATTO col suo test permanente; forma diversa perche' misura un regime diverso (slab pre-repacked, prefetch, no repack JS on-miss)"
+ }
+}
