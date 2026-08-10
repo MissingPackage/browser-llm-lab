@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-4 DONE + 9B CONFORME (ratchet 97.656%, near-tie provati); next = it.12 WP decomposizione gap)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: FASI 1-5/9 COMPLETE, gap decode 4.6-5.2× scomposto con misura; next = it.13 fase 6 leve bounded)
 
 ## 1. Next decidable
 
@@ -43,12 +43,16 @@ correttezza-prima dichiarato — zero fusioni, readback per token). **it.11 DONE
 ratchet **1000/1024 = 97.656%** con analisi near-tie al pin (24 miss tutti
 near-tie, 23/24 top-2, mediana 0.066 logit; docket item 9); embd/head
 invertiti sul 9B gestiti (Q4_0/Q6_K); riferimenti 9B: decode 14.55, prefill
-15.4, TTFT 40.3 s. **Al lavoro: it.12 = fase 5 seconda metà — WP
-decomposizione gap**: llama-bench Vulkan sullo STESSO GGUF 9B (p512/n64,
-b10333, host dichiarato, GPU scarica 60 s) vs riferimenti browser
-committati; scomposizione kernel/dispatch/safety-check nel doc di studio
-(prior LlamaWeb: check 14-42%, tuning +41%) e leve ordinate per ROI
-misurato → decide la fase 6. Perimetro: path testo Qwen
+15.4, TTFT 40.3 s. **it.12 DONE — FASE 5 COMPLETA**: WP gap
+fatto — decode 5.18×/4.62× vs nativo Vulkan stesso GGUF, readback 5.1/3.6
+ms/token MISURATO (decode−prefillSeq), prefill 183×/171× = assenza di
+batching; leve per ROI in docket item 10 e doc studio
+(2026-08-10-q35-gap-decomposition.md); per il writeup: 4.6-5.2× a parità
+di regime. **Al lavoro: it.13 = fase 6 — leve kernel bounded da
+contratto**: dot4I8Packed e tuning tile per-device DIETRO FLAG con delta
+misurato O esclusione motivata coi numeri del WP; spike subgroup-matrix
+dietro flag Chromium O impraticabilità documentata (spec §7: non c'è nel
+browser stabile — lo spike lo PROVA empiricamente sul nostro Chrome). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

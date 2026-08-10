@@ -121,3 +121,16 @@ ora parametrico su entrambi gli orientamenti. Riferimenti 9B: decode
 14.55 tok/s · prefill 15.4 · TTFT 40.3 s (banda-pesi-bound, come atteso).
 Due modelli della famiglia CONFORMI in produzione GPU. Next: it.12 = WP
 decomposizione gap (llama.cpp Vulkan stesso GGUF 9B, p512/n64).
+
+## it.12 (2026-08-10)
+
+**FASE 5 COMPLETA** (5/9), verifier PASS con bench nativo rieseguito.
+Il WP gap del contratto è FATTO: **decode 5.18× (4B) / 4.62× (9B)** vs
+llama.cpp Vulkan stesso GGUF, scomposto con MISURA (readback 5.1/3.6
+ms/token = decode−prefillSeq; compute residuo 4.6×/4.4×). Prefill
+183×/171× = assenza di batching, non gap. Leve per ROI (docket item 10,
+solo registrazione): 1. prefill batched (pattern GLM), 2. decode
+multi-step no-readback (−5.1 ms misurati, pattern GLM B2), 3. fusione
+dispatch, 4. tuning+dot4I8Packed (fase 6), 5. spike subgroup-matrix.
+Per il writeup: pubblicare 4.6-5.2× a parità di regime; prefill solo
+post-batching. Next: it.13 = fase 6 (leve bounded da contratto).
