@@ -297,3 +297,27 @@
   dietro flag SE in cima al ROI — il WP dice che il ROI più alto è nei
   pattern GLM (fase 7-8/D), quindi fase 6 = misura leve contratto +
   esclusioni motivate coi numeri + spike subgroup-matrix).
+
+## it.13 (2026-08-10) — FASE 6 COMPLETA: 2 esclusioni motivate + probe
+
+- dot4I8Packed e tuning tile: ESCLUSE PER ORA coi numeri del WP (ramo
+  previsto dal done-when): il collo del decode è readback+dispatch+fusione
+  (non l'ALU); il +41% del tuning è sul matmul batched che ancora non
+  esiste (leva n.1). Doc §5, docket item 11.
+- SPIKE subgroup-matrix ESEGUITO (probe empirico committato, 3 config di
+  flag): SORPRESA — `chromium-experimental-subgroup-matrix` è ESPOSTA E
+  CONCESSA al device sul nostro Chrome stable coi flag runner standard
+  (adapter nvidia/lovelace); MA config INT8-ONLY ({u8,i8}→{u32,i32},
+  16×16×32|16×8×32), niente f16/f32, shader-f16 assente dall'adapter;
+  compilazione naive rifiutata (packing u32 richiesto) ⇒ la misura di
+  throughput richiede la stessa infra int8-packed di dot4I8Packed: le due
+  leve CONVERGONO, si rivalutano dopo il prefill batched. Spec §7
+  aggiornata (per l'utente finale senza flag resta non raggiungibile:
+  probe ≠ deployment).
+- Fix di metodo nel probe (2 iterazioni): launchPersistentContext + origin
+  http (WebGPU assente su about:blank con launch semplice); adapter
+  FRESCO per ogni requestDevice (Chrome consuma l'adapter).
+- PHASES fase 6 → done. FASI 1-6 su 9.
+- Next: it.14 = fase 7 — MoE 35B-A3B parametrizzato (il pezzo grosso
+  rimasto: slotTable/classi parametrici con GLM invariato, dequant Q4_K
+  expert, forward 35B con paging C3c).

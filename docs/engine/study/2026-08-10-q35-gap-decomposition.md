@@ -74,7 +74,41 @@ GLM-class; il tier mobile di fase 8 è prefill-bound: landmine C3c).
    Chromium come da contratto: nel browser stabile non esiste (spec §7);
    il batched prefill (leva 1) è comunque prerequisito per sfruttarlo.
 
-## 5. Cosa dice per il writeup (gate di onestà)
+## 5. Fase 6 — esito delle leve bounded (it.13, coi numeri di questo WP)
+
+**dot4I8Packed — ESCLUSIONE PER ORA, motivata**: attacca l'ALU del dot
+quantizzato, ma il decode è dominato da readback (12% 4B, misurato),
+dispatch serializzato (15-29% stimato) e assenza di fusione — il collo non
+è l'ALU. Il prior LlamaWeb (MMVQ) rende quando il resto della pipeline è
+già tight. Si rivaluta DOPO le leve 1-3 (pattern GLM), insieme allo spike
+subgroup-matrix (v. sotto: stessa infrastruttura int8-packed).
+
+**Tuning tile per-device — ESCLUSIONE PER ORA, motivata**: il prior +41%
+(LlamaWeb) è misurato sul matmul BATCHED (prefill a tile); il nostro
+prefill batched non esiste ancora (§3: è la leva n.1). Tunare i tile di
+un percorso assente è premature optimization letterale; per il decode
+gemv-bound il tuning è workgroup sizing, marginale rispetto a
+readback+dispatch. Si fa QUANDO nasce il prefill batched.
+
+**subgroup-matrix — PROBE EMPIRICO ESEGUITO** (contratto: spike dietro
+flag; `results/engine/webgpu-subgroup-matrix-probe-2026-08-10.json`):
+- SORPRESA che AGGIORNA spec §7: `chromium-experimental-subgroup-matrix`
+  è ESPOSTA E CONCESSA al device sul nostro Chrome stable coi flag runner
+  (--enable-unsafe-webgpu; adapter nvidia/lovelace) — su tutte e 3 le
+  config di flag provate. Lo studio LlamaWeb (detection solo-nativa) vale
+  per llama.cpp/Emscripten, non per il browser in sé.
+- MA le config esposte sono INT8-ONLY: {u8,i8}→{u32,i32}, 16×16×32 e
+  16×8×32. Niente f16/f32 (e shader-f16 non è sull'adapter qui).
+- La compilazione naive fallisce ("u8 cannot be used as an element type
+  of an array"): i dati int8 vanno IMPACCHETTATI in u32 — cioè la misura
+  di throughput richiede lo stesso lavoro di quantizzazione attivazioni
+  int8-packed di dot4I8Packed/MMVQ.
+- CONSEGUENZA: le due leve int8 CONVERGONO in un unico pezzo di
+  infrastruttura (attivazioni int8 packed), sensato SOLO dopo il prefill
+  batched (i tensor core rendono sul batch, non sul gemv). Registrato a
+  docket; la misura di throughput è dichiaratamente NON eseguita qui.
+
+## 6. Cosa dice per il writeup (gate di onestà)
 
 Il numero da pubblicare è il gap A PARITÀ di regime: **decode full-resident
 4.6-5.2× (di cui 12% readback già eliminabile con pattern in casa)**; il

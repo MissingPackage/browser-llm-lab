@@ -190,6 +190,14 @@ lug 2026; codice llama.cpp @ e9fa0781):
   llama.cpp la detection è sotto `#ifndef __EMSCRIPTEN__`, cioè solo
   nativa. ⇒ Il [VERIFY] dello studio LlamaWeb è CHIUSO: nel browser di
   oggi i tensor core NON sono raggiungibili da WGSL stabile.
+  **AGGIORNAMENTO dal probe empirico di fase 6 (it.13, 2026-08-10,
+  results/engine/webgpu-subgroup-matrix-probe-2026-08-10.json)**: sul
+  NOSTRO harness (Chrome stable + --enable-unsafe-webgpu, i flag standard
+  dei runner) la feature è ESPOSTA E CONCESSA al device — ma con config
+  INT8-ONLY ({u8,i8}→{u32,i32}, 16×16×32|16×8×32), niente f16/f32; la via
+  di misura richiede attivazioni int8 packed (= infra dot4I8Packed).
+  Per un UTENTE finale senza flag resta non raggiungibile: la frase sopra
+  vale per il deployment, il probe vale per lo spike.
 - Conseguenza sulle fasi: la fase 6 spike prova EMPIRICAMENTE il flag sul
   nostro Chrome/Dawn (la ground truth è il device, non il blog); se la
   feature non è esposta, il done-when di fase 6 chiude con

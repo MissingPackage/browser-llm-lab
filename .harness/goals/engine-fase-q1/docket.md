@@ -1,5 +1,21 @@
 # Docket — engine-fase-q1
 
+11. **FASE 6 — ESITO LEVE BOUNDED (2026-08-10, it.13; registrazione nel
+   perimetro del done-when "O esclusione motivata coi numeri del WP")** —
+   (i) dot4I8Packed: ESCLUSA PER ORA (il collo del decode è readback 12%
+   misurato + dispatch 15-29% + fusione assente, non l'ALU del dot;
+   doc §5); (ii) tuning tile per-device: ESCLUSA PER ORA (il prior +41% è
+   sul matmul batched; il prefill batched non esiste ancora — si tuna
+   quando nasce, leva n.1); (iii) subgroup-matrix: PROBE EMPIRICO eseguito
+   e committato — SORPRESA: feature ESPOSTA E CONCESSA sul nostro harness
+   (Chrome stable + flag runner standard), ma config INT8-ONLY
+   (16×16×32/16×8×32, {u8,i8}→{u32,i32}), niente f16/f32; compilazione
+   naive rifiutata (serve packing u32) ⇒ la misura di throughput richiede
+   la STESSA infra int8-packed di dot4I8Packed: le due leve CONVERGONO e
+   si rivalutano insieme DOPO il prefill batched. Spec §7 aggiornata
+   (docs-update-when-stale). MAI path di default (contratto). Nessuna
+   decisione PI richiesta: tutto dentro i rami previsti dal done-when.
+
 10. **WP GAP — ESITO CHE CONDIZIONA LA FASE 6 (2026-08-10, it.12, fase 5;
    registrazione, la decisione di merito è già nel contratto)** — gap
    decode full-resident vs llama.cpp Vulkan STESSO GGUF: 4B 5.18×, 9B
