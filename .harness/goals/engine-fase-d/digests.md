@@ -83,3 +83,18 @@ sparite davvero (gate: `debiti == []`, 21/21). Prove: parità slab CPU-only 6/6
 **top1 5/5** con hits/misses/uploadedBytes IDENTICI al run pre-migrazione
 (8846 / 3314 / 5.916.950.528). Corretto un bug del meccanismo condiviso: il
 controllo del limite di binding mancava il segmento down dei K-quant.
+
+## it.8 (2026-08-10) — fase 2: pack 6,24x
+
+Misurato prima di scrivere: il repack K-quant costava 3,50 ms/miss = 22% del
+prompt sullo smoke 35B. Due cause: `repackKQuant` ricostruiva le parole con un
+`|=` per byte (ma su little-endian e' una COPIA travestita) e
+`packExpertSlab` passava da un array temporaneo (ogni byte toccato 3 volte).
+Fatto: memcpy + `repackKQuantInto` che scrive dritto nello slab. Pack
+11.585 -> 1.856 ms (**6,24x**), 3,50 -> 0,56 ms/miss, prompt 53,0 -> 42,5 s,
+con hits/miss e top1 IDENTICI. ktest 84/84 con valori identici cifra per
+cifra (il repack veloce e' bit-a-bit lo stesso). Nuovo test con oracolo
+scalare indipendente + il caso del padding Q6_K. Il done-when e' centrato
+nell'obiettivo ma non nella lettera (il repack non e' uscito dal path, e'
+diventato quasi gratis dentro): **docket item 5** al PI, col parere che
+spostarlo all'import non conviene (~4% al prezzo di ~18 GB su disco).

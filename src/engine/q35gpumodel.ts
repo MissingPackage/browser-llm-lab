@@ -45,7 +45,13 @@ export interface Q35GpuModel {
   resetState(): void;
   dispatchesPerToken: number;
   /** stats MoE (null sui densi): arena, routing esatto, residenza. */
-  moeStats: (() => { hits: number; misses: number; uploadedBytes: number; routing: Record<string, number>; nSlots: Record<string, number>; parkSlots: Record<string, number>; slotBytes: Record<string, number> }) | null;
+  moeStats: (() => {
+    hits: number; misses: number; uploadedBytes: number;
+    /** scomposizione del costo per MISS (fase D fase 2): dove vanno i ms */
+    readMs: number; packMs: number; uploadMs: number;
+    routing: Record<string, number>; nSlots: Record<string, number>;
+    parkSlots: Record<string, number>; slotBytes: Record<string, number>;
+  }) | null;
   /** DEBUG (it.17): dopo step(), hidden x a valle del layer indicato (solo MoE). */
   readTap(layer: number): Promise<Float32Array>;
   destroy(): void;
@@ -300,7 +306,7 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
   interface MoeRt {
     nSlots: Record<string, number>; parkSlots: Record<string, number>; slotBytes: Record<string, number>;
     routing: Map<number, number>;
-    stats(): { hits: number; misses: number; uploadedBytes: number };
+    stats(): { hits: number; misses: number; uploadedBytes: number; readMs: number; packMs: number; uploadMs: number };
     runLayer(l: number, logitsF32: Float32Array): Promise<void>;
     destroy(): void;
   }
@@ -319,6 +325,12 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
       maxBindingBytes: device.limits.maxStorageBufferBindingSize,
       maxBufferBytes: device.limits.maxBufferSize,
       cfg,
+      // telemetria liv.1 SEMPRE accesa su q35: sono 4 performance.now() per
+      // MISS (non per token, non sugli hit) contro una lettura Range da ~1,7 MB
+      // — non misurabile. In cambio ogni run di conformance porta con sé la
+      // scomposizione read/pack/upload, che è il numero su cui la fase 2
+      // decide.
+      timing: true,
     });
     const routerCfg: RouterConfig = { ...ROUTER_QWEN35MOE, nUsed: topK };
     // i kernel si scelgono dal LAYOUT della classe, non da un'assunzione sul
@@ -365,7 +377,13 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
     for (const c of cfg.classes) slotBytes[c] = cfg.layout(c).bytes;
     moe = {
       nSlots: cache.stats().slots, parkSlots, slotBytes, routing,
-      stats: () => { const st = cache.stats(); return { hits: st.hits, misses: st.misses, uploadedBytes: st.bytesUploaded }; },
+      stats: () => {
+      const st = cache.stats();
+      return {
+        hits: st.hits, misses: st.misses, uploadedBytes: st.bytesUploaded,
+        readMs: st.readMs, packMs: st.packMs, uploadMs: st.uploadMs,
+      };
+    },
       destroy: () => cache.destroy(),
       async runLayer(l: number, logitsF32: Float32Array): Promise<void> {
         // Selezione: IL router unico, in configurazione qwen35moe (softmax,

@@ -61,3 +61,35 @@
    un layout K-quant, prima che q35 passi da `slotBindRanges`;
    (d) `expertSlots` ripartisce sul parco GLM: renderlo cfg-driven, altrimenti
    q35 girerebbe solo via `slotsOverride` = un bypass.
+
+## item 5 — la fase 2 ha centrato l'OBIETTIVO ma non la LETTERA del done-when (PI)
+
+**Cosa dice PHASES riga 2**: "il repack K-quant esce dal path on-miss
+(import-time, come GLM `expertSlab`)".
+
+**Cosa ho fatto invece**: ho reso il repack quasi gratuito DOVE STA. Misure
+(micro-bench CPU sui due slab reali del 35B, 20 ripetizioni):
+
+| | prima | dopo | fattore |
+|---|---|---|---|
+| pack q4_K | 2,94 ms | 0,44 ms | 6,7x |
+| pack q6_K | 2,49 ms | 0,58 ms | 4,3x |
+
+Due cause, entrambe reali: (a) `repackKQuant` ricostruiva le parole a 32 bit
+con un `|=` per BYTE — ma su little-endian quell'aritmetica scrive
+esattamente il byte al suo posto, cioe' e' una COPIA travestita; (b)
+`packExpertSlab` allocava un array temporaneo per tensore e poi lo ricopiava
+nello slab, toccando ogni byte TRE volte (zero-fill, copia, copia).
+
+**La domanda per il PI**: il residuo e' ~0,5 ms/miss. Sullo smoke del 35B
+sono ~1,7 s su ~45 di prompt (~4%). Spostarlo all'import costerebbe
+**~18 GB di slab su disco** (il GGUF e' 20 GB) piu' una passata di import su
+tutto il file. Il mio parere: NON conviene, e la riga 2 di PHASES andrebbe
+riscritta come "il costo di pack per miss scende di >=4x, misurato" — che e'
+l'obiettivo per cui la fase esisteva. Ma riscrivere un done-when e' un
+cambio di contratto, non una decisione di meccanismo: la lascio qui.
+
+**Se il PI dice "no, fallo all'import"**: si fa, e la fase 2 si riapre — il
+lavoro fatto resta valido comunque (il pack veloce serve anche all'import).
+
+Registrato it.8 (2026-08-10).

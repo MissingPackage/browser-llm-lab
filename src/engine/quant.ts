@@ -267,17 +267,61 @@ export function repackQ4_1(src: Uint8Array, srcOffset: number, nBlocks: number):
 // Repack K-quant: il superblocco resta nel layout GGUF, copiato in u32 LE con
 // stride allineato a 4 byte (Q5_K: 176 B = 44 word esatte; Q6_K: 210 B → 53
 // word, 2 B di pad). Il kernel indicizza byte dentro le word.
+/**
+ * Little-endian? Deciso UNA volta: su LE il repack qui sotto e' una copia, su
+ * BE no. Non e' un'ottimizzazione condizionale a caso — e' la stessa
+ * operazione scritta in due modi, e il test `quant-repack-fast` verifica che
+ * diano lo stesso byte.
+ */
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+
+/**
+ * Superblocchi K-quant → parole a 32 bit, con padding a parola (Q6_K: 210 →
+ * 212, due byte a zero per superblocco; Q4_K 144 e Q5_K 176 sono gia'
+ * multipli di 4 e non cambiano lunghezza).
+ *
+ * COSTO (goal fase-D fase 2): la forma scalare — un `|=` per BYTE — costava
+ * ~2,9 ms per slab expert da 1,7 MB, cioe' ~600 MB/s, e girava DENTRO il path
+ * di miss, sincrona. Su little-endian pero' `out[j>>2] |= src[j] << (j&3)*8`
+ * scrive esattamente il byte j al suo posto: e' una copia travestita da
+ * aritmetica. Con `set()` diventa memcpy. La forma scalare resta come
+ * DEFINIZIONE del risultato (e per big-endian, dove non e' una copia).
+ */
+export function repackKQuantInto(
+  src: Uint8Array, srcOffset: number, nBlocks: number, blockBytes: number,
+  dst: Uint8Array, dstOffset: number,
+): void {
+  const stride = Math.ceil(blockBytes / 4) * 4;
+  if (LITTLE_ENDIAN) {
+    if (stride === blockBytes) {
+      dst.set(src.subarray(srcOffset, srcOffset + nBlocks * blockBytes), dstOffset);
+      return;
+    }
+    for (let b = 0; b < nBlocks; b++) {
+      const o = srcOffset + b * blockBytes;
+      dst.set(src.subarray(o, o + blockBytes), dstOffset + b * stride);
+      // i byte di coda (Q6_K: 2) restano quelli che erano: `dst` arriva
+      // azzerato da chi lo alloca, ed e' l'unico requisito di questa forma.
+    }
+    return;
+  }
+  for (let b = 0; b < nBlocks; b++) {
+    const o = srcOffset + b * blockBytes;
+    for (let j = 0; j < blockBytes; j++) dst[dstOffset + b * stride + j] = src[o + j];
+  }
+}
+
+/**
+ * Variante che ALLOCA (i call site che vogliono le parole, non un pezzo di uno
+ * slab). Il path caldo usa `repackKQuantInto`: allocare qui significherebbe
+ * toccare ogni byte tre volte — zero-fill, copia nel temporaneo, copia nello
+ * slab — ed e' esattamente cio' che la fase 2 ha tolto dal path di miss.
+ */
 export function repackKQuant(
   src: Uint8Array, srcOffset: number, nBlocks: number, blockBytes: number,
 ): Uint32Array {
-  const wordsPerBlock = Math.ceil(blockBytes / 4);
-  const out = new Uint32Array(nBlocks * wordsPerBlock);
-  for (let b = 0; b < nBlocks; b++) {
-    const o = srcOffset + b * blockBytes;
-    for (let j = 0; j < blockBytes; j++) {
-      out[b * wordsPerBlock + (j >> 2)] |= src[o + j] << ((j & 3) * 8);
-    }
-  }
+  const out = new Uint32Array(nBlocks * Math.ceil(blockBytes / 4));
+  repackKQuantInto(src, srcOffset, nBlocks, blockBytes, new Uint8Array(out.buffer), 0);
   return out;
 }
 

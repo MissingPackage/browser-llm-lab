@@ -369,3 +369,77 @@ miss; `destroy()` libera l'arena, che prima restava allocata.
 arena q35-only rimossa ✓, test di non-duplicazione in `npm test` ✓ (con la
 pretesa dichiarata onestamente: ratchet + marchio), ktest tutti PASS con GLM
 bit-exact ✓. Prossimo: fase 2 (slab pre-impacchettati all'import).
+
+## it.8 (2026-08-10) — fase 2: il repack costava 6x quello che doveva
+
+**Come e' iniziata**: invece di scrivere subito il generatore di slab
+all'import (la lettera del done-when), ho MISURATO. Micro-bench CPU sui due
+slab reali del 35B: pack 2,94 ms (q4_K) e 2,49 ms (q6_K) per miss, cioe'
+600-820 MB/s. Un memcpy fa 10 volte tanto: il numero diceva che il problema
+non era DOVE stava il repack, ma COME era scritto.
+
+**Poi la scomposizione vera**, esponendo la telemetria che `ExpertCache` ha
+gia' (`timing: true` su q35 — 4 `performance.now()` per MISS, non per token e
+non sugli hit): sullo smoke 35B, `packMs` **11.585 ms su 3314 miss = 3,50
+ms/miss**, il **22% dei 53 s** di prompt. `uploadMs` 0,12 ms/miss.
+CAVEAT ONESTO: `readMs` risulta ~0 ma NON e' l'I/O — la lettura Range avviene
+nell'`await` prima di `ensure`, quindi cade fuori dalla finestra cronometrata.
+Il costo di I/O resta non misurato (docket per la fase 5, dove serve).
+
+**Due cause, entrambe reali**:
+1. `repackKQuant` ricostruiva ogni parola a 32 bit con un `|=` per BYTE. Ma
+   su little-endian `out[j>>2] |= src[j] << (j&3)*8` scrive esattamente il
+   byte j al suo posto: e' una COPIA travestita da aritmetica. Con `set()`
+   diventa memcpy. La forma scalare resta come DEFINIZIONE del risultato (e
+   per big-endian, dove non e' una copia).
+2. `packExpertSlab` allocava un `Uint32Array` temporaneo per tensore e poi lo
+   ricopiava nello slab: ogni byte toccato TRE volte (zero-fill, copia nel
+   temp, copia nello slab). Nato `repackKQuantInto`, che scrive dritto nello
+   slab.
+
+**RISULTATI**
+
+Micro-bench CPU (20 ripetizioni, slab reali):
+
+| | prima | dopo | fattore |
+|---|---|---|---|
+| pack q4_K (1.769.472 B) | 2,94 ms | 0,44 ms | **6,7x** |
+| pack q6_K (2.048.000 B) | 2,49 ms | 0,58 ms | **4,3x** |
+
+End-to-end, smoke 35B, stesso golden (`corpusHash` verificato uguale):
+
+| | PRIMA | DOPO |
+|---|---|---|
+| top1 | 5/5 | 5/5 |
+| hits / miss | 8846 / 3314 | **8846 / 3314** |
+| packMs totale | 11.585 | **1.856** (6,24x) |
+| pack per miss | 3,50 ms | **0,56 ms** |
+| uploadMs per miss | 0,12 | 0,13 |
+| prompt | 53,0 s | **42,5 s** |
+
+I 9,7 s di pack risparmiati spiegano 9,7 dei 10,5 s di prompt in meno: il
+delta e' attribuibile al meccanismo, non e' rumore di host. Resta una misura
+singola per lato — il numero su cui mi impegno e' `packMs`, che e'
+telemetria diretta, non orologio.
+
+**Correttezza**: `tests/quant-repack-fast.test.ts` (NUOVO) confronta il
+repack con un oracolo scalare INDIPENDENTE riscritto nel test, su blockBytes
+144/176/210 e a due offset di sorgente, parola per parola; piu' un caso che
+verifica che i 2 byte di padding di OGNI superblocco Q6_K restino ZERO con
+sorgente tutta a 0xff (sbagliarlo non darebbe un errore, darebbe pesi
+leggermente diversi — il bug che si vede solo come qualita' che cala).
+Nota sulla catena di prove: l'oracolo di `q35-slab-parity` usa
+`repackKQuant`, quindi da solo non varrebbe piu'; vale perche' il test nuovo
+lega `repackKQuant` a un oracolo scalare indipendente.
+
+**GATE**: suite **406 passed | 9 skipped**; tsc pulito; ktest **84/84,
+0 non-pass**, con i valori IDENTICI cifra per cifra a it.7 (glm-model-2layer
+maxRel 1.309250593300995e-4, arena-vs-slotrange maxRel 0,
+q35-moe-block-real blk0 5.319934364985386e-6 e blk34 1.2826589096342132e-5):
+il repack veloce e' bit-a-bit lo stesso repack.
+
+**DONE-WHEN: obiettivo centrato, lettera no** — il repack NON e' uscito dal
+path di miss, e' diventato ~6x piu' economico dentro. Spostarlo all'import
+comprerebbe il residuo (~1,7 s su 45, ~4%) al prezzo di ~18 GB di slab su
+disco. Non decido io un cambio di contratto: **docket item 5**, col mio
+parere (non conviene) e coi numeri.

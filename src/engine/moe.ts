@@ -23,7 +23,7 @@
 // Pareggi: indice minore in entrambe (argsort stabile — tie-break della
 // replica C1, tools/oracle-moe/trace.cpp, e di ggml_argsort_top_k).
 import { GLM47_FLASH as G } from "./shape";
-import { repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0 } from "./quant";
+import { repackKQuantInto, repackQ4_0, repackQ4_1, repackQ8_0 } from "./quant";
 
 // Clamp del denominatore della normalizzazione (ggml_clamp in build_moe_ffn:
 // il più piccolo f16 normale, evita la divisione per zero). Identico nelle
@@ -270,7 +270,9 @@ export function packExpertSlab(
     const expect = t.nBlocks * geom.srcBytesPerBlock;
     if (raw.length !== expect) throw new Error(`slab: ${name} ${raw.length} byte, attesi ${expect} (${t.kind})`);
     if (!geom.split) {
-      putWords(repackKQuant(raw, 0, t.nBlocks, geom.srcBytesPerBlock), t.data);
+      // DIRETTAMENTE nello slab: nessun array temporaneo, nessun zero-fill in
+      // piu' (fase D fase 2 — erano 3 passate sugli stessi byte).
+      repackKQuantInto(raw, 0, t.nBlocks, geom.srcBytesPerBlock, out, t.data);
       return;
     }
     const r = t.kind === "q4_1" ? repackQ4_1(raw, 0, t.nBlocks)
