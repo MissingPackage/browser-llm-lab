@@ -121,11 +121,20 @@ export type ExpertReader =
     };
 
 /**
- * MARCHIO DI CONIO (goal fase-D it.6). `SlotRef` è ciò che i kernel esigono
- * per bindare un expert: senza, non si può eseguire un blocco MoE. Il campo
- * privato qui sotto fa sì che un `SlotRef` valido possa nascere SOLO dentro
- * questo modulo — un'arena parallela non può fabbricarne uno senza che
- * `tsc` la rifiuti.
+ * MARCHIO DI CONIO (goal fase-D it.6). Il campo privato qui sotto fa sì che
+ * un `SlotRef` possa essere CONIATO solo dentro questo modulo: chi prova a
+ * fabbricarne uno per spacciare la propria arena come residenza viene
+ * rifiutato da `tsc` (letterale, interfaccia gemella, `class implements`,
+ * `Object.assign`, helper generico, perfino il cast diretto `as SlotRef`).
+ *
+ * COSA NON GARANTISCE (correzione del verifier di it.6, che ha bocciato la
+ * prima formulazione): il marchio ferma la CONTRAFFAZIONE, non l'INDIFFERENZA.
+ * Un'arena che semplicemente non usa `SlotRef` non viene sfiorata — ed è il
+ * caso di `q35gpumodel.ts` fino alla chiusura della fase 1. Il marchio
+ * diventa portante quando i kernel expert accettano solo `SlotRef`, cioè
+ * quando ANCHE q35 passa da qui. Restano bypassabili senza cast: l'inflow
+ * any-tipizzato e lo spread di uno `SlotRef` genuino (`{...vero, idx: n}`),
+ * che ne conserva il marchio — si sorveglia il conio, non la circolazione.
  *
  * PERCHÉ COSÌ (lezione di it.4-5, tre gate bocciati): un test che scansiona
  * il sorgente NON può distinguere una duplicazione da una seconda famiglia

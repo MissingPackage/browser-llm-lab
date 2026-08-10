@@ -62,8 +62,10 @@ Terza bocciatura del gate (5 evasioni eseguite, una delle quali — un router
 Qwen legittimo — NON catturabile da nessuna scansione). Diagnosi: stavo
 cercando una porta che non esiste, invece di crearla. **L'invariante si
 sposta nel sistema di tipi**: marchio di conio su `SlotRef` (solo
-residency.ts lo produce; un'arena parallela la ferma `tsc`) + test di tipo
-che va rosso se il marchio sparisce. La scansione resta un RATCHET, con la
+residency.ts lo CONIA — 11 sonde ostili del verifier rifiutate) + test di
+tipo che va rosso se il marchio sparisce. Limite dichiarato: ferma la
+contraffazione, non l'indifferenza — q35gpumodel oggi ignora SlotRef e tsc
+è verde; il marchio diventa portante con la migrazione (it.7). La scansione resta un RATCHET, con la
 pretesa ridimensionata per iscritto. N3/N4/N5 chiuse (scansione su tutto
 src/, ancorata, estensioni; predicato di allocazione corretto). Lezione:
 tre iterazioni su un poliziotto mentre ciò che elimina la duplicazione è la

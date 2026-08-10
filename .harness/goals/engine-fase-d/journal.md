@@ -241,12 +241,19 @@ migrazione. Diagnosi, dopo tre tentativi sbagliati sullo stesso bersaglio:
 > non esisteva: va CREATA, non cercata.
 
 Cosa ho fatto:
-- **MARCHIO DI CONIO su `SlotRef`** (`residency.ts`): il riferimento che i
-  kernel esigono per bindare un expert ha ora un campo con `unique symbol`
-  ⇒ può nascere SOLO dentro residency.ts (un solo sito, marcato). Un'arena
-  parallela che provi a fabbricarne uno **viene rifiutata da `tsc`** —
-  verificato con una sonda temporanea. È l'evasione N2 del verifier, chiusa
-  dal compilatore invece che da una regex.
+- **MARCHIO DI CONIO su `SlotRef`** (`residency.ts`): campo con
+  `unique symbol` ⇒ uno SlotRef può essere CONIATO solo dentro residency.ts
+  (un solo sito, marcato). Chi prova a fabbricarne uno per spacciare la
+  propria arena come residenza **viene rifiutato da `tsc`** — il verifier
+  l'ha confermato con 11 sonde ostili (letterale, interfaccia gemella,
+  `class implements`, `Object.assign`, helper generico, cast diretto: tutti
+  ROSSI). È l'evasione N2, chiusa dal compilatore invece che da una regex.
+  **LIMITE, nella formulazione corretta dal verifier**: il marchio ferma la
+  CONTRAFFAZIONE, non l'INDIFFERENZA — un'arena che semplicemente non usa
+  SlotRef non viene sfiorata, ed è il caso di `q35gpumodel` finché la fase 1
+  non chiude. Diventa portante con it.7. Bypass noti senza cast: inflow
+  any-tipizzato e spread di uno SlotRef genuino (si sorveglia il conio, non
+  la circolazione). Tutto scritto nei file, non solo qui.
 - **`tests/types/slotref-brand.ts`**: test DI TIPO con `@ts-expect-error`.
   Se qualcuno togliesse il marchio, la direttiva diventerebbe inutilizzata e
   **tsc andrebbe rosso**. L'invariante si sorveglia da solo, in un gate che
@@ -264,10 +271,33 @@ Cosa ho fatto:
   rinominato di conseguenza.
 - Correzione: suite 392 → **396** nel journal di it.5 (numero stale rilevato
   dal verifier).
-- GATE: suite 397; tsc pulito (incluso il test di tipo); nessun tocco ai
+- GATE: suite **396 passed | 9 skipped** (misurata, non derivata: il verifier
+  ha bocciato it.6 anche per un 397 dedotto per aritmetica — seconda
+  occorrenza della stessa classe di errore, i conteggi si LEGGONO dall'output);
+  tsc pulito (incluso il test di tipo); nessun tocco ai
   path GLM oltre il marchio, che è additivo.
 
 **LEZIONE, e cambio di rotta**: ho speso tre iterazioni a costruire un
 poliziotto quando la cosa che elimina davvero la duplicazione è LA
 MIGRAZIONE. Il gate serve contro le derive future, non come precondizione.
 Da qui si migra `q35gpumodel` (it.7) e la fase 1 si chiude lì.
+
+## it.6b (2026-08-10) — sanatoria del FAIL del verifier su it.6
+
+Due rilievi, entrambi fondati, entrambi sanati PRIMA di procedere:
+1. **Numero dedotto invece che letto**: avevo scritto suite 397 per
+   aritmetica (396 + il test di tipo, che però non è un caso vitest). Reale:
+   **396 passed | 9 skipped**. Seconda occorrenza: da qui i conteggi si
+   copiano dall'output, mai si calcolano.
+2. **Sovravendita spostata, non eliminata**: avevo ridimensionato la pretesa
+   del test a scansione e poi ri-gonfiata sul marchio, scrivendo che
+   "un'arena parallela viene rifiutata da tsc". FALSO come scritto:
+   `q35gpumodel.ts` gestisce oggi un'arena expert completa (byKey/LRU,
+   `slotLoc`, bind group propri) SENZA toccare `SlotRef`, e tsc è verde.
+   La frase vera è più stretta: il marchio ferma chi **contraffà** uno
+   SlotRef, non chi lo **ignora**; diventa portante solo quando il binding
+   expert passa da `SlotRef`/`slotBindRanges`, cioè con it.7. In più il
+   verifier ha trovato due bypass NON dichiarati (inflow any-tipizzato;
+   spread di uno SlotRef genuino, che conserva il marchio). Riqualificato
+   in `residency.ts`, `tests/types/slotref-brand.ts`, docket item 4,
+   digests, HANDOFF.

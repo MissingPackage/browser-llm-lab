@@ -24,8 +24,10 @@ di cui una (un router Qwen legittimo: softmax puro, niente clamp, niente
 nomi di tensori, niente VRAM) NON catturabile da nessuna impronta
 testuale, perché la differenza fra duplicazione e seconda famiglia è
 SEMANTICA. Esito: **l'invariante vive nel SISTEMA DI TIPI** — marchio di
-conio (`unique symbol`) su `SlotRef`, che solo `residency.ts` può
-produrre: un'arena parallela viene rifiutata da `tsc`, e
+conio (`unique symbol`) su `SlotRef`, che solo `residency.ts` può CONIARE
+(11 sonde ostili del verifier rifiutate da `tsc`). Ferma la CONTRAFFAZIONE,
+non l'indifferenza: q35gpumodel oggi ignora `SlotRef` e tsc è verde — il
+marchio diventa portante con it.7. E
 `tests/types/slotref-brand.ts` (`@ts-expect-error`) va rosso se il
 marchio sparisce. `tests/engine-one-mechanism.test.ts` resta come
 **RATCHET** su impronte note (scansione di tutto `src/`, ancorata,

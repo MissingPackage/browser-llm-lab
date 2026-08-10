@@ -32,7 +32,12 @@
    nessuna scansione del sorgente: la differenza fra duplicazione e seconda
    famiglia è SEMANTICA. ESITO di it.6: l'invariante è stato spostato nel
    SISTEMA DI TIPI — marchio di conio su `SlotRef` (solo residency.ts può
-   produrlo; un'arena parallela viene rifiutata da tsc) + test di tipo
+   CONIARLO: 11 sonde ostili del verifier tutte rifiutate da tsc). ATTENZIONE
+   alla formulazione (il verifier ha bocciato quella precedente): il marchio
+   ferma chi CONTRAFFÀ uno SlotRef, NON chi lo ignora — q35gpumodel oggi
+   gestisce un'arena completa senza SlotRef e tsc è verde. Diventa portante
+   con it.7. Bypass noti senza cast: inflow any e spread di uno SlotRef
+   genuino. Più il test di tipo
    `tests/types/slotref-brand.ts` che va rosso se il marchio sparisce. La
    scansione del sorgente resta come RATCHET su impronte note, con la
    pretesa ridimensionata PER ISCRITTO nel file. Evasioni N3/N4/N5 chiuse
