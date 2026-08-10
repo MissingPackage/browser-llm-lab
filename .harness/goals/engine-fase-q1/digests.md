@@ -87,3 +87,14 @@ Fase 4 slice 3, verifier PASS. **IL 4B GIRA SU GPU: argmax == oracolo
 device). ktest 80/80. Il motore ESEGUE la famiglia Qwen 3.5 — prima
 inferenza browser end-to-end del goal. Restano per fase 4: golden
 full-corpus a soglia RATCHET + riferimenti full-resident (it.9).
+
+## it.9 (2026-08-10)
+
+Fase 4 quasi chiusa, verifier PASS (top-1 ricalcolato indipendentemente).
+Golden full-corpus 4B committato (8 prompt, 1024 posizioni, provenance
+piena) e **SOGLIA RATCHET FISSATA: top-1 = 1012/1024 = 98.828125%**
+(docket item 8; run GPU 29 min ad albero congelato; miss sparsi, max 3 per
+prompt). Curiosità verificata: stessa cifra del PIN GLM — stesso corpus
+testuale, modelli e miss diversi; coincidenza onesta, non copia. Resta per
+fase 4: it.10 = riferimenti decode/prefill/TTFT full-resident con
+hostState (dichiarati come frame correttezza-prima).

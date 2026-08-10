@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: IL 4B GIRA SU GPU, argmax==oracolo 6/6, ktest 80/80; next = golden full-corpus RATCHET + riferimenti)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: 4B su GPU con GOLDEN 98.828% RATCHET FISSATO (1012/1024); next = riferimenti full-resident, poi fase 5)
 
 ## 1. Next decidable
 
@@ -33,10 +33,13 @@ q35-attn rigenerabile, rope parziale + sigmoidMul nuovi). **Slice 3 DONE (it.8):
 SU GPU** — orchestratore `q35gpumodel.ts` (562 dispatch/token, piano
 precostruito, full residency), argmax GPU == ORACOLO 6/6 sul golden smoke,
 ktest 80/80; pareti Chromium risolte (Range per-tensore; maxBufferSize per
-la head 527 MB). **Al lavoro: it.9 = chiusura fase 4** — golden 4B
-full-corpus con run-golden-q35.sh (provenance: SHA/commit/corpus-hash),
-golden top-1 GPU misurato e SOGLIA FISSATA (ratchet, mai import del PIN
-GLM), riferimenti decode/prefill/TTFT full-resident con hostState. Perimetro: path testo Qwen
+la head 527 MB). **it.9 DONE**: golden full-corpus
+committato (8 prompt, 1024 pos, provenance piena) e **SOGLIA 4B FISSATA a
+RATCHET: top-1 ≥ 1012/1024 = 98.828125% AL PIN** (docket q1 item 8; run
+GPU 29 min; conformance infra: q35conf + run-golden-q35.sh). **Al lavoro:
+it.10 = riferimenti decode/prefill/TTFT full-resident 4B con hostState**
+(orchestratore correttezza-prima DICHIARATO come frame di partenza), poi
+fase 5 (9B + WP decomposizione gap vs llama.cpp Vulkan). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.
