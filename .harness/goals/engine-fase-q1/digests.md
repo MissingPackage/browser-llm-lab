@@ -232,3 +232,17 @@ spiegazione va in direction (lettera del done-when); recall@4 ha
 denominatore 8 (tetto 50%) — esplicitare nella migrazione ai doc.
 Next: it.21 = FASE 9 — LA CHIUSURA (checklist contratto voce-voce,
 non-reg GLM piena, direction/ledger/HANDOFF, docket triage).
+
+## it.21 (2026-08-10) — GOAL CHIUSO E VERIFICATO
+
+**engine-fase-q1 CHIUSO** (tag goal-engine-fase-q1-done, verifier finale
+PASS su sostanza: ratchet ricalcolati posizione-per-posizione, gap/tier/
+recall ricalcolati, GLM a diff NULLO fra i tag, cpuref 4B e2e rieseguito
+fresco). Checklist DONE WHEN 11/11. Non-reg: correttezza GLM piena e
+fresca (84/84 bit-exact); NUMERICA host-gated con diagnosi quantificata
+(pagina cache + VRAM baseline; gpuBusy identico alla 4ª cifra = zero
+regressione di codice) — rerun a boot pulito = gate d'apertura della
+prossima sessione (docket item 13). Il motore esegue la famiglia Qwen
+3.5/3.6: 98.828 / 97.656 / 98.926% vs oracolo, paging vero, gap onesto
+4.6-5.2×. 21 iterazioni, ~14 h, 2 FAIL di verifier sanati. Next =
+DECISIONE PI (release vs fase D) + rerun non-reg.
