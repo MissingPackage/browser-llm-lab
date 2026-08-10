@@ -206,14 +206,33 @@ export function mkSlabLayout(
   for (const o of [g.data, g.scales, u.data, u.scales, d.data, d.scales, bytes]) {
     if (o !== null && o % 256 !== 0) throw new Error(`slab layout ${id}: offset ${o} non allineato a 256`);
   }
-  return {
+  const out: SlabLayout = {
     id, gate: g, up: u, down: d, bytes,
     downKind: d.kind,
-    gateQs: g.data, gateScales: g.scales ?? g.data + g.dataBytes,
-    upQs: u.data, upScales: u.scales ?? u.data + u.dataBytes,
-    downQs: d.data, downScales: d.scales ?? d.data + d.dataBytes,
+    gateQs: g.data, upQs: u.data, downQs: d.data,
     qsBytes: g.dataBytes, gateScalesBytes: g.scalesBytes, downScalesBytes: d.scalesBytes,
+  } as SlabLayout;
+  // I campi `*Scales` esistono SOLO per i formati legacy (2 segmenti). Sui
+  // K-quant non c'è un segmento scale: leggerli darebbe un offset finto e un
+  // binding di taglia 0 SENZA errore (trappola trovata dal verifier it.2).
+  // Qui diventano getter che FALLISCONO, invece di mentire.
+  const scaleField = (name: string, t: SlabTensorLayout): void => {
+    Object.defineProperty(out, name, {
+      enumerable: true,
+      get(): number {
+        if (t.scales === null) {
+          throw new Error(
+            `slab ${id}: ${name} non esiste sul formato ${t.kind} (K-quant: un solo segmento). ` +
+            "Usa la vista generica (layout.gate/up/down) invece dei campi compat legacy.");
+        }
+        return t.scales;
+      },
+    });
   };
+  scaleField("gateScales", g);
+  scaleField("upScales", u);
+  scaleField("downScales", d);
+  return out;
 }
 
 // --- Classi GLM-4.7-Flash (spec C2 §1): 5.308.416 B e 5.505.024 B, le due

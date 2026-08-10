@@ -7,7 +7,7 @@ import {
 } from "../src/engine/moe";
 import {
   MOE_CFG_GLM47, MIN_SLOTS, PARK_Q4_0, PARK_Q4_1, SLOT_TABLE_ENTRIES,
-  expertKey, expertKeyFor, minSlotsOf, moeParkOf, slotTableEntriesOf,
+  expertKey, expertKeyFor, minSlotsOf, moeParkOf, slotTableEntriesOf, expertSlots, arenaNeeds,
   type MoeModelConfig,
 } from "../src/engine/residency";
 
@@ -176,5 +176,50 @@ describe("residency parametrica: GLM è una configurazione (fase-D fase 1)", () 
     // chiavi: nessuna collisione fra (layer, expert) distinti
     expect(expertKeyFor(cfg, 1, 0)).toBe(256);
     expect(expertKeyFor(cfg, 0, 255)).toBe(255);
+  });
+});
+
+describe("il MOTORE della residenza è cfg-driven (fase-D fase 1 slice C)", () => {
+  const E = 2048 * 512;
+  const q4k = mkSlabLayout("q4_K", { kind: "q4_K", elems: E }, { kind: "q4_K", elems: E }, { kind: "q4_K", elems: E });
+  const q6k = mkSlabLayout("q6_K", { kind: "q4_K", elems: E }, { kind: "q4_K", elems: E }, { kind: "q6_K", elems: E });
+  const DOWN_Q6K = new Set([34, 38, 39]);
+  const qwen: MoeModelConfig = {
+    id: "qwen3.6-35b-a3b", nLayer: 40, denseLead: 0, nExpert: 256, nExpertUsed: 8,
+    classes: ["q4_K", "q6_K"],
+    classOf: (l) => (DOWN_Q6K.has(l) ? "q6_K" : "q4_K"),
+    layout: (c) => (c === "q6_K" ? q6k : q4k),
+  };
+
+  it("expertSlots ripartisce sul parco DELLA CONFIG (q35 non passa più da slotsOverride)", () => {
+    const budget = 12 * 2 ** 30;
+    const s = expertSlots({ budgetBytes: budget, cfg: qwen });
+    // proporzionale al parco: 37/40 dei byte alla classe q4_K, 3/40 alla q6_K
+    const park = moeParkOf(qwen);
+    expect(s.q4_K).toBe(Math.min(Math.floor((budget * park.q4_K / 10240) / q4k.bytes), park.q4_K));
+    expect(s.q6_K).toBe(Math.min(Math.floor((budget * park.q6_K / 10240) / q6k.bytes), park.q6_K));
+    expect(s.q4_K).toBeGreaterThan(0);
+    expect(s.q6_K).toBeGreaterThan(0);
+    // e la ripartizione GLM resta quella storica (nessuna regressione)
+    const g = expertSlots({ budgetBytes: budget });
+    expect(g.q4_0 + g.q4_1).toBeGreaterThan(2000);
+  });
+
+  it("arenaNeeds dimensiona sulle classi della config, non su quelle GLM", () => {
+    const needs = arenaNeeds({
+      budgetBytes: 12 * 2 ** 30, cfg: qwen,
+      maxBufferBytes: 2 * 2 ** 30, maxBindingBytes: 2 * 2 ** 30,
+    });
+    expect(needs.arenaBuffers).toBeGreaterThanOrEqual(1);
+    // la finestra deve reggere almeno uno slab della classe più grande
+    expect(needs.arenaWindowBytes).toBeGreaterThanOrEqual(q6k.bytes);
+  });
+
+  it("i campi compat legacy FALLISCONO su un layout K-quant invece di mentire", () => {
+    // trappola trovata dal verifier it.2: prima restituivano un offset finto
+    expect(() => q4k.gateScales).toThrow(/non esiste sul formato q4_K/);
+    expect(() => q6k.downScales).toThrow(/non esiste sul formato q6_K/);
+    // sui legacy restano leciti e corretti
+    expect(SLAB_DOWN_Q4_0.gateScales).toBe(1572864);
   });
 });

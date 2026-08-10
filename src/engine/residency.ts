@@ -201,12 +201,12 @@ export interface ExpertCacheStats {
   bytesRead: number; bytesUploaded: number;
   readMs: number; packMs: number; uploadMs: number;
   occupied: Record<ExpertClass, number>;
-  slots: { q4_0: number; q4_1: number };
+  slots: Record<ExpertClass, number>;
   /** policy tier (C3c fase 5): pin correnti, cap 12.5%, selezioni, repin.
    *  null con policy "lru" (schema unico, null contagioso). */
   policy: {
-    pinSlots: { q4_0: number; q4_1: number };
-    pinCap: { q4_0: number; q4_1: number };
+    pinSlots: Record<ExpertClass, number>;
+    pinCap: Record<ExpertClass, number>;
     selections: number;
     repinPasses: number;
     repinSwaps: number;
@@ -234,13 +234,19 @@ export interface ArenaGeometry {
 /** Riparto del budget fra le due classi (spec §5). Usato dal costruttore, da
  *  `arenaNeeds` e dalla precondizione di residenza totale dello slice C: tutti
  *  devono poterlo calcolare PRIMA che la cache (e quindi la VRAM) esista. */
-export function expertSlots(o: { budgetBytes: number; slotsOverride?: Record<ExpertClass, number> }): { q4_0: number; q4_1: number } {
-  if (o.slotsOverride) return o.slotsOverride as { q4_0: number; q4_1: number };
-  const park = PARK_Q4_0 + PARK_Q4_1;
-  return {
-    q4_0: Math.min(Math.floor((o.budgetBytes * PARK_Q4_0 / park) / SLAB_DOWN_Q4_0.bytes), PARK_Q4_0),
-    q4_1: Math.min(Math.floor((o.budgetBytes * PARK_Q4_1 / park) / SLAB_DOWN_Q4_1.bytes), PARK_Q4_1),
-  };
+export function expertSlots(
+  o: { budgetBytes: number; slotsOverride?: Record<ExpertClass, number>; cfg?: MoeModelConfig },
+): Record<ExpertClass, number> {
+  if (o.slotsOverride) return o.slotsOverride;
+  const cfg = o.cfg ?? MOE_CFG_GLM47;
+  const park = moeParkOf(cfg);
+  let total = 0;
+  for (const c of cfg.classes) total += park[c];
+  const out: Record<ExpertClass, number> = {};
+  for (const c of cfg.classes) {
+    out[c] = Math.min(Math.floor((o.budgetBytes * park[c] / total) / cfg.layout(c).bytes), park[c]);
+  }
+  return out;
 }
 
 /**
@@ -301,7 +307,7 @@ export interface SlabBudgetInputs {
 
 export interface SlabBudget {
   budgetBytes: number;
-  slots: { q4_0: number; q4_1: number };
+  slots: Record<ExpertClass, number>;
   /** addendi della sottrazione, per il report (spec §2: il JSON mostra il
    *  budget CALCOLATO, non asserito) */
   allocCeilingBytes: number;
@@ -334,7 +340,7 @@ export function slabBudgetCtxAware(o: SlabBudgetInputs): SlabBudget {
       `nonExpert ${nonExpertBytes} − kv ${kvBytes} @ctx${o.ctxMax} − work ${workBytes} − riserva ${reserveBytes})`);
   }
   const slots = expertSlots({ budgetBytes });
-  for (const cls of ["q4_0", "q4_1"] as const) {
+  for (const cls of MOE_CFG_GLM47.classes) {
     if (slots[cls] < MIN_SLOTS[cls]) {
       throw new Error(
         `slab ctx-aware: ${slots[cls]} slot ${cls} < minimo ${MIN_SLOTS[cls]} (pin-for-replay c3b I3) ` +
@@ -360,12 +366,14 @@ const arenaSlabsPerBuffer = (layout: SlabLayout, maxBufferBytes: number, maxBind
  */
 export function arenaNeeds(o: {
   budgetBytes: number;
-  slotsOverride?: { q4_0: number; q4_1: number };
+  slotsOverride?: Record<ExpertClass, number>;
   maxBufferBytes: number;
   maxBindingBytes: number;
+  cfg?: MoeModelConfig;
 }): { arenaBuffers: number; arenaWindowBytes: number } {
   const slots = expertSlots(o);
-  const classes = [["q4_0", SLAB_DOWN_Q4_0], ["q4_1", SLAB_DOWN_Q4_1]] as const;
+  const cfg = o.cfg ?? MOE_CFG_GLM47;
+  const classes = cfg.classes.map((c) => [c, cfg.layout(c)] as const);
   // 1) la finestra: il buffer più grande che la cache creerebbe ai tetti dati.
   let arenaWindowBytes = 0;
   for (const [cls, layout] of classes) {
@@ -375,7 +383,7 @@ export function arenaNeeds(o: {
     if (!Number.isInteger(slots[cls]) || slots[cls] < 1) {
       throw new Error(
         `residency arena: la classe ${cls} ha ${slots[cls]} slot (budget ${o.budgetBytes} B, ` +
-        `slab ${layout.bytes} B) — il modello ne binda ${G.nExpertUsed} per token`);
+        `slab ${layout.bytes} B) — il modello ne binda ${cfg.nExpertUsed} per token`);
     }
     const per = arenaSlabsPerBuffer(layout, o.maxBufferBytes, o.maxBindingBytes);
     if (per < 1) {
@@ -430,7 +438,7 @@ export class ExpertCache {
   private device: GPUDevice;
   /** config del modello: rende parametrici chiavi, parco, classi, minimi. */
   readonly cfg: MoeModelConfig;
-  private cls: Record<ExpertClass, ClassState>;
+  private cls: Record<ExpertClass, ClassState> = {};
   private timing: boolean;
   private s = { hits: 0, hitsResident: 0, hitsPrefetch: 0, misses: 0, evictions: 0, bytesRead: 0, bytesUploaded: 0, readMs: 0, packMs: 0, uploadMs: 0 };
   // ---- stato della policy "tier" (null con policy "lru": zero overhead) ----
@@ -451,22 +459,6 @@ export class ExpertCache {
   constructor(device: GPUDevice, opts: ExpertCacheOpts) {
     this.device = device;
     this.cfg = opts.cfg ?? MOE_CFG_GLM47;
-    // GUARD (fase-D it.2, nota del verifier): la config è parametrica nei
-    // DERIVATI (chiavi, parco, minimi, slotTable) ma il MOTORE della cache
-    // costruisce ancora gli stati di classe dalle classi GLM. Finché la
-    // slice C non lo rende cfg-driven, una config diversa va RIFIUTATA qui
-    // e non accettata in silenzio per fallire dopo con un TypeError.
-    if (this.cfg !== MOE_CFG_GLM47) {
-      const glm = MOE_CFG_GLM47;
-      const same = this.cfg.nExpert === glm.nExpert && this.cfg.nExpertUsed === glm.nExpertUsed
-        && this.cfg.classes.length === glm.classes.length
-        && this.cfg.classes.every((c, i) => c === glm.classes[i]);
-      if (!same) {
-        throw new Error(
-          `residency: config "${this.cfg.id}" non ancora onorata dal motore della cache ` +
-          "(stati di classe, expertSlots, arenaNeeds ed ensure sono GLM-shaped: slice C della fase 1 del goal engine-fase-d)");
-      }
-    }
     for (const c of this.cfg.classes) this.pins[c] = new Set();
     this.timing = opts.timing ?? false;
     this.policy = opts.policy ?? "lru";
@@ -518,9 +510,11 @@ export class ExpertCache {
         lru: new Map(),
       };
     };
-    // riparto del budget tra le classi in proporzione al parco (spec §5)
-    const { q4_0: n40, q4_1: n41 } = expertSlots(opts);
-    this.cls = { q4_0: mk(SLAB_DOWN_Q4_0, n40), q4_1: mk(SLAB_DOWN_Q4_1, n41) };
+    // riparto del budget tra le classi in proporzione al parco (spec §5),
+    // PARAMETRICO: le classi e i loro layout vengono dalla config del modello.
+    const slots = expertSlots({ ...opts, cfg: this.cfg });
+    this.cls = {};
+    for (const c of this.cfg.classes) this.cls[c] = mk(this.cfg.layout(c), slots[c]);
     if (opts.slotTable === true) {
       // Dimensionata sul parco INTERO (47×64), non sui layer del modello: la
       // chiave e' `expertKey`, che usa il layer assoluto perche' l'eviction non
@@ -602,7 +596,7 @@ export class ExpertCache {
     this.assertNotInFlight("debugMarkMiss");
     for (const k of keys) {
       const layer = Math.floor(k / this.cfg.nExpert);
-      const c = this.cls[ExpertCache.classOf(layer)];
+      const c = this.cls[this.classOfLayer(layer)];
       const found = c.lru.get(k);
       if (found !== undefined) {
         c.lru.delete(k);
@@ -668,9 +662,9 @@ export class ExpertCache {
   // layer devono coesistere).
   ensure(layer: number, expert: number, readRaw: ExpertReader, pinned?: Set<number>): { slot: SlotRef; hit: boolean } {
     this.assertNotInFlight("ensure");
-    const cls = ExpertCache.classOf(layer);
+    const cls = this.classOfLayer(layer);
     const c = this.cls[cls];
-    const key = expertKey(layer, expert);
+    const key = this.keyOf(layer, expert);
     const found = c.lru.get(key);
     if (found !== undefined) {
       c.lru.delete(key);
@@ -744,7 +738,7 @@ export class ExpertCache {
   noteSelection(layer: number, experts: ArrayLike<number>): void {
     if (this.policy !== "tier") return;
     for (let k = 0; k < experts.length; k++) {
-      const key = expertKey(layer, experts[k] as number);
+      const key = this.keyOf(layer, experts[k] as number);
       this.eusage![key]++;
       if (this.eheat![key] < 0xffff) this.eheat![key]++;
       this.erec![key] = ++this.selClock;
@@ -775,7 +769,7 @@ export class ExpertCache {
    */
   private repinPass(): void {
     this.pol.repinPasses++;
-    for (const cls of ["q4_0", "q4_1"] as const) {
+    for (const cls of this.cfg.classes) {
       const c = this.cls[cls];
       const pins = this.pins[cls];
       const cap = Math.floor(PIN_CAP_FRAC * c.nSlots);
@@ -840,14 +834,11 @@ export class ExpertCache {
       requests,
       retention: requests > 0 ? 1 - this.s.evictions / requests : null,
       occupied: Object.fromEntries(Object.entries(this.cls).map(([c, st]) => [c, st.lru.size])),
-      slots: { q4_0: this.cls.q4_0.nSlots, q4_1: this.cls.q4_1.nSlots },
+      slots: Object.fromEntries(Object.entries(this.cls).map(([c, st]) => [c, st.nSlots])),
       // policy tier (C3c fase 5): null con policy "lru" (schema unico)
       policy: this.policy === "tier" ? {
-        pinSlots: { q4_0: this.pins.q4_0.size, q4_1: this.pins.q4_1.size },
-        pinCap: {
-          q4_0: Math.floor(PIN_CAP_FRAC * this.cls.q4_0.nSlots),
-          q4_1: Math.floor(PIN_CAP_FRAC * this.cls.q4_1.nSlots),
-        },
+        pinSlots: Object.fromEntries(this.cfg.classes.map((c) => [c, this.pins[c].size])),
+        pinCap: Object.fromEntries(this.cfg.classes.map((c) => [c, Math.floor(PIN_CAP_FRAC * this.cls[c].nSlots)])),
         selections: this.selClock,
         repinPasses: this.pol.repinPasses,
         repinSwaps: this.pol.repinSwaps,
@@ -860,7 +851,7 @@ export class ExpertCache {
   }
 
   destroy(): void {
-    for (const cls of [this.cls.q4_0, this.cls.q4_1]) for (const b of cls.buffers) b.destroy();
+    for (const st of Object.values(this.cls)) for (const b of st.buffers) b.destroy();
     this.table?.buf.destroy();
   }
 }

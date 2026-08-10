@@ -24,3 +24,13 @@ onorate); il gate strutturale dichiarava il falso sul router (cpuref.ts
 era un terzo router non elencato → eccezione riscritta come CATEGORIA);
 i predicati del gate sono firme testuali, non invarianti (docket item 4).
 Next: it.3 = motore della cache cfg-driven + gate irrobustito.
+
+## it.3 (2026-08-10)
+
+Il MOTORE della residenza è cfg-driven: stati di classe, ripartizione del
+budget, arena, repin, stats, destroy e il PATH CALDO (`ensure`) vengono
+dalla config, non da `G.*`. Guard di it.2 rimosso: la config è onorata.
+I campi compat legacy ora FALLISCONO sui K-quant invece di fabbricare un
+offset finto. q35 non ha più bisogno di `slotsOverride`. GLM bit-identico
+(ktest 84/84), suite 387. Restano: gate strutturale da irrobustire (4b) e
+migrazione di q35gpumodel.

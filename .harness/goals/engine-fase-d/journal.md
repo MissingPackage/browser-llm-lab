@@ -111,3 +111,38 @@ Il verifier ha dato PASS ma con tre rilievi che accolgo per intero: il titolo
 
 Processo: digests.md era vuoto e il verifier è arrivato dopo DUE iterazioni
 invece che dopo ognuna — entrambe le cose sanate qui.
+
+## it.3 (2026-08-10) — fase 1 slice C: il MOTORE della residenza è cfg-driven
+
+Chiusi i quattro blocker del verifier (docket item 4 a/c/d + f; il gate
+strutturale irrobustito (4b) resta a it.4).
+
+- **(a) stati di classe dalla config**: il costruttore non conosce più
+  `SLAB_DOWN_Q4_0/Q4_1` — cicla `cfg.classes` e chiede `cfg.layout(c)`.
+- **(b) `expertSlots` cfg-driven**: la ripartizione del budget usa il parco
+  DELLA CONFIG (`moeParkOf`) e i byte dei SUOI layout. Conseguenza che
+  contava: q35 non deve più passare da `slotsOverride`, cioè da un bypass.
+  Per GLM la formula è identica ⇒ numeri identici (verificato).
+- **(c) niente più liste letterali**: `arenaNeeds`, `repinPass`, `stats`
+  (occupied/slots/pinSlots/pinCap) e `destroy` iterano `cfg.classes` /
+  `Object.entries(this.cls)`. I tipi pubblici delle stats sono diventati
+  `Record<ExpertClass, number>`.
+- **(d) path CALDO parametrico**: `ensure()`, `noteSelection()` e
+  `debugMarkMiss()` usano `this.classOfLayer()` e `this.keyOf()` — i due
+  metodi che a it.2 non avevano nemmeno un chiamante.
+- **(e) GUARD RIMOSSO**: la config ora è onorata davvero, non serve più
+  rifiutarla.
+- **(f) campi compat**: `gateScales`/`upScales`/`downScales` sono diventati
+  GETTER che FALLISCONO su un layout K-quant ("non esiste sul formato
+  q4_K: usa la vista generica") invece di restituire un offset finto con
+  binding di taglia 0 — la trappola che il verifier aveva individuato.
+- TEST nuovi (3): `expertSlots` ripartisce sul parco della config qwen
+  (37/40 vs 3/40) e GLM resta invariato; `arenaNeeds` dimensiona sulle
+  classi della config (finestra ≥ slab della classe più grande); i campi
+  compat falliscono sui K-quant e restano corretti sui legacy.
+- GATE: ktest **84/84** GLM BIT-IDENTICO (2layer L2rel 2.07e-7,
+  arena-vs-slotrange BIT-A-BIT, layer0 2.35e-7, moe-ffn Σw 1.800000);
+  suite 387 (+3); tsc pulito.
+- Next: it.4 = gate strutturale da firme testuali a invariante non
+  aggirabile (docket 4b) — l'ultimo blocco prima di poter dichiarare la
+  fase 1; poi la migrazione di q35gpumodel alla ExpertCache unica.
