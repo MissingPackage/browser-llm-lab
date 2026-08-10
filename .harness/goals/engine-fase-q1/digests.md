@@ -134,3 +134,16 @@ multi-step no-readback (−5.1 ms misurati, pattern GLM B2), 3. fusione
 dispatch, 4. tuning+dot4I8Packed (fase 6), 5. spike subgroup-matrix.
 Per il writeup: pubblicare 4.6-5.2× a parità di regime; prefill solo
 post-batching. Next: it.13 = fase 6 (leve bounded da contratto).
+
+## it.13 (2026-08-10)
+
+**FASE 6 COMPLETA** (6/9), verifier PASS (probe rieseguito = identico;
+giudizio esplicito: done-when soddisfatto in lettera e spirito).
+dot4I8Packed e tuning tile: escluse per ora COI NUMERI del WP (il collo è
+readback+dispatch+fusione, non l'ALU; il +41% è sul batched che non
+esiste). **Spike subgroup-matrix: il probe RIBALTA la fonte** — la
+feature è esposta e concessa sul nostro harness (Chrome stable + flag
+runner), ma INT8-ONLY (16×16×32, {u8,i8}→{u32,i32}); la misura di
+throughput richiede l'infra int8-packed = converge con dot4I8Packed,
+rivalutazione dopo il prefill batched. Spec §7 corretta subito. Next:
+it.14 = fase 7 — il MoE 35B-A3B parametrizzato (il pezzo grosso rimasto).

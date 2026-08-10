@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: FASI 1-5/9 COMPLETE, gap decode 4.6-5.2× scomposto con misura; next = it.13 fase 6 leve bounded)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: FASI 1-6/9 COMPLETE; next = it.14 fase 7, MoE 35B-A3B parametrizzato)
 
 ## 1. Next decidable
 
@@ -48,11 +48,20 @@ fatto — decode 5.18×/4.62× vs nativo Vulkan stesso GGUF, readback 5.1/3.6
 ms/token MISURATO (decode−prefillSeq), prefill 183×/171× = assenza di
 batching; leve per ROI in docket item 10 e doc studio
 (2026-08-10-q35-gap-decomposition.md); per il writeup: 4.6-5.2× a parità
-di regime. **Al lavoro: it.13 = fase 6 — leve kernel bounded da
-contratto**: dot4I8Packed e tuning tile per-device DIETRO FLAG con delta
-misurato O esclusione motivata coi numeri del WP; spike subgroup-matrix
-dietro flag Chromium O impraticabilità documentata (spec §7: non c'è nel
-browser stabile — lo spike lo PROVA empiricamente sul nostro Chrome). Perimetro: path testo Qwen
+di regime. **it.13 DONE — FASE 6 COMPLETA**:
+dot4I8Packed/tuning escluse coi numeri del WP (rami previsti dal
+done-when); probe subgroup-matrix committato — feature ESPOSTA sul nostro
+harness ma INT8-ONLY, converge con dot4I8Packed post-prefill-batched;
+spec §7 corretta. **Al lavoro: it.14 = fase 7 — MoE 35B-A3B
+parametrizzato** (3-4 it. stimate): slotTable/classi/nExpert/topK/shapes
+parametrici con GLM INVARIATO (non-reg verde); dequant Q4_K expert (nuovo,
+kernel gemv da estendere o classe slab dedicata); 35B forward con paging
+C3c al budget 16 GB senza OOM; argmax==cpuref sul campione, golden a
+soglia fissata (run-golden-q35.sh MODEL=35B... NOTA: golden 35B su CPU
+oracolo sarà LENTO — valutare NPREDICT/corpus del protocollo in apertura),
+firma routing registrata. Riancorarsi da residency.ts/moe.ts/glmmodel.ts
+(la meccanica da parametrizzare) + spec §3 (mix UD: expert Q4_K 117 +
+Q6_K 3) + header dump. Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.
