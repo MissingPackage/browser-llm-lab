@@ -213,3 +213,20 @@
   con provenance) + riferimenti decode/prefill/TTFT full-resident con
   hostState → it.9.
 - Suite node 371/8, tsc pulito, GLM intatto.
+
+## it.9 (2026-08-10) — fase 4: golden full-corpus + SOGLIA RATCHET 4B
+
+- `run-golden-q35.sh` (provenance piena) → golden full-corpus COMMITTATO:
+  8 prompt, prefill 27 312, 1024 posizioni greedy top-32 (SHA 298fcb5f,
+  oracle 5f55650a, corpus-hash 2882e4ab).
+- Infrastruttura conformance: q35conf worker/page/html + runner playwright
+  (pattern glmconf); q35gpumodel: resetState() per prompt + step(read=false)
+  per il prefill sequenziale senza readback.
+- RUN GPU full-corpus (albero congelato, 29 min): **top-1 = 1012/1024 =
+  98.828125%** — SOGLIA 4B FISSATA a docket item 8 (ratchet
+  pre-autorizzato dal contratto). Per-prompt 125-128/128; load 11.3 s.
+  Coincidenza notevole e verificabile: stessa cifra del PIN GLM (stesso
+  corpus, near-tie q4 comparabili; i miss cadono su prompt diversi).
+- RESTA per chiudere fase 4 (it.10): riferimenti decode/prefill/TTFT
+  full-resident con hostState dichiarato (orchestratore correttezza-prima,
+  DICHIARATO come frame di partenza: il numero onesto pre-ottimizzazioni).

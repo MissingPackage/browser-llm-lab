@@ -1,5 +1,17 @@
 # Docket — engine-fase-q1
 
+8. **SOGLIA GOLDEN 4B FISSATA — RATCHET (2026-08-10, it.9, fase 4; spec §5
+   punto 3, pre-autorizzata dal contratto: "soglia FISSATA alla prima run
+   verificata e mai più abbassata")** — golden top-1 full-corpus del 4B su
+   GPU: **1012/1024 = 98.828125%** (run q35-conf-4b-2026-08-10.json vs
+   golden-q35-4b-full-2026-08-10.json, provenance piena; per-prompt:
+   125-128/128, load 11.3 s, 29 min totali coi prefill sequenziali).
+   Da qui in avanti il gate 4B è top-1 ≥ 1012/1024 AL PIN (near-tie mai
+   gateati singolarmente: la cifra è il pin, come per GLM). Nota di colore
+   VERIFICABILE: la cifra coincide col PIN GLM (1012/1024) — stesso
+   corpus, 1024 posizioni, aritmetica dei near-tie q4 comparabile;
+   coincidenza, non copia (i 12 miss cadono su prompt diversi).
+
 7. **IGIENE (2026-08-10, it.6 — fuori goal, non bloccante)** — golden.cpp
    (tools/oracle-moe) scrive `"arch":"deepseek2"` HARDCODED nel JSON di
    output anche per modelli qwen35: i token e i logit sono corretti (l'eval
