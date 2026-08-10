@@ -99,7 +99,7 @@ nell'obiettivo ma non nella lettera (il repack non e' uscito dal path, e'
 diventato quasi gratis dentro): **docket item 5** al PI, col parere che
 spostarlo all'import non conviene (~4% al prezzo di ~18 GB su disco).
 
-## it.10 (2026-08-10) — fase 3: -15,0 ms/token sui densi
+## it.10 (2026-08-10) — fase 3 sui densi [NUMERO CORRETTO IN it.12: -3,3, non -15,0]
 
 Misurato prima: 50,5 ms/token con sync per token contro 35,4 accodando senza
 attese = 15,0 ms di pura serializzazione (il `readbackMs` di 44,6 NON e' il
@@ -111,3 +111,19 @@ ktest. Errore mio corretto in corsa: batchare anche il prefill era piu'
 LENTO (li' non c'era attesa da togliere e l'argmax su GPU si aggiungeva).
 Il MoE NON puo' usarlo — 41 submit/token per il routing su CPU: docket
 item 8, il pezzo piu' grosso rimasto.
+
+## it.11-12 (2026-08-10) — arena K-quant, e la correzione di un numero mio
+
+it.11: `gemvQ4K`/`gemvQ6K` accettano l'indirizzamento d'ARENA (slot da `Sel`,
+buffer bindato intero), riusando la testa di GLM. Gate nuovo sul 35B reale:
+l'uscita degli 8 expert coi due regimi di indirizzamento e' **BIT-A-BIT
+identica** su entrambe le classi. ktest 86/86.
+
+it.12: **il -15,0 ms/token di it.10 era un artefatto di misura** — il braccio
+"con sync" era la prima passata dopo il load (a freddo), quello "batch" la
+terza (a caldo): ~8 ms/token di warm-up tutti nel braccio lento. Micro-bench
+riscritto con warm-up scartato, bracci interleavati, 3 ripetizioni, mediana e
+dispersione. **Valore onesto: -3,33 ms/token (-8,3%)**, spread 0,19/0,10. La
+serializzazione vera a caldo e' 4,58 ms/token, non 15, e il batch ne recupera
+il 73%. Il done-when della fase 3 chiedeva >= -5,1: **NON e' soddisfatto**,
+docket item 9 al PI. Regola nuova per l'harness a docket item 10.

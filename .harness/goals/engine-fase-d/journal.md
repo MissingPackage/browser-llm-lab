@@ -444,7 +444,7 @@ comprerebbe il residuo (~1,7 s su 45, ~4%) al prezzo di ~18 GB di slab su
 disco. Non decido io un cambio di contratto: **docket item 5**, col mio
 parere (non conviene) e coi numeri.
 
-## it.10 (2026-08-10) — fase 3 sui DENSI: -15,0 ms/token. Sul MoE non si puo' (ancora)
+## it.10 (2026-08-10) — fase 3 sui DENSI [NUMERI CORRETTI IN it.12: il -15,0 era un ARTEFATTO DI MISURA, il valore onesto e' -3,3 — vedi it.12]
 
 **Misurato prima, di nuovo.** Strumentata la scomposizione per token
 (`Q35GpuModel.perf()`: embed CPU / readback / argmax CPU) e girata sul 4B:
@@ -454,12 +454,12 @@ token. Il numero che serviva era un altro — quanto CPU e GPU si aspettano a
 vicenda — e l'ho preso con un micro-bench nel ktest: gli stessi token
 accodati con `read=false` e una sola attesa alla fine.
 
-| 4B, 39 token | ms/token |
-|---|---|
-| con sync per token (`step`) | **50,5** |
-| senza sync (accodati, una attesa) | **35,4** |
-| **tetto recuperabile** | **15,0** |
-| embed dequant CPU | 0,07-0,12 |
+| 4B, 39 token | ms/token | **[CORRETTO in it.12]** |
+|---|---|---|
+| con sync per token (`step`) | ~~50,5~~ | **40,0 a caldo** (il 50,5 era la PRIMA passata dopo il load) |
+| senza sync (accodati, una attesa) | 35,4 | 35,4 |
+| **tetto recuperabile** | ~~15,0~~ | **4,58** |
+| embed dequant CPU | 0,07-0,12 | idem |
 
 **Fatto**: `Q35GpuModel.decodeBatch(tokens, posStart)` — K token
 teacher-forced in UN submit, argmax su GPU (`argmaxStage1/2`, gli stessi
@@ -470,9 +470,12 @@ ordinata prima del submit, quindi scriverli in ciclo darebbe a tutti gli step
 l'ultimo valore (stesso schema di `dbSlots` in gpuforward). Error scope
 esplicito, come ogni encode nuovo.
 
-**RISULTATO**: `decodeBatch` **35,5 ms/token contro 50,5** = **-15,0
-(-29,6%)**, e cade esattamente sul tetto senza sync (35,4): recupera
-praticamente tutta la serializzazione. Il done-when ne chiedeva >= -5,1.
+**RISULTATO [CORRETTO in it.12]**: ~~35,5 contro 50,5 = -15,0 (-29,6%)~~ —
+ARTEFATTO DI MISURA (braccio lento a freddo, braccio veloce a caldo). Valore
+onesto, a caldo e interleavato: **36,69 contro 40,02 = -3,33 ms/token
+(-8,3%)**, che sta 1,25 ms SOPRA il pavimento senza sync (ne recupera il
+73%, non "praticamente tutto"). **Sotto il >= -5,1 che il done-when
+chiedeva** → docket item 9.
 
 **GATE SECCO (quello che il contratto chiede)**: nel ktest
 `q35-model-4b-argmax`, gli argmax di `decodeBatch` sono confrontati uno a uno
@@ -502,3 +505,64 @@ goal** e non e' una riga della fase 3: docket item 8.
 
 **GATE**: suite 410 | 9 skipped, tsc pulito, ktest 84/84, conformance 4B
 smoke top1 6/6 con argmax identici al path precedente.
+
+## it.11 (2026-08-10) — fase 3b, fetta 1: kernel K-quant con indirizzamento d'arena
+
+`gemvQ4KWgsl`/`gemvQ6KWgsl` accettano ora un `KArenaOpts`
+{nBuf, slabWords, slabsPerBuf, tensorWords}: il buffer di classe si binda
+INTERO, lo slot arriva da `Sel` e il kernel ricava da solo (binding, base).
+Riusata la testa di GLM (`SEL_STRUCT`, `MoeIdx`, `ld4`, `arenaSlotWgsl`), non
+riscritta: `arenaHeadWgsl` ora accetta il sottoinsieme strutturale, perche' un
+tensore K-quant e' UN segmento e non ha i campi scale di GLM. Un solo corpo
+aritmetico per i due regimi: cambia solo da dove arrivano le parole (`blkw`).
+
+GATE NUOVO sul 35B reale: `q35-arena-vs-slotrange-blk0-q4kdown` e
+`blk34-q6kdown` — l'uscita degli 8 expert calcolata coi due regimi di
+indirizzamento deve essere **BIT-A-BIT identica** (`Object.is` su tutti i
+2048 f32). **PASS su entrambe le classi.** ktest 86/86.
+
+NOTA OPERATIVA (costata mezz'ora): le modifiche a `ktest.worker.ts` sono
+andate perse una prima volta perche' il verifier, ripulendo il working tree
+dai suoi file di prova, l'ha riportato a HEAD. **Non lasciare lavoro non
+committato mentre un verifier gira.**
+
+## it.12 (2026-08-10) — IL -15,0 ms ERA UN ARTEFATTO DI MISURA. Valore vero: -3,3
+
+Il verifier ha bocciato it.10 e ha ragione. L'errore era di METODO:
+`msTokenConSync` era la **PRIMA passata dopo il load del modello**, a freddo;
+`msTokenBatch` era la terza, a caldo. Circa 8 ms/token di warm-up stavano
+tutti dentro il braccio lento, e il delta usciva gonfiato di ~5x. Il verifier
+l'ha dimostrato cronometrando una quarta passata — path identico, bit per
+bit — che costava 39,9 ms contro i 48 della prima.
+
+**Micro-bench riscritto**: una passata di warm-up SCARTATA, poi i tre bracci
+INTERLEAVATI e ripetuti 3 volte, e si riporta la MEDIANA con min-max. Non un
+campione singolo.
+
+| 4B, a caldo, 3 ripetizioni interleavate | ms/token | [min-max] |
+|---|---|---|
+| `step` con sync per token | **40,02** | 40,0-40,2 |
+| `decodeBatch` | **36,69** | 36,7-36,8 |
+| accodato senza sync (pavimento) | 35,44 | 35,4-35,5 |
+| **delta batch** | **-3,33 (-8,3%)** | spread 0,19 / 0,10 |
+
+**Cosa cade e cosa resta**:
+- CADE "-15,0 ms/token (-29,6%)": era l'artefatto. Corretto in journal it.10,
+  digests, HANDOFF, PHASES e docket.
+- CADE "cade esattamente sul tetto, recupera praticamente tutta la
+  serializzazione": il batch sta 1,25 ms SOPRA il pavimento senza sync. Ne
+  recupera 3,33 su 4,58, cioe' il 73%. Il verifier ha osservato che in
+  4 run su 4 il batch stava sopra il pavimento e che il mio 35,5-vs-35,4 era
+  l'unico campione in cui coincidevano: aveva ragione anche li'.
+- RESTA il gate secco: **argmax IDENTICO** su 39 token, dentro il `pass`.
+- RESTA che la serializzazione vera, a caldo, e' 4,58 ms/token (40,02-35,44),
+  non 15.
+
+**IL DONE-WHEN DELLA FASE 3 NON E' SODDISFATTO**: chiedeva >= -5,1 ms/token,
+misurati -3,33. Non lo assorbo e non riscrivo il contratto: **docket item 9**.
+
+Regola nuova per l'harness (osservazione del verifier, vale oltre questa
+fase): il primo passaggio dopo `createQ35GpuModel` non e' comparabile con
+nulla. Ogni micro-bench futuro — incluso quello del prefill alla fase 4, che
+e' formulato allo stesso modo — deve scartare una passata e interleavare i
+bracci. Registrato a docket item 10.

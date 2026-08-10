@@ -153,3 +153,51 @@ misure due volte. Registrato it.10 (2026-08-10).
 
 "(a), fai la fase 3-bis". Riga aggiunta a PHASES fra la 3 e la 4.
 **Item 8 CHIUSO.**
+
+
+## item 9 — il done-when della fase 3 NON e' soddisfatto: -3,3 contro >= -5,1 (PI)
+
+Il verifier ha bocciato it.10: il mio "-15,0 ms/token" era un ARTEFATTO DI
+MISURA (braccio lento cronometrato a freddo, subito dopo il load; braccio
+veloce a caldo, terza passata). Ri-misurato a caldo, interleavato, 3
+ripetizioni, mediana e dispersione:
+
+| 4B | ms/token | [min-max] |
+|---|---|---|
+| `step` con sync per token | 40,02 | 40,0-40,2 |
+| `decodeBatch` | 36,69 | 36,7-36,8 |
+| accodato senza sync (pavimento) | 35,44 | 35,4-35,5 |
+| **delta** | **-3,33 (-8,3%)** | spread 0,19 / 0,10 |
+
+La riga 3 di PHASES chiede "**atteso >= -5,1 ms** dal q1". Misurato -3,33.
+La differenza NON e' rumore: la dispersione e' 0,1-0,2 ms.
+
+**Perche' e' -3,3 e non di piu'**: a caldo la serializzazione totale vale
+4,58 ms/token (40,02 - 35,44) e il batch ne recupera il 73%. Il -5,1 del
+contratto veniva dalla decomposizione del gap di q1, misurata su un altro
+regime: era una stima, e la stima era alta.
+
+**Le opzioni**:
+(a) accettare -3,3 come esito della fase 3 sui densi e riscrivere la riga
+    come "delta MISURATO a caldo con dispersione, qualunque sia";
+(b) tenere la riga com'e' e lasciare la fase 3 APERTA finche' non si trova
+    l'altro 1,8 ms (il pavienot senza sync e' 35,44: sopra quello non si va
+    senza toccare i kernel, che e' un'altra fase);
+(c) considerare la fase 3 sui densi chiusa e ri-misurarla alla fase 6, dove
+    il numero che conta e' end-to-end.
+
+**Il mio parere: (a)**. Il -5,1 era una stima ex-ante, non un requisito del
+prodotto; il numero misurato e' positivo, verificato e con dispersione
+dichiarata, e il guadagno vero sui densi non e' li' ma nei kernel (il
+pavimento a 35,4 ms/token con 562 dispatch). Registrato it.12 (2026-08-10).
+
+## item 10 — regola nuova per l'harness: il primo passaggio non si misura (io)
+
+Osservazione del verifier di it.10, che vale oltre quella fase: il primo
+decode dopo `createQ35GpuModel` costa ~8 ms/token in piu' degli altri
+(compilazione pipeline, cache, prima allocazione). Misurare un braccio li' e
+l'altro a caldo gonfia qualunque delta. **Ogni micro-bench del goal scarta
+una passata e interleava i bracci, e riporta mediana + dispersione, non un
+campione.** Applicato al bench della fase 3 (it.12); da applicare al bench
+del prefill della fase 4, che e' formulato allo stesso modo. Mio, non PI.
+Registrato it.12 (2026-08-10).

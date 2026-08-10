@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3(densi) fatte; next = ruling PI su docket item 8 (il MoE fa 41 submit/token))
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2 fatte, 3b in corso; next = ruling PI su docket item 9 (fase 3: -3,3 contro -5,1 richiesti))
 
 ## 1. Next decidable
 
@@ -67,31 +67,39 @@ costo di pack per miss scende di >=4x, misurato". **Riscrivere un done-when
 è un cambio di contratto, non una decisione di meccanismo: decide il PI.**
 Se dice "fallo all'import", la fase 2 si riapre e il lavoro fatto resta buono.
 
-**FASE 3 (it.10), densi**: misurato prima. Il decode pagava 50,5 ms/token
-con sync contro 35,4 accodando senza attese: **15,0 ms di pura
-serializzazione**. (Il `readbackMs` di 44,6 NON è il costo dei 604 KB di
-logits: è l'attesa su `mapAsync`, che include il lavoro GPU del token.)
-Fatto `Q35GpuModel.decodeBatch`: K token teacher-forced in un submit, argmax
-su GPU, un readback di K·4 byte → **35,5 ms/token, -15,0 (-29,6%)**, sul
-tetto misurato; il contratto ne chiedeva >= -5,1. **Gate secco**: argmax
-identici al path a readback su tutti i 39 token, dentro il `pass` del ktest.
-Errore corretto in corsa: batchare anche il prefill era più LENTO (lì non
-c'è attesa da togliere e l'argmax su GPU si aggiunge) — si batcha solo lo
-span di cui si legge l'argmax, e sulla conformance il batch è NEUTRO (quel
-corpus è 96% prefill): resta lì perché il golden VALIDA `decodeBatch`.
+**FASE 3 (it.10-12), densi — E UNA CORREZIONE MIA**. `decodeBatch` c'e' e
+funziona: K token teacher-forced in un submit, argmax su GPU, un readback di
+K·4 byte, con **argmax IDENTICO** al path a readback su tutti i 39 token
+(dentro il `pass` del ktest). **Ma il "-15,0 ms/token" che avevo scritto era
+un ARTEFATTO DI MISURA** — il braccio lento era la prima passata dopo il
+load (a freddo), quello veloce la terza (a caldo): ~8 ms/token di warm-up
+tutti da una parte. Trovato dal verifier. Micro-bench riscritto (warm-up
+scartato, bracci interleavati, 3 ripetizioni, mediana + dispersione):
 
-**PI-GATED, docket item 8 — il prossimo passo del goal**: sul MoE
-`decodeBatch` è `null` per costruzione. La selezione degli expert legge i
-logits del router su CPU a OGNI layer ⇒ sul 35B sono **41 submit e 41
-readback per token**. È lo stesso problema che GLM ha risolto in fase C
-(47 → 2 sync/token) e la meccanica c'è già in `residency.ts`
-(`arena: true`, `slotTable: true`), ma q35 non la usa. È plausibilmente il
-pezzo più redditizio rimasto. Opzioni: (a) fase 3-bis subito, (b) dentro la
-fase 5, (c) più avanti. **Parere: (a)** — prefill batched e policy sul MoE
-si misurano male finché ogni token paga 41 round-trip, e rischiamo di
-ottimizzare sopra un collo di bottiglia che poi sparisce.
+| 4B, a caldo | ms/token | [min-max] |
+|---|---|---|
+| `step` con sync | 40,02 | 40,0-40,2 |
+| `decodeBatch` | 36,69 | 36,7-36,8 |
+| pavimento senza sync | 35,44 | 35,4-35,5 |
+| **delta** | **-3,33 (-8,3%)** | spread 0,19/0,10 |
 
-**Regola del goal**: bench pieni SOLO alle fasi 6 e 8.
+**PI-GATED, docket item 9**: la riga 3 chiede >= -5,1 ms; misurati -3,33, e
+non e' rumore (dispersione 0,1-0,2). Parere: accettare il numero misurato e
+riscrivere la riga — il -5,1 era una stima ex-ante di q1, non un requisito
+del prodotto, e il guadagno vero sui densi sta nei kernel (pavimento 35,4
+ms/token con 562 dispatch), non qui.
+
+**AL LAVORO: fase 3b** (resolve MoE su GPU, ruling PI 2026-08-10). Fetta 1
+FATTA (it.11): `gemvQ4K`/`gemvQ6K` accettano l'indirizzamento d'ARENA (slot
+da `Sel`, buffer bindato intero, testa di GLM riusata) e il gate nuovo sul
+35B reale dice **BIT-A-BIT identico** contro il binding a sotto-range, su
+entrambe le classi. ktest 86/86. Prossime fette: (2) router+resolve su GPU
+in regione ombra, con confronto contro la selezione CPU; (3) selezione di
+produzione + miss rilevato su GPU + repair/replay ⇒ 1 submit/token.
+
+**Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
+misura mai — si scarta una passata, si interleavano i bracci, si riporta
+mediana e dispersione.
 
 ## 2. State delta (sessione 27, 2026-08-10 — goal q1 intero, it.0-21)
 

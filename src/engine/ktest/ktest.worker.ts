@@ -577,49 +577,75 @@ async function testQ35Model4B(g: Gpu): Promise<KResult> {
     }
   }
   const decodeS = ((performance.now() - t1) / 1000).toFixed(1);
-  const conSync = (performance.now() - t1) / tokens.length;
 
-  // MICRO-BENCH della SERIALIZZAZIONE (goal fase-D fase 3). Il decode qui
-  // sopra aspetta il readback dei logits a OGNI token: la CPU sta ferma
-  // mentre la GPU calcola e viceversa. Qui si accodano gli stessi token
-  // SENZA leggere (`read=false`) e si aspetta una volta sola alla fine: la
-  // differenza e' il prezzo del round-trip per token, cioe' il tetto di
-  // quello che `decodeBatch` puo' recuperare. NON e' il costo del
-  // trasferimento dei 604 KB: e' quanto le due unita' si aspettano a vicenda.
-  model.resetState();
-  const t2 = performance.now();
-  for (let t = 0; t < tokens.length; t++) await model.step(tokens[t], t, false);
-  const ultimo = await model.step(tokens[tokens.length - 1], tokens.length, true);
-  const senzaSync = (performance.now() - t2) / (tokens.length + 1);
-  model.resetState();
+  // ---- MICRO-BENCH (fase D fase 3), riscritto dopo il FAIL del verifier su
+  // it.10. L'errore era di METODO, non di codice: il braccio "con sync" era la
+  // PRIMA passata dopo il load (a freddo) e quello "batch" la terza (a caldo),
+  // quindi ~8 ms/token di warm-up finivano tutti nel braccio lento e il delta
+  // usciva gonfiato di ~5x. Qui: una passata di WARM-UP scartata, poi i
+  // bracci INTERLEAVATI e ripetuti, e si riporta la MEDIANA con la
+  // dispersione — non un campione singolo.
+  const passSync = async (): Promise<number> => {
+    model.resetState();
+    const t = performance.now();
+    for (let i2 = 0; i2 < tokens.length; i2++) await model.step(tokens[i2], i2);
+    return (performance.now() - t) / tokens.length;
+  };
+  const passBatch = async (): Promise<{ ms: number; ids: number[] }> => {
+    model.resetState();
+    const ids: number[] = [];
+    const t = performance.now();
+    for (let off = 0; off < tokens.length; off += 32) {
+      ids.push(...await model.decodeBatch!(tokens.slice(off, off + 32), off));
+    }
+    return { ms: (performance.now() - t) / tokens.length, ids };
+  };
+  const passNoSync = async (): Promise<number> => {
+    model.resetState();
+    const t = performance.now();
+    for (let i2 = 0; i2 < tokens.length; i2++) await model.step(tokens[i2], i2, false);
+    await model.step(tokens[tokens.length - 1], tokens.length, true);
+    return (performance.now() - t) / (tokens.length + 1);
+  };
+  await passSync(); // WARM-UP scartato: la prima passata dopo il load non e' comparabile
 
-  // GATE SECCO della fase 3: `decodeBatch` deve dare gli STESSI argmax del
-  // path a readback, token per token. Non "vicini": identici — sono interi.
-  const batchIds: number[] = [];
-  const t3 = performance.now();
-  for (let off = 0; off < tokens.length; off += 32) {
-    const chunk = tokens.slice(off, off + 32);
-    batchIds.push(...await model.decodeBatch!(chunk, off));
+  const REP = 3;
+  const msSync: number[] = [], msBatch: number[] = [], msNoSync: number[] = [];
+  let batchIds: number[] = [];
+  for (let r = 0; r < REP; r++) {
+    msSync.push(await passSync());
+    const b = await passBatch();
+    msBatch.push(b.ms); batchIds = b.ids;
+    msNoSync.push(await passNoSync());
   }
-  const msBatch = (performance.now() - t3) / tokens.length;
+  const med = (a: number[]): number => [...a].sort((p2, q2) => p2 - q2)[a.length >> 1];
+  const disp = (a: number[]): string => `${Math.min(...a).toFixed(1)}-${Math.max(...a).toFixed(1)}`;
+  const medSync = med(msSync), medBatch = med(msBatch), medNoSync = med(msNoSync);
+
+  // GATE SECCO: gli argmax del batch devono essere IDENTICI a quelli del path
+  // a readback. Sono interi: o sono uguali o non lo sono.
   const seqIds: number[] = [];
   model.resetState();
   for (let t = 0; t < tokens.length; t++) seqIds.push(await model.step(tokens[t], t));
   let diff = -1;
-  for (let i = 0; i < tokens.length; i++) if (seqIds[i] !== batchIds[i]) { diff = i; break; }
+  for (let i2 = 0; i2 < tokens.length; i2++) if (seqIds[i2] !== batchIds[i2]) { diff = i2; break; }
   model.resetState();
   const pf = model.perf();
 
   return {
     kernel: "q35-model-4b-argmax",
-    pass: ok === p.positions.length && ultimo >= 0 && diff === -1,
+    pass: ok === p.positions.length && diff === -1,
     maxAbs: 0, maxRel: 0,
-    note: `argmax GPU == oracolo ${ok}/${p.positions.length} (load ${loadS}s, ${tokens.length} pos in ${decodeS}s, ${model.dispatchesPerToken} dispatch/token) — SERIALIZZAZIONE: ${conSync.toFixed(1)} ms/token con sync vs ${senzaSync.toFixed(1)} senza (tetto ${(conSync - senzaSync).toFixed(1)}); decodeBatch ${msBatch.toFixed(1)} ms/token, argmax ${diff === -1 ? "IDENTICO" : `DIVERSO alla posizione ${diff} (seq ${seqIds[diff]} vs batch ${batchIds[diff]})`} su ${tokens.length} token${detail.length ? " — " + detail.join("; ") : ""}`,
+    note: `argmax GPU == oracolo ${ok}/${p.positions.length} (load ${loadS}s, ${tokens.length} pos in ${decodeS}s, ${model.dispatchesPerToken} dispatch/token) — MICRO-BENCH a caldo, ${REP} ripetizioni interleavate (mediana, [min-max]): sync ${medSync.toFixed(1)} [${disp(msSync)}] · batch ${medBatch.toFixed(1)} [${disp(msBatch)}] · senza-sync ${medNoSync.toFixed(1)} [${disp(msNoSync)}] ⇒ delta batch ${(medBatch - medSync).toFixed(1)} ms/token (${((medBatch / medSync - 1) * 100).toFixed(1)}%); argmax ${diff === -1 ? "IDENTICO" : `DIVERSO alla posizione ${diff} (seq ${seqIds[diff]} vs batch ${batchIds[diff]})`} su ${tokens.length} token${detail.length ? " — " + detail.join("; ") : ""}`,
     metrics: {
       okPositions: ok, dispatchesPerToken: model.dispatchesPerToken,
-      msTokenConSync: +conSync.toFixed(2), msTokenSenzaSync: +senzaSync.toFixed(2),
+      msTokenSyncMediana: +medSync.toFixed(2), msTokenBatchMediana: +medBatch.toFixed(2),
+      msTokenSenzaSyncMediana: +medNoSync.toFixed(2),
+      msTokenSyncSpread: +(Math.max(...msSync) - Math.min(...msSync)).toFixed(2),
+      msTokenBatchSpread: +(Math.max(...msBatch) - Math.min(...msBatch)).toFixed(2),
+      deltaBatchMsToken: +(medBatch - medSync).toFixed(2),
       msTokenEmbedCpu: +(pf.embedMs / pf.tokens).toFixed(3),
-      msTokenBatch: +msBatch.toFixed(2), argmaxDiffBatch: diff, // -1 = identico
+      argmaxDiffBatch: diff, // -1 = identico
     },
   };
 }
