@@ -26,7 +26,7 @@
 // buffer (e di conseguenza quanti sono): slot, LRU, telemetria e VRAM totale
 // restano quelli.
 import { GLM47_FLASH as G } from "./shape";
-import { packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, type SlabLayout } from "./moe";
+import { packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, type SlabLayout, type SlabTensorLayout } from "./moe";
 import { downIsQ4_1 } from "./expertstore";
 import { mlaPartialsLen } from "./mlasplit";
 import { GLM_PREFILL_M } from "./glmprefillplan";
@@ -177,6 +177,25 @@ export function slotBindRanges(s: SlotRef): {
     upQs: r(l.upQs, l.qsBytes), upScales: r(l.upScales, l.gateScalesBytes),
     downQs: r(l.downQs, l.qsBytes), downScales: r(l.downScales, l.downScalesBytes),
   };
+}
+
+/**
+ * I TRE sotto-range del generico slab, dalla vista `layout.gate/up/down`.
+ * `slotBindRanges` sopra è la vista LEGACY a sei range: esiste solo per i
+ * formati a due segmenti (q4_0/q4_1/q8_0) e LANCIA sui K-quant, dove un
+ * segmento scale separato non esiste. Questa è la forma che vale per
+ * entrambe le famiglie, ed è quella che i call site nuovi devono usare.
+ */
+export function slotTensorRanges(s: SlotRef): { gate: BindRange; up: BindRange; down: BindRange } {
+  const r = (t: SlabTensorLayout): BindRange => ({ buffer: s.buffer, offset: s.offset + t.data, size: t.dataBytes });
+  return { gate: r(s.layout.gate), up: r(s.layout.up), down: r(s.layout.down) };
+}
+
+/** Il sotto-range PIÙ GRANDE che i kernel bindano su una classe di slab. */
+export function maxBindRangeOf(layout: SlabLayout): number {
+  let m = 0;
+  for (const t of [layout.gate, layout.up, layout.down]) m = Math.max(m, t.dataBytes, t.scalesBytes);
+  return m;
 }
 
 export interface ExpertCacheOpts {
@@ -528,7 +547,13 @@ export class ExpertCache {
             `(min(maxBufferSize ${opts.maxBufferBytes}, maxStorageBufferBindingSize ${opts.maxBindingBytes}))`);
         }
       } else {
-        const maxRange = Math.max(layout.qsBytes, layout.gateScalesBytes, layout.downScalesBytes);
+        // Il max si prende dalla VISTA GENERICA, non dai campi compat: quelli
+        // descrivono il gate (`qsBytes`) e i due segmenti scale, e sui K-quant
+        // il segmento più grande è il DOWN (Q6_K: 868 352 B contro 589 824 del
+        // gate) — con i campi compat sarebbe sfuggito al controllo e il bind
+        // sarebbe fallito a runtime. Su GLM il valore non cambia (i tre
+        // tensori hanno la stessa taglia).
+        const maxRange = maxBindRangeOf(layout);
         if (maxRange > opts.maxBindingBytes) {
           throw new Error(
             `residency: sotto-range ${maxRange} B > maxStorageBufferBindingSize ${opts.maxBindingBytes}`);
@@ -655,6 +680,17 @@ export class ExpertCache {
   /** La classe del layer SECONDO LA CONFIG di questa cache (parametrica). */
   classOfLayer(layer: number): ExpertClass {
     return this.cfg.classOf(layer);
+  }
+
+  /**
+   * L'expert è già in VRAM? Peek PURO: non tocca la LRU, non conta hit/miss,
+   * non alloca. Serve a chi legge i pesi in modo ASINCRONO (il 35B non sta in
+   * RAM: i byte arrivano da fetch Range): il forward guarda quali dei top-K
+   * mancano, `await`ta SOLO quelli, e poi chiama `ensure` con i byte in mano.
+   * Senza questo si dovrebbe leggere anche sugli hit — cioè sempre.
+   */
+  isResident(layer: number, expert: number): boolean {
+    return this.cls[this.classOfLayer(layer)].lru.has(this.keyOf(layer, expert));
   }
 
   /** Chiave globale dell'expert secondo la config di questa cache. */

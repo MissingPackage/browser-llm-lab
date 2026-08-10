@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; next = it.7 migrazione q35gpumodel (chiude la fase 1))
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; FASE 1 CHIUSA it.7 (q35 migrato, GLM bit-identico); next = fase 2)
 
 ## 1. Next decidable
 
@@ -34,11 +34,20 @@ marchio sparisce. `tests/engine-one-mechanism.test.ts` resta come
 estensioni incluse) con la pretesa ridimensionata per iscritto: non è una
 prova, ed è sbagliato usarlo come tale. Docket item 4 CHIUSO.
 
-**Al lavoro: it.7** = migrazione di `q35gpumodel` alla meccanica unica.
-È questa — non il gate — che elimina DAVVERO la duplicazione: le tre voci
-DEBITO NOTO dell'allowlist spariscono lì e la fase 1 chiude. Poi le fasi 2-5
-(slab pre-impacchettati, decode multi-step, prefill batched, policy MoE).
-**Regola del goal**: bench pieni SOLO alle fasi 6 e 8 — durante lo
+**FASE 1 CHIUSA (it.7)**: `q35gpumodel` non possiede più niente della
+residenza expert — arena a chunk, LRU, `ensure`, repack e router propri
+sono spariti, sostituiti dalla `ExpertCache` di GLM guidata da una
+`MoeModelConfig` dedotta dal GGUF e da `routerSelect`. Nato
+`src/engine/q35expertstore.ts`, gemello di `expertstore.ts`: le tre voci
+DEBITO NOTO sono sparite DAVVERO (il gate asserisce `debiti == []`).
+Prove: parità slab CPU-only 6/6 (stessi byte agli stessi offset), ktest
+**84/84** con GLM bit-identico (arena-vs-slotrange maxRel 0), conformance
+smoke 35B sul path migrato **top1 5/5** con hits/misses/uploadedBytes
+IDENTICI al pre-migrazione (8846 / 3314 / 5.916.950.528).
+
+**Al lavoro: fase 2** (slab pre-impacchettati all'import: il repack K-quant
+esce dal path on-miss), poi 3-5 (decode multi-step, prefill batched, policy
+MoE). **Regola del goal**: bench pieni SOLO alle fasi 6 e 8 — durante lo
 sviluppo micro-bench e ktest.
 
 ## 2. State delta (sessione 27, 2026-08-10 — goal q1 intero, it.0-21)

@@ -17,6 +17,11 @@ import { deltaNetConvWgsl, deltaNetCoreWgsl, deltaNetGatesWgsl } from "./kernels
 import { GGML_TYPE, tensorByteSize, type GgufTensorInfo } from "./gguf";
 import { dequantQ4_0, dequantQ6_K, dequantQ8_0, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { q35IsFullAttn, type Q35Shape } from "./q35shape";
+import { ROUTER_QWEN35MOE, routerSelect, type RouterConfig } from "./moe";
+import {
+  ExpertCache, moeParkOf, slotTensorRanges, type ExpertRawBytes, type SlotRef,
+} from "./residency";
+import { q35ExpertReader, q35MoeConfig } from "./q35expertstore";
 
 export interface Q35RawReader {
   shape: Q35Shape;
@@ -284,68 +289,51 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
   const rowBytes = embdKind === "q6k" ? (d / 256) * 210 : (d / 32) * (embdKind === "q80" ? 34 : 18);
   const embRow = new Float32Array(d);
   const dispatchesPerToken = steps.length;
-// ============ arena MoE + LRU + esecuzione dinamica (it.17) ============
+// ====== residenza expert: LA MECCANICA UNICA (goal fase-D fase 1, it.7) ======
+// L'arena a chunk + LRU + bind group scritte a mano qui in q1 it.16 sono
+// SPARITE: questa è la stessa `ExpertCache` che serve GLM, guidata da una
+// `MoeModelConfig` costruita dai metadata del GGUF. Il layout degli slab che
+// ne esce coincide BYTE PER BYTE con quello che questo file calcolava a mano
+// (test `q35-slab-parity`, CPU-only), quindi la migrazione non sposta un byte
+// in VRAM: cambia il proprietario del meccanismo — e con lui arrivano a Qwen
+// le ottimizzazioni che GLM aveva e questo path no (ruling direction §7-ter).
   interface MoeRt {
-    stats: { hits: number; misses: number; uploadedBytes: number; routing: Map<number, number> };
     nSlots: Record<string, number>; parkSlots: Record<string, number>; slotBytes: Record<string, number>;
+    routing: Map<number, number>;
+    stats(): { hits: number; misses: number; uploadedBytes: number };
     runLayer(l: number, logitsF32: Float32Array): Promise<void>;
+    destroy(): void;
   }
   let moe: MoeRt | null = null;
   if (isMoe) {
-    const readRange = r.readRange!.bind(r);
-    const classOf = (l: number): "q4k" | "q6k" => (r.info(`blk.${l}.ffn_down_exps.weight`).type === GGML_TYPE.Q6_K ? "q6k" : "q4k");
-    const gT = r.info("blk.0.ffn_gate_exps.weight");
-    const gateRp = ((gT.dims[0] * gT.dims[1]) / 256) * 144; // gate/up: Q4_K su tutti i layer (header dump)
-    const downRawPer = (l: number): number => {
-      const t = r.info(`blk.${l}.ffn_down_exps.weight`);
-      return ((t.dims[0] * t.dims[1]) / 256) * (t.type === GGML_TYPE.Q6_K ? 210 : 144);
-    };
-    const downRpPer = (l: number): number => {
-      const t = r.info(`blk.${l}.ffn_down_exps.weight`);
-      return ((t.dims[0] * t.dims[1]) / 256) * (t.type === GGML_TYPE.Q6_K ? 212 : 144);
-    };
-    const slotBytes: Record<string, number> = { q4k: 0, q6k: 0 };
-    const parkSlots: Record<string, number> = { q4k: 0, q6k: 0 };
-    for (let l = 0; l < S.nLayer; l++) {
-      const c = classOf(l);
-      parkSlots[c] += nE;
-      if (!slotBytes[c]) slotBytes[c] = 2 * gateRp + downRpPer(l);
-    }
-    const totPark = parkSlots.q4k * slotBytes.q4k + parkSlots.q6k * slotBytes.q6k;
-    const frac = Math.min(1, arenaBudgetBytes / totPark);
-    const nSlots: Record<string, number> = {
-      q4k: Math.max(topK * 2, Math.floor(parkSlots.q4k * frac)),
-      q6k: Math.max(topK * 2, Math.floor(parkSlots.q6k * frac)),
-    };
-    // Arena A CHUNK (it.17 root-cause: un buffer monolitico da ~11 GB sfora
-    // maxBufferSize — l'adapter stesso cappa a ~4 GB): chunk ≤ 2 GiB, slot →
-    // (chunk, offset locale). I needs del device devono chiedere
-    // slabClassBytes ≥ CHUNK (il conf worker lo fa).
-    const CHUNK = 2 * (1 << 30);
-    const slotsPerChunk: Record<string, number> = {
-      q4k: Math.max(1, Math.floor(CHUNK / slotBytes.q4k)),
-      q6k: Math.max(1, Math.floor(CHUNK / slotBytes.q6k)),
-    };
-    const mkChunks = (cls: "q4k" | "q6k"): GPUBuffer[] => {
-      const n = nSlots[cls];
-      const per = slotsPerChunk[cls];
-      const out: GPUBuffer[] = [];
-      for (let i = 0; i < Math.ceil(n / per); i++) {
-        out.push(empty(Math.min(per, n - i * per) * slotBytes[cls]));
-      }
-      return out;
-    };
-    const arenaChunks: Record<string, GPUBuffer[]> = { q4k: mkChunks("q4k"), q6k: mkChunks("q6k") };
-    const slotLoc = (cls: "q4k" | "q6k", slot: number): { buf: GPUBuffer; base: number } => {
-      const per = slotsPerChunk[cls];
-      return { buf: arenaChunks[cls][Math.floor(slot / per)], base: (slot % per) * slotBytes[cls] };
-    };
+    // i NOMI dei tensori expert e i loro byte stanno in `q35expertstore`, il
+    // gemello di `expertstore` (GLM): qui non si nomina nessun tensore expert
+    // e non si calcola nessun offset di slab.
+    const cfg = q35MoeConfig(S, (n) => r.info(n));
+    const readExpert = q35ExpertReader(S, (n) => r.info(n), r.readRange!.bind(r));
+    // I limiti sono quelli NEGOZIATI col device (il conf worker chiede
+    // slabClassBytes = 2 GiB): usarli invece di una costante evita il buffer
+    // monolitico che in it.17 falliva in silenzio oltre il cap dell'adapter.
+    const cache = new ExpertCache(device, {
+      budgetBytes: arenaBudgetBytes,
+      maxBindingBytes: device.limits.maxStorageBufferBindingSize,
+      maxBufferBytes: device.limits.maxBufferSize,
+      cfg,
+    });
+    const routerCfg: RouterConfig = { ...ROUTER_QWEN35MOE, nUsed: topK };
+    // i kernel si scelgono dal LAYOUT della classe, non da un'assunzione sul
+    // formato: se un GGUF della famiglia arrivasse con gate/up diversi, qui
+    // si ferma con un messaggio invece di dequantizzare byte sbagliati.
+    const gk = cfg.layout(cfg.classes[0]).gate.kind;
+    if (gk !== "q4_K") throw new Error(`q35 MoE: nessun kernel gemv per gate/up ${gk}`);
     const pGate = pipe(gemvQ4KWgsl({ K: d, N: dE }));
     const pSilu = pipe(siluMulWgsl(dE));
-    const pDown: Record<string, GPUComputePipeline> = {
-      q4k: pipe(gemvQ4KWgsl({ K: dE, N: d })),
-      q6k: pipe(gemvQ6KWgsl({ K: dE, N: d })),
-    };
+    const pDown: Record<string, GPUComputePipeline> = {};
+    for (const c of cfg.classes) {
+      const dk = cfg.layout(c).down.kind;
+      if (dk !== "q4_K" && dk !== "q6_K") throw new Error(`q35 MoE: nessun kernel gemv per down ${dk}`);
+      pDown[c] = pipe(dk === "q6_K" ? gemvQ6KWgsl({ K: dE, N: d }) : gemvQ4KWgsl({ K: dE, N: d }));
+    }
     const pAxpy = pipe(axpyWgsl(d));
     const pAdd = pipe(addInPlaceWgsl(d));
     const wBufs = Array.from({ length: topK }, () => device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
@@ -357,85 +345,57 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
     const bgSilu = mkBg(pSilu, [gateE, upE]);
     const bgAxpy = wBufs.map((w) => mkBg(pAxpy, [moeAcc, dnE, w]));
     const bgAddRes = mkBg(pAdd, [x, moeAcc]);
-    interface SlotState { byKey: Map<number, number>; lru: Map<number, number>; bgs: (GPUBindGroup[] | null)[] }
-    const slots: Record<string, SlotState> = {
-      q4k: { byKey: new Map(), lru: new Map(), bgs: Array(nSlots.q4k).fill(null) },
-      q6k: { byKey: new Map(), lru: new Map(), bgs: Array(nSlots.q6k).fill(null) },
-    };
-    const stats = { hits: 0, misses: 0, uploadedBytes: 0, routing: new Map<number, number>() };
-    const rpU8 = (raw: Uint8Array, bb: number): Uint8Array => {
-      const w = repackKQuant(raw, 0, raw.length / bb, bb);
-      return new Uint8Array(w.buffer, 0, w.byteLength);
-    };
-    const ensure = async (l: number, e: number): Promise<{ cls: "q4k" | "q6k"; slot: number }> => {
-      const cls = classOf(l);
-      const st = slots[cls];
-      const key = l * nE + e;
-      let slot = st.byKey.get(key);
-      if (slot !== undefined) {
-        stats.hits++;
-        st.lru.delete(key);
-        st.lru.set(key, slot);
-        return { cls, slot };
-      }
-      stats.misses++;
-      if (st.byKey.size < nSlots[cls]) slot = st.byKey.size;
-      else {
-        const [oldKey, oldSlot] = st.lru.entries().next().value as [number, number];
-        st.lru.delete(oldKey);
-        st.byKey.delete(oldKey);
-        slot = oldSlot;
-      }
-      const dT = r.info(`blk.${l}.ffn_down_exps.weight`);
-      const gRawPer = ((gT.dims[0] * gT.dims[1]) / 256) * 144;
-      const [gRaw, uRaw, dRaw] = await Promise.all([
-        readRange(`blk.${l}.ffn_gate_exps.weight`, e * gRawPer, gRawPer),
-        readRange(`blk.${l}.ffn_up_exps.weight`, e * gRawPer, gRawPer),
-        readRange(`blk.${l}.ffn_down_exps.weight`, e * downRawPer(l), downRawPer(l)),
-      ]);
-      const { buf: chunkBuf, base } = slotLoc(cls, slot);
-      const dp = rpU8(dRaw, dT.type === GGML_TYPE.Q6_K ? 210 : 144);
-      device.queue.writeBuffer(chunkBuf, base, rpU8(gRaw, 144));
-      device.queue.writeBuffer(chunkBuf, base + gateRp, rpU8(uRaw, 144));
-      device.queue.writeBuffer(chunkBuf, base + 2 * gateRp, dp);
-      stats.uploadedBytes += 2 * gateRp + dp.byteLength;
-      st.byKey.set(key, slot);
-      st.lru.set(key, slot);
-      st.bgs[slot] = null;
-      return { cls, slot };
-    };
-    const slotBgs = (cls: "q4k" | "q6k", slot: number): GPUBindGroup[] => {
-      const st = slots[cls];
-      let b2 = st.bgs[slot];
+    // I bind group dipendono dallo SLOT (buffer + offset), non dall'expert che
+    // ci abita: si costruiscono una volta per slot e non si invalidano mai —
+    // l'eviction cambia i byte, non l'indirizzo.
+    const bgBySlot = new Map<string, GPUBindGroup[]>();
+    const slotBgs = (s: SlotRef): GPUBindGroup[] => {
+      const k = `${s.cls}:${s.idx}`;
+      let b2 = bgBySlot.get(k);
       if (!b2) {
-        const { buf: chunkBuf, base } = slotLoc(cls, slot);
-        b2 = [
-          mkBg(pGate, [{ buffer: chunkBuf, offset: base, size: gateRp }, xn, gateE]),
-          mkBg(pGate, [{ buffer: chunkBuf, offset: base + gateRp, size: gateRp }, xn, upE]),
-          mkBg(pDown[cls], [{ buffer: chunkBuf, offset: base + 2 * gateRp, size: slotBytes[cls] - 2 * gateRp }, gateE, dnE]),
-        ];
-        st.bgs[slot] = b2;
+        const rg = slotTensorRanges(s);
+        b2 = [mkBg(pGate, [rg.gate, xn, gateE]), mkBg(pGate, [rg.up, xn, upE]), mkBg(pDown[s.cls], [rg.down, gateE, dnE])];
+        bgBySlot.set(k, b2);
       }
       return b2;
     };
+    const routing = new Map<number, number>();
+    const parkSlots = moeParkOf(cfg);
+    const slotBytes: Record<string, number> = {};
+    for (const c of cfg.classes) slotBytes[c] = cfg.layout(c).bytes;
     moe = {
-      stats, nSlots, parkSlots, slotBytes,
+      nSlots: cache.stats().slots, parkSlots, slotBytes, routing,
+      stats: () => { const st = cache.stats(); return { hits: st.hits, misses: st.misses, uploadedBytes: st.bytesUploaded }; },
+      destroy: () => cache.destroy(),
       async runLayer(l: number, logitsF32: Float32Array): Promise<void> {
-        // selezione CPU: STESSA matematica del cpuref (softmax→topK→norm clamp)
-        let mx = -Infinity;
-        for (let e = 0; e < nE; e++) if (logitsF32[e] > mx) mx = logitsF32[e];
-        const probs = new Float64Array(nE);
-        let sm = 0;
-        for (let e = 0; e < nE; e++) { probs[e] = Math.exp(logitsF32[e] - mx); sm += probs[e]; }
-        for (let e = 0; e < nE; e++) probs[e] /= sm;
-        const sel = Array.from({ length: nE }, (_, e2) => e2).sort((a2, b2) => probs[b2] - probs[a2] || a2 - b2).slice(0, topK);
-        const wSum = Math.max(sel.reduce((a2, e2) => a2 + probs[e2], 0), 6.103515625e-5);
-        const placed: { cls: "q4k" | "q6k"; slot: number }[] = [];
-        for (const e2 of sel) {
-          stats.routing.set(l * nE + e2, (stats.routing.get(l * nE + e2) ?? 0) + 1);
-          placed.push(await ensure(l, e2));
+        // Selezione: IL router unico, in configurazione qwen35moe (softmax,
+        // niente bias, niente scale). Stessa matematica del cpuref, che prima
+        // era ricopiata qui a mano.
+        const sel = routerSelect(logitsF32, null, routerCfg);
+        // L'I/O sta FUORI dalla cache: `ensure` è sincrona (GLM legge da
+        // memoria), il 35B no. Guardo chi manca, `await`to solo quelli, e poi
+        // consegno i byte già in mano. Sugli hit non si legge niente.
+        const raw = new Map<number, ExpertRawBytes>();
+        const missing: number[] = [];
+        for (const e of sel.experts) if (!cache.isResident(l, e)) missing.push(e);
+        if (missing.length > 0) {
+          const got = await Promise.all(missing.map((e) => readExpert(l, e)));
+          missing.forEach((e, i) => raw.set(e, got[i]));
         }
-        sel.forEach((e2, k2) => device.queue.writeBuffer(wBufs[k2], 0, new Float32Array([probs[e2] / wSum, 0, 0, 0])));
+        // i top-K del token devono coesistere: nessuno di loro può essere
+        // vittima di eviction per far posto agli altri.
+        const pinned = new Set<number>();
+        for (const e of sel.experts) pinned.add(cache.keyOf(l, e));
+        const slots: SlotRef[] = [];
+        for (const e of sel.experts) {
+          const key = cache.keyOf(l, e);
+          routing.set(key, (routing.get(key) ?? 0) + 1);
+          slots.push(cache.ensure(l, e, (_ly, ex) => raw.get(ex)!, pinned).slot);
+        }
+        cache.noteSelection(l, sel.experts);
+        for (let k2 = 0; k2 < topK; k2++) {
+          device.queue.writeBuffer(wBufs[k2], 0, new Float32Array([sel.weights[k2], 0, 0, 0]));
+        }
         const enc = device.createCommandEncoder();
         const pass = enc.beginComputePass();
         const disp = (p2: GPUComputePipeline, b2: GPUBindGroup, wg: [number, number, number]): void => {
@@ -445,11 +405,11 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
         };
         const gg2 = gemvGrid(d);
         for (let k2 = 0; k2 < topK; k2++) {
-          const [bGate, bUp, bDown] = slotBgs(placed[k2].cls, placed[k2].slot);
+          const [bGate, bUp, bDown] = slotBgs(slots[k2]);
           disp(pGate, bGate, [dE, 1, 1]);
           disp(pGate, bUp, [dE, 1, 1]);
           disp(pSilu, bgSilu, [Math.ceil(dE / 64), 1, 1]);
-          disp(pDown[placed[k2].cls], bDown, [gg2[0], gg2[1], 1]);
+          disp(pDown[slots[k2].cls], bDown, [gg2[0], gg2[1], 1]);
           disp(pAxpy, bgAxpy[k2], [Math.ceil(d / 64), 1, 1]);
         }
         disp(pAdd, bgAddRes, [Math.ceil(d / 64), 1, 1]); // x += moeAcc (shexp + expert)
@@ -533,8 +493,8 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
     },
     moeStats: moe
       ? () => ({
-          hits: moe!.stats.hits, misses: moe!.stats.misses, uploadedBytes: moe!.stats.uploadedBytes,
-          routing: Object.fromEntries([...moe!.stats.routing.entries()].map(([k2, v2]) => [String(k2), v2])),
+          ...moe!.stats(),
+          routing: Object.fromEntries([...moe!.routing.entries()].map(([k2, v2]) => [String(k2), v2])),
           nSlots: moe!.nSlots, parkSlots: moe!.parkSlots, slotBytes: moe!.slotBytes,
         })
       : null,
@@ -543,6 +503,7 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
     },
     destroy(): void {
       for (const [, p] of pipes) void p;
+      moe?.destroy(); // l'arena expert è VRAM vera: senza questa il modello la teneva
     },
   };
 }

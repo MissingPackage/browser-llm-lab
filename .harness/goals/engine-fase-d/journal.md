@@ -301,3 +301,71 @@ Due rilievi, entrambi fondati, entrambi sanati PRIMA di procedere:
    spread di uno SlotRef genuino, che conserva il marchio). Riqualificato
    in `residency.ts`, `tests/types/slotref-brand.ts`, docket item 4,
    digests, HANDOFF.
+
+## it.7 (2026-08-10) — FASE 1 CHIUSA: q35 migrato alla meccanica unica
+
+Il lavoro che elimina davvero la duplicazione (non il gate: la migrazione).
+
+**Cosa è sparito da `q35gpumodel.ts`**: arena a chunk (`mkChunks`/`slotLoc`),
+`byKey`+`lru` proprie, `ensure` proprio, `rpU8`, i bind group ricostruiti a
+ogni miss, il calcolo a mano di `slotBytes`/`parkSlots`/`nSlots`, e il router
+softmax+topK+clamp ricopiato dal cpuref. **Cosa c'è al posto**: la stessa
+`ExpertCache` che serve GLM, con una `MoeModelConfig` dedotta dal GGUF, e
+`routerSelect(logits, null, {...ROUTER_QWEN35MOE, nUsed: topK})`.
+
+**Nuovo modulo `src/engine/q35expertstore.ts`** — gemello di `expertstore.ts`
+(GLM): nomina i tensori expert, ne legge le fette per-expert, costruisce la
+config. È così che le TRE voci DEBITO NOTO sono sparite DAVVERO invece di
+essere rietichettate: il gate ora asserisce `debiti == []`.
+
+**Aggiunte al meccanismo condiviso** (`residency.ts`), tutte generiche:
+- `isResident(layer, expert)`: peek puro (niente LRU touch, niente stats). Il
+  35B non sta in RAM: il forward guarda chi manca, `await`ta SOLO i miss e poi
+  chiama `ensure` (sincrona) coi byte in mano. Senza, si leggerebbe sempre.
+- `slotTensorRanges(slot)`: la vista a TRE range, valida per entrambe le
+  famiglie. `slotBindRanges` (sei range) resta legacy e lancia sui K-quant.
+- `maxBindRangeOf(layout)` + **BUG CORRETTO**: il controllo del limite di
+  binding leggeva i campi compat (`qsBytes` = il GATE, più i due scale). Sui
+  K-quant il segmento più grande è il DOWN (Q6_K 868.352 B contro 589.824):
+  sfuggiva al controllo, e su un device stretto il bind sarebbe fallito a
+  runtime invece che alla costruzione. Su GLM il valore non cambia.
+
+**PROVE (tutte fresche, nessuna dedotta)**
+1. `tests/q35-slab-parity.test.ts` **6/6** (CPU-only, permanente): offset e
+   taglie identici all'aritmetica cancellata (gate@0, up@589.824,
+   down@1.179.648; 1.769.472 / 2.048.000 B) e `packExpertSlab` == i tre
+   repack a mano **parola per parola**. La migrazione non sposta un byte.
+2. ktest GPU reale **84/84, 0 non-pass**. GLM BIT-IDENTICO: `glm-model-2layer`
+   L2rel 2.07e-7 + argmax 6/6 (identici a it.3), `expert-arena-vs-slotrange`
+   maxRel **0** "BIT-A-BIT identico", `moe-ffn` Σw=1.800000,
+   `glm-layer0-conformance` 2.35e-7. `q35-model-4b-argmax` 6/6.
+3. **Conformance smoke 35B sul path MIGRATO** (run di CORRETTEZZA, non bench —
+   la piena da 2 h resta alla fase 6): **top1 5/5 = 100%**, e il confronto col
+   run PRE-migrazione dello stesso golden è **identico nei numeri che contano**:
+
+   | | pre (q1) | post (it.7) |
+   |---|---|---|
+   | top1 | 5/5 | 5/5 |
+   | hits | 8846 | **8846** |
+   | misses | 3314 | **3314** |
+   | uploadedBytes | 5.916.950.528 | **5.916.950.528** |
+   | nSlots q4k/q6k | 6657 / 539 | 6735 / 471 |
+
+   Stesso routing, stessi miss, stessi byte caricati: la residenza si comporta
+   in modo indistinguibile. L'unica differenza è la ripartizione del budget fra
+   classi (il meccanismo condiviso riparte in proporzione al parco, il codice
+   vecchio usava una `frac` unica) — non ha cambiato un solo miss qui, ma è una
+   differenza REALE che va detta. Tempo prompt 54,4 s contro 59,3 s: NON lo
+   chiamo speedup, è una misura singola non pinnata, e i tempi si misurano
+   alla fase 6.
+4. suite **402 passed | 9 skipped** (letta dall'output), `tsc --noEmit` pulito,
+   gate 21/21 con `debiti == []`.
+
+**Effetti collaterali reali**: i bind group ora nascono una volta per SLOT
+(dipendono dall'indirizzo, non dall'expert che ci abita) invece che a ogni
+miss; `destroy()` libera l'arena, che prima restava allocata.
+
+**FASE 1 CHIUSA.** Done-when verificate una per una: core parametrico ✓,
+arena q35-only rimossa ✓, test di non-duplicazione in `npm test` ✓ (con la
+pretesa dichiarata onestamente: ratchet + marchio), ktest tutti PASS con GLM
+bit-exact ✓. Prossimo: fase 2 (slab pre-impacchettati all'import).

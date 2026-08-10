@@ -74,7 +74,7 @@ const ALLOC_ALLOWED: Record<string, string> = {
   "src/engine/ktest/ktest.worker.ts": "harness dei kernel: alloca a mano per confrontare la meccanica con riferimenti indipendenti",
   "src/engine/glmbench/glmbench.worker.ts": "harness di bench: buffer di telemetria e staging",
   "src/microbench/runner.ts": "microbench dei kernel: alloca buffer di prova, nessun expert e nessuna residenza",
-  "src/engine/q35gpumodel.ts": "DEBITO NOTO (docket fase-D item 4): arena expert propria, da migrare a ExpertCache — la riga sparisce con la migrazione",
+  "src/engine/q35gpumodel.ts": "orchestratore Qwen 3.5/3.6: scratch, KV e pesi non-expert (gli slab expert li chiede a ExpertCache, come glmmodel)",
 };
 const EXPERT_NAME_ALLOWED: Record<string, string> = {
   "src/engine/shape.ts": "validazione hard dell'inventario GLM contro il GGUF: nomina i tensori, non li porta in VRAM",
@@ -84,13 +84,12 @@ const EXPERT_NAME_ALLOWED: Record<string, string> = {
   "src/engine/cpuref.ts": "CPUREF GLM: riferimento indipendente del differential testing (categoria dichiarata, docket item 3)",
   "src/engine/q35cpurefmodel.ts": "CPUREF Qwen: stessa categoria dichiarata, indipendenza voluta",
   "src/engine/ktest/ktest.worker.ts": "harness dei kernel: costruisce casi con pesi expert reali",
-  "src/engine/q35gpumodel.ts": "DEBITO NOTO (docket fase-D item 4): legge e impacchetta expert per conto proprio",
+  "src/engine/q35expertstore.ts": "reader dei byte grezzi Qwen: nomina i tensori per leggerli dal file, nessuna GPU (gemello di expertstore)",
 };
 const ROUTER_CLAMP_ALLOWED: Record<string, string> = {
   "src/engine/moe.ts": "il punto unico stesso: qui la costante WEIGHTS_SUM_CLAMP_MIN è definita",
   "src/engine/cpuref.ts": "CPUREF GLM: riferimento indipendente del differential testing (categoria dichiarata)",
   "src/engine/q35cpurefmodel.ts": "CPUREF Qwen: stessa categoria dichiarata, indipendenza voluta",
-  "src/engine/q35gpumodel.ts": "DEBITO NOTO (docket fase-D item 4): router proprio, da sostituire con routerSelect",
   "src/engine/ktest/ktest.worker.ts": "harness dei kernel: verifica il valore del clamp contro la costante importata",
 };
 
@@ -124,10 +123,12 @@ describe("ratchet sulle impronte note (NON una prova: v. il commento in testa)",
     for (const [f, why] of Object.entries(all)) {
       expect(why.length, `${f}: razionale troppo corto`).toBeGreaterThan(30);
     }
-    // le voci "DEBITO NOTO" devono sparire: la fase 1 non chiude finché ci sono
+    // Nessun DEBITO NOTO residuo: la fase 1 ha migrato q35 alla meccanica
+    // unica, e un'allowlist non è il posto dove parcheggiare una duplicazione.
+    // Se ricompare una voce così, la fase 1 è stata riaperta senza dirlo.
     const debiti = [...new Set([ALLOC_ALLOWED, EXPERT_NAME_ALLOWED, ROUTER_CLAMP_ALLOWED]
       .flatMap((m) => Object.entries(m).filter(([, w]) => w.startsWith("DEBITO NOTO")).map(([f]) => f)))];
-    expect(debiti).toEqual(["src/engine/q35gpumodel.ts"]);
+    expect(debiti).toEqual([]);
   });
 });
 

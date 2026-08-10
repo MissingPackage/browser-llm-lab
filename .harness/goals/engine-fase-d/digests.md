@@ -70,3 +70,16 @@ pretesa ridimensionata per iscritto. N3/N4/N5 chiuse (scansione su tutto
 src/, ancorata, estensioni; predicato di allocazione corretto). Lezione:
 tre iterazioni su un poliziotto mentre ciò che elimina la duplicazione è la
 MIGRAZIONE — che è it.7 e chiude la fase 1.
+
+## it.7 (2026-08-10) — FASE 1 CHIUSA
+
+`q35gpumodel` non possiede più niente della residenza expert: arena, LRU,
+ensure, repack e router propri sono spariti, sostituiti dalla `ExpertCache` di
+GLM con una `MoeModelConfig` dedotta dal GGUF e da `routerSelect`. Nato
+`q35expertstore.ts`, gemello di `expertstore.ts`: le tre voci DEBITO NOTO sono
+sparite davvero (gate: `debiti == []`, 21/21). Prove: parità slab CPU-only 6/6
+(stessi byte agli stessi offset), ktest 84/84 con GLM bit-identico
+(arena-vs-slotrange maxRel 0), e conformance smoke 35B sul path migrato
+**top1 5/5** con hits/misses/uploadedBytes IDENTICI al run pre-migrazione
+(8846 / 3314 / 5.916.950.528). Corretto un bug del meccanismo condiviso: il
+controllo del limite di binding mancava il segmento down dei K-quant.
