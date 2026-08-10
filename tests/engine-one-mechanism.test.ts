@@ -5,6 +5,11 @@ import {
   mkSlabLayout, packExpertSlab, routerSelect, ROUTER_GLM47, ROUTER_QWEN35MOE,
   SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1,
 } from "../src/engine/moe";
+import {
+  MOE_CFG_GLM47, MIN_SLOTS, PARK_Q4_0, PARK_Q4_1, SLOT_TABLE_ENTRIES,
+  expertKey, expertKeyFor, minSlotsOf, moeParkOf, slotTableEntriesOf,
+  type MoeModelConfig,
+} from "../src/engine/residency";
 
 // GATE STRUTTURALE del goal engine-fase-d (ruling PI 2026-08-10, direction
 // §7-ter): il codice si UNIFORMA — una meccanica, UNA implementazione. Una
@@ -132,5 +137,40 @@ describe("moe parametrico: GLM e qwen35moe sono configurazioni", () => {
     // distinguibili dalla lunghezza: il tipo lo detta il layout, che a sua
     // volta viene dal GGUF (q35shape/shape lo validano contro il file).
     expect((E / 32) * 18).toBe((E / 256) * 144);
+  });
+});
+
+describe("residency parametrica: GLM è una configurazione (fase-D fase 1)", () => {
+  it("i valori storici GLM sono DERIVATI dalla config, non cablati", () => {
+    const park = moeParkOf(MOE_CFG_GLM47);
+    expect(park.q4_0).toBe(PARK_Q4_0);   // 2.688
+    expect(park.q4_1).toBe(PARK_Q4_1);   // 256
+    expect(park.q4_0 + park.q4_1).toBe(2944); // il parco misurato in C1
+    expect(slotTableEntriesOf(MOE_CFG_GLM47)).toBe(SLOT_TABLE_ENTRIES);
+    expect(minSlotsOf(MOE_CFG_GLM47)).toEqual(MIN_SLOTS);
+    expect(expertKeyFor(MOE_CFG_GLM47, 7, 3)).toBe(expertKey(7, 3));
+  });
+
+  it("una config qwen35moe produce parco/chiavi/minimi coerenti dallo STESSO codice", () => {
+    // 35B-A3B: 40 layer tutti MoE, 256 expert, top-8, due classi dal file
+    const E = 2048 * 512;
+    const q4k = mkSlabLayout("q4_K", { kind: "q4_K", elems: E }, { kind: "q4_K", elems: E }, { kind: "q4_K", elems: E });
+    const q6k = mkSlabLayout("q6_K", { kind: "q4_K", elems: E }, { kind: "q4_K", elems: E }, { kind: "q6_K", elems: E });
+    const DOWN_Q6K_LAYERS = new Set([34, 38, 39]); // i 3 layer down-Q6_K del file
+    const cfg: MoeModelConfig = {
+      id: "qwen3.6-35b-a3b", nLayer: 40, denseLead: 0, nExpert: 256, nExpertUsed: 8,
+      classes: ["q4_K", "q6_K"],
+      classOf: (l) => (DOWN_Q6K_LAYERS.has(l) ? "q6_K" : "q4_K"),
+      layout: (c) => (c === "q6_K" ? q6k : q4k),
+    };
+    const park = moeParkOf(cfg);
+    expect(park.q4_K).toBe(37 * 256);
+    expect(park.q6_K).toBe(3 * 256);
+    expect(park.q4_K + park.q6_K).toBe(10240); // il parco misurato in q1
+    expect(slotTableEntriesOf(cfg)).toBe(10240);
+    expect(minSlotsOf(cfg)).toEqual({ q4_K: 8 * 37, q6_K: 8 * 3 });
+    // chiavi: nessuna collisione fra (layer, expert) distinti
+    expect(expertKeyFor(cfg, 1, 0)).toBe(256);
+    expect(expertKeyFor(cfg, 0, 255)).toBe(255);
   });
 });

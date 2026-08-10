@@ -532,6 +532,17 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       upQsWords: l.upQs / 4, upScWords: l.upScales / 4,
     };
   };
+  /**
+   * Il kernel `gemvAccumFast` esiste solo per i due formati legacy: la classe
+   * (ora una stringa, goal fase-D) va ristretta esplicitamente, con errore
+   * parlante se un modello introducesse una classe che quel kernel non sa fare.
+   */
+  const legacyDownKind = (cls: ExpertClass): "q4_0" | "q4_1" => {
+    if (cls !== "q4_0" && cls !== "q4_1") {
+      throw new Error(`glmmodel: classe ${cls} senza kernel gemvAccumFast (formati legacy attesi)`);
+    }
+    return cls;
+  };
   const mkExpertClass = (cls: ExpertClass) => {
     const geo = cache.arenaGeometry(cls);
     const need = expertArenaBindings(geo.nBuf);
@@ -559,10 +570,10 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
     return {
       geo, bgl,
       gu: mkPipe(pairGemvSiluFastWgsl({ K: G.dModel, N: G.dFfnExpert, arena }), bgl),
-      down: mkPipe(gemvAccumFastWgsl({ kind: cls, K: G.dFfnExpert, N: G.dModel, arena }), bgl),
+      down: mkPipe(gemvAccumFastWgsl({ kind: legacyDownKind(cls), K: G.dFfnExpert, N: G.dModel, arena }), bgl),
     };
   };
-  const expert = { q4_0: mkExpertClass("q4_0"), q4_1: mkExpertClass("q4_1") };
+  const expert: Record<ExpertClass, ReturnType<typeof mkExpertClass>> = { q4_0: mkExpertClass("q4_0"), q4_1: mkExpertClass("q4_1") };
 
   const pipes = {
     rmsD: mkPipe(rmsnormWgsl(G.dModel, G.rmsEps)),
@@ -1000,7 +1011,7 @@ export function createGlmModel(device: GPUDevice, src: GlmWeightSource, opts: Gl
       ],
     });
   };
-  const expBg = {
+  const expBg: Record<ExpertClass, { gu: GPUBindGroup; down: GPUBindGroup }> = {
     q4_0: { gu: arenaBg("q4_0", fnB, gateE), down: arenaBg("q4_0", gateE, moeOut) },
     q4_1: { gu: arenaBg("q4_1", fnB, gateE), down: arenaBg("q4_1", gateE, moeOut) },
   };

@@ -51,3 +51,32 @@
 - Next: it.2 = fase 1 slice B — `residency.ts` parametrico (park/slot
   table/arena/eviction su config di modello invece che su G.*), poi la
   migrazione di q35gpumodel che fa sparire due voci del ratchet.
+
+## it.2 (2026-08-10) — fase 1 slice B: residency.ts PARAMETRICA
+
+- `MoeModelConfig` (id, nLayer, denseLead, nExpert, nExpertUsed, classes,
+  classOf(layer), layout(cls)) è ora la struttura da cui la residenza
+  DERIVA tutto: chiavi (`expertKeyFor`), parco (`moeParkOf`), minimi
+  (`minSlotsOf`), entry della slotTable (`slotTableEntriesOf`).
+- `ExpertClass` da unione chiusa `"q4_0"|"q4_1"` a STRINGA: le classi le
+  detta il modello, non il file. Fallout tipizzato dove serviva
+  (`Record<ExpertClass, …>` nei record per-classe di glmmodel; il kernel
+  legacy `gemvAccumFast` ha un narrowing ESPLICITO con errore parlante —
+  esiste solo per q4_0/q4_1, e ora si vede).
+- `MOE_CFG_GLM47` = il modello-tesi come CONFIGURAZIONE. I simboli storici
+  (PARK_*, MIN_SLOTS, SLOT_TABLE_ENTRIES, expertKey, classOf statico)
+  restano come compat DERIVATA — una sola fonte di verità.
+- `ExpertCache` prende `opts.cfg` (default GLM): pins, slotTable, chiave
+  inversa, minimo bindabile e `occupied` ora vengono dalla config, non da
+  `G.*`. Aggiunti `classOfLayer()` e `keyOf()` di istanza.
+- TEST: `engine-one-mechanism` esteso — i valori storici GLM (parco 2944 =
+  2688+256, MIN_SLOTS, slotTable) sono verificati come DERIVATI, e una
+  config qwen35moe (40 layer, 256 expert, top-8, classi q4_K/q6_K) produce
+  dallo STESSO codice parco 10240 = 37×256 + 3×256 e minimi 8×37 / 8×3 —
+  i numeri misurati in q1.
+- GATE: ktest **84/84** con GLM BIT-IDENTICO (glm-model-2layer L2rel
+  2.07e-7, arena-vs-slotrange "BIT-A-BIT identico", layer0 2.35e-7);
+  suite 384 (+2); tsc pulito.
+- Next: it.3 = migrazione di `q35gpumodel` a ExpertCache+mkSlabLayout+
+  routerSelect ⇒ due voci del ratchet spariscono (arena e slab), il router
+  resta solo nel cpuref (eccezione dichiarata).

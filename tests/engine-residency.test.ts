@@ -461,7 +461,7 @@ describe("ExpertCache — arena a binding fisso", () => {
       // del kernel che girerà davvero, non dalla geometria TS
       const a = arenaOptsOf(geo);
       const wg = addressingFromWgsl(pairGemvSiluFastWgsl({ K: G.dModel, N: G.dFfnExpert, arena: a }));
-      const wgDown = downAddressingFromWgsl(gemvAccumFastWgsl({ kind: cls, K: G.dFfnExpert, N: G.dModel, arena: a }));
+      const wgDown = downAddressingFromWgsl(gemvAccumFastWgsl({ kind: cls as "q4_0" | "q4_1", K: G.dFfnExpert, N: G.dModel, arena: a }));
       expect(wg.slabWords, `${cls}: SLAB_W nel WGSL`).toBe(geo.slabWords);
       expect(wg.slabsPerBuf, `${cls}: SLABS_PER_BUF nel WGSL`).toBe(geo.slabsPerBuf);
       expect([wg.gateQs * 4, wg.gateSc * 4, wg.upQs * 4, wg.upSc * 4, wgDown.qs * 4, wgDown.sc * 4])

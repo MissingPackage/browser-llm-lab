@@ -31,10 +31,75 @@ import { downIsQ4_1 } from "./expertstore";
 import { mlaPartialsLen } from "./mlasplit";
 import { GLM_PREFILL_M } from "./glmprefillplan";
 
-export type ExpertClass = "q4_0" | "q4_1";
+/**
+ * Classe di slab: l'ID della combinazione di formati (GLM: "q4_0"/"q4_1" dal
+ * tipo del down; qwen35moe: "q4_K"/"q6_K"). Stringa e non unione chiusa dal
+ * goal fase-D: le classi le detta il MODELLO, non questo file.
+ */
+export type ExpertClass = string;
+
+/**
+ * CONFIG DI MODELLO MoE (goal engine-fase-d fase 1, ruling direction §7-ter:
+ * una meccanica, una implementazione). Tutto ciò che in questo file era
+ * cablato su GLM — chiavi, parco, classi, minimi, slotTable — si DERIVA da
+ * qui. GLM e Qwen 3.5/3.6 sono due configurazioni della stessa residenza.
+ */
+export interface MoeModelConfig {
+  id: string;
+  /** layer totali del modello (i primi `denseLead` sono densi, senza expert) */
+  nLayer: number;
+  denseLead: number;
+  /** expert per layer MoE */
+  nExpert: number;
+  /** expert attivi per token (top-K): il minimo bindabile in un forward */
+  nExpertUsed: number;
+  /** id delle classi di slab presenti nel modello */
+  classes: readonly ExpertClass[];
+  /** classe del layer (chiamata solo sui layer MoE) */
+  classOf(layer: number): ExpertClass;
+  /** layout della classe (dal builder unico di moe.ts) */
+  layout(cls: ExpertClass): SlabLayout;
+}
+
+/** Chiave globale expert → intero, per config. */
+export const expertKeyFor = (cfg: MoeModelConfig, layer: number, expert: number): number =>
+  layer * cfg.nExpert + expert;
+
+/** Park per classe, opzionalmente troncato a `nLayer` (test di modelli parziali). */
+export function moeParkOf(cfg: MoeModelConfig, nLayer: number = cfg.nLayer): Record<ExpertClass, number> {
+  const park: Record<ExpertClass, number> = {};
+  for (const c of cfg.classes) park[c] = 0;
+  for (let l = cfg.denseLead; l < nLayer; l++) park[cfg.classOf(l)] += cfg.nExpert;
+  return park;
+}
+
+/** Slot minimi per classe: un token deve poter bindare top-K expert per layer. */
+export function minSlotsOf(cfg: MoeModelConfig): Record<ExpertClass, number> {
+  const park = moeParkOf(cfg);
+  const out: Record<ExpertClass, number> = {};
+  for (const c of cfg.classes) out[c] = cfg.nExpertUsed * (park[c] / cfg.nExpert);
+  return out;
+}
+
+/** Entry della slotTable: tutto il parco, layer assoluti. */
+export const slotTableEntriesOf = (cfg: MoeModelConfig): number => cfg.nLayer * cfg.nExpert;
 
 // Parco expert per classe (spec §1): blk.1-4 → 256 expert down-Q4_1,
 // blk.5-46 → 2.688 down-Q4_0. blk.0 è denso.
+/** CONFIG del modello-tesi: GLM-4.7-Flash è una configurazione, non il default cablato. */
+export const MOE_CFG_GLM47: MoeModelConfig = {
+  id: "glm-4.7-flash",
+  nLayer: G.nLayer,
+  denseLead: G.denseLead,
+  nExpert: G.nExpert,
+  nExpertUsed: G.nExpertUsed,
+  classes: ["q4_0", "q4_1"],
+  classOf: (layer) => (downIsQ4_1(layer) ? "q4_1" : "q4_0"),
+  layout: (cls) => (cls === "q4_1" ? SLAB_DOWN_Q4_1 : SLAB_DOWN_Q4_0),
+};
+
+// Park GLM — ora DERIVATI dalla config (i valori storici 256 / 2.688 restano,
+// e il test li verifica).
 export const PARK_Q4_1 = 4 * G.nExpert;                          // 256
 export const PARK_Q4_0 = (G.nLayer - G.denseLead - 4) * G.nExpert; // 2.688
 
@@ -90,7 +155,9 @@ export interface ExpertCacheOpts {
   maxBindingBytes: number;        // maxStorageBufferBindingSize negoziato
   maxBufferBytes: number;         // maxBufferSize negoziato
   // override per i test (budget ripartito ignorato se presente)
-  slotsOverride?: { q4_0: number; q4_1: number };
+  slotsOverride?: Record<ExpertClass, number>;
+  /** config del modello: default il modello-tesi (GLM). Qwen passa la sua. */
+  cfg?: MoeModelConfig;
   timing?: boolean;               // telemetria liv.1: performance.now SOLO se true
   /**
    * Regime ARENA (C3a fase 4, strato 1): i buffer di classe si dimensionano per
@@ -133,7 +200,7 @@ export interface ExpertCacheStats {
   retention: number | null;
   bytesRead: number; bytesUploaded: number;
   readMs: number; packMs: number; uploadMs: number;
-  occupied: { q4_0: number; q4_1: number };
+  occupied: Record<ExpertClass, number>;
   slots: { q4_0: number; q4_1: number };
   /** policy tier (C3c fase 5): pin correnti, cap 12.5%, selezioni, repin.
    *  null con policy "lru" (schema unico, null contagioso). */
@@ -167,8 +234,8 @@ export interface ArenaGeometry {
 /** Riparto del budget fra le due classi (spec §5). Usato dal costruttore, da
  *  `arenaNeeds` e dalla precondizione di residenza totale dello slice C: tutti
  *  devono poterlo calcolare PRIMA che la cache (e quindi la VRAM) esista. */
-export function expertSlots(o: { budgetBytes: number; slotsOverride?: { q4_0: number; q4_1: number } }): { q4_0: number; q4_1: number } {
-  if (o.slotsOverride) return o.slotsOverride;
+export function expertSlots(o: { budgetBytes: number; slotsOverride?: Record<ExpertClass, number> }): { q4_0: number; q4_1: number } {
+  if (o.slotsOverride) return o.slotsOverride as { q4_0: number; q4_1: number };
   const park = PARK_Q4_0 + PARK_Q4_1;
   return {
     q4_0: Math.min(Math.floor((o.budgetBytes * PARK_Q4_0 / park) / SLAB_DOWN_Q4_0.bytes), PARK_Q4_0),
@@ -184,6 +251,7 @@ export function expertSlots(o: { budgetBytes: number; slotsOverride?: { q4_0: nu
  * expert, non 2 944. Il conto è sui layer che ci sono davvero, con la stessa
  * `classOf` che decide dove finisce lo slab.
  */
+/** COMPAT GLM (i call site storici passano nLayer): park del modello-tesi. */
 export function modelExpertPark(nLayer: number): Record<ExpertClass, number> {
   const park: Record<ExpertClass, number> = { q4_0: 0, q4_1: 0 };
   for (let l = G.denseLead; l < nLayer; l++) park[downIsQ4_1(l) ? "q4_1" : "q4_0"] += G.nExpert;
@@ -218,7 +286,7 @@ export const SLAB_RESERVE_BYTES = 512 * 2 ** 20;
 /** Minimo di slot per classe = pin-for-replay del decode ottimistico (c3b I3:
  *  fino a 4 expert × layer MoE della classe devono poter restare pinnati
  *  durante un repair). q4_0: 4×42 layer, q4_1: 4×4 layer. */
-export const MIN_SLOTS = { q4_0: 4 * (PARK_Q4_0 / G.nExpert), q4_1: 4 * (PARK_Q4_1 / G.nExpert) } as const;
+export const MIN_SLOTS = minSlotsOf(MOE_CFG_GLM47);
 
 export interface SlabBudgetInputs {
   /** Tetto di allocazione VRAM MISURATO (nvidia-smi total−used−reserved al
@@ -341,7 +409,7 @@ export function arenaNeeds(o: {
 /** Entry della slotTable: nessuno slot pubblicato (design §2.1, `Sel.slot`). */
 export const SLOT_TABLE_MISS = 0xffffffff;
 /** Chiavi della slotTable: TUTTO il parco, layer assoluti (come `expertKey`). */
-export const SLOT_TABLE_ENTRIES = G.nLayer * G.nExpert;
+export const SLOT_TABLE_ENTRIES = slotTableEntriesOf(MOE_CFG_GLM47);
 
 // ---- policy tier.h + AUTOPIN (C3c fase 5, spec §4 — colibri §2 tradotto) ----
 // Costanti [ASSUMED spec §4], taratura eventualmente in fase 5 coi numeri:
@@ -360,6 +428,8 @@ export const REPIN_MAX_SWAPS = 4;
 
 export class ExpertCache {
   private device: GPUDevice;
+  /** config del modello: rende parametrici chiavi, parco, classi, minimi. */
+  readonly cfg: MoeModelConfig;
   private cls: Record<ExpertClass, ClassState>;
   private timing: boolean;
   private s = { hits: 0, hitsResident: 0, hitsPrefetch: 0, misses: 0, evictions: 0, bytesRead: 0, bytesUploaded: 0, readMs: 0, packMs: 0, uploadMs: 0 };
@@ -369,7 +439,7 @@ export class ExpertCache {
   private eheat: Uint16Array | null = null;  // calore di sessione (decade >>1 al repin)
   private erec: Uint32Array | null = null;   // clock dell'ultima selezione (recency LFRU)
   private selClock = 0;                      // selezioni totali (confidenza AUTOPIN)
-  private pins: Record<ExpertClass, Set<number>> = { q4_0: new Set(), q4_1: new Set() };
+  private pins: Record<ExpertClass, Set<number>> = {};
   private repinCountdown = REPIN_EVERY_SEL;
   private pol = { repinSwaps: 0, repinPasses: 0 };
   // slotTable (slice B): ombra CPU + intervallo sporco. La GPU la vede solo
@@ -380,16 +450,19 @@ export class ExpertCache {
 
   constructor(device: GPUDevice, opts: ExpertCacheOpts) {
     this.device = device;
+    this.cfg = opts.cfg ?? MOE_CFG_GLM47;
+    for (const c of this.cfg.classes) this.pins[c] = new Set();
     this.timing = opts.timing ?? false;
     this.policy = opts.policy ?? "lru";
     if (this.policy === "tier") {
-      this.eusage = new Uint32Array(SLOT_TABLE_ENTRIES);
-      this.eheat = new Uint16Array(SLOT_TABLE_ENTRIES);
-      this.erec = new Uint32Array(SLOT_TABLE_ENTRIES);
+      const entries = slotTableEntriesOf(this.cfg);
+      this.eusage = new Uint32Array(entries);
+      this.eheat = new Uint16Array(entries);
+      this.erec = new Uint32Array(entries);
     }
     const arena = opts.arena === true;
     const mk = (layout: SlabLayout, nSlots: number): ClassState => {
-      if (nSlots < G.nExpertUsed) throw new Error(`residency: ${nSlots} slot < ${G.nExpertUsed} (un token deve poter bindare 4 expert)`);
+      if (nSlots < this.cfg.nExpertUsed) throw new Error(`residency: ${nSlots} slot < ${this.cfg.nExpertUsed} (un token deve poter bindare top-K expert)`);
       // Il sotto-range più grande che i kernel bindano è `qsBytes` (~1.5 MB):
       // deve stare nel limite di BINDING. Se non ci sta, il layout è
       // incompatibile col device e va detto subito, non scoperto al primo bind.
@@ -437,7 +510,7 @@ export class ExpertCache {
       // chiave e' `expertKey`, che usa il layer assoluto perche' l'eviction non
       // rispetta i layer. Sono 12 032 B: tenerla piena costa meno che avere due
       // convenzioni di chiave.
-      const shadow = new Uint32Array(SLOT_TABLE_ENTRIES).fill(SLOT_TABLE_MISS);
+      const shadow = new Uint32Array(slotTableEntriesOf(this.cfg)).fill(SLOT_TABLE_MISS);
       const buf = device.createBuffer({
         size: shadow.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
@@ -445,7 +518,7 @@ export class ExpertCache {
       // zero, cioe' "tutti gli expert nello slot 0" — un miss che si legge come
       // hit sull'indirizzo sbagliato.
       device.queue.writeBuffer(buf, 0, shadow as unknown as BufferSource);
-      this.table = { buf, shadow, lo: SLOT_TABLE_ENTRIES, hi: -1 };
+      this.table = { buf, shadow, lo: shadow.length, hi: -1 };
     }
   }
 
@@ -512,7 +585,7 @@ export class ExpertCache {
     if (!this.table) throw new Error("residency: debugMarkMiss senza slotTable (ExpertCacheOpts.slotTable)");
     this.assertNotInFlight("debugMarkMiss");
     for (const k of keys) {
-      const layer = Math.floor(k / G.nExpert);
+      const layer = Math.floor(k / this.cfg.nExpert);
       const c = this.cls[ExpertCache.classOf(layer)];
       const found = c.lru.get(k);
       if (found !== undefined) {
@@ -524,8 +597,19 @@ export class ExpertCache {
     this.flushSlotTable();
   }
 
+  /** COMPAT GLM: la classe del layer nel modello-tesi. */
   static classOf(layer: number): ExpertClass {
-    return downIsQ4_1(layer) ? "q4_1" : "q4_0";
+    return MOE_CFG_GLM47.classOf(layer);
+  }
+
+  /** La classe del layer SECONDO LA CONFIG di questa cache (parametrica). */
+  classOfLayer(layer: number): ExpertClass {
+    return this.cfg.classOf(layer);
+  }
+
+  /** Chiave globale dell'expert secondo la config di questa cache. */
+  keyOf(layer: number, expert: number): number {
+    return expertKeyFor(this.cfg, layer, expert);
   }
 
   /** I buffer d'arena di una classe, nell'ordine dei binding della pipeline. */
@@ -739,7 +823,7 @@ export class ExpertCache {
       ...this.s,
       requests,
       retention: requests > 0 ? 1 - this.s.evictions / requests : null,
-      occupied: { q4_0: this.cls.q4_0.lru.size, q4_1: this.cls.q4_1.lru.size },
+      occupied: Object.fromEntries(Object.entries(this.cls).map(([c, st]) => [c, st.lru.size])),
       slots: { q4_0: this.cls.q4_0.nSlots, q4_1: this.cls.q4_1.nSlots },
       // policy tier (C3c fase 5): null con policy "lru" (schema unico)
       policy: this.policy === "tier" ? {
