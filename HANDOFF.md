@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-6 DONE + fase 7 a 3/4 (blocco MoE GPU reale L2rel ~e-7, ktest 84/84); next = it.17 forward GPU 35B completo)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: IL 35B GIRA SU GPU CON PAGING (5/5 vs oracolo, residenza 70.3%); in coda: golden full 35B CPU → conf GPU ~12h per la soglia ratchet)
 
 ## 1. Next decidable
 
@@ -62,15 +62,19 @@ sanato; elevata a docket item 7 l'arch falsa nei metadata dei golden q35.
 **Slice 3a DONE (it.16)**: DECISIONE — residency GLM intatto, paging q35
 = strato nuovo parametrico; blocco MoE GPU reale == cpuref L2rel 2-3e-7
 (entrambe le classi down, arena offset-binding; slot in byte REPACKED:
-Q6_K 210→212). **Al lavoro: it.17 = fase 7 slice 3b — forward GPU 35B
-completo**: estendere q35gpumodel al qwen35moe (path denso già in casa;
-ffn → router gemv F32 + readback top-8 CPU correttezza-prima + arena per
-classe down con LRU on-miss via Range + i dispatch del ktest it.16 come
-piano per-token), gate argmax==oracolo sul golden smoke 35B; run al
-budget 16 GB senza OOM con JSON (VRAM: non-expert ~2.6 GB + arena
-dimensionata dal budget); firma routing registrata (conteggi expert
-esatti sul run). Nota verifier: niente fallback fuorviante nei nomi di
-classe (solo tipi reali dal file). Perimetro: path testo Qwen
+Q6_K 210→212). **it.17 DONE nella sostanza** (verifier: 5/5 ricalcolato, root-cause
+corroborato al byte; FAIL puntuale sanato — la run full era abortita per
+golden mancante): 35B su GPU con paging (arena a CHUNK ≤2 GiB, LRU
+on-miss, residenza 70.3% al budget 12 GiB, firma routing, zero OOM;
+esecuzione segmentata correttezza-prima 1 sync/layer). **IN CODA**: (1)
+golden full 35B su CPU in generazione (task bo9rnqy88, ~30-60 min; arch
+fix golden.cpp fatto — item 7 mezzo sanato, restano i campi dei golden
+4B/9B da rigenerare prima del paper); (2) al termine: conf GPU full 35B
+(~11-12 h, ALBERO CONGELATO, scripts/q35-conf-run.mjs --model 35b
+--golden-kind full --timeout-min 900) → SOGLIA RATCHET 35B a docket coi
+numeri. Nel frattempo il loop può fare solo lavoro documentale o
+attendere (GPU e albero vincolati). Dopo: fase 8 (tier+recall+bandmodel)
+e fase 9 (chiusura). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

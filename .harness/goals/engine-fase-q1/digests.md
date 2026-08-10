@@ -181,3 +181,17 @@ parametrico per costruzione — rifitting C3c pieno in fase 8. **Blocco MoE
 down, arena offset-binding = seme del paging; bug repack Q6_K 210→212
 preso dal run). Kernel axpy nuovo. ktest 84/84, suite verde, GLM intatto.
 Next: it.17 = forward GPU 35B completo (arena+LRU on-miss) + argmax gate.
+
+## it.17 (2026-08-10)
+
+**IL 35B-A3B GIRA SU GPU CON PAGING: 5/5 vs oracolo** (residenza 70.3% al
+budget 12 GiB, firma routing esatta, zero OOM). Root-cause hunt da
+manuale sul 0/5 iniziale: tap debug → selezione ok → x post-attn 9.8e-8 →
+pass dinamici NO-OP silenziosi → console worker catturata → **arena
+monolitica 11.8 GB oltre maxBufferSize E cap adapter 4 GB** → arena a
+CHUNK ≤2 GiB + needs slabClassBytes. Esperimento discriminante: ktest MoE
+in single-pass = e-7 (ordering sano). Verifier: sostanza tutta PASS con
+ricalcoli al byte; FAIL puntuale (la run full era abortita: mancava il
+golden full 35B) SANATO — fix arch golden.cpp (item 7), golden full in
+generazione, conf GPU full (~12 h) a seguire per la soglia ratchet.
+TUTTI E TRE i modelli della famiglia girano su GPU nel motore.
