@@ -36,6 +36,9 @@ import { createEngineDevice } from "../gpudevice";
 import { planMoeChunk } from "../glmprefillplan";
 import { deltaNetConvWgsl, deltaNetGatesWgsl, deltaNetCoreWgsl } from "../kernels/deltanet";
 import { sigmoidMulWgsl } from "../kernels/wgsl";
+import { createQ35GpuModel, q35TensorBytes } from "../q35gpumodel";
+import { validateQwen35 } from "../q35shape";
+import { parseGguf } from "../gguf";
 import { deltaNetStepCore, softplusGgml, Q35DeltaNetRef } from "../q35cpuref";
 import { SAMPLE_DIMS, SAMPLE_T, sampleWeights, sampleInputs } from "../q35sample";
 
@@ -165,7 +168,12 @@ class Gpu {
       label: "ktest",
       needs: {
         ctxMax: 64,
-        extraBindings: [{ bytes: 10_485_760, consumer: "ktest: blk.0 ffn_gate/up q4_0 qs (pesi reali)" }],
+        extraBindings: [
+          { bytes: 10_485_760, consumer: "ktest: blk.0 ffn_gate/up q4_0 qs (pesi reali)" },
+          // q1 fase 4 slice 3: head Q6_K del 4B (vocab 248320 × d 2560, repack
+          // ~527 MB) bindata intera dal gemv della testa nel full-model test
+          { bytes: 530_000_000, consumer: "ktest: q35 4B head Q6_K (full-model)" },
+        ],
         // i due requisiti dell'arena, calcolati dalla stessa aritmetica della
         // cache (residency.arenaNeeds) e non ricopiati qui. Le configurazioni
         // sono DUE (residenza parziale e residenza totale dello slice C) e il
@@ -510,6 +518,71 @@ async function testQ35AttnLayersReal(g: Gpu): Promise<KResult[]> {
     });
   }
   return results;
+}
+
+/** Full-model GPU 4B teacher-forced: argmax GPU == ORACOLO sul golden smoke (fase 4 slice 3). */
+async function testQ35Model4B(g: Gpu): Promise<KResult> {
+  const goldenRes = await fetch("/models/q35/golden-smoke.json");
+  const ggufHead = await fetch("/models/Qwen3.5-4B-Q4_0.gguf", { method: "HEAD" });
+  if (!goldenRes.ok || !ggufHead.ok) {
+    return { kernel: "q35-model-4b-argmax", pass: false, maxAbs: NaN, maxRel: NaN, note: "manca golden-smoke.json o symlink GGUF in public/models (vedi journal it.8)" };
+  }
+  const golden = (await goldenRes.json()) as {
+    prompts: { promptTokens: number[]; generated: number[]; positions: { argmax: number }[] }[];
+  };
+  const t0 = performance.now();
+  // Niente file intero in RAM: 2.58 GB sfonda sia arrayBuffer() (cap 2 GiB
+  // Chromium) sia l'allocazione di un ArrayBuffer singolo. Range per-tensore
+  // (vite risponde 206, verificato): header 64 MB, poi un GET per tensore,
+  // upload e scarto — la stessa postura streaming del loader cpuref.
+  const URL_GGUF = "/models/Qwen3.5-4B-Q4_0.gguf";
+  const range = async (off: number, len: number): Promise<Uint8Array> => {
+    const rr = await fetch(URL_GGUF, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
+    if (rr.status !== 206) throw new Error(`q35-model: Range non onorato (${rr.status})`);
+    const ab = await rr.arrayBuffer();
+    if (ab.byteLength !== len) throw new Error(`q35-model: Range corto ${ab.byteLength}/${len}`);
+    return new Uint8Array(ab);
+  };
+  const header = await range(0, 64 * 1024 * 1024);
+  const f = parseGguf(header.buffer.slice(header.byteOffset, header.byteOffset + header.byteLength) as ArrayBuffer);
+  const { shape, byName } = validateQwen35(f);
+  const model = await createQ35GpuModel(g.device, {
+    shape,
+    info: (name) => {
+      const t = byName.get(name);
+      if (!t) throw new Error(`q35-model: tensore ${name} assente`);
+      return t;
+    },
+    read: (name) => {
+      const t = byName.get(name);
+      if (!t) throw new Error(`q35-model: tensore ${name} assente`);
+      return range(f.dataOffset + t.offset, q35TensorBytes(t));
+    },
+  }, 64);
+  const loadS = ((performance.now() - t0) / 1000).toFixed(1);
+  const p = golden.prompts[0];
+  const P = p.promptTokens.length;
+  const tokens = [...p.promptTokens, ...p.generated.slice(0, -1)];
+  const t1 = performance.now();
+  let ok = 0;
+  const detail: string[] = [];
+  for (let t = 0; t < tokens.length; t++) {
+    const am = await model.step(tokens[t], t);
+    const gi = t - (P - 1);
+    if (gi >= 0 && gi < p.positions.length) {
+      const want = p.positions[gi].argmax;
+      if (am === want) ok++;
+      else detail.push(`pos gen ${gi}: gpu ${am} vs oracolo ${want}`);
+    }
+  }
+  const decodeS = ((performance.now() - t1) / 1000).toFixed(1);
+  return {
+    kernel: "q35-model-4b-argmax",
+    pass: ok === p.positions.length,
+    maxAbs: 0, maxRel: 0,
+    note: `argmax GPU == oracolo ${ok}/${p.positions.length} (load ${loadS}s, ${tokens.length} pos in ${decodeS}s, ${model.dispatchesPerToken} dispatch/token)${detail.length ? " — " + detail.join("; ") : ""}`,
+    metrics: { okPositions: ok, dispatchesPerToken: model.dispatchesPerToken },
+  };
 }
 
 async function testGemv(g: Gpu, kind: "q4_0" | "q8_0", K: number, N: number, hasBias: boolean): Promise<KResult> {
@@ -2756,6 +2829,7 @@ async function main(): Promise<void> {
     results.push(await testRopePartial(g));
     results.push(await testSigmoidMul(g));
     results.push(...await testQ35AttnLayersReal(g));
+    results.push(await testQ35Model4B(g)); // full-model: argmax GPU == oracolo (slice 3)
 
     // --- kernel MLA absorbed (C2 fase 4 slice 2), dims reali GLM ---
     const HL = G.qkNope + G.ropeDims; // 256: head len di q

@@ -189,3 +189,27 @@
 - Ogni PEZZO del forward 4B è ora provato su GPU con pesi veri: l'it.8
   è solo orchestrazione (loop 32 layer + embed + head) + gate argmax.
 - Suite node 371/8 skip, tsc pulito, GLM intatto (69 ktest verdi dentro i 79).
+
+## it.8 (2026-08-10) — fase 4 slice 3: FORWARD GPU FULL-MODEL, argmax == ORACOLO
+
+- `src/engine/q35gpumodel.ts`: orchestratore correttezza-prima del denso
+  qwen35 — piano di step PRECOSTRUITO (pipeline cache + bind group statici
+  su scratch condivisi), 562 dispatch/token, un submit/token, full
+  residency (tier 16 GB by design), head Q6_K con gemv a griglia, embed
+  row Q6_K dequant CPU-side, reader astratto (Range o byte in RAM).
+- Setup ktest (riproducibile): symlink `public/models/Qwen3.5-4B-Q4_0.gguf`
+  → ~/.cache/blab-models/q35/…; `cp results/engine/golden/q35/golden-q35-
+  4b-smoke-2026-08-10.json public/models/q35/golden-smoke.json`.
+- DUE pareti trovate e risolte nel run: (i) fetch/ArrayBuffer 2.6 GB
+  sfonda i cap Chromium (arrayBuffer 2 GiB E allocazione singola) → loader
+  a fetch RANGE per-tensore (vite risponde 206, verificato) — la stessa
+  postura streaming del cpuref; (ii) head Q6_K 527 MB > maxBufferSize
+  negoziato dal device ktest (256 MB) → extraBindings esteso (l'errore
+  URLA via uncapturederror: il punto-unico gpudevice ha fatto il suo
+  lavoro, niente no-op silenzioso).
+- GATE: **argmax GPU == oracolo 6/6** sul golden smoke (39 posizioni
+  teacher-forced in 1.9 s, load 10 s). ktest TOTALE 80/80.
+- FASE 4: restano golden full-corpus a soglia RATCHET (run-golden-q35.sh
+  con provenance) + riferimenti decode/prefill/TTFT full-resident con
+  hostState → it.9.
+- Suite node 371/8, tsc pulito, GLM intatto.
