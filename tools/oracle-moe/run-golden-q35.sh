@@ -12,11 +12,14 @@ OUTDIR="results/engine/golden/q35"
 mkdir -p "$OUTDIR"
 # tag del modello nel nome file (it.11: il 9B non deve sovrascrivere il 4B)
 TAG=$(basename "$MODEL" | sed -E 's/^Qwen3\.[56]-//; s/-.*$//' | tr 'A-Z' 'a-z')
-OUT="$OUTDIR/golden-q35-${TAG}-full-$DATE.json"
-CORPUS_HASH=$(cat "$HERE"/corpus/*.txt | sha256sum | cut -d' ' -f1)
+# CORPUS_DIR: smoke (corpus-q35) o full (corpus) — it.15
+CORPUS_DIR=${CORPUS_DIR:-corpus}
+SUFFIX=full; if [ "$CORPUS_DIR" != "corpus" ]; then SUFFIX=smoke; fi
+OUT="$OUTDIR/golden-q35-${TAG}-${SUFFIX}-$DATE.json"
+CORPUS_HASH=$(cat "$HERE"/$CORPUS_DIR/*.txt | sha256sum | cut -d' ' -f1)
 
 ARGS=()
-for f in "$HERE"/corpus/*.txt; do ARGS+=(--prompt "$f"); done
+for f in "$HERE"/$CORPUS_DIR/*.txt; do ARGS+=(--prompt "$f"); done
 
 "$HERE/golden" --model "$MODEL" "${ARGS[@]}" \
   --threads "${THREADS:-16}" --n-predict "${NPREDICT:-128}" --top-k 32 \

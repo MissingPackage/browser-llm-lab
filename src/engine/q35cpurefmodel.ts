@@ -22,7 +22,7 @@
 //   nel graph (attn_norm → attn → +res; post_attention_norm → ffn → +res).
 // I layer linear riusano Q35DeltaNetRef (stessa semantica ktestata 75/75).
 import { GGML_TYPE, parseGguf, tensorByteSize, type GgufFile, type GgufTensorInfo } from "./gguf";
-import { dequantQ4_0, dequantQ4_1, dequantQ5_K, dequantQ6_K, dequantQ8_0 } from "./quant";
+import { dequantQ4_0, dequantQ4_1, dequantQ4_K, dequantQ5_K, dequantQ6_K, dequantQ8_0 } from "./quant";
 import { Q35DeltaNetRef } from "./q35cpuref";
 import { q35IsFullAttn, validateQwen35, type Q35Shape } from "./q35shape";
 
@@ -128,22 +128,36 @@ export function q35MoeFfnRefF64(
   return { out, selected, weights };
 }
 
+/**
+ * Sorgente byte LAZY (it.15): il 35B (20.9 GB) non sta in RAM col resto —
+ * slice(off,len) restituisce una COPIA con byteOffset 0 (allineamento F32).
+ * Implementazioni: wrap di ArrayBuffer (4B/9B) o pread da fd (tests/helpers).
+ */
+export interface Q35ByteSource {
+  size: number;
+  slice(off: number, len: number): Uint8Array;
+}
+
 export class Q35CpuRefModel {
   readonly shape: Q35Shape;
   private f: GgufFile;
   private byName: Map<string, GgufTensorInfo>;
-  private bytes: Uint8Array;
-  private buf: ArrayBuffer;
+  private src: Q35ByteSource;
   private headF32: Float32Array | null = null;
 
-  constructor(buf: ArrayBuffer) {
-    this.buf = buf;
-    this.bytes = new Uint8Array(buf);
-    this.f = parseGguf(buf);
+  constructor(input: ArrayBuffer | Q35ByteSource) {
+    if (input instanceof ArrayBuffer) {
+      const buf = input;
+      this.src = { size: buf.byteLength, slice: (off, len) => new Uint8Array(buf.slice(off, off + len)) };
+    } else {
+      this.src = input;
+    }
+    const headerLen = Math.min(this.src.size, 64 * 1024 * 1024);
+    const header = this.src.slice(0, headerLen);
+    this.f = parseGguf(header.buffer as ArrayBuffer);
     const v = validateQwen35(this.f);
     this.shape = v.shape;
     this.byName = v.byName;
-    if (this.shape.arch !== "qwen35") throw new Error("q35cpurefmodel: solo densi (qwen35)");
   }
 
   /** Dequantizza un tensore intero in f32 (streaming per-layer: il chiamante non lo trattiene). */
@@ -152,16 +166,36 @@ export class Q35CpuRefModel {
     if (!t) throw new Error(`q35cpurefmodel: tensore ${name} assente`);
     const elems = t.dims.reduce((a, b) => a * b, 1);
     const dst = new Float32Array(elems);
-    const off = this.f.dataOffset + t.offset;
+    const raw = this.src.slice(this.f.dataOffset + t.offset, tensorByteSize(t));
     switch (t.type) {
-      case GGML_TYPE.F32: dst.set(new Float32Array(this.buf, off, elems)); break;
-      case GGML_TYPE.Q4_0: dequantQ4_0(this.bytes, off, elems / 32, dst); break;
-      case GGML_TYPE.Q4_1: dequantQ4_1(this.bytes, off, elems / 32, dst); break;
-      case GGML_TYPE.Q8_0: dequantQ8_0(this.bytes, off, elems / 32, dst); break;
-      case GGML_TYPE.Q5_K: dequantQ5_K(this.bytes, off, elems / 256, dst); break;
-      case GGML_TYPE.Q6_K: dequantQ6_K(this.bytes, off, elems / 256, dst); break;
+      case GGML_TYPE.F32: dst.set(new Float32Array(raw.buffer, 0, elems)); break;
+      case GGML_TYPE.Q4_0: dequantQ4_0(raw, 0, elems / 32, dst); break;
+      case GGML_TYPE.Q4_1: dequantQ4_1(raw, 0, elems / 32, dst); break;
+      case GGML_TYPE.Q8_0: dequantQ8_0(raw, 0, elems / 32, dst); break;
+      case GGML_TYPE.Q4_K: dequantQ4_K(raw, 0, elems / 256, dst); break;
+      case GGML_TYPE.Q5_K: dequantQ5_K(raw, 0, elems / 256, dst); break;
+      case GGML_TYPE.Q6_K: dequantQ6_K(raw, 0, elems / 256, dst); break;
       default: throw new Error(`q35cpurefmodel: tipo ${t.type} non gestito (${name}, ${tensorByteSize(t)} B)`);
     }
+    return dst;
+  }
+
+  /** Slice di UN expert dai tensori stacked [d|dE, dE|d, nE] (it.15, lazy). */
+  dequantExpert(name: string, e: number): Float32Array {
+    const t = this.byName.get(name);
+    if (!t) throw new Error(`q35cpurefmodel: tensore ${name} assente`);
+    const elemsPer = t.dims[0] * t.dims[1];
+    const dst = new Float32Array(elemsPer);
+    let blockW: number, blockB: number, fn: (s: Uint8Array, o: number, n: number, d: Float32Array) => number;
+    switch (t.type) {
+      case GGML_TYPE.Q4_K: blockW = 256; blockB = 144; fn = dequantQ4_K; break;
+      case GGML_TYPE.Q6_K: blockW = 256; blockB = 210; fn = dequantQ6_K; break;
+      case GGML_TYPE.Q8_0: blockW = 32; blockB = 34; fn = dequantQ8_0; break;
+      default: throw new Error(`q35cpurefmodel: expert tipo ${t.type} non gestito (${name})`);
+    }
+    const bytesPer = (elemsPer / blockW) * blockB;
+    const raw = this.src.slice(this.f.dataOffset + t.offset + e * bytesPer, bytesPer);
+    fn(raw, 0, elemsPer / blockW, dst);
     return dst;
   }
 
@@ -173,16 +207,22 @@ export class Q35CpuRefModel {
     const out = new Float32Array(d);
     const off = this.f.dataOffset + t.offset;
     if (t.type === GGML_TYPE.Q6_K) {
-      const rowBlocks = d / 256;
-      dequantQ6_K(this.bytes, off + token * rowBlocks * 210, rowBlocks, out);
+      const raw = this.src.slice(off + token * (d / 256) * 210, (d / 256) * 210);
+      dequantQ6_K(raw, 0, d / 256, out);
     } else if (t.type === GGML_TYPE.Q4_0) {
-      dequantQ4_0(this.bytes, off + token * (d / 32) * 18, d / 32, out);
+      const raw = this.src.slice(off + token * (d / 32) * 18, (d / 32) * 18);
+      dequantQ4_0(raw, 0, d / 32, out);
+    } else if (t.type === GGML_TYPE.Q8_0) {
+      const raw = this.src.slice(off + token * (d / 32) * 34, (d / 32) * 34);
+      dequantQ8_0(raw, 0, d / 32, out);
     } else throw new Error(`q35cpurefmodel: embd tipo ${t.type} non gestito`);
     return Float64Array.from(out);
   }
 
   private head(): Float32Array {
-    if (!this.headF32) this.headF32 = this.dequant("token_embd.weight"); // tied (4B)
+    if (!this.headF32) {
+      this.headF32 = this.dequant(this.shape.tiedEmbeddings ? "token_embd.weight" : "output.weight");
+    }
     return this.headF32;
   }
 
@@ -202,20 +242,57 @@ export class Q35CpuRefModel {
       const b = `blk.${l}.`;
       const postNorm = this.dequant(`${b}post_attention_norm.weight`);
       const attnOut = this.attnLayerRef(l, hidden);
-      const wg = this.dequant(`${b}ffn_gate.weight`);
-      const wu = this.dequant(`${b}ffn_up.weight`);
-      const wd = this.dequant(`${b}ffn_down.weight`);
-      const dFfn = S.dFfn as number;
-      for (let t = 0; t < T; t++) {
-        const afterAttn = new Float64Array(d);
-        for (let i = 0; i < d; i++) afterAttn[i] = hidden[t][i] + attnOut[t][i];
-        const xn = rmsnormF64(afterAttn, postNorm, S.rmsEps);
-        const gt = matVecF64(wg, xn, dFfn);
-        const up = matVecF64(wu, xn, dFfn);
-        for (let i = 0; i < dFfn; i++) gt[i] = silu(gt[i]) * up[i];
-        const dn = matVecF64(wd, gt, d);
-        for (let i = 0; i < d; i++) afterAttn[i] += dn[i];
-        hidden[t] = afterAttn;
+      if (S.arch === "qwen35") {
+        const wg = this.dequant(`${b}ffn_gate.weight`);
+        const wu = this.dequant(`${b}ffn_up.weight`);
+        const wd = this.dequant(`${b}ffn_down.weight`);
+        const dFfn = S.dFfn as number;
+        for (let t = 0; t < T; t++) {
+          const afterAttn = new Float64Array(d);
+          for (let i = 0; i < d; i++) afterAttn[i] = hidden[t][i] + attnOut[t][i];
+          const xn = rmsnormF64(afterAttn, postNorm, S.rmsEps);
+          const gt = matVecF64(wg, xn, dFfn);
+          const up = matVecF64(wu, xn, dFfn);
+          for (let i = 0; i < dFfn; i++) gt[i] = silu(gt[i]) * up[i];
+          const dn = matVecF64(wd, gt, d);
+          for (let i = 0; i < d; i++) afterAttn[i] += dn[i];
+          hidden[t] = afterAttn;
+        }
+      } else {
+        // MoE (qwen35moe): expert dequant LAZY con cache per-layer (rilasciata
+        // a fine layer: 256 expert f32 = ~3.2 GB transitori nel caso peggiore)
+        const nE = S.nExpert as number;
+        const dE = S.dFfnExpert as number;
+        const moeW: Q35MoeLayerWeights = {
+          router: this.dequant(`${b}ffn_gate_inp.weight`),
+          sharedGate: this.dequant(`${b}ffn_gate_inp_shexp.weight`),
+          shGate: this.dequant(`${b}ffn_gate_shexp.weight`),
+          shUp: this.dequant(`${b}ffn_up_shexp.weight`),
+          shDown: this.dequant(`${b}ffn_down_shexp.weight`),
+          expert: (() => {
+            const cache = new Map<number, { gate: Float32Array; up: Float32Array; down: Float32Array }>();
+            return (e: number) => {
+              let hit = cache.get(e);
+              if (!hit) {
+                hit = {
+                  gate: this.dequantExpert(`${b}ffn_gate_exps.weight`, e),
+                  up: this.dequantExpert(`${b}ffn_up_exps.weight`, e),
+                  down: this.dequantExpert(`${b}ffn_down_exps.weight`, e),
+                };
+                cache.set(e, hit);
+              }
+              return hit;
+            };
+          })(),
+        };
+        for (let t = 0; t < T; t++) {
+          const afterAttn = new Float64Array(d);
+          for (let i = 0; i < d; i++) afterAttn[i] = hidden[t][i] + attnOut[t][i];
+          const xn = rmsnormF64(afterAttn, postNorm, S.rmsEps);
+          const { out } = q35MoeFfnRefF64(xn, moeW, nE, S.nExpertUsed as number, dE);
+          for (let i = 0; i < d; i++) afterAttn[i] += out[i];
+          hidden[t] = afterAttn;
+        }
       }
     }
 
