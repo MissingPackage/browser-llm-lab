@@ -35,7 +35,8 @@ import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 import { createEngineDevice } from "../gpudevice";
 import { planMoeChunk } from "../glmprefillplan";
 import { deltaNetConvWgsl, deltaNetGatesWgsl, deltaNetCoreWgsl } from "../kernels/deltanet";
-import { gemvQ4KWgsl, sigmoidMulWgsl } from "../kernels/wgsl";
+import { axpyWgsl, gemvQ4KWgsl, sigmoidMulWgsl } from "../kernels/wgsl";
+import { q35MoeFfnRefF64, type Q35MoeLayerWeights } from "../q35cpurefmodel";
 import { createQ35GpuModel, q35TensorBytes } from "../q35gpumodel";
 import { validateQwen35 } from "../q35shape";
 import { parseGguf } from "../gguf";
@@ -584,6 +585,166 @@ async function testQ35Model4B(g: Gpu): Promise<KResult> {
     metrics: { okPositions: ok, dispatchesPerToken: model.dispatchesPerToken },
   };
 }
+
+/**
+ * Blocco MoE 35B su GPU con pesi REALI vs cpuref (q1 fase 7 slice 3a):
+ * router F32 → top-8 (CPU, correttezza-prima) → per-expert gemv Q4_K a
+ * OFFSET nel buffer di classe (il seme dell'arena parametrica) → axpy
+ * pesato → shared expert Q8_0 con gate sigmoid su GPU. Un layer con down
+ * Q4_K e uno con down Q6_K (il mix UD). Pesi via fetch Range dal GGUF.
+ */
+async function testQ35MoeBlockReal(g: Gpu): Promise<KResult[]> {
+  const URL35 = "/models/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf";
+  const head = await fetch(URL35, { method: "HEAD" });
+  if (!head.ok) {
+    return [{ kernel: "q35-moe-block-real", pass: false, maxAbs: NaN, maxRel: NaN, note: "symlink 35B assente in public/models" }];
+  }
+  const range = async (off: number, len: number): Promise<Uint8Array> => {
+    const rr = await fetch(URL35, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
+    if (rr.status !== 206) throw new Error(`q35-moe: Range ${rr.status}`);
+    return new Uint8Array(await rr.arrayBuffer());
+  };
+  const hdr = await range(0, 64 * 1024 * 1024);
+  const f = parseGguf(hdr.buffer.slice(hdr.byteOffset, hdr.byteOffset + hdr.byteLength) as ArrayBuffer);
+  const { shape, byName } = validateQwen35(f);
+  const nE = shape.nExpert as number, topK = shape.nExpertUsed as number, dE = shape.dFfnExpert as number;
+  const d = shape.dModel;
+  // un layer down-Q4_K e uno down-Q6_K (mix UD enumerato dal file)
+  const downType = (l: number): number => byName.get(`blk.${l}.ffn_down_exps.weight`)!.type;
+  const layers: number[] = [];
+  for (let l = 0; l < shape.nLayer && layers.length < 2; l++) {
+    const t = downType(l);
+    if (layers.length === 0 && t === GGML_TYPE_Q4K) layers.push(l);
+    else if (layers.length === 1 && t === GGML_TYPE_Q6K) layers.push(l);
+  }
+  if (layers.length < 2) for (let l = 0; l < shape.nLayer && layers.length < 2; l++) if (!layers.includes(l)) layers.push(l);
+
+  const results: KResult[] = [];
+  for (const L of layers) {
+    const b = `blk.${L}.`;
+    const info = (s: string) => byName.get(`${b}${s}`)!;
+    const tBytes = (s: string) => q35TensorBytes(info(s));
+    const fetchT = (s: string) => range(f.dataOffset + info(s).offset, tBytes(s));
+    const routerRaw = await fetchT("ffn_gate_inp.weight");
+    const router = new Float32Array(routerRaw.slice().buffer);
+    const shGateV = new Float32Array((await fetchT("ffn_gate_inp_shexp.weight")).slice().buffer);
+    const shTens = { gate: await fetchT("ffn_gate_shexp.weight"), up: await fetchT("ffn_up_shexp.weight"), down: await fetchT("ffn_down_shexp.weight") };
+    // input sintetico realistico + selezione con la STESSA matematica del cpuref
+    const x64 = Float64Array.from(randF32(d, 1600 + L, 0.5));
+    const logits = new Float64Array(nE);
+    for (let e = 0; e < nE; e++) {
+      let acc = 0;
+      for (let i = 0; i < d; i++) acc += router[e * d + i] * x64[i];
+      logits[e] = acc;
+    }
+    const mx = Math.max(...logits);
+    const probs = Array.from(logits, (v) => Math.exp(v - mx));
+    const ps = probs.reduce((a, c) => a + c, 0);
+    const sel = Array.from({ length: nE }, (_, e) => e).sort((a2, b2) => probs[b2] - probs[a2] || a2 - b2).slice(0, topK);
+    const wSum = Math.max(sel.reduce((a2, e) => a2 + probs[e], 0) / ps, 6.103515625e-5);
+    const weights = sel.map((e) => probs[e] / ps / wSum);
+    // pesi expert selezionati via Range (slice per-expert dai tensori stacked)
+    const expBytes = (s: string) => {
+      const t = info(s);
+      const elemsPer = t.dims[0] * t.dims[1];
+      const bb = t.type === GGML_TYPE_Q4K ? 144 : 210;
+      // rp = byte REPACKED (repackKQuant padda i superblocchi a word: 210→212)
+      return { t, elemsPer, bb, per: (elemsPer / 256) * bb, rp: (elemsPer / 256) * (bb === 210 ? 212 : bb) };
+    };
+    const gU = expBytes("ffn_gate_exps.weight"), uU = expBytes("ffn_up_exps.weight"), dU = expBytes("ffn_down_exps.weight");
+    const expRaw = new Map<number, { gate: Uint8Array; up: Uint8Array; down: Uint8Array }>();
+    for (const e of sel) {
+      expRaw.set(e, {
+        gate: await range(f.dataOffset + gU.t.offset + e * gU.per, gU.per),
+        up: await range(f.dataOffset + uU.t.offset + e * uU.per, uU.per),
+        down: await range(f.dataOffset + dU.t.offset + e * dU.per, dU.per),
+      });
+    }
+    // cpuref f64 (stessa fonte unica del modello)
+    const refW: Q35MoeLayerWeights = {
+      router, sharedGate: shGateV,
+      shGate: deqQ80(shTens.gate), shUp: deqQ80(shTens.up), shDown: deqQ80(shTens.down),
+      expert: (e) => {
+        const r = expRaw.get(e)!;
+        const dq = (raw: Uint8Array, spec: typeof gU): Float32Array => {
+          const out = new Float32Array(spec.elemsPer);
+          (spec.bb === 144 ? dequantQ4_K : dequantQ6_K)(raw, 0, spec.elemsPer / 256, out);
+          return out;
+        };
+        return { gate: dq(r.gate, gU), up: dq(r.up, uU), down: dq(r.down, dU) };
+      },
+    };
+    const ref = q35MoeFfnRefF64(x64, refW, nE, topK, dE);
+
+    // --- GPU: arena di classe con OFFSET binding (il seme del paging q35) ---
+    const slotBytes = gU.rp + uU.rp + dU.rp; // layout REPACKED (Q6_K paddato)
+    const arena = g.empty(slotBytes * topK);
+    sel.forEach((e, k) => {
+      const r = expRaw.get(e)!;
+      const packed = new Uint8Array(slotBytes);
+      packed.set(repackKQuantU8(r.gate, gU.bb), 0);
+      packed.set(repackKQuantU8(r.up, uU.bb), gU.rp);
+      packed.set(repackKQuantU8(r.down, dU.bb), gU.rp + uU.rp);
+      g.device.queue.writeBuffer(arena, k * slotBytes, packed);
+    });
+    const xB = g.buf(Float32Array.from(x64));
+    const out = g.buf(new Float32Array(d));
+    const gateT = g.empty(dE * 4), upT = g.empty(dE * 4), dnT = g.empty(d * 4), wB = g.empty(4);
+    const gemvGate = gemvQ4KWgsl({ K: d, N: dE });
+    const gemvDown = dU.bb === 144 ? gemvQ4KWgsl({ K: dE, N: d }) : gemvQ6KWgsl({ K: dE, N: d });
+    for (let k = 0; k < topK; k++) {
+      const base = k * slotBytes;
+      await g.run(gemvGate, [{ buffer: arena, offset: base, size: gU.rp }, xB, gateT], dE);
+      await g.run(gemvGate, [{ buffer: arena, offset: base + gU.rp, size: uU.rp }, xB, upT], dE);
+      await g.run(siluMulWgsl(dE), [gateT, upT], Math.ceil(dE / 64));
+      await g.run(gemvDown, [{ buffer: arena, offset: base + gU.rp + uU.rp, size: dU.rp }, gateT, dnT], [...gemvGrid(d), 1] as [number, number, number]);
+      g.device.queue.writeBuffer(wB, 0, new Float32Array([weights[k]]));
+      await g.run(axpyWgsl(d), [out, dnT, wB], Math.ceil(d / 64));
+    }
+    // shared expert Q8_0 + gate sigmoid su GPU
+    const shg = repackQ8_0(shTens.gate, 0, (d / 32) * dE);
+    const shu = repackQ8_0(shTens.up, 0, (d / 32) * dE);
+    const shd = repackQ8_0(shTens.down, 0, (dE / 32) * d);
+    await g.run(gemvQuantWgsl({ kind: "q8_0", K: d, N: dE, hasBias: false }), [g.buf(shg.qs), g.buf(shg.scales), xB, gateT], dE);
+    await g.run(gemvQuantWgsl({ kind: "q8_0", K: d, N: dE, hasBias: false }), [g.buf(shu.qs), g.buf(shu.scales), xB, upT], dE);
+    await g.run(siluMulWgsl(dE), [gateT, upT], Math.ceil(dE / 64));
+    await g.run(gemvQuantWgsl({ kind: "q8_0", K: dE, N: d, hasBias: false }), [g.buf(shd.qs), g.buf(shd.scales), gateT, dnT], [...gemvGrid(d), 1] as [number, number, number]);
+    const gScal = g.empty(4);
+    await g.run(gemvF32Wgsl({ K: d, N: 1 }), [g.buf(shGateV), xB, gScal], 1);
+    await g.run(axpyWgsl(d, true), [out, dnT, gScal], Math.ceil(d / 64));
+
+    const got = new Float32Array(await g.read(out, d * 4));
+    const refF = Float32Array.from(ref.out);
+    let l2n = 0, l2d = 0, maxAbs = 0, maxRel = 0;
+    for (let i = 0; i < d; i++) {
+      const dif = Math.abs(got[i] - refF[i]);
+      l2n += dif * dif; l2d += refF[i] * refF[i];
+      if (dif > maxAbs) maxAbs = dif;
+      if (Math.abs(refF[i]) > 1e-4) maxRel = Math.max(maxRel, dif / Math.abs(refF[i]));
+    }
+    const l2 = Math.sqrt(l2n / Math.max(l2d, 1e-12));
+    results.push({
+      kernel: `q35-moe-block-real-blk${L}-${dU.bb === 144 ? "q4k" : "q6k"}down`,
+      pass: l2 <= 1e-3 && maxAbs <= 5e-2,
+      maxAbs, maxRel,
+      note: `pesi reali 35B, top-${topK} di ${nE}, arena offset-binding, L2rel=${l2.toExponential(2)}`,
+      metrics: { l2rel: l2 },
+    });
+  }
+  return results;
+}
+
+const GGML_TYPE_Q4K = 12, GGML_TYPE_Q6K = 14;
+const deqQ80 = (raw: Uint8Array): Float32Array => {
+  const out = new Float32Array((raw.length / 34) * 32);
+  dequantQ8_0(raw, 0, raw.length / 34, out);
+  return out;
+};
+/** repackKQuant ritorna Uint32Array: vista U8 per il packing nello slot. */
+const repackKQuantU8 = (raw: Uint8Array, blockBytes: number): Uint8Array => {
+  const w = repackKQuant(raw, 0, raw.length / blockBytes, blockBytes);
+  return new Uint8Array(w.buffer, w.byteOffset, w.byteLength);
+};
 
 async function testGemv(g: Gpu, kind: "q4_0" | "q8_0", K: number, N: number, hasBias: boolean): Promise<KResult> {
   const blockBytes = kind === "q4_0" ? 18 : 34;
@@ -2832,6 +2993,7 @@ async function main(): Promise<void> {
     results.push(await testSigmoidMul(g));
     results.push(...await testQ35AttnLayersReal(g));
     results.push(await testQ35Model4B(g)); // full-model: argmax GPU == oracolo (slice 3)
+    results.push(...await testQ35MoeBlockReal(g)); // MoE 35B block reale (fase 7 slice 3a)
 
     // --- kernel MLA absorbed (C2 fase 4 slice 2), dims reali GLM ---
     const HL = G.qkNope + G.ropeDims; // 256: head len di q

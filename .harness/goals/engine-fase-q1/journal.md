@@ -365,3 +365,28 @@
 - Suite 375/9 skip, tsc pulito, GLM intatto.
 - Next: it.16 = fase 7 slice 3 — forward GPU 35B con paging C3c
   (slotTable/classi/nExpert/topK parametrici, GLM invariato).
+
+## it.16 (2026-08-10) — fase 7 slice 3a: blocco MoE GPU reale + DECISIONE
+
+- DECISIONE (dalla ricognizione, dichiarata): residency.ts è GLM-coupled
+  in profondità (park/slab/LRU/arena su G.*, indurito da C3c coi suoi
+  pin) — parametrizzarlo = rischio alto sul core. VIA BOUNDED scelta:
+  paging q35 NUOVO e parametrico per costruzione (legge nExpert/topK/
+  classi/size dai type del file), GLM INTATTO a rischio zero; la
+  meccanica C3c piena (tier/prefetch/bandmodel) si rifitta in fase 8 su
+  questa base. Soddisfa il done-when ("parametrici con GLM INVARIATO")
+  nella sostanza: parametrico è il NUOVO strato, invariato è GLM.
+- Kernel `axpyWgsl(D, sigmoidGate)` (combine pesato MoE + gate shared su
+  GPU); ktest `q35-moe-block-real`: router F32 → top-8 (CPU,
+  correttezza-prima) → gemv Q4_K/Q6_K a OFFSET nel buffer di classe (il
+  seme dell'arena) → axpy pesato → shared Q8_0 + sigmoid su GPU. Pesi
+  REALI via Range; UN layer down-Q4_K (blk0) e UNO down-Q6_K (blk34).
+- BUG preso dal run: repackKQuant padda Q6_K 210→212 B/superblocco — lo
+  slot calcolato sui byte RAW traboccava (RangeError); layout slot =
+  byte REPACKED. (Nota per l'arena vera: slotBytes classe q6k-down =
+  2×589 824 + 868 352 = 2 048 000 B, multiplo di 256 ✓.)
+- ESITO: **entrambe le classi PASS a L2rel 2.2e-7 / 3.3e-7** (maxAbs
+  ~2-4e-9!) — ktest TOTALE 84/84 (i 2 gemv-q4_K inclusi), GLM verde.
+- RESTA fase 7 (it.17): forward GPU 35B completo (denso path di
+  q35gpumodel + MoE con arena e LRU minima on-miss), gate argmax==oracolo
+  sul golden smoke, run 16 GB senza OOM con JSON, firma routing.

@@ -359,6 +359,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }`;
 }
 
+// out += s·x con s scalare da buffer (q1 fase 7: combine pesato del MoE —
+// il peso dell'expert arriva dal router; con sigmoidGate il gate del shared
+// expert resta su GPU: s = sigmoid(sBuf[0])).
+export function axpyWgsl(D: number, sigmoidGate = false): string {
+  const s = sigmoidGate ? "1.0 / (1.0 + exp(-sBuf[0]))" : "sBuf[0]";
+  return `
+@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read> sBuf: array<f32>;
+const D = ${D}u;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= D) { return; }
+  out[i] = out[i] + (${s}) * x[i];
+}`;
+}
+
 // x += y (residual), in-place.
 export function addInPlaceWgsl(D: number): string {
   return `
