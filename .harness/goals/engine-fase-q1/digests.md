@@ -98,3 +98,14 @@ prompt). Curiosità verificata: stessa cifra del PIN GLM — stesso corpus
 testuale, modelli e miss diversi; coincidenza onesta, non copia. Resta per
 fase 4: it.10 = riferimenti decode/prefill/TTFT full-resident con
 hostState (dichiarati come frame correttezza-prima).
+
+## it.10 (2026-08-10)
+
+**FASE 4 COMPLETA** (fasi 1-4 su 9 in 10 iterazioni), verifier PASS con
+ricalcoli esatti. Riferimenti full-resident 4B committati con hostState:
+**decode 22.93 tok/s · prefill seq 26.0 · TTFT 25.8 s** — frame
+correttezza-prima DICHIARATO (562 dispatch/token, zero fusioni, readback
+per token). Lettura: il denso full-resident fa già 23 tok/s senza alcuna
+ottimizzazione (GLM paginato: 15.6 dopo tre fasi); la soglia UX 30 è a
+1.3× con tutte le leve in canna. Next: fase 5 — 9B + WP decomposizione
+gap vs llama.cpp Vulkan (il cuore del confronto onesto per il writeup).

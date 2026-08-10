@@ -240,7 +240,9 @@
 - RIFERIMENTI (q35-bench-4b-fullresident-2026-08-10.json, host
   user-session-light dichiarato, GPU idle 31°C/210MHz al via):
   **decode 22.93 tok/s (p50 43.6 ms) · prefill seq 26.0 tok/s · TTFT
-  25.8 s (load 11.3 + prefill 380 tok)** su prompt 05-math-en. DICHIARATO
+  25.8 s (load 10.9 s + prefill 387 tok in 14.9 s + first 49 ms)** su
+  prompt 05-math-en (correzione verifier: la prima stesura trascinava il
+  load di it.9 e arrotondava i token). DICHIARATO
   nel JSON: correttezza-prima (562 dispatch/token, zero fusioni, readback
   per token) = FRAME DI PARTENZA, non un numero competitivo.
 - Lettura onesta del frame: il 4B denso full-resident fa GIÀ 23 tok/s

@@ -50,7 +50,9 @@ for (;;) {
       console.error(`[q35bench] ${status} — nessun report`);
       process.exit(1);
     }
-    const full = { ...report, hostState: { before: hostBefore, after: hostState(declared) } };
+    // hostState() restituisce già {declared, before, after}: niente doppio
+    // annidamento (nota verifier it.10) — before campionato all'avvio, after qui
+    const full = { ...report, hostState: { declared, before: hostBefore.state?.before ?? hostBefore, after: hostState(declared).state?.before ?? null } };
     writeFileSync(out, JSON.stringify(full, null, 1));
     console.log(`[q35bench] done: decode ${report.decode.tokS.toFixed(2)} tok/s (p50 ${report.decode.msPerTokenP50.toFixed(1)} ms), prefill ${report.prefill.tokS.toFixed(1)} tok/s, TTFT ${(report.ttftMs / 1000).toFixed(1)} s -> ${out}`);
     process.exit(0);
