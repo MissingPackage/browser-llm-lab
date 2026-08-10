@@ -199,3 +199,29 @@ mantenimento della tabella dentro `ensure` sono giusti sul modello vero, non
 solo nel caso finto di it.13.
 
 tsc pulito, suite 410|9, 0 gpu-error.
+
+## it.16 (2026-08-11) — misura prima della 3c: chi e' sporco, e quando
+
+Il path ottimistico di GLM ha una PRECONDIZIONE (`optimisticMinResidency`
+0.8): sotto quella residenza ogni token e' sporco e il replay costa piu' del
+sync. Il 35B a 10 GiB sta al 58,7% del parco — sotto la soglia. Misurato
+invece di assumere, con `--misstrace` (due passate sullo stesso prompt:
+`resetState` azzera lo stato ricorrente, non la cache expert).
+
+**Smoke 35B, 39 token, 320 selezioni/token**: pass FREDDO = **39/39 token
+sporchi**, mediana 68 miss/token, hit rate 73,2%. Pass CALDO = **0/39 token
+sporchi, 0 miss, hit rate 100%**.
+
+Due conclusioni opposte da tenere insieme: (1) a residenza raggiunta il decode
+ottimistico da' **1 submit/token**, che e' alla lettera il done-when — ed e'
+misurabile su questo stesso smoke con la seconda passata; (2) a cache fredda
+il repair+replay e' il REGIME, non il caso limite, e il path ottimistico nudo
+sarebbe una regressione sul prefill.
+
+⇒ la fetta 3c diventa DUE cose: il path a submit unico (Sel di produzione dal
+router, dirty, hiddenCkpt, repair+replay) E una policy d'ingresso tarata sui
+numeri (sync finche' i miss/token stanno sopra soglia). Gate della 3c: due
+passate, submit/token riportati SEPARATI per freddo e caldo — mediarli
+nasconderebbe il fenomeno. E la 3c non sara' bit-identica per costruzione: i
+pesi vengono dal router GPU (3,80e-7 misurato in it.15), quindi il gate e'
+l'argmax identico + routing e miss invariati, come dice il contratto.

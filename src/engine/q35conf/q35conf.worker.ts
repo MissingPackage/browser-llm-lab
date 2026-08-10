@@ -30,6 +30,8 @@ interface Cfg {
   debugTap?: number;
   /** fase-D 3b fetta 3b: router GPU in OMBRA, con report di fedelta'. */
   routerShadow?: boolean;
+  /** fase-D 3b, prima della 3c: profilo dei MISS per token (2 passate). */
+  missTrace?: boolean;
 }
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
@@ -159,6 +161,53 @@ async function main(cfg: Cfg): Promise<void> {
       ttftMs: Math.round(loadMs + prefillMs + firstMs),
       dispatchesPerToken: model.dispatchesPerToken,
       moe: model.moeStats ? model.moeStats() : null,
+    };
+    post({ type: "done", report });
+    return;
+  }
+
+  if (cfg.missTrace) {
+    // MISURA PRIMA DI SCRIVERE (fase-D 3b, prima della fetta 3c): quanti MISS
+    // ha un token? È il numero da cui dipende se il decode ottimistico paga.
+    // Il repair+replay rigioca dal PRIMO layer sporco in giù: se ogni token è
+    // sporco a un layer basso, il replay ricalcola quasi tutto il token e i 40
+    // submit che toglie li ripaga in lavoro GPU. GLM esige per questo una
+    // residenza >= 80%, e sul 35B a questa VRAM non ci siamo.
+    // Due passate SULLO STESSO prompt: la prima a cache fredda (peggior caso),
+    // la seconda con `resetState` — lo stato ricorrente riparte, la cache
+    // expert NO — cioè il caso perfettamente caldo (miglior caso). L'uso vero
+    // sta in mezzo, e questi due numeri lo delimitano.
+    const p = golden.prompts[0];
+    const tokens = [...p.promptTokens, ...p.generated];
+    const passes: Array<{ misses: number[]; hits: number[]; firstDirtyLayerUnknown: true }> = [];
+    for (let pass = 0; pass < 2; pass++) {
+      model.resetState();
+      const misses: number[] = [], hits: number[] = [];
+      let prevM = model.moeStats!().misses, prevH = model.moeStats!().hits;
+      for (let t = 0; t < tokens.length; t++) {
+        await model.step(tokens[t], t, false);
+        const st = model.moeStats!();
+        misses.push(st.misses - prevM); hits.push(st.hits - prevH);
+        prevM = st.misses; prevH = st.hits;
+      }
+      passes.push({ misses, hits, firstDirtyLayerUnknown: true });
+      post({ type: "tick", msg: `miss-trace pass ${pass}: ${misses.reduce((a, b) => a + b, 0)} miss` });
+    }
+    const sum = (a: number[]): number => a.reduce((x, y) => x + y, 0);
+    const report = {
+      schemaVersion: 1,
+      kind: `q35-misstrace-${cfg.model ?? "4b"}`,
+      date: new Date().toISOString().slice(0, 10),
+      model: M.file, arenaGiB: cfg.arenaGiB ?? 12,
+      selectionsPerToken: (shape.nLayer as number) * (shape.nExpertUsed as number),
+      tokens: tokens.length,
+      passes: passes.map((pp, i) => ({
+        pass: i, missTotal: sum(pp.misses), hitTotal: sum(pp.hits),
+        missPerToken: pp.misses,
+        dirtyTokens: pp.misses.filter((m) => m > 0).length,
+        missPerTokenMedian: [...pp.misses].sort((a, b) => a - b)[Math.floor(pp.misses.length / 2)],
+      })),
+      moe: model.moeStats!(),
     };
     post({ type: "done", report });
     return;

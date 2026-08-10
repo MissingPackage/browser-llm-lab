@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a-3b fatte; next = fetta 3c (Sel di produzione dal router GPU + dirty + repair/replay = 1 submit/token))
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a-3b fatte; next = fetta 3c in due pezzi (path a submit unico + policy d'ingresso), progettata su disco in it.16)
 
 ## 1. Next decidable
 
@@ -129,11 +129,30 @@ l'ultimo expert preso e il primo scartato (sui logit) — una decade sopra la
 risoluzione dell'f32 a quella scala. Sotto ~1e-6 sarebbe testa-o-croce e qui
 non e' capitato: da rifare sul corpus pieno alla fase 6.
 
-**PROSSIMO: fetta 3c** — la `Sel` di produzione la scrive il router GPU, entra
-`dirty` (atomicMin sul primo layer con miss + atomicAdd sul conteggio) e il
-repair+replay dalla CPU solo quando `dirty[1] > 0` ⇒ 1 submit/token a residenza
-piena. E' li' che cadono i 40 submit e i 40 readback per token; la precondizione
-(selezione e resolve fedeli sui layer veri) e' ora verificata.
+**MISURA PRIMA DELLA 3c (it.16)**: il path ottimistico di GLM ha una
+precondizione (`optimisticMinResidency` 0.8) e il 35B a 10 GiB sta al 58,7% del
+parco. Misurato con `--misstrace` (due passate sullo stesso prompt; `resetState`
+azzera lo stato ricorrente, NON la cache expert): pass FREDDO **39/39 token
+sporchi**, mediana 68 miss su 320 selezioni, hit 73,2%; pass CALDO **0/39
+sporchi, 0 miss, hit 100%**. Due conclusioni opposte, da tenere insieme: a
+residenza raggiunta l'ottimistico da' **1 submit/token** (ed e' misurabile su
+questo stesso smoke, seconda passata); a cache fredda il repair+replay e' il
+REGIME e il path ottimistico NUDO sarebbe una regressione sul prefill.
+
+**PROSSIMO: fetta 3c, in DUE pezzi** (progetto scritto nel journal it.16):
+(3c-i) path a submit unico — `Sel` di produzione dal router GPU, `dirty`
+(atomicMin primo layer sporco + atomicAdd conteggio), `hiddenCkpt` come input
+del replay, repair+replay al confine di token; pezzi noti da risolvere:
+`clearBuffer` per `moeAcc` dentro l'encoder, un axpy che legge il peso da
+`Sel.w` (i pesi ora nascono su GPU), il guard `setInFlight`, e `routing`
+ricostruita dalla `Sel` letta in coda (nessuno sulla CPU vede piu' la
+selezione). (3c-ii) POLICY d'ingresso tarata sui numeri: sync finche' i
+miss/token stanno sopra soglia, ottimistico sotto, con isteresi.
+**GATE della 3c**: due passate con submit/token e readback/token riportati
+SEPARATI per freddo e caldo (mediarli nasconderebbe il fenomeno), piu' argmax
+identico e routing/miss invariati. **La 3c NON sara' bit-identica** per
+costruzione: i pesi arrivano dal router GPU in f32 (3,80e-7 misurato in it.15),
+quindi il gate e' quello del contratto (argmax + routing), non la bit-identita'.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

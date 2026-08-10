@@ -840,3 +840,83 @@ parametri) e il path GLM non e' stato sfiorato.
 repair+replay dalla CPU quando `dirty[1] > 0`. E' li' che cadono i 40 submit e
 i 40 readback per token. Precondizione ora verificata: la selezione e il
 resolve su GPU sono fedeli sui layer veri.
+
+## it.16 (2026-08-11) — MISURA PRIMA DELLA 3c: quanti token sono sporchi?
+
+**Perche' mi sono fermato a misurare invece di scrivere la 3c.** Leggendo il
+path ottimistico di GLM per portarlo, ho trovato la sua PRECONDIZIONE:
+`optimisticMinResidency` (default 0.8) — GLM RIFIUTA di costruirsi in modo
+ottimistico sotto quella residenza, con un messaggio che dice perche': "in
+regime di scarsita' ogni token e' sporco e il replay costa piu' del sync".
+Il 35B a 10 GiB ha 6006 slot su un parco di 10.240 expert = **58,7%**. Sotto
+la soglia di GLM. Se ogni token fosse sporco, la fetta 3c toglierebbe 40
+submit e 40 readback per aggiungere N replay che ricalcolano il token da un
+layer basso in giu': un cambio in perdita. Non e' una cosa da scoprire dopo
+aver scritto 300 righe.
+
+**Strumento** (opt-in, `--misstrace`): due passate SULLO STESSO prompt.
+`resetState()` fra le due azzera lo stato ricorrente ma NON la cache expert,
+quindi la passata 0 e' il caso freddo (peggiore) e la 1 e' il caso
+perfettamente caldo (migliore). L'uso vero sta in mezzo e questi due numeri lo
+delimitano. Smoke 35B, 39 token, 320 selezioni/token, budget 10 GiB:
+
+| | pass 0 (freddo) | pass 1 (caldo) |
+|---|---|---|
+| token SPORCHI | **39 / 39** | **0 / 39** |
+| miss/token, mediana | 68 | 0 |
+| miss/token, primo token | 320 (tutto) | 0 |
+| miss totali | 3341 | **0** |
+| hit rate | 73,2% | **100,0%** |
+
+**Le due conclusioni, che sono opposte e vanno tenute insieme**:
+
+1. **A residenza raggiunta il decode ottimistico e' ESATTAMENTE cio' che
+   serve**: zero token sporchi su 39 ⇒ zero replay ⇒ **1 submit/token**, che
+   e' alla lettera il done-when (a) della fase 3b. E non e' una fortuna: i
+   3341 expert distinti che questo prompt tocca stanno nei 6006 slot, quindi
+   non c'e' nessuna eviction e la cache converge. Il caso "residenza piena"
+   del contratto e' MISURABILE su questo stesso smoke, con la seconda passata.
+2. **A cache fredda TUTTI i token sono sporchi**, mediana 68 miss su 320
+   selezioni. Il repair+replay li' non e' un caso limite: e' il regime. Un
+   token con 68 miss sparsi su 40 layer ha il primo layer sporco in basso, e
+   il replay ricalcola quasi tutto il token — piu' volte (i round avanzano per
+   prefisso). Il path ottimistico NUDO, applicato al prefill freddo, e' una
+   regressione, non un guadagno.
+
+**Conseguenza sul progetto della fetta 3c** (scritto qui PRIMA di iniziarla,
+come per la fetta 3): la 3c non e' "porta il path ottimistico". E':
+
+- (3c-i) **il path a submit unico** con `Sel` di produzione scritta dal router
+  GPU, `dirty` (atomicMin sul primo layer MoE sporco + atomicAdd sul
+  conteggio), `hiddenCkpt` (l'hidden di INGRESSO di ogni layer, copiato
+  nell'encoder: e' l'input del replay) e repair+replay al confine di token.
+  Pezzi noti: `clearBuffer` per azzerare `moeAcc` DENTRO l'encoder (oggi e'
+  una `writeBuffer` per layer, che nell'encoder non si puo' fare); un axpy che
+  legge il peso da `Sel.w` invece che da un buffer scritto dalla CPU (i pesi
+  ora nascono su GPU); il guard `setInFlight` di `ExpertCache` fra submit e
+  readback; la ricostruzione di `routing` dalla `Sel` letta in coda, perche'
+  in questo modo NESSUNO sulla CPU ha visto la selezione del token.
+- (3c-ii) **una POLICY di ingresso**, che e' la vera lezione di questa misura:
+  il modo ottimistico si accende quando conviene e non per decreto. La forma
+  piu' semplice che i numeri sostengono: si parte in modo sync (quello di
+  oggi) e si passa a ottimistico quando i miss per token scendono sotto una
+  soglia, con isteresi. La soglia si TARA sui numeri, non si inventa: il
+  micro-bench deve dare il costo di un token sync (40 submit) e quello di un
+  token ottimistico sporco (1 submit + R replay) sullo stesso host.
+- **GATE della 3c**, con la metodologia di questa misura: due passate sullo
+  stesso prompt, submit/token e readback/token riportati per PASSATA — freddo
+  e caldo separati, mai mediati insieme (mediarli nasconderebbe esattamente il
+  fenomeno che questa iterazione ha trovato). Piu' i gate secchi del contratto:
+  argmax identico al path attuale sul campione, routing e conteggio miss
+  identici.
+
+**Nota sulla FEDELTA', che cambia rispetto alle fette precedenti**: dalla 3c i
+pesi di mixing arrivano dal router GPU (f32) invece che dalla CPU (f64). it.15
+ha misurato la differenza: 3,80e-7 relativo. Quindi la 3c **non e'
+bit-identica per costruzione** e il suo gate non puo' essere la bit-identita':
+e' l'argmax identico sul campione (done-when (b) del contratto), piu' routing
+e miss invariati (done-when (d)). Va detto prima, non dopo aver visto i numeri.
+
+**Gate di questa iterazione**: tsc pulito, suite 410|9, 0 gpu-error nel run,
+JSON committato (`results/engine/q35-misstrace-35b-it16.json`). Lo strumento
+resta: serve di nuovo alla 3c per il gate, e alla fase 5 per la policy.

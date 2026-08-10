@@ -10,6 +10,8 @@ const cfg = {
   arenaGiB: q.has("arena") ? Number(q.get("arena")) : undefined,
   // ?shadow=1 → router+resolve su GPU in OMBRA accanto alla selezione CPU
   routerShadow: q.get("shadow") === "1",
+  // ?misstrace=1 → profilo dei miss per token (2 passate sullo stesso prompt)
+  missTrace: q.get("misstrace") === "1",
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

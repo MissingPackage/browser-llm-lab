@@ -43,6 +43,9 @@ if (arenaGiB) qs.set("arena", arenaGiB);
 // quella della CPU, il resolve GPU scrive una regione parallela di Sel e il
 // report porta la fedelta' misurata sui layer VERI.
 if (process.argv.includes("--shadow")) qs.set("shadow", "1");
+// Profilo dei miss per token (2 passate: fredda e calda) — misura che precede
+// la fetta 3c: il decode ottimistico paga solo se i token sporchi sono pochi.
+if (process.argv.includes("--misstrace")) qs.set("misstrace", "1");
 const tap = arg("tap", null);
 if (tap !== null) qs.set("tap", tap);
 
