@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-3 DONE, fase 4 slice 1 DONE (cpuref 4B == oracolo); next = forward GPU 4B)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: fasi 1-3 DONE, fase 4 slice 1-2 DONE (assembly GPU reale L2rel ~1e-7, ktest 79/79); next = orchestrazione full-model + argmax gate)
 
 ## 1. Next decidable
 
@@ -27,10 +27,13 @@ T=12 stato-persistente maxAbs 5.4e-7, core a dims reali hd128). Suite 371
 PASS, tsc pulito. **Fase 4 slice 1 DONE (it.6)**: cpuref-f64
 4B e2e == ORACOLO al primo run (argmax su tutte le posizioni generate del
 golden smoke committato; mrope text-only = NEOX-64 provato dalla fonte;
-`q35cpurefmodel.ts`, test gated Q35_E2E=1). **Al lavoro: it.7 = forward
-GPU 4B** (orchestratore engine sui kernel esistenti + deltanet;
-argmax==cpuref via GPU; poi golden full-corpus a soglia RATCHET con
-run-golden-q35.sh con provenance, e riferimenti full-resident hostState). Perimetro: path testo Qwen
+`q35cpurefmodel.ts`, test gated Q35_E2E=1). **Slice 2 DONE (it.7)**: assembly GPU
+dei layer attn con pesi REALI == cpuref a L2rel ~1e-7 (ktest 79/79; fixture
+q35-attn rigenerabile, rope parziale + sigmoidMul nuovi). **Al lavoro:
+it.8 = orchestrazione full-model GPU 4B** (loop 32 layer + embed row +
+ffn + head Q6_K argmax; gate = argmax GPU == oracolo sulle posizioni del
+golden smoke; poi golden full-corpus a soglia RATCHET con run-golden-q35.sh
+con provenance, e riferimenti full-resident hostState). Perimetro: path testo Qwen
 3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
 decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
 `.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.

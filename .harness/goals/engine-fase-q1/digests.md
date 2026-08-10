@@ -66,3 +66,14 @@ La comprensione del modello è PROVATA — da qui ogni divergenza GPU è bug
 di kernel. Note per fase 4: run-golden-q35.sh con provenance per i golden
 full-corpus; binario golden buildato da 5f55650 (≡ b10333 per qwen35).
 Next: it.7 = forward GPU 4B (orchestratore sui kernel esistenti+deltanet).
+
+## it.7 (2026-08-10)
+
+Fase 4 slice 2, verifier PASS (ktest rieseguiti, fixture bit-deterministica
+riprovata, rope retrocompatibile sui chiamanti storici). **Assembly GPU di
+ENTRAMBI i tipi di layer con pesi reali del 4B == cpuref a L2rel ~1e-7**
+(linear blk0: catena DeltaNet completa con Q5_K out; full blk3:
+deinterleave + QK-norm + rope64 + attnDecode 16/4/256 + gate). Kernel
+nuovi: ropeDims opzionale su ropeNeoxWgsl, sigmoidMul. ktest 79/79.
+Ogni pezzo del forward è provato: it.8 = pura orchestrazione (32 layer +
+embed + head) + gate argmax GPU == oracolo sul golden smoke.
