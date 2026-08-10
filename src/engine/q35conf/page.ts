@@ -4,6 +4,10 @@ const q = new URLSearchParams(location.search);
 const cfg = {
   prompts: q.has("prompts") ? q.get("prompts")!.split(",").map(Number) : undefined,
   maxGen: q.has("maxgen") ? Number(q.get("maxgen")) : undefined,
+  // ?bench=4,64 → riferimenti full-resident: prompt idx 4, 64 decode greedy
+  bench: q.has("bench")
+    ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
+    : undefined,
 };
 const worker = new Worker(new URL("./q35conf.worker.ts", import.meta.url), { type: "module" });
 const log = (line: string): void => {

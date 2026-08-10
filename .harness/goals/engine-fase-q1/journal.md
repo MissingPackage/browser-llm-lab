@@ -230,3 +230,24 @@
 - RESTA per chiudere fase 4 (it.10): riferimenti decode/prefill/TTFT
   full-resident con hostState dichiarato (orchestratore correttezza-prima,
   DICHIARATO come frame di partenza: il numero onesto pre-ottimizzazioni).
+
+## it.10 (2026-08-10) — FASE 4 COMPLETA: riferimenti full-resident 4B
+
+- Modalità bench nel worker q35conf (?bench=idx,n): prefill sequenziale
+  read=false con sync onSubmittedWorkDone, poi decode GREEDY (argmax →
+  token successivo) con readback, p50; runner q35-bench-run.mjs con
+  hostState PRIMA/DOPO (scripts/lib/hoststate.mjs).
+- RIFERIMENTI (q35-bench-4b-fullresident-2026-08-10.json, host
+  user-session-light dichiarato, GPU idle 31°C/210MHz al via):
+  **decode 22.93 tok/s (p50 43.6 ms) · prefill seq 26.0 tok/s · TTFT
+  25.8 s (load 11.3 + prefill 380 tok)** su prompt 05-math-en. DICHIARATO
+  nel JSON: correttezza-prima (562 dispatch/token, zero fusioni, readback
+  per token) = FRAME DI PARTENZA, non un numero competitivo.
+- Lettura onesta del frame: il 4B denso full-resident fa GIÀ 23 tok/s
+  SENZA alcuna ottimizzazione (GLM paginato: 15.6 dopo tre fasi di
+  lavoro) — il regime full-resident è un altro sport; la soglia UX 30
+  è a 1.3× di distanza con tutte le leve ancora in canna.
+- PHASES fase 4 → done (it.6-10). FASI 1-4 COMPLETE su 9.
+- Next: it.11 = fase 5 — 9B (golden MODEL=9B, conformance riusando
+  l'infra parametrica) + WP decomposizione gap full-residency vs
+  llama.cpp Vulkan (stesso GGUF/protocollo p512/n64).

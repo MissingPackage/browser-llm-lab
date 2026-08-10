@@ -1,0 +1,57 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-bench-4b-fullresident",
+ "date": "2026-08-10",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "modelSha256": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
+ "declared": "orchestratore correttezza-prima (562 dispatch/token, zero fusioni/batch, readback logits per token nel decode): FRAME DI PARTENZA pre-ottimizzazioni, non un numero competitivo",
+ "prompt": {
+  "idx": 4,
+  "file": "/home/neuromancer/Projects/browser-llm-lab/tools/oracle-moe/corpus/05-math-en.txt",
+  "tokens": 388
+ },
+ "loadMs": 10887,
+ "prefill": {
+  "tokens": 387,
+  "ms": 14903,
+  "tokS": 25.967281225647366
+ },
+ "decode": {
+  "n": 64,
+  "msPerTokenP50": 43.62000000476837,
+  "tokS": 22.925263638025765,
+  "firstMs": 49
+ },
+ "ttftMs": 25839,
+ "dispatchesPerToken": 562,
+ "hostState": {
+  "before": {
+   "state": {
+    "declared": "user-session-light",
+    "before": {
+     "temperatureC": 31,
+     "smClockMHz": 210,
+     "powerW": 12.44,
+     "memUsedMiB": 953,
+     "utilizationPct": 0,
+     "throttleReasons": "0x0000000000000001"
+    },
+    "after": null
+   }
+  },
+  "after": {
+   "state": {
+    "declared": "user-session-light",
+    "before": {
+     "temperatureC": 39,
+     "smClockMHz": 2265,
+     "powerW": 35.73,
+     "memUsedMiB": 961,
+     "utilizationPct": 41,
+     "throttleReasons": "0x0000000000000024"
+    },
+    "after": null
+   }
+  }
+ }
+}

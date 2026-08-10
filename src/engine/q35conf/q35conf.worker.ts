@@ -15,7 +15,12 @@ import { validateQwen35 } from "../q35shape";
 interface GoldenPos { argmax: number; top: Array<[number, number]> }
 interface GoldenPrompt { id: string; file: string; promptTokens: number[]; generated: number[]; positions: GoldenPos[] }
 interface Golden { modelSha256: string; oracle: { commit: string }; corpusHash: string; prompts: GoldenPrompt[] }
-interface Cfg { prompts?: number[]; maxGen?: number }
+interface Cfg {
+  prompts?: number[];
+  maxGen?: number;
+  /** modalità BENCH (it.10): riferimenti decode/prefill/TTFT full-resident. */
+  bench?: { promptIdx: number; nDecode: number };
+}
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
 const progress = (msg: string) => post({ type: "progress", msg });
@@ -64,6 +69,50 @@ async function main(cfg: Cfg): Promise<void> {
   }, ctxMax);
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
+
+  if (cfg.bench) {
+    // Riferimenti full-resident (fase 4, it.10): prefill sequenziale
+    // read=false (sync con onSubmittedWorkDone), poi nDecode GREEDY con
+    // readback (l'argmax dello step alimenta il successivo). DICHIARATO:
+    // orchestratore correttezza-prima, frame di partenza pre-ottimizzazioni
+    // (562 dispatch/token, nessuna fusione/batch: i moltiplicatori sono
+    // materia delle fasi 6+/D, non di questo numero).
+    const p = golden.prompts[cfg.bench.promptIdx];
+    model.resetState();
+    const P = p.promptTokens.length;
+    const tPre = performance.now();
+    for (let t = 0; t < P - 1; t++) void model.step(p.promptTokens[t], t, false);
+    await device.queue.onSubmittedWorkDone();
+    const prefillMs = performance.now() - tPre;
+    const tFirst = performance.now();
+    let tok = await model.step(p.promptTokens[P - 1], P - 1, true);
+    const firstMs = performance.now() - tFirst;
+    const stepMs: number[] = [];
+    for (let i = 0; i < cfg.bench.nDecode; i++) {
+      const ts = performance.now();
+      tok = await model.step(tok, P + i, true);
+      stepMs.push(performance.now() - ts);
+      if (i % 16 === 0) post({ type: "tick", msg: `decode ${i}/${cfg.bench.nDecode}` });
+    }
+    const sorted = stepMs.slice().sort((a, b) => a - b);
+    const p50 = sorted[Math.floor(sorted.length / 2)];
+    const report = {
+      schemaVersion: 1,
+      kind: "q35-bench-4b-fullresident",
+      date: new Date().toISOString().slice(0, 10),
+      model: "Qwen3.5-4B-Q4_0.gguf",
+      modelSha256: golden.modelSha256,
+      declared: "orchestratore correttezza-prima (562 dispatch/token, zero fusioni/batch, readback logits per token nel decode): FRAME DI PARTENZA pre-ottimizzazioni, non un numero competitivo",
+      prompt: { idx: cfg.bench.promptIdx, file: p.file, tokens: P },
+      loadMs: Math.round(loadMs),
+      prefill: { tokens: P - 1, ms: Math.round(prefillMs), tokS: (P - 1) / (prefillMs / 1000) },
+      decode: { n: cfg.bench.nDecode, msPerTokenP50: p50, tokS: 1000 / p50, firstMs: Math.round(firstMs) },
+      ttftMs: Math.round(loadMs + prefillMs + firstMs),
+      dispatchesPerToken: model.dispatchesPerToken,
+    };
+    post({ type: "done", report });
+    return;
+  }
 
   let okTot = 0, posTot = 0;
   const perPrompt: { id: string; positions: number; top1: number; engineArgmax: number[]; promptS: number }[] = [];
