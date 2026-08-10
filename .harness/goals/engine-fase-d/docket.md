@@ -94,6 +94,15 @@ lavoro fatto resta valido comunque (il pack veloce serve anche all'import).
 
 Registrato it.8 (2026-08-10).
 
+### RULING PI 2026-08-10: ACCOLTO
+
+"Sono d'accordo con te su item 5. Hai fatto la scelta giusta."
+
+Il done-when della fase 2 e' RISCRITTO in PHASES.md nella forma ratificata:
+"il costo di pack per miss scende di >=4x, misurato PRIMA e DOPO nello stesso
+JSON". Gli slab all'import NON si fanno: ~4% di residuo non vale ~18 GB su
+disco. **Item 5 CHIUSO.** La fase 2 e' chiusa anche per contratto.
+
 
 ## item 6 — la telemetria read/pack/upload esiste su q35 ma non su GLM (io, fase 5/6)
 
