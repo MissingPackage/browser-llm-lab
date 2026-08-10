@@ -1,5 +1,29 @@
 # Docket — engine-fase-q1
 
+13. **NON-REG NUMERICA GLM = HOST-GATED (2026-08-10, it.21, fase 9 —
+   registrazione con rerun programmato)** — la non-regressione di
+   CORRETTEZZA GLM è PIENA e fresca (ktest 84/84 con pesi reali inclusi
+   layer0-conformance e model-2layer; suite 375; tsc). Quella NUMERICA
+   (decode >= 13.43, banda ±5% vs 15.641) NON è riproducibile in questa
+   sessione per host state: DIAGNOSI QUANTIFICATA (3 run + attribuzione):
+   (i) page cache OPFS lavata dai 29 GB q35 → stallResidenza 28-29 vs 4.3
+   ms/token c3c (= rapporto banda fredda/calda 1.79/11.9); mitigato con
+   eviction q35 + warm GLM → 8.4 ms; (ii) VRAM baseline 1257 vs ~985 MiB
+   → ceiling auto 14.13 vs 15.36 → budget 12.29 vs 12.737 → −96 slot →
+   residenza 84.2% nel TRATTO RIPIDO di P(dirty) (0.95-0.98 vs 0.81; il
+   collasso sotto ~85-88% è il comportamento NOTO di WP-0/c3c). PROVA che
+   NON è regressione di codice: gpuBusy per categoria IDENTICO al
+   riferimento (attn 22.0 vs 20.2, +5-9% termico su tutte le categorie);
+   ktest GLM tutti verdi. Landmine c3c "mai confrontare bande fra host
+   state diversi" colpita in pieno: la lezione di metodo è che la non-reg
+   NUMERICA di fine goal va eseguita a host comparabile DICHIARATO (boot
+   pulito o sessione dedicata). RERUN PROGRAMMATO: primo atto della
+   prossima sessione a boot pulito = glm-bench optimistic autobudget +
+   glm-conf full (anche lei host-sensibile: 4.9 pos/s e alloc-fail in
+   questa sessione) + Qwen (BASE_URL :5199 — il bug :5173 nei 2 script è
+   il thread aperto c3c). Artefatti diagnosi: nonreg-q1-glmbench-{,retry-,
+   warm-,warm2-}2026-08-10.json con attribution2.
+
 12. **SOGLIA GOLDEN 35B FISSATA — RATCHET (2026-08-10, it.18, fase 7;
    stesso regime pre-autorizzato di item 8/9)** — golden top-1 full-corpus
    del 35B-A3B su GPU CON PAGING: **1013/1024 = 98.925781%** (la migliore

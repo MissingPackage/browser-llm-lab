@@ -1,179 +1,79 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1: FASI 1-8/9 COMPLETE (recall 82.67%@8 spiegato, bandmodel 17.6 ms/miss); next = it.21 FASE 9 CHIUSURA)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL engine-fase-q1 CHIUSO: famiglia Qwen 3.5/3.6 conforme; next = decisione PI + rerun non-reg a boot pulito)
 
 ## 1. Next decidable
 
-**AVVIO GOAL `engine-fase-q1` — GENERALIZZAZIONE.** La direzione post-fase-C
-NON è più una decisione aperta: il PI l'ha data (docket c3c item 9, "vai") e
-poi raffinata (item 10). Sequenza congelata: **q1 (generalizzazione) →
-release (split repo + paper Zenodo + blog)**. I due prerequisiti immediati
-sono FATTI: (a) baseline nativa llama.cpp b10333 Vulkan stesso hardware —
-decode 66.6 / prefill 1230 tok/s vs browser 15.6/35.7 = **gap 4.3× / 34×**,
-limite INFERIORE (`results/engine/native-baseline-llamacpp-vulkan-2026-08-09.json`);
-(b) recon famiglia Qwen 3.5/3.6 (`docs/engine/study/2026-08-09-qwen35-family-recon.md`).
-**GOAL `engine-fase-q1` APERTO** (tag `goal-engine-fase-q1-start`,
-contratto v1 approvato dal PI, taglie: 4B mobile-target + 9B + 35B-A3B; il
-2B = eventuale futuro). Spine in `.harness/goals/engine-fase-q1/PHASES.md`:
-9 fasi sequenziali, plan-check pre-autorizzato (docket q1 item 1, revisione
-naturale prima della fase 3). **Fasi 1-2 DONE (it.1-3, verifier PASS)**: spec con ratifica
-(`docs/superpowers/specs/2026-08-10-engine-fase-q1-design.md`); GGUF in
-casa e SHA-verificati (~29 GB, q35-verify-sha exit 0); reader parametrico
-(`q35shape.ts`: shape dai metadata, inventario 426/427/733); primo
-tokenizer in-engine (`q35tokenizer.ts`: BPE byte-level, id==oracolo sul
-corpus 12 file, protocollo v2 `--no-escape`, semantica USER_DEFINED
-llama.cpp:3171); oracolo b10333 supporta la famiglia senza upgrade. **Fase 3 DONE
-(it.4-5)**: cpuref-f64 DeltaNet dalla fonte b10333 + 3 kernel WGSL
-(`kernels/deltanet.ts`) — ktest 75/75 (69 GLM intatti + 6 nuovi, catena
-T=12 stato-persistente maxAbs 5.4e-7, core a dims reali hd128). Suite 371
-PASS, tsc pulito. **Fase 4 slice 1 DONE (it.6)**: cpuref-f64
-4B e2e == ORACOLO al primo run (argmax su tutte le posizioni generate del
-golden smoke committato; mrope text-only = NEOX-64 provato dalla fonte;
-`q35cpurefmodel.ts`, test gated Q35_E2E=1). **Slice 2 DONE (it.7)**: assembly GPU
-dei layer attn con pesi REALI == cpuref a L2rel ~1e-7 (ktest 79/79; fixture
-q35-attn rigenerabile, rope parziale + sigmoidMul nuovi). **Slice 3 DONE (it.8): IL 4B GIRA
-SU GPU** — orchestratore `q35gpumodel.ts` (562 dispatch/token, piano
-precostruito, full residency), argmax GPU == ORACOLO 6/6 sul golden smoke,
-ktest 80/80; pareti Chromium risolte (Range per-tensore; maxBufferSize per
-la head 527 MB). **it.9 DONE**: golden full-corpus
-committato (8 prompt, 1024 pos, provenance piena) e **SOGLIA 4B FISSATA a
-RATCHET: top-1 ≥ 1012/1024 = 98.828125% AL PIN** (docket q1 item 8; run
-GPU 29 min; conformance infra: q35conf + run-golden-q35.sh). **it.10 DONE — FASE 4 COMPLETA**:
-riferimenti full-resident 4B committati (decode 22.93 tok/s p50 43.6 ms,
-prefill seq 26.0, TTFT 25.8 s; hostState user-session-light; frame
-correttezza-prima dichiarato — zero fusioni, readback per token). **it.11 DONE**: 9B CONFORME —
-ratchet **1000/1024 = 97.656%** con analisi near-tie al pin (24 miss tutti
-near-tie, 23/24 top-2, mediana 0.066 logit; docket item 9); embd/head
-invertiti sul 9B gestiti (Q4_0/Q6_K); riferimenti 9B: decode 14.55, prefill
-15.4, TTFT 40.3 s. **it.12 DONE — FASE 5 COMPLETA**: WP gap
-fatto — decode 5.18×/4.62× vs nativo Vulkan stesso GGUF, readback 5.1/3.6
-ms/token MISURATO (decode−prefillSeq), prefill 183×/171× = assenza di
-batching; leve per ROI in docket item 10 e doc studio
-(2026-08-10-q35-gap-decomposition.md); per il writeup: 4.6-5.2× a parità
-di regime. **it.13 DONE — FASE 6 COMPLETA**:
-dot4I8Packed/tuning escluse coi numeri del WP (rami previsti dal
-done-when); probe subgroup-matrix committato — feature ESPOSTA sul nostro
-harness ma INT8-ONLY, converge con dot4I8Packed post-prefill-batched;
-spec §7 corretta. **Slice 1 DONE (it.14)**: dequantQ4_K
-ancorato a gguf-py su byte reali + gemvQ4K ktestato a dims expert (82/82)
-+ `q35MoeFfnRefF64` dalla fonte (softmax→top8→norm clamp esatto→no scale;
-shared con gate sigmoid scalare — TUTTO diverso da GLM). **Slice 2 DONE (it.15)**: cpuref
-35B-A3B == ORACOLO al primo run (130 s; reader lazy da fd; golden smoke
-35B committato; fix head non-tied). Verifier: FAIL amministrativo journal
-sanato; elevata a docket item 7 l'arch falsa nei metadata dei golden q35.
-**Slice 3a DONE (it.16)**: DECISIONE — residency GLM intatto, paging q35
-= strato nuovo parametrico; blocco MoE GPU reale == cpuref L2rel 2-3e-7
-(entrambe le classi down, arena offset-binding; slot in byte REPACKED:
-Q6_K 210→212). **it.17 DONE nella sostanza** (verifier: 5/5 ricalcolato, root-cause
-corroborato al byte; FAIL puntuale sanato — la run full era abortita per
-golden mancante): 35B su GPU con paging (arena a CHUNK ≤2 GiB, LRU
-on-miss, residenza 70.3% al budget 12 GiB, firma routing, zero OOM;
-esecuzione segmentata correttezza-prima 1 sync/layer). **it.18 DONE — FASE 7 COMPLETA**:
-soglia ratchet 35B **1013/1024 = 98.926%** (11 miss tutti near-tie,
-mediana 0.204); paging vero: 9.06M selezioni, hit 98.55%, 121 421
-eviction, 234.7 GB on-miss, zero OOM (run 122 min); golden full con arch
-reale. **it.19 DONE (slice 1)**: bench tier 35B con hostState — 8/12/16 GB =
-decode 0.79/2.00/3.40 tok/s (residenza 23/47/64%, hit 77/91/94%),
-collasso 4.3× attribuito al hit-rate; tier mobile 4B (cap 2.48/3 GiB,
-proiezione parametrica = prefill-bound confermato); fix await-prefill;
-device-lost arena12 documentato (baseline VRAM). **it.20 DONE — FASE 8 COMPLETA**: recall lookahead 256-wide 82.67%@8 /
-47.74%@4 (denominatore 8, tetto 50% — esplicitare nei doc) vs GLM 91.92%
-con scostamento spiegato; bandmodel q35 fit 17.64 ms/miss (residui
-≤6.3%, limiti dichiarati); GLM bandmodel intatto. **Al lavoro: it.21 =
-FASE 9 — CHIUSURA DEL GOAL**: (1) checklist DONE WHEN del contratto
-voce per voce con evidenza puntuale (GOAL.md); (2) non-reg GLM PIENA
-fresca ad albero congelato: ktest 84/84 + conformance GLM (golden AL PIN
-98.828%, cpuref, firma) + bench b12 in banda ±5% + Qwen2.5 + suite +
-tsc — run GPU sequenziali 60 s; (3) direction: sezione generalizzazione
-COI NUMERI (3 ratchet, tier, gap 4.6-5.2×, recall spiegato + nota @4,
-leve ROI) + ledger; (4) docket q1 triage + HANDOFF refresh compatto
-(pattern 78 righe); (5) verifier finale su sostanza. PI-gated dopo:
-merge già autorizzato a goal chiuso e verificato (ruling merge-at-goal-
-close; siamo già su main), tag goal-engine-fase-q1-done. Perimetro: path testo Qwen
-3.5/3.6, fedeltà bit-verificata metodo GLM, tier mobile+8/12/16 emulati, WP
-decomposizione gap kernel-vs-paging, leve kernel bounded. Riancorarsi da:
-`.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`.
-Rischio tecnico dominante già nominato: **kernel DeltaNet WGSL** (ibrida 3:1
-linear-attention : GQA, mamba f32). Fuori sequenza, non aperti: hero-demo M4
-(docket c3c item 8, PI-gated per hardware), fase D — moltiplicatori/spec-dec
-MTP (DOPO q1, è per-modello), igiene fuori-goal (§3). Riancorarsi da:
-`.harness/goals/engine-fase-c3c/{GOAL,journal,docket}.md` (item 9/10),
-`docs/publishing/{split-plan,paper-contract-draft}.md`, direction §7, ledger §A.
+**DECISIONE PI: prossimo passo dopo q1.** Il goal `engine-fase-q1`
+(generalizzazione) è **CHIUSO** (it.21, checklist DONE WHEN 11/11 nel
+journal, tag `goal-engine-fase-q1-done`): il motore esegue il path testo
+della famiglia Qwen 3.5/3.6 — **4B 98.828% · 9B 97.656% · 35B-A3B 98.926%
+top-1 vs oracolo** (ratchet full-corpus, near-tie analizzati), il 35B col
+paging VERO (121k eviction, zero OOM). Gap nativo **4.6-5.2× decode a
+parità di regime** (scomposto con misura); tier 8/12/16 GB misurati col
+collasso attribuito; recall lookahead 82.67%@8 spiegato. Numeri =
+CORRETTEZZA-PRIMA dichiarata (i moltiplicatori sono fase D).
+**PRIMA DI TUTTO alla riapertura: rerun non-reg GLM a boot pulito**
+(docket q1 item 13 — HOST-GATED in questa sessione: page cache + VRAM
+baseline; correttezza GLM piena e verde, 84/84). Poi la sequenza congelata
+(docket c3c item 10): **release = split repo + paper Zenodo + blog** —
+oppure fase D (moltiplicatori sul modello target: prefill batched = leva
+1, decode no-readback −5.1 ms misurati, poi spec-dec MTP). Riancorarsi:
+`.harness/goals/engine-fase-q1/{GOAL,PHASES,journal,docket}.md`,
+direction §7-bis (i numeri), `docs/publishing/{split-plan,
+paper-contract-draft}.md`.
 
-## 2bis. State delta (sessione 26, 2026-08-09 — post-fase-C, fuori goal)
+## 2. State delta (sessione 27, 2026-08-10 — goal q1 intero, it.0-21)
 
-- **Baseline nativa** (429bfd2): llama.cpp b10333 Vulkan, stessa GPU/driver/
-  GGUF, p512/n64 — 66.6 / 1230 tok/s (best `-ncmoe 8`; 26.7/338 con tutti gli
-  expert su CPU). Chiude il [VERIFY] del writeup. Chiave architetturale:
-  llama.cpp fa **compute-at-data** sugli spillover (computa su CPU), noi li
-  trasferiamo ⇒ direzione WASM-SIMD REGISTRATA, non promessa.
-- **Recon Qwen** (429bfd2): 3.5 + 3.6 Apache 2.0, GGUF maturi (oracolo
-  llama.cpp preservato); tutta la famiglia è IBRIDA 3:1 (KV solo su 1/4 dei
-  layer ⇒ ctx lungo quasi gratis), MTP nativa ovunque (fase D apparecchiata);
-  35B-A3B = 256 expert top-8 da ~1.7 MB Q4 (granularità 3× più fine del nostro
-  paging). 3.8 = solo API, niente pesi open.
-- **Publishing**: split in 3 repo congelato ALLA PUBBLICAZIONE (20f3d11,
-  `docs/publishing/split-plan.md`); paper = companion del rilascio su Zenodo
-  preprint, si charterizza a valle di q1 coi numeri finali (e28c0a8,
-  `docs/publishing/paper-contract-draft.md`). Il lab resta il workshop.
-- Nessun goal aperto in questa sessione; nessun codice engine toccato.
+- 21 iterazioni in ~14 h, verifier gate su ognuna (2 FAIL sanati: journal
+  it.15, run-morta it.17). Storia completa nel journal del goal.
+- Moduli nuovi in `src/engine/`: q35shape (shape dai metadata),
+  q35tokenizer (PRIMO tokenizer in-engine, BPE byte-level), q35cpuref +
+  q35cpurefmodel (cpuref-f64 famiglia, reader lazy), q35sample,
+  kernels/deltanet (conv+gates+core WGSL), q35gpumodel (orchestratore
+  denso+MoE con arena a chunk e LRU), q35conf/ (conformance+bench+tap).
+  gguf/quant/wgsl estesi SOLO additivi (Q4_K, axpy, sigmoidMul, ropeDims).
+  GLM (glmmodel/residency/moe/bandmodel) INTATTO.
+- Strumenti: run-golden-q35.sh (provenance, CORPUS_DIR, arch fix),
+  q35-conf-run/q35-bench-run (--model/--arena-gib), q35-looka-run,
+  q35-bandmodel-fit, q35-tier-mobile-gen, webgpu-subgroup-matrix-probe,
+  q35-verify-sha, fixture generators.
+- Soglie ratchet nel docket q1 (item 8/9/12); leve e convergenza int8
+  (item 10/11); non-reg host-gated (item 13).
+- Docs: direction §7-bis (generalizzazione coi numeri), ledger +4 righe,
+  spec q1 con §7 aggiornata dal probe, gap-decomposition §5.
 
-## 2. State delta (sessione 25, 2026-08-08/09 — goal C3c intero)
+## 3. Open threads (fuori goal, non bloccanti)
 
-- Fasi 1-9 in 10 iterazioni, ogni iterazione verificata da loop-verifier
-  e committata su main (10 commit, 5c2de37..58f5cf4).
-- Meccanismi nuovi in `src/engine/`: `slabBudgetCtxAware` (residency.ts,
-  riserva tarata 512 MiB), prefetch in-forward decode+prefill chunked
-  (glmmodel.ts, tap router L+1, recall 91.92% @K=8), policy tier+AUTOPIN
-  (residency.ts, pin ≤12.5% HARD), `bandmodel.ts` (±1% sui 3 punti, test
-  permanente). Tutto dietro flag: default = comportamento storico.
-- Tool nuovi: `tools/opfs-cold/` (banda fredda browser, freddezza provata),
-  `scripts/glm-instanton-run.mjs` (instant-on, protocollo mediane 3+3).
-- Riferimenti nuovi (docket c3c item 2/5-bis): b12 optimistic
-  13.172/31.26/14.74; hit-rate policy 1472/736 (routing-policy-*.json);
-  instant-on 1.247 ≤ 1.25× (ruling item 1a).
-- Docs: direction §7 fase C CHIUSA, §8.3 banda browser; ledger §A riga
-  paging CHIUSA; spec `2026-08-08-engine-fase-c3c-design.md`.
-- Storia completa: `.harness/goals/engine-fase-c3c/journal.md` (it.0-10);
-  lo storico delle sessioni 17-24 vive nei journal dei goal c3a/c3b.
-
-## 3. Open threads
-
-- **Fuori-goal, non bloccanti**: ratifiche c3a item 14b / item 2 formale /
-  19-21 prese d'atto; `npm run test:conformance` punta all'harness
-  benchmark; BASE_URL :5173 in 2 script; goal fase-1b/fase-2 in STANDBY
-  deliberato (benchmark, ripresa più avanti — NON stale, PI 2026-08-09); campi power hostState scambiati (c3c item 7);
-  selezioni prefill non in eusage (c3c item 6); profilo bench ~6.4 GiB in
-  `~/.cache/blab-opfs-cold-profile` (cancellabile).
-- C3b/C3a/C2: chiusi, nessun item aperto che richieda azione.
+- **Rerun non-reg a boot pulito** (docket q1 item 13): glm-bench
+  optimistic autobudget (>=13.43, banda vs 15.641) + glm-conf full +
+  Qwen2.5. È il gate d'apertura della prossima sessione.
+- Golden q35 4B/9B: campo arch "deepseek2" stale nei metadata (fix del
+  tool fatto; rigenerare i CAMPI prima del paper — docket q1 item 7).
+- BASE_URL :5173 in engine-bench.mjs e conformance (thread c3a).
+- Ratifiche c3a pendenti (14b, 2, 19-21); campi power hostState scambiati
+  (c3c item 7); profilo bench ~6.4 GiB in ~/.cache cancellabile.
+- Goal fase-1b/fase-2 = STANDBY deliberato benchmark (non stale).
+- Disco: +50 GB questa sessione (29 GGUF q35 + profili/golden).
 
 ## 4. Landmines
 
-- Bench su questa macchina: gate a macchina scarica o host state DICHIARATO
-  nel JSON; costo per-fetch varia ~4× fra sessioni host (upload 0.65-3.7
-  ms) — mai confrontare bande ±5% fra host state diversi.
-- Margine instant-on 0.3%: qualunque ritocco al prefill invalida il
-  riferimento — rimisurare col protocollo v2 (mediane 3+3), non a sessione
-  singola.
-- Prefill in scarsità collassa (30→4 tok/s a 1472/736 slot): su device
-  piccoli il TTFT è prefill-bound, primo numero da guardare in fase D.
-- Run GPU lunghe SOLO ad albero congelato (HMR vite uccide la run) e 60 s
-  fra run; niente pipe sull'output dei runner; `/tmp` è tmpfs (profili
-  Chrome in ~/.cache); KV = 108 288 B/token (f32, NON il vecchio 54 KB).
-- Full-corpus SOLO per firma/nonreg/riferimenti nuovi; sim su traccia o
-  subset di PROMPT INTERI per esplorare (mai --cap: perde il decode).
-- Oracolo CPU quantizza q8: mai gate su near-tie; golden ≥98.828% è un PIN.
-- Storiche: error scope su ogni submit; vite :5199; f32-first; `pos ===
-  kvLen` hard; var WGSL nei loop da azzerare; mai mapAsync su submit non
-  emesso; lock OPFS transitorio possibile al primo accesso (retry).
+- **Non-reg NUMERICA solo a host comparabile DICHIARATO** (lezione it.21):
+  page cache OPFS e VRAM baseline muovono stallResidenza 4.3→29 ms/token
+  e P(dirty) 0.81→0.98; mai confrontare bande fra host diversi (c3c).
+- MoE q35: prefill bench con `await` (mai fire-and-forget: mapAsync del
+  router); arena SOLO a chunk ≤2 GiB (adapter cap 4 GB, il monolitico
+  fallisce SILENZIOSO); slot in byte REPACKED (Q6_K 210→212).
+- fetch/ArrayBuffer >2 GiB: sempre Range/pread (3 pareti trovate).
+- recall@4 lookahead ha denominatore 8 (tetto 50%): mai confrontarlo
+  con @8 senza dichiararlo.
+- Storiche: run GPU ad albero congelato + 60 s; niente pipe sui runner;
+  near-tie mai gateati; f32-first; var WGSL azzerate; full-corpus solo
+  per riferimenti; KV GLM 108 288 B/token; q35: 40 960 (35B) / 65 536
+  (densi).
 
 ## 5. Docket (user decisions pending)
 
-- **Via all'apertura di q1** — è il §1: contratto su disco e approvato,
-  manca solo il "partiamo" del PI per lanciare /goal.
-- Timing del blog (prima del paper o insieme) — aperto, non bloccante
-  (docket c3c item 10).
-- Freshness di HANDOFF: hook "messaggio nomina HANDOFF ⇒ HANDOFF.md in
-  index" = tampone approvato dal PI; il meccanismo vero (garanzia di
-  refresh a fine goal, non a ogni commit) è da disegnare insieme —
-  parcheggiato (PI 2026-08-09).
-- c3c item 8: input hero-demo M4 (PI-gated per hardware).
-- Ratifiche c3a pendenti (14b, 2 formale, 19-21) — prese d'atto, non urgenti.
+- **Prossimo passo post-q1**: release (split+paper+blog, sequenza c3c
+  item 10) vs fase D (moltiplicatori) — la decisione di §1.
+- Rerun non-reg a boot pulito (q1 item 13) — operativo, primo atto.
+- Hero-demo M4 (c3c item 8) — PI-gated per hardware.
+- Timing del blog (prima del paper o insieme) — aperto, non bloccante.

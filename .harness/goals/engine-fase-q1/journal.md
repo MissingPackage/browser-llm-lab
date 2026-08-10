@@ -511,3 +511,62 @@
 - PHASES fase 8 -> done (it.19-20). Fasi 1-8 COMPLETE. Next: it.21 =
   FASE 9 CHIUSURA (checklist contratto voce-voce, non-reg GLM piena ad
   albero congelato, direction/ledger/HANDOFF, docket triage).
+
+## it.21 (2026-08-10) — FASE 9: CHIUSURA DEL GOAL
+
+### Non-reg GLM: diagnosi e esito
+- ktest COMPLETO fresco: **84/84 PASS** (tutti i path GLM con pesi reali:
+  layer0-conformance, model-2layer, optimistic, arena). Suite 375, tsc ok.
+- Bench numerico: 3 run + attribuzione ⇒ NON regressione di codice
+  (gpuBusy per categoria IDENTICO a c3c: attn 22.0 vs 20.2, +5-9% termico
+  uniforme) ma HOST NON COMPARABILE: page cache lavata dai 29 GB q35
+  (stallResidenza 28-29→8.4 ms/token dopo eviction+warm; c3c: 4.3) +
+  VRAM baseline 1257 vs 985 MiB (→ −96 slot → residenza 84.2% nel tratto
+  ripido di P(dirty), 0.95-0.98 vs 0.81 — comportamento NOTO WP-0).
+  Registrato a docket item 13 con rerun a boot pulito = primo atto della
+  prossima sessione. Lezione di metodo: la non-reg NUMERICA di fine goal
+  si esegue a host comparabile DICHIARATO.
+- Qwen2.5: script con BASE_URL :5173 hardcoded (thread aperto c3c, non
+  regressione) — nel rerun.
+
+### Checklist DONE WHEN del contratto (GOAL.md), voce per voce
+1. **Spec + docket PRIMA del codice** ✓ it.1: spec 2026-08-10 con ratifica
+   §0, SHA pinnate, subgroup-matrix chiuso in spec (docket item 2).
+2. **Reader + tokenizer: token id IDENTICI, 3 modelli, npm test, tsc** ✓
+   it.3: q35shape (426/427/733), q35tokenizer (12 file id==oracolo,
+   protocollo v2), suite verde.
+3. **Kernel DeltaNet + GQA: argmax == cpuref-f64** ✓ it.4-8 e it.15:
+   ktest kernel-level + assembly reale (L2rel e-7) + cpuref e2e == oracolo
+   su 4B (it.6) e 35B (it.15). DICHIARAZIONE: sul 9B l'anello cpuref e2e
+   non è stato eseguito (codice parametrico identico ai fratelli; coperto
+   dal golden GPU==oracolo 97.656% con analisi near-tie 24/24) — scelta
+   di metodo dichiarata, non taciuta.
+4. **Golden per-modello a soglia RATCHET** ✓ docket item 8/9/12:
+   98.828% / 97.656% / 98.926%, tutte con analisi near-tie, provenance
+   piena, full-corpus.
+5. **WP decomposizione gap** ✓ it.12: 5.18×/4.62× con readback MISURATO,
+   doc studio + JSON auto-verificato; prefill = assenza dichiarata.
+6. **Leve bounded** ✓ it.13: 2 esclusioni coi numeri (rami previsti),
+   probe subgroup-matrix committato (int8-only, convergenza registrata).
+7. **MoE regime C3c** ✓ it.14-18: paging parametrico (GLM INTATTO),
+   35B su GPU 98.926% col paging VERO (121k eviction, zero OOM, firma
+   routing nel JSON).
+8. **Tier mobile** ✓ it.19: cap 3 GiB rispettato + proiezione parametrica
+   (banda libera, PI-gated il device).
+9. **Prefill/TTFT dentro il goal** ✓: in ogni bench (seq dichiarato);
+   collasso scarsità 4.3× misurato e attribuito (it.19).
+10. **Non-reg GLM permanente** ✓ correttezza (84/84+suite+tsc a ogni
+    merge, fresca oggi) / NUMERICA host-gated dichiarata (docket item 13,
+    rerun programmato).
+11. **Chiusura docs** ✓ it.21: direction §7-bis coi numeri, ledger +4
+    righe, docket triage (item 1-13: nessuna decisione PI pendente DENTRO
+    il goal; restano fuori-goal item 7 metà [golden 4B/9B campi arch] e
+    item 13 rerun), HANDOFF refresh compatto.
+
+### Numeri finali del goal (per il re-entry)
+- 3 modelli conformi: 4B 98.828% · 9B 97.656% · 35B 98.926% (ratchet).
+- Riferimenti correttezza-prima: 4B 22.93/26.0/25.8s · 9B 14.55/15.4/40.3s
+  · 35B tier 0.79/2.00/3.40 tok/s (8/12/16 GB).
+- Gap nativo: 4.6-5.2× decode a parità di regime; prefill = assenza.
+- Recall lookahead: 82.67%@8 (spiegato); bandmodel 17.64 ms/miss.
+- 21 iterazioni, 1 giorno, verifier gate su ognuna (2 FAIL sanati).
