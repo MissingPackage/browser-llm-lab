@@ -34,3 +34,14 @@ I campi compat legacy ora FALLISCONO sui K-quant invece di fabbricare un
 offset finto. q35 non ha più bisogno di `slotsOverride`. GLM bit-identico
 (ktest 84/84), suite 387. Restano: gate strutturale da irrobustire (4b) e
 migrazione di q35gpumodel.
+
+## it.4 (2026-08-10)
+
+Gate strutturale da FIRME TESTUALI a INVARIANTI non aggirabili: (A) chi
+nomina i tensori expert del GGUF e crea buffer GPU deve importare la
+meccanica; (B) il clamp del router può stare solo in moe.ts. Allowlist con
+razionale, e le voci "DEBITO NOTO" (solo q35gpumodel) sono ciò che la
+fase 1 deve far sparire. Il gate PROVA SE STESSO su offender sintetici —
+inclusa la variante di spaziatura che sfuggiva prima. ktest 84/84, suite
+391. Docket item 4 chiuso per intero; resta la migrazione di q35gpumodel
+(it.5), che chiude la fase 1.

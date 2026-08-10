@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { globSync } from "node:fs";
 import {
   mkSlabLayout, packExpertSlab, routerSelect, ROUTER_GLM47, ROUTER_QWEN35MOE,
-  SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1,
+  SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, WEIGHTS_SUM_CLAMP_MIN,
 } from "../src/engine/moe";
 import {
   MOE_CFG_GLM47, MIN_SLOTS, PARK_Q4_0, PARK_Q4_1, SLOT_TABLE_ENTRIES,
@@ -15,71 +15,114 @@ import {
 // §7-ter): il codice si UNIFORMA — una meccanica, UNA implementazione. Una
 // famiglia nuova è una CONFIGURAZIONE, mai un path parallelo.
 //
-// Pattern di `tests/gpudevice.test.ts`, che già vieta per costruzione un
-// secondo sito di `requestDevice`: qui la scansione del sorgente vieta un
-// secondo router, un secondo layout di slab, una seconda arena/LRU.
+// PATTERN: `tests/gpudevice.test.ts` — non si verifica sito per sito (lista
+// che marcisce), si VIETA l'esistenza di siti fuori dal punto unico
+// intercettando qualcosa che NON SI PUÒ EVITARE, con allowlist motivata.
+//
+// La prima versione (it.1) usava firme TESTUALI ricalcate sul testo degli
+// offender: il verifier di it.2 ha dimostrato che una copia con spaziatura
+// diversa sfuggiva. Questa versione (it.4) usa due INVARIANTI:
+//
+//  A. ARENA/SLAB — per mettere un expert in VRAM servono per forza (i) i NOMI
+//     GGUF dei tensori expert (`ffn_{gate,up,down}_exps`, convenzione di
+//     llama.cpp valida per OGNI famiglia MoE) e (ii) la creazione di buffer
+//     GPU. Chi fa entrambe DEVE passare dalla meccanica (moe.ts/residency.ts).
+//
+//  B. ROUTER — un router MoE fedele DEVE applicare il clamp del denominatore
+//     di `build_moe_ffn` (6.103515625e-5, minimo f16 normale). Chi scrive quel
+//     letterale invece di importare `WEIGHTS_SUM_CLAMP_MIN` riscrive il router.
+//
+// Il secondo `describe` mette alla prova IL GATE STESSO su offender sintetici:
+// senza, un predicato può marcire in un no-op senza che nessuno se ne accorga.
 
 const SRC = globSync("src/engine/**/*.ts").filter((f) => !f.endsWith(".d.ts"));
 const read = (f: string): string => readFileSync(f, "utf8");
 
-// RATCHET DELLE DUPLICAZIONI: questa lista può solo ACCORCIARSI. Il test è
-// verde sullo stato noto, rosso se una duplicazione COMPARE, e rosso anche
-// se una sparisce senza aggiornare la lista — così la parità non si può né
-// perdere né dichiarare a voce. A fase 1 completa: liste vuote (tranne le
-// eccezioni dichiarate).
-// ECCEZIONE DICHIARATA PERMANENTE, come CATEGORIA (non come lista di file —
-// nota del verifier it.2): i CPUREF di famiglia sono riferimenti INDIPENDENTI
-// per il differential testing. Se usassero il codice del motore, un bug
-// condiviso sarebbe invisibile al confronto. `cpuref.ts` (GLM) e
-// `q35cpurefmodel.ts` (Qwen) sono entrambi in questa categoria.
-const CPUREF = /cpuref/;
+/** NOMI dei tensori expert nel GGUF: inevitabili per chiunque li carichi */
+const EXPERT_TENSORS = /ffn_(gate|up|down)_exps/;
+/** creazione di memoria GPU: inevitabile per chiunque li porti in VRAM */
+const GPU_ALLOC = /createBuffer\s*\(/;
+/** il clamp di build_moe_ffn: inevitabile per un router MoE fedele */
+const CLAMP_LITERAL = /6\.103515625e-5/;
+/** l'import della meccanica unica */
+const IMPORTS_MECHANISM = /from "\.{1,2}\/(moe|residency)"/;
 
-const DUP_NOTE = {
-  router: ["src/engine/q35gpumodel.ts"],
-  slab: ["src/engine/q35gpumodel.ts"],
-  arena: ["src/engine/q35gpumodel.ts"],
+// ALLOWLIST CON RAZIONALE (pattern gpudevice.test): ogni riga dice PERCHÉ quel
+// file non passa dalla meccanica. Aggiungere qui senza motivo = rifare a mano
+// la deriva che questo gate esiste per impedire.
+const ARENA_ALLOWED: Record<string, string> = {
+  "src/engine/q35gpumodel.ts":
+    "DEBITO NOTO (docket fase-D item 4): arena+LRU proprie, da migrare a ExpertCache — la riga sparisce con la migrazione",
+  "src/engine/ktest/ktest.worker.ts":
+    "harness dei kernel: impacchetta expert a mano PER CONFRONTARE la meccanica con un riferimento indipendente",
+};
+const ROUTER_ALLOWED: Record<string, string> = {
+  "src/engine/moe.ts": "il punto unico stesso: qui la costante WEIGHTS_SUM_CLAMP_MIN è definita",
+  "src/engine/cpuref.ts": "CPUREF GLM: riferimento indipendente del differential testing (categoria dichiarata, docket item 3)",
+  "src/engine/q35cpurefmodel.ts": "CPUREF Qwen: stessa categoria dichiarata, indipendenza voluta",
+  "src/engine/q35gpumodel.ts": "DEBITO NOTO (docket fase-D item 4): router proprio, da sostituire con routerSelect",
+  "src/engine/ktest/ktest.worker.ts": "harness dei kernel: verifica il valore del clamp contro la costante importata",
 };
 
-describe("una meccanica, una implementazione (gate strutturale fase-D)", () => {
-  it("il ROUTER vive solo in moe.ts: nessun altro modulo ricalcola gating+top-K", () => {
+describe("una meccanica, una implementazione — INVARIANTI (gate strutturale fase-D)", () => {
+  it("A. chi porta EXPERT in VRAM passa dalla meccanica (o è in allowlist motivata)", () => {
     const offenders: string[] = [];
     for (const f of SRC) {
-      if (f.endsWith("moe.ts")) continue;
-      const s = read(f);
-      // firma di un router riscritto in casa: softmax/sigmoid sui logit +
-      // selezione top-K nello stesso file
-      const hasGating = /Math\.exp\(-?logits?\[/.test(s) || /probs\[e\] = Math\.exp\(/.test(s);
-      const hasTopK = /\.slice\(0, *(topK|nUsed|nExpertUsed)\)/.test(s) || /taken\[best\] = 1/.test(s);
-      if (hasGating && hasTopK && !CPUREF.test(f)) offenders.push(f);
+      const s2 = read(f);
+      if (!EXPERT_TENSORS.test(s2) || !GPU_ALLOC.test(s2)) continue; // non fa slab
+      if (IMPORTS_MECHANISM.test(s2)) continue;                      // passa dalla meccanica
+      if (f in ARENA_ALLOWED) continue;                              // eccezione motivata
+      offenders.push(f);
     }
-    expect(offenders.sort(), "ratchet router: la lista può solo accorciarsi (usa routerSelect); il cpuref è eccezione dichiarata").toEqual(DUP_NOTE.router);
+    expect(offenders.sort(), "chi nomina i tensori expert E crea buffer GPU deve importare moe.ts/residency.ts").toEqual([]);
   });
 
-  it("il LAYOUT SLAB vive solo in moe.ts: nessun altro modulo calcola offset di slot a mano", () => {
+  it("B. il CLAMP del router vive solo in moe.ts (gli altri importano la costante)", () => {
     const offenders: string[] = [];
     for (const f of SRC) {
-      if (f.endsWith("moe.ts")) continue;
-      const s = read(f);
-      // firma di un layout riscritto: byte per slot sommati a mano dai
-      // tensori dell'expert (gate+up+down) nello stesso file
-      if (/slotBytes\s*[:=][^;]*gate[A-Za-z]*\s*\+/.test(s) || /2 \* gateRp \+ down/.test(s)) {
-        offenders.push(f);
-      }
+      if (!CLAMP_LITERAL.test(read(f))) continue;
+      if (f in ROUTER_ALLOWED) continue;
+      offenders.push(f);
     }
-    expect(offenders.sort(), "ratchet layout slab: la lista può solo accorciarsi (usa mkSlabLayout)").toEqual(DUP_NOTE.slab);
+    expect(offenders.sort(), "usa WEIGHTS_SUM_CLAMP_MIN: un router fedele non può evitare quel clamp").toEqual([]);
+    expect(WEIGHTS_SUM_CLAMP_MIN).toBe(6.103515625e-5);
   });
 
-  it("l'ARENA+LRU vive solo in residency.ts: nessun altro modulo tiene una propria slot table", () => {
-    const offenders: string[] = [];
-    for (const f of SRC) {
-      if (f.endsWith("residency.ts")) continue;
-      const s = read(f);
-      // firma di una cache di slot riscritta: mappa chiave→slot + evizione LRU
-      const hasByKey = /byKey\s*[:.]/.test(s) || /new Map<number, number>\(\)/.test(s);
-      const hasLru = /lru\.(delete|set|entries)/.test(s);
-      if (hasByKey && hasLru) offenders.push(f);
+  it("l'allowlist è un DEBITO tracciato, non un parcheggio", () => {
+    for (const [f, why] of Object.entries({ ...ARENA_ALLOWED, ...ROUTER_ALLOWED })) {
+      expect(why.length, `${f}: razionale troppo corto`).toBeGreaterThan(30);
     }
-    expect(offenders.sort(), "ratchet arena/LRU: la lista può solo accorciarsi (usa ExpertCache di residency.ts)").toEqual(DUP_NOTE.arena);
+    // le voci "DEBITO NOTO" devono sparire: la fase 1 non è chiusa finché ci sono
+    const debiti = [...new Set(Object.entries({ ...ARENA_ALLOWED, ...ROUTER_ALLOWED })
+      .filter(([, why]) => why.startsWith("DEBITO NOTO")).map(([f]) => f))];
+    expect(debiti).toEqual(["src/engine/q35gpumodel.ts"]);
+  });
+});
+
+describe("il gate mette alla prova SE STESSO (anti-marciume)", () => {
+  // Un predicato che non becca più niente è indistinguibile da un gate verde.
+  const arenaHit = (s2: string): boolean =>
+    EXPERT_TENSORS.test(s2) && GPU_ALLOC.test(s2) && !IMPORTS_MECHANISM.test(s2);
+
+  it("becca un'arena scritta a mano, comunque la si formatti", () => {
+    expect(arenaHit('const t = "blk.0.ffn_gate_exps.weight"; device.createBuffer({size: 1});')).toBe(true);
+    // spaziatura diversa: la variante che sfuggiva alle firme testuali di it.1
+    expect(arenaHit("const n='ffn_down_exps'; dev . createBuffer ( {size:1} )")).toBe(true);
+    // nomi di variabile completamente diversi
+    expect(arenaHit("const foo = `blk.${i}.ffn_up_exps.weight`; gpu.createBuffer({});")).toBe(true);
+  });
+
+  it("NON becca chi passa dalla meccanica, né chi non fa slab", () => {
+    expect(arenaHit('import { packExpertSlab } from "./moe";\nconst t="ffn_gate_exps"; device.createBuffer({});')).toBe(false);
+    expect(arenaHit('import { ExpertCache } from "../residency";\nconst t="ffn_up_exps"; d.createBuffer({});')).toBe(false);
+    expect(arenaHit('const t = "ffn_gate_exps.weight"; // solo validazione shape, niente VRAM')).toBe(false);
+    expect(arenaHit("device.createBuffer({ size: 16 }); // buffer qualsiasi, niente expert")).toBe(false);
+  });
+
+  it("il predicato del router becca il letterale comunque scritto", () => {
+    expect(CLAMP_LITERAL.test("Math.max(sum, 6.103515625e-5)")).toBe(true);
+    expect(CLAMP_LITERAL.test("const MIN=6.103515625e-5;")).toBe(true);
+    expect(CLAMP_LITERAL.test("import { WEIGHTS_SUM_CLAMP_MIN } from './moe';")).toBe(false);
   });
 });
 
@@ -215,11 +258,19 @@ describe("il MOTORE della residenza è cfg-driven (fase-D fase 1 slice C)", () =
     expect(needs.arenaWindowBytes).toBeGreaterThanOrEqual(q6k.bytes);
   });
 
+  it("slotsOverride con chiavi di un'altra config FALLISCE (niente cache a zero classi)", () => {
+    expect(() => expertSlots({ budgetBytes: 1, slotsOverride: { q4_0: 10, q4_1: 10 }, cfg: qwen }))
+      .toThrow(/senza la classe "q4_K"/);
+  });
+
   it("i campi compat legacy FALLISCONO su un layout K-quant invece di mentire", () => {
     // trappola trovata dal verifier it.2: prima restituivano un offset finto
     expect(() => q4k.gateScales).toThrow(/non esiste sul formato q4_K/);
     expect(() => q6k.downScales).toThrow(/non esiste sul formato q6_K/);
     // sui legacy restano leciti e corretti
     expect(SLAB_DOWN_Q4_0.gateScales).toBe(1572864);
+    // ma NON esplodono su spread/serializzazione (getter non enumerabili)
+    expect(() => JSON.stringify(q4k)).not.toThrow();
+    expect(() => ({ ...q6k })).not.toThrow();
   });
 });

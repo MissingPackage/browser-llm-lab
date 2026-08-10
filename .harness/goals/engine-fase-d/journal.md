@@ -161,3 +161,34 @@ Verifier PASS con 5 rilievi; i 4 minori chiusi immediatamente:
   ZERO classi in silenzio: ora le chiavi si validano contro `cfg.classes`.
 - docket item 4 annotato con lo stato reale (a/c/d CHIUSI, b unico residuo).
 Il quinto (gate strutturale da irrobustire) È il lavoro di it.4.
+
+## it.4 (2026-08-10) — fase 1: il gate strutturale è un INVARIANTE (docket 4b CHIUSO)
+
+Il gate di it.1 era fatto di FIRME TESTUALI ricalcate sul testo degli
+offender: il verifier ha dimostrato che una copia con spaziatura diversa
+sfuggiva. Riscritto sul pattern vero di `gpudevice.test` — intercettare
+qualcosa che NON SI PUÒ EVITARE, con allowlist motivata:
+
+- **INVARIANTE A (arena/slab)**: per mettere un expert in VRAM servono per
+  forza (i) i NOMI GGUF dei tensori expert (`ffn_{gate,up,down}_exps` —
+  convenzione llama.cpp valida per OGNI famiglia MoE) e (ii) la creazione
+  di buffer GPU. Chi fa entrambe DEVE importare moe.ts/residency.ts.
+- **INVARIANTE B (router)**: un router MoE fedele DEVE applicare il clamp
+  di `build_moe_ffn` (6.103515625e-5). Chi scrive il letterale invece di
+  importare `WEIGHTS_SUM_CLAMP_MIN` sta riscrivendo il router.
+- **ALLOWLIST CON RAZIONALE** (come gpudevice.test): ogni voce dice perché.
+  Un test verifica che i razionali non siano vuoti e che le voci marcate
+  "DEBITO NOTO" siano SOLO q35gpumodel — la fase 1 non chiude finché ci sono.
+- **IL GATE PROVA SE STESSO** (anti-marciume): 3 test danno ai predicati
+  offender SINTETICI e pretendono che scattino — inclusa la variante di
+  spaziatura che sfuggiva a it.1 — e controesempi che NON devono scattare
+  (chi importa la meccanica, chi nomina i tensori senza toccare la VRAM).
+  Senza questo, un predicato può marcire in un no-op restando verde.
+- Test aggiunti anche per i due fix di it.3 senza copertura: `slotsOverride`
+  con chiavi di un'altra config FALLISCE; JSON/spread di un layout K-quant
+  NON esplodono (getter non enumerabili).
+- GATE: ktest **84/84** GLM bit-identico; suite **391** (+4); tsc pulito.
+- STATO FASE 1: docket item 4 completamente CHIUSO (a/c/d in it.3, b qui).
+  La fase NON è ancora done: resta la migrazione di `q35gpumodel` alla
+  meccanica unica, che il gate ora ESIGE (le sue due voci di allowlist sono
+  marcate DEBITO NOTO e vanno rimosse). È it.5, e chiude la fase 1.
