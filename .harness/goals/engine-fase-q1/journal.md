@@ -423,3 +423,12 @@
   (docket). Lo smoke 5/5 NON è la soglia: è il gate di correttezza.
 - ktest 84/84 (single-pass variant inclusa), suite 375/9, tsc pulito,
   GLM intatto.
+- CORREZIONE (verifier it.17, FAIL puntuale sul punto 5 — sanato): la run
+  full dichiarata sopra era ABORTITA in 24 s — mancava il GOLDEN full 35B
+  (mai generato: solo smoke). Sequenza sanata: (1) fix arch hardcoded in
+  golden.cpp (docket item 7: ora legge l'arch REALE via llama_model_desc —
+  verificato "qwen35" su rigenerazione di prova; i golden 4B/9B committati
+  restano da rigenerare nei CAMPI prima del paper, numeri identici),
+  (2) golden full 35B in generazione su CPU (~30-60 min), (3) la conf GPU
+  full (~11-12 h) parte alla fine del golden. La sostanza di it.17 (5/5,
+  arena, root-cause) è tutta confermata dal verifier con ricalcoli.

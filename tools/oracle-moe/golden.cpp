@@ -143,9 +143,20 @@ int main(int argc, char ** argv) {
         llama_free(ctx);
     }
 
+    // arch REALE dal modello (docket q1 item 7: prima era hardcoded "deepseek2"
+    // e i golden qwen35 nascevano con metadata falso)
+    char arch_buf[64] = "unknown";
+    {
+        char desc[128];
+        llama_model_desc(model, desc, sizeof(desc));
+        // desc = "<arch> <size> <quant>": prendi il primo token
+        size_t i = 0;
+        while (i < sizeof(arch_buf) - 1 && desc[i] && desc[i] != ' ') { arch_buf[i] = desc[i]; i++; }
+        arch_buf[i] = 0;
+    }
     std::ofstream out(out_path);
     out << "{\"schemaVersion\":1,\"kind\":\"engine-golden\",\"model\":\"" << model_path.substr(model_path.find_last_of('/') + 1)
-        << "\",\"modelSha256\":\"" << gguf_sha << "\",\"arch\":\"deepseek2\","
+        << "\",\"modelSha256\":\"" << gguf_sha << "\",\"arch\":\"" << arch_buf << "\","
         << "\"oracle\":{\"impl\":\"llama.cpp-oracle\",\"commit\":\"" << commit << "\",\"nThreads\":" << n_threads
         << ",\"nCtx\":8192,\"nBatch\":" << n_chunk << ",\"backend\":\"CPU\",\"sampling\":\"greedy\"},"
         << "\"corpusHash\":\"" << corpus_hash << "\",\"genTokens\":" << n_predict << ",\"topK\":" << top_k << ","
