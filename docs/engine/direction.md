@@ -144,7 +144,7 @@ una famiglia di modelli per volta, zero astrazione**.
 | First-light | Qwen2.5-0.5B q4 | battere 107 tok/s con L1-L3; grafo già noto al dispatch-level (269 disp/token misurati, invarianti di device — estimates §8) | gate di v0 |
 | Dev rungs | Qwen3.5-0.8B / 2B (Apache) | sviluppo quotidiano, CI, evals | v0.5+ |
 | **Tesi** | **GLM-4.7-Flash 30B-A3B** | MoE+MLA: hero-demo M4 (residenza piena, ~17 GB q4 in 48 GB); sul box dev (4090 Laptop 16 GiB) il paging è marginale — misurato C1: 2.573 slot su 2.944, fattore 1.14× | v1 |
-| v2 | Qwen3.5-35B-A3B / Nemotron (ibridi) | kernel linear-attention fuori dal critical path di v0 | dichiarato |
+| v2 | Qwen3.5-35B-A3B / Nemotron (ibridi) | kernel linear-attention fuori dal critical path di v0 | **FATTO (goal q1, 2026-08-10): famiglia Qwen 3.5/3.6 conforme — v. §7-bis** |
 
 ## 7. Ordine di costruzione (dal WP studio, §6 della sintesi)
 
@@ -253,6 +253,65 @@ live di divergenza — idea DeepSpec).
 Le fasi B/C/D si sequenziano dopo il gate di A; dentro ciascuna, spec dedicata prima
 del codice (convenzione repo). Il benchmark pubblico e la roadmap generale del progetto
 (consolidamento → ceiling+hero-demo → motore) restano fuori da questo doc.
+
+## 7-bis. Generalizzazione — goal engine-fase-q1 CHIUSO (2026-08-10, coi numeri)
+
+Il motore esegue il path testo della famiglia Qwen 3.5/3.6 (ibrida 3:1
+Gated-DeltaNet : GQA) con la fedeltà del metodo GLM. Tre modelli, tre
+soglie ratchet fissate su golden full-corpus (1024 posizioni, oracolo
+llama.cpp b10333, provenance piena):
+
+| Modello | top-1 ratchet | near-tie dei miss | riferimenti (correttezza-prima) |
+|---|---|---|---|
+| 4B denso (tied) | **1012/1024 = 98.828%** | sparsi, max 3/prompt | decode 22.93 tok/s · prefill seq 26.0 · TTFT 25.8 s (full-resident) |
+| 9B denso | **1000/1024 = 97.656%** | 24/24 near-tie (23 top-2, mediana 0.066 logit) | 14.55 · 15.4 · 40.3 s |
+| 35B-A3B MoE | **1013/1024 = 98.926%** | 11/11 near-tie (mediana 0.204, zero >1 logit) | col paging: v. tier |
+
+I riferimenti sono DICHIARATI correttezza-prima (562-782 dispatch/token,
+zero fusioni, readback per token nel decode; sul MoE 1 sync router/layer):
+sono il FRAME su cui i moltiplicatori (fase D) lavorano, non numeri
+competitivi. Pezzi nuovi permanenti: tokenizer in-engine (BPE byte-level,
+id==oracolo, protocollo `--no-escape`+USER_DEFINED), reader parametrico
+(shape dai metadata), kernel DeltaNet WGSL (ktest vs cpuref-f64 dalla
+fonte b10333), dequant/gemv Q4_K, paging MoE parametrico (arena a chunk
+≤2 GiB per classe down, LRU on-miss; residency.ts GLM INTATTO — rifit
+della meccanica C3c piena rimandato alla fase D sul modello target).
+
+**Tier 35B misurati** (bench p512-style, host dichiarato): 8/12/16 GB →
+decode 0.79/2.00/3.40 tok/s (residenza 23/47/64%, hit 77/91/94%) — il
+collasso in scarsità è 4.3×, attribuito al hit-rate (~73 miss/token al
+tier 8; costo miss 17.64 ms fit su 3 punti, LIMITI dichiarati nel JSON:
+il costo include il repack JS on-miss del regime correttezza-prima).
+Full-corpus a budget 12 GiB: hit 98.55% con 121 421 eviction LRU reali,
+zero OOM. Tier mobile 4B: cap 3 GiB rispettato (footprint 2.48), TTFT
+mobile = proiezione PARAMETRICA (banda storage e compute factor liberi):
+prefill-bound ⇒ il batching è la porta del mobile.
+
+**Gap nativo a parità di regime** (stesso GGUF, stessa GPU, llama.cpp
+Vulkan): decode **5.18× (4B) / 4.62× (9B)** — scomposto con misura:
+readback+sync 5.1/3.6 ms/token (12%/5% — eliminabile col pattern GLM
+decodeBatch), compute residuo 4.6×/4.4× (dispatch serializzato 15-29%
+stimato, kernel non tuned, check WebGPU). Prefill 183×/171× = ASSENZA di
+batching, non gap: leva n.1. Leve per ROI (docket q1 item 10-11):
+prefill batched (pattern GLM) → decode multi-step no-readback → fusione
+→ int8 (dot4I8Packed CONVERGE con subgroup-matrix: il probe ha trovato la
+feature ESPOSTA sul nostro harness ma INT8-ONLY 16×16×32). Per il
+writeup: pubblicare il 4.6-5.2×; il prefill solo post-batching.
+
+**Recall lookahead 256-wide** (oracolo C1 su cpuref, subset p4+p7):
+**82.67% @8** vs 91.92% GLM — spiegato: softmax-256 senza bias vs
+sigmoid+bias-64, bersaglio 3.1% vs 6.25% del parco, profilo per-layer
+(L0 44%: dall'embedding l'attn costruisce il segnale; max 90%). NOTA:
+il recall@4 = 47.74% ha DENOMINATORE 8 (tetto teorico 50%), non
+confrontabile con @8. Implicazione: il prefetch in fase D renderà meno
+che su GLM — registrato, non promesso.
+
+Artefatti: journal/docket `.harness/goals/engine-fase-q1/`; JSON in
+`results/engine/` (conf, bench tier, looka, bandmodel-fit, gap); doc
+`docs/engine/study/2026-08-10-q35-gap-decomposition.md`; spec
+`docs/superpowers/specs/2026-08-10-engine-fase-q1-design.md`. Tutti i
+numeri destinati al writeup si RIMISURANO al tag di release
+(paper-contract-draft, ruling 2026-08-10).
 
 ## 8. Rischi dichiarati
 
