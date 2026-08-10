@@ -139,3 +139,32 @@
   provata kernel-level a dims reali; resta l'e2e coi pesi veri (fase 4).
 - Next: it.6 = fase 4 (path 4B end-to-end: GQA variante + mrope + ibrido
   3:1 + ffn denso; argmax==cpuref; golden 4B a soglia ratchet).
+
+## it.6 (2026-08-10) — fase 4 slice 1: cpuref 4B e2e == ORACOLO (verifier PASS)
+
+- Semantica full-attention dalla fonte b10333: mrope TEXT-ONLY COLLASSA a
+  NEOX su 64 dims (sezioni [11,11,10,0] con posizioni uguali ⇒ le theta
+  t/h/w/e scalano in lockstep; ggml_mrope_cache_init + rotate_pairs offset
+  32), q+gate fusi a stride 512 per head (gate: niente norm/rope, sigmoid a
+  valle), QK-norm per head PRIMA del rope, GQA h/(nHead/nKvHead).
+- `src/engine/q35cpurefmodel.ts`: forward teacher-forced streaming
+  per-layer (pesi f32 un layer alla volta ~300 MB, attivazioni f64, head
+  tied Q6_K dequantizzata una volta ~2.5 GB); i layer linear RIUSANO
+  Q35DeltaNetRef (ktestata 75/75).
+- Oracolo: il binario golden di tools/oracle-moe è GENERICO — funziona sul
+  4B senza rebuild (tree llama.cpp-oracle @5f55650 ha già qwen35).
+  Golden smoke committato (results/engine/golden/q35/, prompt committato,
+  SHA modello, chat template dell'oracolo INCLUSO nei token del JSON:
+  teacher-forced, zero logica template nel cpuref; il 4B apre con <think>).
+- GATE E2E: argmax cpuref == oracolo su TUTTE le 6 posizioni generate
+  (prefill 34 + 5 tf, 32 layer, pesi reali) AL PRIMO RUN NUMERICO — 130 s
+  (test gated Q35_E2E=1: fuori dalla suite permanente, la raddoppierebbe).
+- Fix: readFileSync cap 2 GiB → readLargeFile a chunk nel test.
+- Igiene notata (non bloccante): golden.cpp scrive "arch":"deepseek2"
+  HARDCODED nel JSON anche per qwen35 — cosmetico, i token/logit sono veri;
+  da sistemare a igiene fuori run (registrare a docket).
+- La COMPRENSIONE del modello è provata: da qui ogni divergenza GPU è un
+  bug di kernel (pattern GLM). RESTANO per fase 4: forward WGSL 4B
+  (engine path), argmax==cpuref sul campione ratificato via GPU, golden
+  full-corpus a soglia ratchet, riferimenti full-resident con hostState.
+- Next: it.7 = forward GPU 4B (orchestratore: kernel esistenti + deltanet).

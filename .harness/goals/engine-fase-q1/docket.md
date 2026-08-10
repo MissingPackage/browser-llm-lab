@@ -1,5 +1,11 @@
 # Docket — engine-fase-q1
 
+7. **IGIENE (2026-08-10, it.6 — fuori goal, non bloccante)** — golden.cpp
+   (tools/oracle-moe) scrive `"arch":"deepseek2"` HARDCODED nel JSON di
+   output anche per modelli qwen35: i token e i logit sono corretti (l'eval
+   usa l'arch vera), è solo il campo metadata. Da parametrizzare a igiene,
+   fuori dalle run del goal.
+
 1. **PLAN-CHECK — PRE-AUTORIZZATO (2026-08-10, PI in chat: "partiamo con la
    spec e poi direttamente il loop"; pattern c3c item 3 / c3b item 4 / c3a
    item 3).** PHASES.md è su disco al tag di apertura: 9 fasi sequenziali,
