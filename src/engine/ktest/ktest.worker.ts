@@ -577,12 +577,50 @@ async function testQ35Model4B(g: Gpu): Promise<KResult> {
     }
   }
   const decodeS = ((performance.now() - t1) / 1000).toFixed(1);
+  const conSync = (performance.now() - t1) / tokens.length;
+
+  // MICRO-BENCH della SERIALIZZAZIONE (goal fase-D fase 3). Il decode qui
+  // sopra aspetta il readback dei logits a OGNI token: la CPU sta ferma
+  // mentre la GPU calcola e viceversa. Qui si accodano gli stessi token
+  // SENZA leggere (`read=false`) e si aspetta una volta sola alla fine: la
+  // differenza e' il prezzo del round-trip per token, cioe' il tetto di
+  // quello che `decodeBatch` puo' recuperare. NON e' il costo del
+  // trasferimento dei 604 KB: e' quanto le due unita' si aspettano a vicenda.
+  model.resetState();
+  const t2 = performance.now();
+  for (let t = 0; t < tokens.length; t++) await model.step(tokens[t], t, false);
+  const ultimo = await model.step(tokens[tokens.length - 1], tokens.length, true);
+  const senzaSync = (performance.now() - t2) / (tokens.length + 1);
+  model.resetState();
+
+  // GATE SECCO della fase 3: `decodeBatch` deve dare gli STESSI argmax del
+  // path a readback, token per token. Non "vicini": identici — sono interi.
+  const batchIds: number[] = [];
+  const t3 = performance.now();
+  for (let off = 0; off < tokens.length; off += 32) {
+    const chunk = tokens.slice(off, off + 32);
+    batchIds.push(...await model.decodeBatch!(chunk, off));
+  }
+  const msBatch = (performance.now() - t3) / tokens.length;
+  const seqIds: number[] = [];
+  model.resetState();
+  for (let t = 0; t < tokens.length; t++) seqIds.push(await model.step(tokens[t], t));
+  let diff = -1;
+  for (let i = 0; i < tokens.length; i++) if (seqIds[i] !== batchIds[i]) { diff = i; break; }
+  model.resetState();
+  const pf = model.perf();
+
   return {
     kernel: "q35-model-4b-argmax",
-    pass: ok === p.positions.length,
+    pass: ok === p.positions.length && ultimo >= 0 && diff === -1,
     maxAbs: 0, maxRel: 0,
-    note: `argmax GPU == oracolo ${ok}/${p.positions.length} (load ${loadS}s, ${tokens.length} pos in ${decodeS}s, ${model.dispatchesPerToken} dispatch/token)${detail.length ? " — " + detail.join("; ") : ""}`,
-    metrics: { okPositions: ok, dispatchesPerToken: model.dispatchesPerToken },
+    note: `argmax GPU == oracolo ${ok}/${p.positions.length} (load ${loadS}s, ${tokens.length} pos in ${decodeS}s, ${model.dispatchesPerToken} dispatch/token) — SERIALIZZAZIONE: ${conSync.toFixed(1)} ms/token con sync vs ${senzaSync.toFixed(1)} senza (tetto ${(conSync - senzaSync).toFixed(1)}); decodeBatch ${msBatch.toFixed(1)} ms/token, argmax ${diff === -1 ? "IDENTICO" : `DIVERSO alla posizione ${diff} (seq ${seqIds[diff]} vs batch ${batchIds[diff]})`} su ${tokens.length} token${detail.length ? " — " + detail.join("; ") : ""}`,
+    metrics: {
+      okPositions: ok, dispatchesPerToken: model.dispatchesPerToken,
+      msTokenConSync: +conSync.toFixed(2), msTokenSenzaSync: +senzaSync.toFixed(2),
+      msTokenEmbedCpu: +(pf.embedMs / pf.tokens).toFixed(3),
+      msTokenBatch: +msBatch.toFixed(2), argmaxDiffBatch: diff, // -1 = identico
+    },
   };
 }
 

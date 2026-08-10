@@ -1,0 +1,45 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-conf-4b",
+ "date": "2026-08-10",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "modelSha256": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
+ "oracleCommit": "5f55650a78f92aff4d48d671423e888fac0469ff",
+ "corpusHash": "c2fb4e1631b684889afa36812ffb62988a4f53f81ff20ef4cb19179254e23e21",
+ "engine": {
+  "orchestrator": "q35gpumodel correttezza-prima",
+  "dispatchesPerToken": 562,
+  "loadMs": 10125,
+  "perToken": {
+   "tokens": 39,
+   "embedMs": 1.3300001323223114,
+   "readbackMs": 0,
+   "argmaxMs": 0
+  }
+ },
+ "moe": null,
+ "top1": {
+  "ok": 6,
+  "positions": 6,
+  "rate": 1
+ },
+ "perPrompt": [
+  {
+   "id": "p0",
+   "positions": 6,
+   "top1": 6,
+   "promptS": 1.8285949999988078
+  }
+ ],
+ "engineArgmaxByPrompt": {
+  "0": [
+   248068,
+   198,
+   90700,
+   8340,
+   25,
+   271
+  ]
+ },
+ "totalMs": 11984
+}

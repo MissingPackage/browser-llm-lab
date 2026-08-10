@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2 fatte (q35 migrato + pack 6,24x); next = fase 3 (decode multi-step))
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3(densi) fatte; next = ruling PI su docket item 8 (il MoE fa 41 submit/token))
 
 ## 1. Next decidable
 
@@ -67,11 +67,31 @@ costo di pack per miss scende di >=4x, misurato". **Riscrivere un done-when
 è un cambio di contratto, non una decisione di meccanismo: decide il PI.**
 Se dice "fallo all'import", la fase 2 si riapre e il lavoro fatto resta buono.
 
-**Al lavoro: fase 3** (decode multi-step senza readback: argmax on-GPU +
-embed gather, K step/submit — atteso >=-5,1 ms/token dal q1), poi 4-5
-(prefill batched, policy MoE). Docket 6 (telemetria anche su GLM) e 7 (il
-costo di I/O per miss NON è misurato: serve alla fase 5) sono miei, non
-bloccano. **Regola del goal**: bench pieni SOLO alle fasi 6 e 8.
+**FASE 3 (it.10), densi**: misurato prima. Il decode pagava 50,5 ms/token
+con sync contro 35,4 accodando senza attese: **15,0 ms di pura
+serializzazione**. (Il `readbackMs` di 44,6 NON è il costo dei 604 KB di
+logits: è l'attesa su `mapAsync`, che include il lavoro GPU del token.)
+Fatto `Q35GpuModel.decodeBatch`: K token teacher-forced in un submit, argmax
+su GPU, un readback di K·4 byte → **35,5 ms/token, -15,0 (-29,6%)**, sul
+tetto misurato; il contratto ne chiedeva >= -5,1. **Gate secco**: argmax
+identici al path a readback su tutti i 39 token, dentro il `pass` del ktest.
+Errore corretto in corsa: batchare anche il prefill era più LENTO (lì non
+c'è attesa da togliere e l'argmax su GPU si aggiunge) — si batcha solo lo
+span di cui si legge l'argmax, e sulla conformance il batch è NEUTRO (quel
+corpus è 96% prefill): resta lì perché il golden VALIDA `decodeBatch`.
+
+**PI-GATED, docket item 8 — il prossimo passo del goal**: sul MoE
+`decodeBatch` è `null` per costruzione. La selezione degli expert legge i
+logits del router su CPU a OGNI layer ⇒ sul 35B sono **41 submit e 41
+readback per token**. È lo stesso problema che GLM ha risolto in fase C
+(47 → 2 sync/token) e la meccanica c'è già in `residency.ts`
+(`arena: true`, `slotTable: true`), ma q35 non la usa. È plausibilmente il
+pezzo più redditizio rimasto. Opzioni: (a) fase 3-bis subito, (b) dentro la
+fase 5, (c) più avanti. **Parere: (a)** — prefill batched e policy sul MoE
+si misurano male finché ogni token paga 41 round-trip, e rischiamo di
+ottimizzare sopra un collo di bottiglia che poi sparisce.
+
+**Regola del goal**: bench pieni SOLO alle fasi 6 e 8.
 
 ## 2. State delta (sessione 27, 2026-08-10 — goal q1 intero, it.0-21)
 

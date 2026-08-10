@@ -443,3 +443,62 @@ path di miss, e' diventato ~6x piu' economico dentro. Spostarlo all'import
 comprerebbe il residuo (~1,7 s su 45, ~4%) al prezzo di ~18 GB di slab su
 disco. Non decido io un cambio di contratto: **docket item 5**, col mio
 parere (non conviene) e coi numeri.
+
+## it.10 (2026-08-10) — fase 3 sui DENSI: -15,0 ms/token. Sul MoE non si puo' (ancora)
+
+**Misurato prima, di nuovo.** Strumentata la scomposizione per token
+(`Q35GpuModel.perf()`: embed CPU / readback / argmax CPU) e girata sul 4B:
+`readbackMs` 44,6 ms/token. **NON l'ho letto come "il trasferimento di 604 KB
+costa 44 ms"**: quell'attesa su `mapAsync` include tutto il lavoro GPU del
+token. Il numero che serviva era un altro — quanto CPU e GPU si aspettano a
+vicenda — e l'ho preso con un micro-bench nel ktest: gli stessi token
+accodati con `read=false` e una sola attesa alla fine.
+
+| 4B, 39 token | ms/token |
+|---|---|
+| con sync per token (`step`) | **50,5** |
+| senza sync (accodati, una attesa) | **35,4** |
+| **tetto recuperabile** | **15,0** |
+| embed dequant CPU | 0,07-0,12 |
+
+**Fatto**: `Q35GpuModel.decodeBatch(tokens, posStart)` — K token
+teacher-forced in UN submit, argmax su GPU (`argmaxStage1/2`, gli stessi
+kernel di `gpuforward`), un readback di K·4 byte invece di K readback da
+604 KB. Le righe di embedding e gli uniform dei K step si impacchettano in un
+buffer e si copiano nello scratch DENTRO l'encoder: `queue.writeBuffer` e'
+ordinata prima del submit, quindi scriverli in ciclo darebbe a tutti gli step
+l'ultimo valore (stesso schema di `dbSlots` in gpuforward). Error scope
+esplicito, come ogni encode nuovo.
+
+**RISULTATO**: `decodeBatch` **35,5 ms/token contro 50,5** = **-15,0
+(-29,6%)**, e cade esattamente sul tetto senza sync (35,4): recupera
+praticamente tutta la serializzazione. Il done-when ne chiedeva >= -5,1.
+
+**GATE SECCO (quello che il contratto chiede)**: nel ktest
+`q35-model-4b-argmax`, gli argmax di `decodeBatch` sono confrontati uno a uno
+con quelli del path a readback su tutti i 39 token → **IDENTICI**, ed e' una
+condizione di `pass` (sono interi: o sono uguali o non lo sono). ktest
+**84/84, 0 non-pass**.
+
+**ERRORE MIO, CORRETTO IN CORSA**: avevo messo la conformance a batchare
+TUTTI i token e il risultato era piu' LENTO (1,75 → 1,82 s). Motivo: li' il
+prefill gira gia' con `read=false`, senza attesa — batcharlo non toglie
+niente e AGGIUNGE l'argmax su GPU su token che non lo useranno. Corretto:
+si batcha solo lo span di cui si legge l'argmax. Sullo smoke resta NEUTRO
+(1,83 vs 1,75, dentro il rumore di una run da 1,8 s con 33 prefill su 39) e
+lo dico: il guadagno non e' li'. Il corpus pieno del 4B e' 27.312 token di
+prefill contro 1024 posizioni generate — 96% prefill. La conformance resta
+sul path batch non per velocita' ma perche' cosi' il golden VALIDA
+`decodeBatch`: argmax generati identici a PRIMA, verificato.
+
+**IL MoE NON PUO' USARLO**, e `decodeBatch` e' `null` li' — non un'omissione,
+una proprieta': la selezione degli expert legge i logits del router su CPU a
+OGNI layer, quindi sul 35B sono **41 submit e 41 readback per token**. E' la
+stessa situazione che GLM aveva prima del lavoro "47 → 2 sync/token" della
+fase C, e si risolve con il resolve su GPU (slotTable + kernel d'arena +
+router su GPU) — che `residency.ts` gia' offre (`arena: true`,
+`slotTable: true`) ma che q35 non usa. **E' il pezzo piu' grosso rimasto del
+goal** e non e' una riga della fase 3: docket item 8.
+
+**GATE**: suite 410 | 9 skipped, tsc pulito, ktest 84/84, conformance 4B
+smoke top1 6/6 con argmax identici al path precedente.

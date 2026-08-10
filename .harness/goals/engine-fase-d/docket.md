@@ -123,3 +123,28 @@ nel tipo (it.9), ma il NUMERO manca: e la fase 5 deve decidere se il
 prefetch si giustifica, il che dipende esattamente da quanto costa una
 lettura. Va strumentato l'`await` in `runLayer` prima di attaccare la fase 5.
 it.9 (2026-08-10).
+
+
+## item 8 — il MoE fa 41 submit/token: serve il resolve su GPU (PI: e' una fase nuova?)
+
+Emerso misurando la fase 3 (it.10). `decodeBatch` funziona sui densi
+(-15,0 ms/token) ed e' `null` sul MoE, perche' la selezione degli expert
+legge i logits del router su CPU a OGNI layer: sul 35B sono **41 submit e 41
+readback per token**.
+
+E' esattamente il problema che GLM ha risolto in fase C passando da 47 a 2
+sync/token, e la meccanica c'e' gia' in `residency.ts` (`arena: true`,
+`slotTable: true` + kernel d'arena che ricavano l'indirizzo dello slot da
+soli). q35 oggi non la usa: binda sotto-range calcolati dalla CPU.
+
+**Perche' e' PI-gated**: non e' una riga della fase 3, ed e' plausibilmente
+il pezzo piu' redditizio rimasto nel goal — sul 35B il decode e' dominato da
+quei 41 round-trip, non dal calcolo. Le opzioni:
+(a) fase 3-bis nuova, subito dopo la 3, prima di prefill e policy;
+(b) dentro la fase 5 (policy MoE), che gia' tocca la residenza;
+(c) piu' avanti, accettando che il 35B resti sul path lento fino alla fase 5.
+
+**Il mio parere: (a)**. Il prefill batched (fase 4) e la policy (fase 5) sul
+MoE si misurano male finche' ogni token paga 41 round-trip: rischiamo di
+ottimizzare sopra un collo di bottiglia che poi sparisce, cioe' di rifare le
+misure due volte. Registrato it.10 (2026-08-10).

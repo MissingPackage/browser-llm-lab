@@ -98,3 +98,16 @@ scalare indipendente + il caso del padding Q6_K. Il done-when e' centrato
 nell'obiettivo ma non nella lettera (il repack non e' uscito dal path, e'
 diventato quasi gratis dentro): **docket item 5** al PI, col parere che
 spostarlo all'import non conviene (~4% al prezzo di ~18 GB su disco).
+
+## it.10 (2026-08-10) — fase 3: -15,0 ms/token sui densi
+
+Misurato prima: 50,5 ms/token con sync per token contro 35,4 accodando senza
+attese = 15,0 ms di pura serializzazione (il `readbackMs` di 44,6 NON e' il
+costo dei 604 KB: e' l'attesa che include il lavoro GPU). Fatto
+`decodeBatch`: K token teacher-forced in un submit, argmax su GPU, un
+readback di K·4 byte. **35,5 ms/token**, sul tetto misurato. Gate secco:
+argmax identici al path a readback su tutti i 39 token, dentro il `pass` del
+ktest. Errore mio corretto in corsa: batchare anche il prefill era piu'
+LENTO (li' non c'era attesa da togliere e l'argmax su GPU si aggiungeva).
+Il MoE NON puo' usarlo — 41 submit/token per il routing su CPU: docket
+item 8, il pezzo piu' grosso rimasto.

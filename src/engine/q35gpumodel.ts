@@ -9,7 +9,8 @@
 // di layer con pesi reali == cpuref a L2rel ~1e-7 (it.7). Qui c'è SOLO
 // l'orchestrazione: loop 32 layer + embed row + ffn + head + residui.
 import {
-  addInPlaceWgsl, attnDecodeWgsl, axpyWgsl, gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
+  addInPlaceWgsl, ARGMAX_CHUNK, argmaxStage1Wgsl, argmaxStage2Wgsl, attnDecodeWgsl, axpyWgsl,
+  gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
   gemvQ6KWgsl, gemvQuantWgsl, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
   siluMulWgsl, stridedCopyWgsl,
 } from "./kernels/wgsl";
@@ -41,6 +42,22 @@ export interface Q35GpuModel {
    * senza sync; tornare -1) — la conformance legge solo dove serve.
    */
   step(token: number, pos: number, read?: boolean): Promise<number>;
+  /**
+   * K token TEACHER-FORCED in UN SOLO submit, con l'argmax calcolato su GPU
+   * (goal fase-D fase 3). `step` aspetta il readback dei logits a ogni token
+   * — 604 KB e, soprattutto, un round-trip in cui CPU e GPU si aspettano a
+   * vicenda: misurato 51,5 ms/token contro 35,8 senza sync sul 4B. Qui gli
+   * step si accodano tutti, ogni step scrive il proprio argmax in un buffer,
+   * e si legge UNA volta sola K·4 byte.
+   *
+   * Teacher-forced: i token di ingresso sono noti in anticipo (conformance,
+   * golden). La generazione libera ha bisogno del feedback su GPU (embed
+   * gather), che è un passo a parte.
+   *
+   * `null` sui modelli MoE: la selezione degli expert passa dalla CPU a ogni
+   * layer, quindi il batch non è possibile finché il routing non è su GPU.
+   */
+  decodeBatch: ((tokens: ArrayLike<number>, posStart: number) => Promise<number[]>) | null;
   /** azzera gli stati ricorrenti (conv + S) di tutti i layer linear: nuovo prompt. */
   resetState(): void;
   dispatchesPerToken: number;
@@ -52,6 +69,14 @@ export interface Q35GpuModel {
     routing: Record<string, number>; nSlots: Record<string, number>;
     parkSlots: Record<string, number>; slotBytes: Record<string, number>;
   }) | null;
+  /**
+   * Scomposizione del costo per token (fase D fase 3): dove vanno i ms del
+   * decode. `embedMs` = dequant CPU della riga di embedding + writeBuffer;
+   * `readbackMs` = attesa del readback dei logits (604 KB sul 4B);
+   * `argmaxMs` = il max su `vocab` float in CPU. Tutti e tre spariscono col
+   * pattern decodeBatch — misurarli PRIMA e' come si decide se conviene.
+   */
+  perf(): { tokens: number; embedMs: number; readbackMs: number; argmaxMs: number };
   /** DEBUG (it.17): dopo step(), hidden x a valle del layer indicato (solo MoE). */
   readTap(layer: number): Promise<Float32Array>;
   destroy(): void;
@@ -436,11 +461,46 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
       },
     };
   }
+  const perfAcc = { tokens: 0, embedMs: 0, readbackMs: 0, argmaxMs: 0 };
   const zeroAcc = new Float32Array(d);
   const tapStaging = device.createBuffer({ size: d * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   let tapLayer = -1;
   let tapWanted = -1;
   let tapValue: Float32Array | null = null;
+
+  // --- argmax su GPU + batch teacher-forced (fase D fase 3) ---
+  const N_PARTIALS = Math.ceil(S.vocab / ARGMAX_CHUNK);
+  const amaxPartMax = empty(N_PARTIALS * 4);
+  const amaxPartIdx = empty(N_PARTIALS * 4);
+  const amaxOut = empty(16);
+  const pAmax1 = pipe(argmaxStage1Wgsl(S.vocab));
+  const pAmax2 = pipe(argmaxStage2Wgsl(N_PARTIALS));
+  const bgAmax1 = device.createBindGroup({
+    layout: pAmax1.getBindGroupLayout(0),
+    entries: [logits, amaxPartMax, amaxPartIdx].map((b, i) => ({ binding: i, resource: { buffer: b } })),
+  });
+  const bgAmax2 = device.createBindGroup({
+    layout: pAmax2.getBindGroupLayout(0),
+    entries: [amaxPartMax, amaxPartIdx, amaxOut].map((b, i) => ({ binding: i, resource: { buffer: b } })),
+  });
+  const BATCH_MAX = 32;
+  // Le righe di embedding e gli uniform dei K step NON si possono scrivere con
+  // writeBuffer dentro l'encoder: `queue.writeBuffer` e' ordinata PRIMA del
+  // submit, quindi tutti gli step vedrebbero l'ultimo valore scritto. Si
+  // impacchettano in un buffer solo e si copiano nello scratch all'inizio di
+  // ogni step, DENTRO l'encoder (stesso schema di `dbSlots` in gpuforward).
+  const embBatch = empty(BATCH_MAX * d * 4);
+  const uniBatch = device.createBuffer({ size: BATCH_MAX * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+  const idsBatch = empty(BATCH_MAX * 4);
+  const stagingIds = device.createBuffer({ size: BATCH_MAX * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const embRowsCpu = new Float32Array(BATCH_MAX * d);
+  const uniCpu = new Uint32Array(BATCH_MAX * 4);
+  const dequantRow = (token: number, dst: Float32Array, at: number): void => {
+    const sub = dst.subarray(at, at + d);
+    if (embdKind === "q6k") dequantQ6_K(embdRaw, token * rowBytes, rowBlocks, sub);
+    else if (embdKind === "q80") dequantQ8_0(embdRaw, token * rowBytes, rowBlocks, sub);
+    else dequantQ4_0(embdRaw, token * rowBytes, rowBlocks, sub);
+  };
 
   const runSeg = (from: number, to: number, tail?: (enc: GPUCommandEncoder) => void): void => {
     const enc = device.createCommandEncoder();
@@ -464,11 +524,58 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
 
   return {
     dispatchesPerToken,
+    perf: () => ({ ...perfAcc }),
+    decodeBatch: moe ? null : async (tokens: ArrayLike<number>, posStart: number): Promise<number[]> => {
+      const k = tokens.length;
+      if (k < 1 || k > BATCH_MAX) throw new Error(`q35 decodeBatch: k=${k} fuori da [1, ${BATCH_MAX}]`);
+      const tEmb = performance.now();
+      for (let i = 0; i < k; i++) {
+        dequantRow(tokens[i] as number, embRowsCpu, i * d);
+        uniCpu[i * 4] = posStart + i;
+        uniCpu[i * 4 + 1] = posStart + i;
+      }
+      device.queue.writeBuffer(embBatch, 0, embRowsCpu, 0, k * d);
+      device.queue.writeBuffer(uniBatch, 0, uniCpu, 0, k * 4);
+      perfAcc.embedMs += performance.now() - tEmb;
+      perfAcc.tokens += k;
+      // Error scope come CONTRATTO di ogni percorso di encode nuovo (landmine
+      // B1: una pipeline invalida fa droppare i submit IN SILENZIO, e i
+      // readback tornano valori stale ma plausibili).
+      device.pushErrorScope("validation");
+      device.pushErrorScope("out-of-memory");
+      const enc = device.createCommandEncoder();
+      for (let i = 0; i < k; i++) {
+        enc.copyBufferToBuffer(embBatch, i * d * 4, x, 0, d * 4);
+        enc.copyBufferToBuffer(uniBatch, i * 16, uni, 0, 16);
+        const pass = enc.beginComputePass();
+        for (const st of steps) {
+          pass.setPipeline(st.pipe);
+          pass.setBindGroup(0, st.bind);
+          pass.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+        }
+        pass.setPipeline(pAmax1); pass.setBindGroup(0, bgAmax1); pass.dispatchWorkgroups(N_PARTIALS);
+        pass.setPipeline(pAmax2); pass.setBindGroup(0, bgAmax2); pass.dispatchWorkgroups(1);
+        pass.end();
+        enc.copyBufferToBuffer(amaxOut, 0, idsBatch, i * 4, 4);
+      }
+      enc.copyBufferToBuffer(idsBatch, 0, stagingIds, 0, k * 4);
+      device.queue.submit([enc.finish()]);
+      const errOom = await device.popErrorScope();
+      const errVal = await device.popErrorScope();
+      if (errOom ?? errVal) throw new Error(`q35 decodeBatch error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
+      await stagingIds.mapAsync(GPUMapMode.READ);
+      const ids = [...new Uint32Array(stagingIds.getMappedRange()).subarray(0, k)];
+      stagingIds.unmap();
+      return ids;
+    },
     async step(token: number, pos: number, read = true): Promise<number> {
+      const tEmb = performance.now();
       if (embdKind === "q6k") dequantQ6_K(embdRaw, token * rowBytes, rowBlocks, embRow);
       else if (embdKind === "q80") dequantQ8_0(embdRaw, token * rowBytes, rowBlocks, embRow);
       else dequantQ4_0(embdRaw, token * rowBytes, rowBlocks, embRow);
       device.queue.writeBuffer(x, 0, embRow);
+      perfAcc.embedMs += performance.now() - tEmb;
+      perfAcc.tokens++;
       device.queue.writeBuffer(uni, 0, new Uint32Array([pos, pos, 0, 0]));
       if (!moe) {
         runSeg(0, steps.length, read ? (enc) => enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4) : undefined);
@@ -498,9 +605,13 @@ export async function createQ35GpuModel(device: GPUDevice, r: Q35RawReader, ctxM
         runSeg(from, steps.length, read ? (enc) => enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4) : undefined);
       }
       if (!read) return -1;
+      const tRb = performance.now();
       const lg = await readStaging(staging, S.vocab * 4);
+      const tAm = performance.now();
+      perfAcc.readbackMs += tAm - tRb;
       let best = -Infinity, bi = -1;
       for (let i = 0; i < S.vocab; i++) if (lg[i] > best) { best = lg[i]; bi = i; }
+      perfAcc.argmaxMs += performance.now() - tAm;
       return bi;
     },
     async readTap(layer: number): Promise<Float32Array> {

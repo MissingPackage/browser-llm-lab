@@ -139,7 +139,7 @@ async function main(cfg: Cfg): Promise<void> {
       date: new Date().toISOString().slice(0, 10),
       model: M.file,
       modelSha256: golden.modelSha256,
-      declared: "orchestratore correttezza-prima (562 dispatch/token, zero fusioni/batch, readback logits per token nel decode): FRAME DI PARTENZA pre-ottimizzazioni, non un numero competitivo",
+      declared: "orchestratore correttezza-prima; sui densi decode BATCHED (fase D fase 3: argmax su GPU, K=32 token/submit, un readback ogni K); sul MoE ancora un readback del router per layer",
       prompt: { idx: cfg.bench.promptIdx, file: p.file, tokens: P },
       loadMs: Math.round(loadMs),
       prefill: { tokens: P - 1, ms: Math.round(prefillMs), tokS: (P - 1) / (prefillMs / 1000) },
@@ -163,16 +163,30 @@ async function main(cfg: Cfg): Promise<void> {
     const tp = performance.now();
     let ok = 0;
     const engineArgmax: number[] = [];
-    for (let t = 0; t < tokens.length; t++) {
-      const gi = t - (P - 1);
-      const need = gi >= 0 && gi < gen;
-      const am = await model.step(tokens[t], t, need);
-      if (need) {
-        engineArgmax.push(am);
-        if (am === p.positions[gi].argmax) ok++;
-        posTot++;
+    // BATCH (fase D fase 3) sui modelli senza MoE, e SOLO sullo span che
+    // serve. Lezione di it.10: il prefill qui gira gia' con `read=false`,
+    // cioe' senza readback e senza attesa — batcharlo non toglie niente e
+    // AGGIUNGE l'argmax su GPU su token che non lo useranno (misurato: 1,75 →
+    // 1,82 s sullo smoke, che ha 33 token di prefill su 39). Il guadagno sta
+    // dove ogni token vuole il proprio argmax: le posizioni generate.
+    // Sul MoE `decodeBatch` e' null (routing su CPU per layer, docket item 8).
+    const primaGen = P - 1; // la prima posizione di cui si legge l'argmax
+    for (let t = 0; t < primaGen; t++) await model.step(tokens[t], t, false);
+    const K = model.decodeBatch ? 32 : 1;
+    for (let t = primaGen; t < tokens.length; t += K) {
+      const n = Math.min(K, tokens.length - t);
+      const ids = model.decodeBatch
+        ? await model.decodeBatch(tokens.slice(t, t + n), t)
+        : [await model.step(tokens[t], t, true)];
+      for (let j = 0; j < ids.length; j++) {
+        const gi = t + j - primaGen;
+        if (gi >= 0 && gi < gen) {
+          engineArgmax.push(ids[j]);
+          if (ids[j] === p.positions[gi].argmax) ok++;
+          posTot++;
+        }
       }
-      if (t % 512 === 0) post({ type: "tick", msg: `p${pi} ${t}/${tokens.length} (top1 ${ok}/${Math.max(0, t - P + 2)})` });
+      if ((t - primaGen) % 512 < K) post({ type: "tick", msg: `p${pi} ${t}/${tokens.length} (top1 ${ok}/${Math.max(1, engineArgmax.length)})` });
     }
     okTot += ok;
     const promptS = (performance.now() - tp) / 1000;
@@ -188,7 +202,7 @@ async function main(cfg: Cfg): Promise<void> {
     modelSha256: golden.modelSha256,
     oracleCommit: golden.oracle.commit,
     corpusHash: golden.corpusHash,
-    engine: { orchestrator: "q35gpumodel correttezza-prima", dispatchesPerToken: model.dispatchesPerToken, loadMs: Math.round(loadMs) },
+    engine: { orchestrator: "q35gpumodel correttezza-prima", dispatchesPerToken: model.dispatchesPerToken, loadMs: Math.round(loadMs), perToken: model.perf() },
     moe: model.moeStats ? model.moeStats() : null,
     top1: { ok: okTot, positions: posTot, rate: okTot / posTot },
     perPrompt: perPrompt.map(({ engineArgmax, ...r }) => r),
