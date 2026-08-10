@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-09, sessione 26 — fase C COMPLETA, direzione post-C DECISA; next = avvio goal q1 generalizzazione)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — GOAL q1 IN CORSO: fasi 1-2 DONE, fase 3 a metà; next = kernel WGSL DeltaNet)
 
 ## 1. Next decidable
 

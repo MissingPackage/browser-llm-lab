@@ -85,6 +85,18 @@ describe("deltaNetStepCore: proprietà algebriche", () => {
     const o = deltaNetStepCore(S, k.map((x) => x * scaleQ) as Float64Array, k, v2, g, 1, HD);
     for (let j = 0; j < HD; j++) expect(o[j]).toBeCloseTo(0, 12);
     for (let i = 0; i < HD * HD; i++) expect(Math.abs(S[i])).toBeLessThan(1e-12);
+    // NOTA (verifier it.4): il caso v=0 NON discrimina la variante
+    // decay-DOPO-update (cancellazione esatta ⇒ 0 in entrambe). Il caso
+    // v₂≠0 sotto discrimina TUTTI e tre gli ordinamenti:
+    //   corretto (decay→lettura→update): S = k⊗v₂        ⇒ o = v₂/√hd
+    //   lettura-prima-del-decay:  S = (e^g−1)k⊗v₁ + k⊗v₂ ⇒ o ≠ v₂/√hd
+    //   decay-dopo-update:        S = e^g·k⊗v₂           ⇒ o = e^g·v₂/√hd
+    const S2 = new Float64Array(HD * HD);
+    const v1b = Float64Array.from({ length: HD }, (_, j) => j + 1);
+    const v2b = Float64Array.from({ length: HD }, (_, j) => 3 - j);
+    deltaNetStepCore(S2, k.map((x) => x * scaleQ) as Float64Array, k, v1b, 0, 1, HD);
+    const o2 = deltaNetStepCore(S2, k.map((x) => x * scaleQ) as Float64Array, k, v2b, g, 1, HD);
+    for (let j = 0; j < HD; j++) expect(o2[j]).toBeCloseTo(v2b[j] * scaleQ, 12);
   });
 
   it("softplus ggml: continuità al gomito x=20 e identità oltre", () => {

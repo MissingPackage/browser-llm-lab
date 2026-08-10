@@ -29,3 +29,15 @@ verbatim — riscontrata nel binario oracolo). Il gate secco ha preso 2 bug
 di fedeltà al protocollo (escape processing, semantica USER_DEFINED) prima
 dei kernel. Suite 364 (+5), tsc pulito, GLM intatto. Next: fase 3 —
 kernel DeltaNet (il rischio dominante), cpuref-f64 prima del WGSL.
+
+## it.4 (2026-08-10)
+
+Fase 3 prima metà, verifier PASS. cpuref-f64 DeltaNet con semantica dalla
+fonte llama.cpp PINNATA a b10333 (la build dell'oracolo): ordine decay →
+lettura → delta → update → output, broadcast k-head h mod nK, l2norm con
+eps a floor, softplus gomito 20. 5 identità algebriche in aritmetica
+esatta + campione T=12 pinnato (generatore esplicito). Il verifier ha
+trovato un buco di discriminanza nel test dell'ordine (variante
+decay-dopo-update mascherata da cancellazione esatta) → chiuso subito con
+il caso v₂≠0 che separa TUTTI e tre gli ordinamenti. Suite 371 (+7).
+Next: it.5 = kernel WGSL DeltaNet + ktest vs cpuref sul campione.
