@@ -275,3 +275,25 @@
 - RESTA per fase 5 (it.12): WP decomposizione gap — llama.cpp Vulkan
   stesso GGUF 9B p512/n64 vs questi riferimenti, scomposizione
   kernel/dispatch/safety-check nel doc di studio, leve per ROI.
+
+## it.12 (2026-08-10) — FASE 5 COMPLETA: WP decomposizione gap
+
+- Nativo Vulkan STESSO GGUF (llama-bench -ngl 99 p512/n64 r3, GPU 31°C
+  idle): 4B 118.7/4755, 9B 67.2/2622. Browser: 22.93/26.0 e 14.55/15.4.
+- GAP DECODE: **5.18× (4B) / 4.62× (9B)**; scomposto CON MISURA:
+  readback+sync = decode−prefillSeq = 5.1/3.6 ms/token (12%, stessi 562
+  dispatch, read=false salta solo copy+map); compute residuo 4.6×/4.4×
+  (dispatch stimato 15-29%, kernel non tuned, check WebGPU 14-42% prior).
+- PREFILL 183×/171× = ASSENZA di batching (prefill sequenziale by
+  design), non gap: leva n.1, pattern GLM già in casa.
+- Leve per ROI (doc §4): prefill batched → decode multi-step no-readback
+  (pattern GLM B2, −5.1 ms misurati) → fusione dispatch → tuning+
+  dot4I8Packed (fase 6 contratto) → spike subgroup-matrix. Docket item 10:
+  priorità informata per il PI, nessun cambio contratto.
+- Per il WRITEUP: gap a parità di regime 4.6-5.2× decode; prefill solo
+  dopo il batching. Artefatti: native-vs-browser-q35 JSON (aritmetica
+  auto-verificata) + doc studio. PHASES fase 5 → done (it.11-12).
+- Next: it.13 = fase 6 (leve bounded da contratto: dot4I8Packed e tuning
+  dietro flag SE in cima al ROI — il WP dice che il ROI più alto è nei
+  pattern GLM (fase 7-8/D), quindi fase 6 = misura leve contratto +
+  esclusioni motivate coi numeri + spike subgroup-matrix).

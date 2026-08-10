@@ -1,0 +1,32 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-gap-decomposition",
+ "date": "2026-08-10",
+ "protocol": "llama-bench b10333 (build 08659901c) Vulkan -ngl 99 -p 512 -n 64 -r 3, STESSI GGUF pinnati del motore (SHA in scripts/q35-manifest.json); browser = q35-bench-{4b,9b}-fullresident-2026-08-10.json (orchestratore correttezza-prima, host user-session-light)",
+ "hostState": {
+  "declared": "user-session-light",
+  "gpuAtStart": { "temperatureC": 31, "smClockMHz": 210, "memUsedMiB": 985, "utilPct": 0 },
+  "note": "campo power nvidia-smi implausibile (588 W a idle): bug parsing noto, docket c3c item 7 — non usato"
+ },
+ "native": {
+  "4b": { "decodeTg64": 118.68, "decodeStd": 2.66, "prefillPp512": 4754.91, "prefillStd": 188.09 },
+  "9b": { "decodeTg64": 67.24, "decodeStd": 1.19, "prefillPp512": 2621.51, "prefillStd": 15.11 }
+ },
+ "browser": {
+  "4b": { "decode": 22.93, "decodeMsP50": 43.62, "prefillSeq": 25.97, "prefillSeqMsPerTok": 38.51, "ttftS": 25.8 },
+  "9b": { "decode": 14.55, "decodeMsP50": 68.74, "prefillSeq": 15.35, "prefillSeqMsPerTok": 65.14, "ttftS": 40.3 }
+ },
+ "gap": {
+  "4b": { "decodeX": 5.18, "prefillX": 183.1 },
+  "9b": { "decodeX": 4.62, "prefillX": 170.8 },
+  "note": "prefill browser = SEQUENZIALE by design (nessun batching nell'orchestratore correttezza-prima): il 183x/171x misura l'assenza del batching, non la qualita' dei kernel"
+ },
+ "decomposition": {
+  "method": "decode−prefillSeq isola il costo readback+sync PER MISURA (stessi 562 dispatch, il prefill read=false salta solo copy+mapAsync); il resto per aritmetica dichiarata sui prior misurati",
+  "readbackSyncMsPerTok": { "4b": 5.11, "9b": 3.6 },
+  "computeDispatchMsPerTok": { "4b": 38.51, "9b": 65.14 },
+  "nativeMsPerTok": { "4b": 8.43, "9b": 14.87 },
+  "computeGapX": { "4b": 4.57, "9b": 4.38 },
+  "dispatchOverheadEstMsPerTok": { "value": "5.6-11.2 (4b)", "basis": "562 dispatch/token x 10-20 us amortizzati (stima dichiarata, non misurata: telemetria per-op assente nell'orchestratore)" }
+ }
+}

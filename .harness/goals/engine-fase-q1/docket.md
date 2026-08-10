@@ -1,5 +1,23 @@
 # Docket — engine-fase-q1
 
+10. **WP GAP — ESITO CHE CONDIZIONA LA FASE 6 (2026-08-10, it.12, fase 5;
+   registrazione, la decisione di merito è già nel contratto)** — gap
+   decode full-resident vs llama.cpp Vulkan STESSO GGUF: 4B 5.18×, 9B
+   4.62×; scomposto: readback+sync 5.1/3.6 ms/token MISURATI (12%,
+   eliminabile col pattern GLM decodeBatch), compute 4.6×/4.4× (dentro:
+   dispatch 562/token stimato 15-29%, kernel non tuned, check WebGPU).
+   Prefill 183×/171× = ASSENZA di batching, non gap: leva n.1. ORDINE ROI
+   per la fase 6: (1) prefill batched pattern GLM, (2) decode multi-step
+   no-readback, (3) fusione/riduzione dispatch, (4) tuning+dot4I8Packed
+   dietro flag (da contratto), (5) spike subgroup-matrix. Le leve 1-3 sono
+   PATTERN GIÀ IN CASA (GLM): la fase 6 del contratto (dot4I8Packed/
+   tuning/spike) resta com'è, ma il doc registra che il ROI più alto è nel
+   PORTARE i pattern GLM, materia delle fasi 7-8/D — nessun cambio di
+   contratto, solo priorità informata per il PI a valle. Doc:
+   docs/engine/study/2026-08-10-q35-gap-decomposition.md. Per il WRITEUP:
+   pubblicare il gap a parità di regime (4.6-5.2× decode); il prefill solo
+   dopo il batching (oggi misura un'assenza).
+
 9. **SOGLIA GOLDEN 9B FISSATA — RATCHET (2026-08-10, it.11, fase 5; stesso
    regime pre-autorizzato di item 8)** — golden top-1 full-corpus del 9B su
    GPU: **1000/1024 = 97.65625%** (q35-conf-9b-2026-08-10.json vs
