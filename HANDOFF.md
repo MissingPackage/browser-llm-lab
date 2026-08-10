@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; next = it.6 migrazione q35gpumodel (chiude la fase 1))
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; next = it.7 migrazione q35gpumodel (chiude la fase 1))
 
 ## 1. Next decidable
 
@@ -18,16 +18,23 @@ GLM è una configurazione e resta **BIT-IDENTICO** (ktest 84/84:
 Suite 387. Nato il GATE STRUTTURALE (`tests/engine-one-mechanism.test.ts`)
 che vieta un secondo router/layout/arena.
 
-**Gate strutturale (it.4-5)**: docket item 4 CHIUSO per intero. Il gate è
-fatto di invarianti su ATTI SINGOLI (allocazione GPU / nomi dei tensori
-expert / clamp del router), con allowlist motivata e senza esenzioni per
-import; le tre evasioni che il verifier aveva eseguito contro la versione
-precedente ora fanno tutte rosso, e il gate PROVA SE STESSO (predicati e
-ciclo esercitati da test sintetici).
+**Gate anti-duplicazione (it.4-6)**: il verifier ha bocciato TRE versioni
+di un gate a scansione del sorgente, l'ultima con 5 evasioni eseguite —
+di cui una (un router Qwen legittimo: softmax puro, niente clamp, niente
+nomi di tensori, niente VRAM) NON catturabile da nessuna impronta
+testuale, perché la differenza fra duplicazione e seconda famiglia è
+SEMANTICA. Esito: **l'invariante vive nel SISTEMA DI TIPI** — marchio di
+conio (`unique symbol`) su `SlotRef`, che solo `residency.ts` può
+produrre: un'arena parallela viene rifiutata da `tsc`, e
+`tests/types/slotref-brand.ts` (`@ts-expect-error`) va rosso se il
+marchio sparisce. `tests/engine-one-mechanism.test.ts` resta come
+**RATCHET** su impronte note (scansione di tutto `src/`, ancorata,
+estensioni incluse) con la pretesa ridimensionata per iscritto: non è una
+prova, ed è sbagliato usarlo come tale. Docket item 4 CHIUSO.
 
-**Al lavoro: it.6** = migrazione di `q35gpumodel` alla meccanica unica —
-il gate la ESIGE (le sue tre voci di allowlist sono marcate DEBITO NOTO e
-la fase 1 non chiude finché ci sono). Poi le fasi 2-5
+**Al lavoro: it.7** = migrazione di `q35gpumodel` alla meccanica unica.
+È questa — non il gate — che elimina DAVVERO la duplicazione: le tre voci
+DEBITO NOTO dell'allowlist spariscono lì e la fase 1 chiude. Poi le fasi 2-5
 (slab pre-impacchettati, decode multi-step, prefill batched, policy MoE).
 **Regola del goal**: bench pieni SOLO alle fasi 6 e 8 — durante lo
 sviluppo micro-bench e ktest.
