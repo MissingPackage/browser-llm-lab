@@ -192,3 +192,35 @@ qualcosa che NON SI PUÒ EVITARE, con allowlist motivata:
   La fase NON è ancora done: resta la migrazione di `q35gpumodel` alla
   meccanica unica, che il gate ora ESIGE (le sue due voci di allowlist sono
   marcate DEBITO NOTO e vanno rimosse). È it.5, e chiude la fase 1.
+
+## it.5 (2026-08-10) — il gate diventa un invariante VERO (docket item 4 CHIUSO)
+
+Il verifier ha bocciato la versione di it.4 ESEGUENDO tre evasioni in buona
+fede, tutte passate verdi. Il difetto di fondo: avevo fatto una CONGIUNZIONE
+di due indizi nello stesso file, mentre `gpudevice.test` intercetta UN ATTO
+SINGOLO. Riscritto:
+
+- **tre invarianti INDIPENDENTI, ognuno su un atto singolo**: (A) l'allocazione
+  di memoria GPU (`createBuffer` — l'analogo esatto di `requestDevice`);
+  (B) i NOMI dei tensori expert, con la regex che prende anche le forme
+  costruite per parti (`ffn_${p}_exps`); (C) il clamp del router.
+  Ciascuno con la propria allowlist motivata (8+8+5 voci).
+- **niente più esenzione per import**: importare qualsiasi cosa da
+  moe/residency non è più un lasciapassare (era l'evasione 3).
+- **niente congiunzioni da spezzare**: nomi in un file e buffer in un altro
+  fanno scattare due invarianti diversi (era l'evasione 2).
+- **guard anti-scansione-vuota** (`SRC.length > 30`), che gpudevice.test ha e
+  a it.4 mancava.
+- **il ciclo delle asserzioni è esso stesso testato** (buco M2): `offendersOf`
+  viene esercitato con predicati sintetici, quindi renderlo vacuo fa rosso.
+- VERIFICA MIA, non solo del verifier: ho riprovato le tre evasioni creando
+  file temporanei in `src/engine/` — **tutte e tre ora fanno ROSSO**, e
+  rimosse tornano verdi con zero file sporchi.
+- Processo: docket item 4 e HANDOFF allineati allo stato reale (il verifier
+  li aveva trovati stale — stessa svista di it.3, questa volta chiusa nella
+  stessa iterazione).
+- GATE: suite **392**; tsc pulito; ktest invariato (nessun file di src toccato
+  in questa iterazione: solo il test e i documenti).
+- STATO FASE 1: docket item 4 CHIUSO per intero. Resta la migrazione di
+  `q35gpumodel`, che il gate ora ESIGE (tre voci DEBITO NOTO). È it.6 e
+  chiude la fase 1.

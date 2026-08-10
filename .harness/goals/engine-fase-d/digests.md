@@ -45,3 +45,13 @@ fase 1 deve far sparire. Il gate PROVA SE STESSO su offender sintetici —
 inclusa la variante di spaziatura che sfuggiva prima. ktest 84/84, suite
 391. Docket item 4 chiuso per intero; resta la migrazione di q35gpumodel
 (it.5), che chiude la fase 1.
+
+## it.5 (2026-08-10)
+
+Il verifier aveva bocciato il gate di it.4 ESEGUENDO tre evasioni: era una
+congiunzione di indizi, non un invariante. Riscritto in tre invarianti
+INDIPENDENTI su atti singoli (allocazione GPU / nomi expert anche costruiti
+per parti / clamp del router), senza esenzioni per import, con guard
+anti-scansione-vuota e col ciclo delle asserzioni a sua volta testato. Ho
+riprovato io le tre evasioni: tutte rosse. Docket item 4 CHIUSO. Resta la
+migrazione di q35gpumodel (it.6), che chiude la fase 1.

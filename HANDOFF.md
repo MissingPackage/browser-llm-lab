@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d APERTO e in corso: unificazione del core fatta, GLM bit-identico; next = it.4 gate strutturale)
+# HANDOFF — browser-llm-lab   (updated 2026-08-10, sessione 27 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; next = it.6 migrazione q35gpumodel (chiude la fase 1))
 
 ## 1. Next decidable
 
@@ -18,11 +18,16 @@ GLM è una configurazione e resta **BIT-IDENTICO** (ktest 84/84:
 Suite 387. Nato il GATE STRUTTURALE (`tests/engine-one-mechanism.test.ts`)
 che vieta un secondo router/layout/arena.
 
-**Al lavoro: it.4** = docket item 4(b), l'unico residuo prima di poter
-dichiarare la fase 1: il gate strutturale va da FIRME TESTUALI (aggirabili
-— il verifier l'ha provato) a INVARIANTE non aggirabile, sul modello del
-nome-API di `gpudevice.test`. Poi: migrazione di `q35gpumodel` alla
-ExpertCache unica (fa sparire le voci del ratchet), e le fasi 2-5
+**Gate strutturale (it.4-5)**: docket item 4 CHIUSO per intero. Il gate è
+fatto di invarianti su ATTI SINGOLI (allocazione GPU / nomi dei tensori
+expert / clamp del router), con allowlist motivata e senza esenzioni per
+import; le tre evasioni che il verifier aveva eseguito contro la versione
+precedente ora fanno tutte rosso, e il gate PROVA SE STESSO (predicati e
+ciclo esercitati da test sintetici).
+
+**Al lavoro: it.6** = migrazione di `q35gpumodel` alla meccanica unica —
+il gate la ESIGE (le sue tre voci di allowlist sono marcate DEBITO NOTO e
+la fase 1 non chiude finché ci sono). Poi le fasi 2-5
 (slab pre-impacchettati, decode multi-step, prefill batched, policy MoE).
 **Regola del goal**: bench pieni SOLO alle fasi 6 e 8 — durante lo
 sviluppo micro-bench e ktest.

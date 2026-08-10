@@ -12,117 +12,153 @@ import {
 } from "../src/engine/residency";
 
 // GATE STRUTTURALE del goal engine-fase-d (ruling PI 2026-08-10, direction
-// §7-ter): il codice si UNIFORMA — una meccanica, UNA implementazione. Una
-// famiglia nuova è una CONFIGURAZIONE, mai un path parallelo.
+// §7-ter): il codice si UNIFORMA — una meccanica, UNA implementazione.
 //
-// PATTERN: `tests/gpudevice.test.ts` — non si verifica sito per sito (lista
-// che marcisce), si VIETA l'esistenza di siti fuori dal punto unico
-// intercettando qualcosa che NON SI PUÒ EVITARE, con allowlist motivata.
+// PATTERN: `tests/gpudevice.test.ts`. Non si verifica sito per sito (lista che
+// marcisce): si intercetta UN ATTO SINGOLO E INEVITABILE e si pretende che
+// avvenga solo nei siti DICHIARATI, con allowlist motivata.
 //
-// La prima versione (it.1) usava firme TESTUALI ricalcate sul testo degli
-// offender: il verifier di it.2 ha dimostrato che una copia con spaziatura
-// diversa sfuggiva. Questa versione (it.4) usa due INVARIANTI:
-//
-//  A. ARENA/SLAB — per mettere un expert in VRAM servono per forza (i) i NOMI
-//     GGUF dei tensori expert (`ffn_{gate,up,down}_exps`, convenzione di
-//     llama.cpp valida per OGNI famiglia MoE) e (ii) la creazione di buffer
-//     GPU. Chi fa entrambe DEVE passare dalla meccanica (moe.ts/residency.ts).
-//
-//  B. ROUTER — un router MoE fedele DEVE applicare il clamp del denominatore
-//     di `build_moe_ffn` (6.103515625e-5, minimo f16 normale). Chi scrive quel
-//     letterale invece di importare `WEIGHTS_SUM_CLAMP_MIN` riscrive il router.
-//
-// Il secondo `describe` mette alla prova IL GATE STESSO su offender sintetici:
-// senza, un predicato può marcire in un no-op senza che nessuno se ne accorga.
+// STORIA DI QUESTO GATE (tenuta qui perché è la lezione, non un dettaglio):
+//  - it.1: firme TESTUALI ricalcate sul testo degli offender. Il verifier
+//    dimostrò che una copia con spaziatura diversa sfuggiva.
+//  - it.4 prima versione: CONGIUNZIONE di due indizi nello stesso file (nomi
+//    dei tensori expert AND createBuffer). Il verifier la ruppe ESEGUENDO tre
+//    evasioni in buona fede: (1) nome costruito per parti `ffn_${p}_exps`;
+//    (2) nomi in un modulo e buffer in un altro — cioè la struttura che il
+//    repo GIÀ usa (expertstore nomina, residency alloca); (3) importare
+//    QUALSIASI cosa da moe/residency esentava dall'invariante.
+//  - it.5 (questa): due invarianti SEPARATI, ognuno su un atto singolo, senza
+//    esenzioni per import. Chi alloca memoria GPU va dichiarato; chi nomina i
+//    tensori expert va dichiarato. Nessuna congiunzione da spezzare.
 
 const SRC = globSync("src/engine/**/*.ts").filter((f) => !f.endsWith(".d.ts"));
 const read = (f: string): string => readFileSync(f, "utf8");
 
-/** NOMI dei tensori expert nel GGUF: inevitabili per chiunque li carichi */
-const EXPERT_TENSORS = /ffn_(gate|up|down)_exps/;
-/** creazione di memoria GPU: inevitabile per chiunque li porti in VRAM */
-const GPU_ALLOC = /createBuffer\s*\(/;
-/** il clamp di build_moe_ffn: inevitabile per un router MoE fedele */
-const CLAMP_LITERAL = /6\.103515625e-5/;
-/** l'import della meccanica unica */
-const IMPORTS_MECHANISM = /from "\.{1,2}\/(moe|residency)"/;
+// --- I PREDICATI: definiti UNA VOLTA e usati sia dalle asserzioni sia dai
+// test anti-marciume (il verifier ha mostrato che ricomporli nei test
+// sintetici lascia svuotare il ciclo dell'asserzione senza accorgersene).
+/** allocazione di memoria GPU: l'unica porta, come `requestDevice` */
+export const allocatesGpu = (src: string): boolean => /createBuffer\s*\(/.test(src);
+/** NOMI dei tensori expert nel GGUF, anche costruiti per parti */
+export const namesExpertTensors = (src: string): boolean => /ffn_[A-Za-z0-9_${}.[\]]*_exps/.test(src);
+/** il clamp di `build_moe_ffn`: un router GLM-fedele non può evitarlo */
+export const hardcodesRouterClamp = (src: string): boolean => /6\.103515625e-5/.test(src);
 
-// ALLOWLIST CON RAZIONALE (pattern gpudevice.test): ogni riga dice PERCHÉ quel
-// file non passa dalla meccanica. Aggiungere qui senza motivo = rifare a mano
-// la deriva che questo gate esiste per impedire.
-const ARENA_ALLOWED: Record<string, string> = {
-  "src/engine/q35gpumodel.ts":
-    "DEBITO NOTO (docket fase-D item 4): arena+LRU proprie, da migrare a ExpertCache — la riga sparisce con la migrazione",
-  "src/engine/ktest/ktest.worker.ts":
-    "harness dei kernel: impacchetta expert a mano PER CONFRONTARE la meccanica con un riferimento indipendente",
+// --- ALLOWLIST CON RAZIONALE (pattern gpudevice.test): ogni riga dice PERCHÉ.
+// Aggiungere qui senza motivo = rifare a mano la deriva che il gate impedisce.
+const ALLOC_ALLOWED: Record<string, string> = {
+  "src/engine/residency.ts": "il punto unico dell'arena expert: è QUI che gli slab diventano VRAM",
+  "src/engine/glmmodel.ts": "orchestratore GLM: scratch, KV e uniform del forward (non slab expert, che chiede a ExpertCache)",
+  "src/engine/glmforward.ts": "forward per-layer GLM (harness dei ktest): scratch e pesi non-expert",
+  "src/engine/gpuforward.ts": "forward denso Qwen2.5: pesi e scratch di un modello SENZA expert",
+  "src/engine/engine.worker.ts": "worker di bring-up: buffer di diagnostica",
+  "src/engine/ktest/ktest.worker.ts": "harness dei kernel: alloca a mano per confrontare la meccanica con riferimenti indipendenti",
+  "src/engine/glmbench/glmbench.worker.ts": "harness di bench: buffer di telemetria e staging",
+  "src/engine/q35gpumodel.ts": "DEBITO NOTO (docket fase-D item 4): arena expert propria, da migrare a ExpertCache — la riga sparisce con la migrazione",
 };
-const ROUTER_ALLOWED: Record<string, string> = {
-  "src/engine/moe.ts": "il punto unico stesso: qui la costante WEIGHTS_SUM_CLAMP_MIN è definita",
+const EXPERT_NAME_ALLOWED: Record<string, string> = {
+  "src/engine/shape.ts": "validazione hard dell'inventario GLM contro il GGUF: nomina i tensori, non li porta in VRAM",
+  "src/engine/q35shape.ts": "stessa cosa per la famiglia Qwen 3.5/3.6",
+  "src/engine/expertstore.ts": "reader OPFS dei byte grezzi: nomina i tensori per leggerli dal file, nessuna GPU",
+  "src/engine/quant.ts": "solo commenti che citano i tensori come esempio di layout",
   "src/engine/cpuref.ts": "CPUREF GLM: riferimento indipendente del differential testing (categoria dichiarata, docket item 3)",
+  "src/engine/q35cpurefmodel.ts": "CPUREF Qwen: stessa categoria dichiarata, indipendenza voluta",
+  "src/engine/ktest/ktest.worker.ts": "harness dei kernel: costruisce casi con pesi expert reali",
+  "src/engine/q35gpumodel.ts": "DEBITO NOTO (docket fase-D item 4): legge e impacchetta expert per conto proprio",
+};
+const ROUTER_CLAMP_ALLOWED: Record<string, string> = {
+  "src/engine/moe.ts": "il punto unico stesso: qui la costante WEIGHTS_SUM_CLAMP_MIN è definita",
+  "src/engine/cpuref.ts": "CPUREF GLM: riferimento indipendente del differential testing (categoria dichiarata)",
   "src/engine/q35cpurefmodel.ts": "CPUREF Qwen: stessa categoria dichiarata, indipendenza voluta",
   "src/engine/q35gpumodel.ts": "DEBITO NOTO (docket fase-D item 4): router proprio, da sostituire con routerSelect",
   "src/engine/ktest/ktest.worker.ts": "harness dei kernel: verifica il valore del clamp contro la costante importata",
 };
 
+const offendersOf = (hit: (s: string) => boolean, allowed: Record<string, string>): string[] =>
+  SRC.filter((f) => hit(read(f)) && !(f in allowed)).sort();
+
 describe("una meccanica, una implementazione — INVARIANTI (gate strutturale fase-D)", () => {
-  it("A. chi porta EXPERT in VRAM passa dalla meccanica (o è in allowlist motivata)", () => {
-    const offenders: string[] = [];
-    for (const f of SRC) {
-      const s2 = read(f);
-      if (!EXPERT_TENSORS.test(s2) || !GPU_ALLOC.test(s2)) continue; // non fa slab
-      if (IMPORTS_MECHANISM.test(s2)) continue;                      // passa dalla meccanica
-      if (f in ARENA_ALLOWED) continue;                              // eccezione motivata
-      offenders.push(f);
-    }
-    expect(offenders.sort(), "chi nomina i tensori expert E crea buffer GPU deve importare moe.ts/residency.ts").toEqual([]);
+  it("la scansione non è vuota (senza questo guard, un gate rotto è verde)", () => {
+    // il guard che gpudevice.test ha e che a it.4 mancava
+    expect(SRC.length).toBeGreaterThan(30);
   });
 
-  it("B. il CLAMP del router vive solo in moe.ts (gli altri importano la costante)", () => {
-    const offenders: string[] = [];
-    for (const f of SRC) {
-      if (!CLAMP_LITERAL.test(read(f))) continue;
-      if (f in ROUTER_ALLOWED) continue;
-      offenders.push(f);
-    }
-    expect(offenders.sort(), "usa WEIGHTS_SUM_CLAMP_MIN: un router fedele non può evitare quel clamp").toEqual([]);
+  it("A. la memoria GPU si alloca SOLO dai siti dichiarati", () => {
+    expect(offendersOf(allocatesGpu, ALLOC_ALLOWED),
+      "createBuffer fuori dai siti dichiarati: gli slab expert passano da ExpertCache (residency.ts)").toEqual([]);
+  });
+
+  it("B. i NOMI dei tensori expert vivono SOLO nei siti dichiarati", () => {
+    expect(offendersOf(namesExpertTensors, EXPERT_NAME_ALLOWED),
+      "chi nomina ffn_*_exps deve essere un reader/validatore/cpuref dichiarato, o passare dalla meccanica").toEqual([]);
+  });
+
+  it("C. il CLAMP del router vive solo in moe.ts (gli altri importano la costante)", () => {
+    expect(offendersOf(hardcodesRouterClamp, ROUTER_CLAMP_ALLOWED),
+      "usa WEIGHTS_SUM_CLAMP_MIN invece del letterale").toEqual([]);
     expect(WEIGHTS_SUM_CLAMP_MIN).toBe(6.103515625e-5);
   });
 
   it("l'allowlist è un DEBITO tracciato, non un parcheggio", () => {
-    for (const [f, why] of Object.entries({ ...ARENA_ALLOWED, ...ROUTER_ALLOWED })) {
+    const all = { ...ALLOC_ALLOWED, ...EXPERT_NAME_ALLOWED, ...ROUTER_CLAMP_ALLOWED };
+    for (const [f, why] of Object.entries(all)) {
       expect(why.length, `${f}: razionale troppo corto`).toBeGreaterThan(30);
     }
-    // le voci "DEBITO NOTO" devono sparire: la fase 1 non è chiusa finché ci sono
-    const debiti = [...new Set(Object.entries({ ...ARENA_ALLOWED, ...ROUTER_ALLOWED })
-      .filter(([, why]) => why.startsWith("DEBITO NOTO")).map(([f]) => f))];
+    // le voci "DEBITO NOTO" devono sparire: la fase 1 non chiude finché ci sono
+    const debiti = [...new Set([ALLOC_ALLOWED, EXPERT_NAME_ALLOWED, ROUTER_CLAMP_ALLOWED]
+      .flatMap((m) => Object.entries(m).filter(([, w]) => w.startsWith("DEBITO NOTO")).map(([f]) => f)))];
     expect(debiti).toEqual(["src/engine/q35gpumodel.ts"]);
   });
 });
 
 describe("il gate mette alla prova SE STESSO (anti-marciume)", () => {
-  // Un predicato che non becca più niente è indistinguibile da un gate verde.
-  const arenaHit = (s2: string): boolean =>
-    EXPERT_TENSORS.test(s2) && GPU_ALLOC.test(s2) && !IMPORTS_MECHANISM.test(s2);
-
-  it("becca un'arena scritta a mano, comunque la si formatti", () => {
-    expect(arenaHit('const t = "blk.0.ffn_gate_exps.weight"; device.createBuffer({size: 1});')).toBe(true);
-    // spaziatura diversa: la variante che sfuggiva alle firme testuali di it.1
-    expect(arenaHit("const n='ffn_down_exps'; dev . createBuffer ( {size:1} )")).toBe(true);
-    // nomi di variabile completamente diversi
-    expect(arenaHit("const foo = `blk.${i}.ffn_up_exps.weight`; gpu.createBuffer({});")).toBe(true);
+  // I predicati sono gli STESSI oggetti usati dalle asserzioni (via
+  // `offendersOf`): mutarli qui rompe là, e svuotare là rompe qui.
+  it("A becca l'allocazione GPU comunque scritta", () => {
+    expect(allocatesGpu("dev.createBuffer({size:1})")).toBe(true);
+    expect(allocatesGpu("device . createBuffer ( { size: 1 } )")).toBe(true);
+    expect(allocatesGpu("const mk = (d) => d.createBuffer(desc);")).toBe(true);
+    expect(allocatesGpu("// niente GPU qui")).toBe(false);
   });
 
-  it("NON becca chi passa dalla meccanica, né chi non fa slab", () => {
-    expect(arenaHit('import { packExpertSlab } from "./moe";\nconst t="ffn_gate_exps"; device.createBuffer({});')).toBe(false);
-    expect(arenaHit('import { ExpertCache } from "../residency";\nconst t="ffn_up_exps"; d.createBuffer({});')).toBe(false);
-    expect(arenaHit('const t = "ffn_gate_exps.weight"; // solo validazione shape, niente VRAM')).toBe(false);
-    expect(arenaHit("device.createBuffer({ size: 16 }); // buffer qualsiasi, niente expert")).toBe(false);
+  it("B becca i nomi expert anche COSTRUITI PER PARTI (l'evasione del verifier it.4)", () => {
+    expect(namesExpertTensors('"blk.0.ffn_gate_exps.weight"')).toBe(true);
+    expect(namesExpertTensors("`blk.${l}.ffn_${p}_exps.weight`")).toBe(true);   // evasione 1
+    expect(namesExpertTensors("const n = `ffn_${kind}_exps`;")).toBe(true);
+    expect(namesExpertTensors('"ffn_gate.weight" // denso, non expert')).toBe(false);
   });
 
-  it("il predicato del router becca il letterale comunque scritto", () => {
-    expect(CLAMP_LITERAL.test("Math.max(sum, 6.103515625e-5)")).toBe(true);
-    expect(CLAMP_LITERAL.test("const MIN=6.103515625e-5;")).toBe(true);
-    expect(CLAMP_LITERAL.test("import { WEIGHTS_SUM_CLAMP_MIN } from './moe';")).toBe(false);
+  it("C becca il letterale del clamp comunque scritto", () => {
+    expect(hardcodesRouterClamp("Math.max(sum, 6.103515625e-5)")).toBe(true);
+    expect(hardcodesRouterClamp("const MIN=6.103515625e-5;")).toBe(true);
+    expect(hardcodesRouterClamp("import { WEIGHTS_SUM_CLAMP_MIN } from './moe';")).toBe(false);
+  });
+
+  it("nessuna esenzione per import: importare dalla meccanica NON è un lasciapassare", () => {
+    // evasione 3 del verifier it.4: bastava importare la costante per sparire
+    const evasione = 'import { WEIGHTS_SUM_CLAMP_MIN } from "./moe";\nconst t="ffn_gate_exps"; d.createBuffer({});';
+    expect(allocatesGpu(evasione)).toBe(true);
+    expect(namesExpertTensors(evasione)).toBe(true);
+  });
+
+  it("offendersOf non può essere svuotato in silenzio (buco M2 del verifier it.4)", () => {
+    // il ciclo delle asserzioni è QUESTA funzione: se qualcuno la rendesse
+    // vacua (`return []`), i test sintetici sui predicati resterebbero verdi.
+    // Qui la si esercita direttamente con un predicato che becca tutto e una
+    // allowlist vuota: deve elencare l'intero src/engine.
+    expect(offendersOf(() => true, {}).length).toBe(SRC.length);
+    expect(offendersOf(() => false, {})).toEqual([]);
+    // e con una allowlist che copre tutto, zero offender
+    const tutti = Object.fromEntries(SRC.map((f) => [f, "razionale sintetico lungo abbastanza per il test"]));
+    expect(offendersOf(() => true, tutti)).toEqual([]);
+  });
+
+  it("nessuna congiunzione da spezzare: i due invarianti sono INDIPENDENTI", () => {
+    // evasione 2 del verifier it.4: nomi in un file, buffer in un altro
+    const fileA = 'const t = "blk.0.ffn_down_exps.weight"; // nessuna GPU qui';
+    const fileB = "dev.createBuffer({ size: n }); // nessun nome qui";
+    expect(namesExpertTensors(fileA)).toBe(true);   // A scatta sul primo
+    expect(allocatesGpu(fileB)).toBe(true);         // B scatta sul secondo
   });
 });
 
