@@ -705,3 +705,40 @@ ottimistico, quindi la colonna in piu' costa solo 3 run).
 Parere: **(c)**. Il costo e' basso proprio dove serve, e un riferimento che
 esiste per riscrivere §7-bis deve contenere il numero che §7-bis dovra' citare.
 Registrato it.43 (2026-08-11).
+
+## item 26 — il gap nativo non e' confrontabile finche' la PAGE CACHE non e' dichiarata (PI, fase 6)
+
+Punto 4 del piano ("gap nativo RI-MISURATO a parita'"). Rimisurato in it.44 con
+build IDENTICA (`5f55650`), stessi thread, stesso GGUF: `pp512` 56,58 → **76,41**
+(+35,06%), `tg64` 13,43 → **18,96** (+41,16%).
+
+Causa verificata con `mincore`, non supposta: il GGUF e' residente in page cache
+al **74,9% (12,01 GiB)** — tutto il `buff/cache` della macchina — perche' la
+conformance di it.42 ha letto 1,1 TB dallo stesso inode un'ora prima. llama.cpp
+mmappa i pesi. La stdev di `pp512` che crolla da 3,743 a 1,249 e' la firma dello
+stesso fenomeno.
+
+**Il problema non e' il numero, e' che nessuno dei due artefatti dichiara lo
+stato della cache.** I run del browser portano `hostState` (VRAM, clock, temp);
+il JSON di llama-bench non porta nulla; e la page cache non compare in nessuno
+dei due. Senza quel campo "a parita'" non e' verificabile — e' una speranza.
+
+**Ricaduta oltre il punto 4**: 13,43/56,58 sono il denominatore della funzione
+obiettivo (direction §2) e i gate che `glm-bench-run.mjs` valuta a OGNI run. Se
+il floor a cache calda e' 18,96/76,41, il divario dal nativo e' piu' grande di
+quello pubblicato: il decode del browser (13,44) non sarebbe "appena sopra il
+floor" ma sotto di circa un terzo. Non lo affermo — il confronto onesto vuole i
+due lati allo stesso stato di cache, e oggi non li ho.
+
+Le strade, e nessuna e' mia: (a) misurare il floor in **entrambi** gli stati —
+cache fredda (serve `vm.drop_caches`, cioe' **root sulla macchina**: non lo
+eseguo senza ruling) e cache calda — e pubblicare la coppia, dichiarando lo
+stato; (b) tenere il riferimento 2026-07-30 come floor storico e dichiarare per
+iscritto che non e' riproducibile perche' il suo stato di cache e' ignoto;
+(c) aggiungere la residenza `mincore` del GGUF come campo dell'artefatto (la
+sonda e' 10 righe, gia' scritta e usata in it.44) e ri-baselinare i floor.
+
+Parere: **(c) piu' (a)** — la sonda costa nulla e trasforma un fattore invisibile
+in un campo; senza, ogni ri-misura futura ricadra' nello stesso buco. La (b) e'
+il ripiego se non si vuole toccare i floor mentre il checkpoint e' aperto.
+Registrato it.44 (2026-08-11).

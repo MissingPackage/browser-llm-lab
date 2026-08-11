@@ -2599,3 +2599,47 @@ il piu' grave dei tre perche' il prodotto di questa fase SONO i JSON.
 
 **Verificato che le altre 8 celle sono pulite**: un solo `pageerror` in tutto il
 log della matrice, ed e' nella cella tier 16. Le referenze non sono contaminate.
+
+## it.44 (2026-08-11, fase 6) — il gap nativo NON e' ri-misurabile "a parita'" senza dichiarare la page cache
+
+Punto 4 del piano. `llama-bench` sta in `~/Projects/llama.cpp-oracle/build/bin`,
+e la build e' **identica al riferimento** (`5f55650`), stessi 16 thread, stesso
+GGUF. Il riferimento ha esattamente due test, e sono i due floor che gateano
+tutta la funzione obiettivo: `pp512` = 56,58 e `tg64` = 13,43.
+
+| test | rif. 2026-07-30 | oggi | delta | stdev |
+|---|---|---|---|---|
+| pp512 | 56,5757 | **76,4134** | **+35,06%** | 3,743 → 1,249 |
+| tg64 | 13,4318 | **18,9606** | **+41,16%** | 0,097 → 0,633 |
+
+**Un floor che si alza del 35-41% a build identica non e' un miglioramento di
+llama.cpp: e' l'host.** Ipotesi formulata prima di toccare altro — la page
+cache, che la landmine §4 nomina gia' ("page cache OPFS e VRAM baseline muovono
+stallResidenza 4.3→29 ms/token"). La conformance di it.42 ha letto **1,1 TB**
+da quel file un'ora fa, e `public/models/GLM-4.7-Flash-Q4_0.gguf` e' un SYMLINK
+allo stesso inode che llama.cpp mmappa.
+
+**Verificata con `mincore`, non supposta**: il GGUF e' residente in page cache al
+**74,9% — 12,01 GiB**, cioe' esattamente tutto il `buff/cache` della macchina
+(`free`: 12 GiB su 31 totali). llama.cpp mmappa i pesi: con 3/4 del modello gia'
+in RAM non tocca il disco per quei tre quarti. La stdev di `pp512` che CROLLA da
+3,743 a 1,249 e' la firma della stessa cosa — meno page fault, meno varianza.
+
+**CONSEGUENZA SUL PUNTO 4, che e' il punto**: il done-when dice "gap nativo
+RI-MISURATO a parita'", e questo run **non e' a parita'** — e' un floor a cache
+calda. Peggio: non lo sarebbe nemmeno un run fatto adesso in altro ordine,
+perche' lo stato della page cache non e' dichiarato **in nessuno dei due
+artefatti**. I run del browser portano `hostState` con VRAM, clock e
+temperatura; il JSON di `llama-bench` non porta niente, e la page cache non
+compare in nessuno dei due. JSON rinominato
+`llama-bench-...-WARMCACHE-fase-d-it44.json` perche' nessuno lo scambi per il
+gap a parita'. → **docket item 26.**
+
+**E c'e' una ricaduta piu' larga di questo punto.** I floor 13,43/56,58 sono il
+denominatore della funzione obiettivo (direction §2) e i gate che
+`glm-bench-run.mjs` valuta a ogni run. Sono stati misurati a stato di cache non
+dichiarato. Se il floor vero a cache calda e' 18,96/76,41, il divario del motore
+dal nativo e' PIU' GRANDE di quello pubblicato — il decode del browser (13,44)
+non e' "appena sopra il floor", e' sotto di un terzo. Non lo affermo: il
+confronto onesto pretende i due lati allo stesso stato di cache, e oggi non li
+ho.
