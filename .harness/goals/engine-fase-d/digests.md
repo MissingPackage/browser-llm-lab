@@ -419,3 +419,18 @@ crescenti, che e' il caso vero di un chunk di prefill.
 
 Restano le tre voci grosse: attenzione a chunk per q35, gather K-quant,
 orchestratore a M righe.
+
+## it.26 (2026-08-11) — l'attenzione a chunk era una variante, non una famiglia
+
+Correzione all'inventario: avevo dato l'attenzione a chunk come famiglia nuova
+perche' `attnPrefillChunkWgsl` e' del path Qwen 2.5 e legge un qkv fuso. Vero,
+ma la conclusione era sbagliata: bastava dare il modo `batch` al kernel di q35
+(`attnDecodeWgsl`, che ha gia' buffer separati e GQA). Trenta righe.
+
+La causalita' viene gratis: la riga m somma su 0..rowPast[m], quindi vede se
+stessa e le righe precedenti dello stesso chunk (che `kvAppend` ha gia' scritto)
+e non quelle dopo — non serve una maschera, serve l'ordine nell'encoder.
+
+ktest **93/93** con `dense-batch-attn-chunk` BIT-IDENTICO su 3 righe a `nPast`
+CRESCENTE. Inventario fase 4: **4 voci su 6**; restano il gather K-quant e
+l'orchestratore.

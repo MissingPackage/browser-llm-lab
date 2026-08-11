@@ -266,16 +266,34 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // workgroup storage).
 export function attnDecodeWgsl(opts: {
   nHead: number; nKvHead: number; headDim: number; ctxMax: number;
+  /**
+   * batch (fase 4, it.26): `wid.y` = riga del chunk, `nPast` PER RIGA da
+   * `rowPast`, q e out a offset di riga. E' l'attenzione a chunk del prefill,
+   * e la CAUSALITA' viene gratis: la riga m guarda le posizioni 0..rowPast[m],
+   * quindi vede se stessa e tutto cio' che la precede — comprese le righe
+   * precedenti dello STESSO chunk, che `kvAppend` ha gia' scritto in cache — e
+   * non vede quelle dopo. Non serve una maschera: serve che l'append preceda
+   * l'attenzione, e nell'encoder e' cosi'.
+   *
+   * `scores` e `red` sono di workgroup, e i workgroup sono (head, riga): ogni
+   * riga ha i suoi. Senza `batch` il testo emesso e' IDENTICO byte per byte.
+   */
+  batch?: boolean;
 }): string {
-  const { nHead, nKvHead, headDim, ctxMax } = opts;
+  const { nHead, nKvHead, headDim, ctxMax, batch } = opts;
   const groups = nHead / nKvHead;
   const kvDim = nKvHead * headDim;
+  const pBind = batch
+    ? "@group(0) @binding(4) var<storage, read> rowPast: array<u32>;"
+    : "@group(0) @binding(4) var<uniform> P: TokParams;";
+  const nExpr = batch ? "rowPast[wid.y] + 1u" : "P.nPast + 1u";
+  const rowOff = batch ? `wid.y * ${nHead * headDim}u + ` : "";
   return `${TOK_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read> q: array<f32>;
 @group(0) @binding(1) var<storage, read> kCache: array<f32>;
 @group(0) @binding(2) var<storage, read> vCache: array<f32>;
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
-@group(0) @binding(4) var<uniform> P: TokParams;
+${pBind}
 const HEAD_DIM = ${headDim}u;
 const KV_DIM = ${kvDim}u;
 const GROUPS = ${groups}u;
@@ -287,8 +305,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   let h = wid.x;
   let t = lid.x;
   let kvHead = h / GROUPS;
-  let qOff = h * HEAD_DIM;
-  let n = P.nPast + 1u;
+  let qOff = ${rowOff}h * HEAD_DIM;
+  let n = ${nExpr};
   // 1) score per posizione (ogni thread un sottoinsieme di posizioni)
   for (var p = t; p < n; p = p + 64u) {
     let kOff = p * KV_DIM + kvHead * HEAD_DIM;

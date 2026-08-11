@@ -2625,6 +2625,31 @@ async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
     }
     out.push(bitCmp("dense-batch-deltanet-gates", got, refs, 2 * nV));
   }
+  { // attnDecode a chunk (fase 4, it.26): righe con nPast CRESCENTE, cioe' il
+    // caso vero del prefill — la riga m vede se stessa e le righe precedenti
+    // dello stesso chunk, e NON quelle dopo. La cache si riempie PRIMA, come
+    // nell'encoder.
+    const nHead = 4, nKvHead = 2, headDim = 32, ctxMax = 64;
+    const kvDim = nKvHead * headDim, qDim = nHead * headDim;
+    const basePast = 9; // la riga m guarda 0..basePast+m
+    const kC = g.buf(randF32(ctxMax * kvDim, 31_600, 0.4));
+    const vC = g.buf(randF32(ctxMax * kvDim, 31_610, 0.4));
+    const qs = Array.from({ length: M }, (_, m) => randF32(qDim, 31_620 + m, 0.6));
+    const refs: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const o = g.empty(qDim * 4);
+      const uni = g.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      g.device.queue.writeBuffer(uni, 0, new Uint32Array([basePast + m, basePast + m, 0, 0]) as unknown as BufferSource);
+      await g.run(attnDecodeWgsl({ nHead, nKvHead, headDim, ctxMax }), [g.buf(qs[m]), kC, vC, o, uni], nHead);
+      refs.push(new Float32Array(await g.read(o, qDim * 4)));
+    }
+    const oM = g.empty(M * qDim * 4);
+    const pastB = g.empty(M * 4);
+    g.device.queue.writeBuffer(pastB, 0, Uint32Array.from({ length: M }, (_, m) => basePast + m) as unknown as BufferSource);
+    await g.run(attnDecodeWgsl({ nHead, nKvHead, headDim, ctxMax, batch: true }),
+      [rowsBuf(qs), kC, vC, oM, pastB], [nHead, M, 1]);
+    out.push(bitCmp("dense-batch-attn-chunk", new Float32Array(await g.read(oM, M * qDim * 4)), refs, qDim));
+  }
   return out;
 }
 

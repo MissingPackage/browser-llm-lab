@@ -1614,3 +1614,35 @@ le tre grosse, e sono nell'ordine in cui vanno fatte.
 
 **Gate**: tsc pulito, suite 440|9, ktest **92/92**, nessun run del modello
 (niente e' cambiato nel path di decode: il testo non-batch e' identico).
+
+## it.26 (2026-08-11, fase 4) — l'attenzione a chunk: era una variante, non una famiglia
+
+**Correzione all'inventario di it.24.** Avevo scritto che l'attenzione a chunk
+era una delle due "famiglie di kernel nuove" e avevo motivato cosi':
+`attnPrefillChunkWgsl` esiste ma e' del path Qwen 2.5, legge un `qkv` FUSO e non
+e' un drop-in. Vero — ma la conclusione era sbagliata: **non serviva adattare il
+kernel di un'altra famiglia, serviva dare il modo `batch` al kernel di q35**,
+`attnDecodeWgsl`, che ha gia' i buffer separati (q, kCache, vCache) e la GQA.
+Trenta righe invece di una famiglia. Avevo guardato cosa c'era di simile altrove
+invece di guardare cosa avevo gia' in casa.
+
+**Il pezzo che rende l'idea corretta**: `wid.y` = riga, `nPast` PER RIGA da
+`rowPast`, q e out a offset di riga. **La causalita' viene gratis**: la riga m
+somma sulle posizioni 0..rowPast[m], quindi vede se stessa e tutto cio' che la
+precede — comprese le righe PRECEDENTI dello stesso chunk, che `kvAppend` ha
+gia' scritto in cache — e non vede quelle dopo. Non serve una maschera: serve
+che l'append preceda l'attenzione, e nell'encoder e' cosi'. `scores` e `red`
+sono di workgroup e i workgroup sono (head, riga): ogni riga ha i suoi.
+
+**GATE — ktest 93/93**, caso nuovo `dense-batch-attn-chunk`: **BIT-IDENTICO su 3
+righe** con `nPast` CRESCENTE (9, 10, 11), cioe' proprio il caso in cui le righe
+del chunk si guardano fra loro. Il confronto e' col kernel per-riga eseguito M
+volte sulla stessa cache.
+
+**Inventario della fase 4: 4 voci su 6.** Restano il path expert a GATHER per i
+K-quant (GLM ce l'ha solo per q4_0/q4_1) e l'orchestratore a M righe. La taglia
+che avevo corretto in it.24 (3-5 iterazioni) va a sua volta ridimensionata: una
+delle due voci "grosse" era una variante.
+
+**Gate**: tsc pulito, suite 440|9, ktest **93/93**, nessun run del modello (il
+testo non-batch e' identico byte per byte, il decode non cambia).
