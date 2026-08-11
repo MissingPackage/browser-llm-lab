@@ -264,3 +264,28 @@ item vanno chiusi insieme o il secondo si accorgera' del primo con un
 VK_ERROR_OUT_OF_DEVICE_MEMORY.
 
 Registrato it.17 (2026-08-11).
+
+## item 13 — i tre numeri che la FASE 5 deve usare per tarare la soglia (io, fase 5)
+
+Misurati in it.18 sul regime freddo del path ottimistico (smoke 35B, 39 token,
+10 GiB), e sono INPUT della policy d'ingresso, non lavoro della 3b:
+
+1. **Il replay rigioca l'80,7% del token** (32,3 layer su 40, media di 109
+   replay): il primo layer sporco sta in basso, quindi "rigiocare da firstDirty"
+   e "rifare il token" quasi coincidono.
+2. **Il repair fetcha il +12,0%**: 3742 miss contro i 3341 del path sync sullo
+   stesso prompt. Un expert riparato puo' non finire nella `Sel` definitiva,
+   perche' il replay a valle — con l'hidden corretto — sceglie diversamente:
+   910 selezioni contate come miss e mai usate. E' inerente al meccanismo.
+3. **Il repair e' il 65,6% del token freddo** (484,3 ms/token di CPU su 738,6).
+
+E una PREVISIONE MIA SMENTITA, che vale piu' dei tre numeri: in it.16 avevo
+scritto che a cache fredda il path ottimistico nudo sarebbe stato una
+regressione. Misurato: 738,6 ms/token contro 1192,9 del sync freddo. NON lo
+prendo per buono — un campione per braccio, due run diversi, passata dominata
+dall'I/O: per l'item 10 non e' una misura. Ma la soglia della fase 5 va tarata
+su un bench fatto apposta (bracci interleavati nello stesso processo, cache
+riportata a freddo fra i bracci), non sulla mia intuizione di it.16 e nemmeno
+su questi due numeri.
+
+Registrato it.18 (2026-08-11).

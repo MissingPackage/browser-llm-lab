@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a-3b-3c fatte (it.17: 81->1 submit/token, argmax e routing identici, -71,99 ms/token a parita'); next = repair+replay, che su 30 layer ricorrenti esige un checkpoint di stato che GLM non aveva)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); next = fase 4, prefill chunked/batched q35)
 
 ## 1. Next decidable
 
@@ -164,23 +164,55 @@ giro del gate confrontava freddo (1192,9) contro caldo: e' servita una TERZA
 passata perche' il numero fosse onesto. ktest 87/87, suite 410|9, tsc pulito.
 JSON: `results/engine/q35-optimistic-35b-it17.json`.
 
-**PROSSIMO: il REPAIR+REPLAY**, che la riga 3b chiede esplicitamente ("miss
-rilevato su GPU con repair+replay dalla CPU") e senza cui il path ottimistico
-ALZA sul token sporco. La sua precondizione e' nuova e va detta prima:
-**il replay di GLM non e' portabile su un modello RICORRENTE**. GLM rigioca i
-layer da `firstDirty` in giu' rientrando da `hiddenCkpt`, ed e' idempotente
-perche' i suoi layer sono senza stato (il KV append riscrive la stessa
-posizione). Nel 35B **30 layer su 40 sono deltanet** e `deltaNetConv`/
-`deltaNetCore` aggiornano `convSt`/`stateS` IN PLACE: un replay li
-applicherebbe DUE VOLTE — senza errore, con numeri plausibili. Via d'uscita
-(economica perche' ogni layer tocca il proprio stato UNA volta per token, quindi
-stato all'ingresso del layer = stato all'ingresso del token): **snapshot per
-token** nell'encoder + restore dei soli layer >= `firstDirty`, valido anche per
-i round successivi. Costo CALCOLATO: 30 x (conv 98.304 B + S 2.097.152 B) =
-**62,8 MiB** di VRAM e una copia da 62,8 MiB per token — da MISURARE contro i
-71,5 ms/token di qui, non da assumere trascurabile. Servono anche `hiddenCkpt`
-(327 KB/token, ancora non scritto: sarebbe stato codice morto) e il pin-for-
-replay dei layer >= firstDirty.
+**REPAIR+REPLAY FATTO — FASE 3b CHIUSA (it.18)**. La precondizione che GLM non
+aveva: 30 layer su 40 sono deltanet e aggiornano `convSt`/`stateS` IN PLACE, quindi
+rigiocarli applicherebbe l'aggiornamento DUE VOLTE (senza errore, con numeri
+plausibili). Snapshot per token — costa poco perche' ogni layer tocca il proprio
+stato una volta sola, quindi stato-all-ingresso-del-layer == stato-all-ingresso-
+del-token — **62,8 MiB**, restore dei soli layer >= `firstDirty`.
+
+BUG PRESO DAL GATE, non da una rilettura: avevo usato `startLayer === 0` come
+sinonimo di "primo giro". A cache vuota il primo layer sporco E' lo zero, quindi
+il replay finiva nel ramo dello snapshot e `x` restava l'uscita del giro prima
+invece dell'embedding — il router di layer 0 sceglieva altri 8 expert, non
+residenti, e il round dopo ritrovava il layer 0 sporco ("progresso violato").
+Ipotesi formulata dal codice PRIMA di toccarlo, corretta separando i due
+concetti, ri-verificata contro lo stesso repro.
+
+**GATE it.18 (smoke 35B, 39 token, 10 GiB)**, regime freddo in un run a parte
+(`--opt-cold`: la cache fredda esiste una volta sola per processo) —
+ottimistico FREDDO 3,79 submit/token · 39/39 token sporchi · 109 replay
+(2,79/token, **32,3 layer su 40 = 80,7% del token rigiocato**) · 3742 miss
+contro i 3341 del sync (**+12,0%**, 910 fetch mai usati: un expert riparato puo'
+non finire nella Sel definitiva) · repair 484,3 ms/token = **65,6% del token** ·
+738,6 ms/token. CALDO **81 -> 1 submit/token, 41 -> 1 readback**, 141,18
+[140,61-144,64] -> 72,58 [72,45-72,73] = **-68,60 ms/token (-48,6%)**.
+**argmax IDENTICO 39/39 anche fra freddo-ottimistico e sync-caldo** — 109
+restore dello stato ricorrente senza deriva, che su un modello ricorrente
+sarebbe cumulativa. ktest 87/87, suite 410|9, tsc pulito. JSON:
+`q35-optimistic-35b-it17.json` (freddo sync) e
+`q35-optimistic-cold-35b-it18.json` (freddo ottimistico).
+
+**Done-when 3b voce per voce**: (a) 81->1 submit e 41->1 readback misurati nello
+stesso JSON, residenza piena a 1 submit/token ✓ · (b) argmax 39/39 ✓ · (c) ktest
+87/87, GLM bit-identico ✓ · (d) miss e routing identici A RESIDENZA PIENA, che e'
+il campione nominato da (a); **a freddo NO e non puo' esserlo** — il +12,0% di
+fetch e' inerente al meccanismo e si pubblica come fatto misurato.
+
+**UNA MIA PREVISIONE SMENTITA** (docket item 13): in it.16 avevo scritto che a
+cache fredda il path ottimistico nudo sarebbe stato una REGRESSIONE. Misurato
+738,6 contro 1192,9 ms/token del sync freddo. Non lo prendo per buono — un
+campione per braccio, due run diversi, passata dominata dall'I/O: per il docket
+item 10 non e' una misura. Ma la soglia della fase 5 va tarata su un bench fatto
+apposta, non su quell'intuizione e nemmeno su questi due numeri.
+
+**PROSSIMO: fase 4** (prefill chunked/batched q35), che e' la riga successiva del
+contratto: pattern `planMoeChunk` + gemv batch portato a q35, micro-bench tok/s
+di prefill prima/dopo, logits del batched == sequenziali sul campione (gate
+secco). Nota di contesto per chi la attacca: il prefill del 35B gira gia' con
+`read=false` e ora, col path ottimistico acceso, un token e' UN submit — il
+margine che la fase 4 cerca e' nel BATCH sulle righe, non piu' nella
+serializzazione dei submit.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

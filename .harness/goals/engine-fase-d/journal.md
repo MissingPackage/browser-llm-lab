@@ -1050,3 +1050,89 @@ trascurabile.
 
 **Gate permanenti**: tsc pulito, suite 410|9, 0 gpu-error nel run, JSON
 committato (`results/engine/q35-optimistic-35b-it17.json`).
+
+## it.18 (2026-08-11, fase 3b) — repair+replay: la fase 3b si chiude, e il regime freddo dice una cosa che non mi aspettavo
+
+**Cosa manca(va)**: la riga 3b chiede "miss rilevato su GPU con **repair+replay**
+dalla CPU". it.17 rilevava il miss e ALZAVA. Questa iterazione ripara e rigioca.
+
+**La precondizione, che GLM non aveva.** Il replay di GLM rientra da
+`hiddenCkpt[firstDirty]` e rigioca i layer da li' in giu': idempotente, perche' i
+suoi layer sono senza stato (il KV append riscrive la stessa posizione). Nel 35B
+**30 layer su 40 sono deltanet** e aggiornano `convSt`/`stateS` IN PLACE:
+rigiocarli applicherebbe l'aggiornamento DUE VOLTE — senza errore, con uno stato
+ricorrente sbagliato e numeri plausibili. Lo snapshot costa poco perche' ogni
+layer tocca il proprio stato UNA volta per token, quindi lo stato all'ingresso
+del LAYER e' quello all'ingresso del TOKEN: **una copia sola a inizio token**
+(62,8 MiB misurati: 30 x (conv 98.304 B + S 2.097.152 B)) serve a tutti i round,
+e il restore tocca solo i layer >= `firstDirty`.
+
+**IL BUG CHE IL GATE HA TROVATO, e come l'ho preso.** Primo giro a cache fredda:
+morto al token 0 con "replay round 2 sporco allo STESSO layer MoE 0 — progresso
+violato". Ipotesi PRIMA della correzione, dal codice: avevo scritto
+`if (startLayer === 0) snapshot else rientro`, cioe' avevo usato
+`startLayer === 0` come sinonimo di "primo giro". **Non lo e': a cache vuota il
+primo layer sporco E' lo zero**, quindi il replay riparte proprio da li' e
+finiva nel ramo dello snapshot — senza rientro, `x` conteneva l'uscita del giro
+precedente invece dell'embedding, il router di layer 0 sceglieva 8 expert
+diversi, quelli non erano residenti, e il round dopo ritrovava il layer 0 sporco.
+Il sintomo osservato (stesso layer, round 2) e' esattamente cio' che quella causa
+produce. Corretto separando i due concetti (`runPass(startLayer, first)`),
+ri-verificato contro lo STESSO repro: 39/39 token completati.
+
+**GATE, smoke 35B, 39 token, 320 selezioni/token, 10 GiB.** Il regime freddo
+gira in un run a parte, perche' la cache fredda esiste una volta sola per
+processo (`--opt-cold`):
+
+| | ottimistico FREDDO | sync CALDO | ottimistico CALDO |
+|---|---|---|---|
+| submit/token | 3,79 | 81 | **1** |
+| readback/token | 3,79 | 41 | **1** |
+| token sporchi | **39 / 39** | 0 | 0 |
+| replay | 109 (2,79/token) | 0 | 0 |
+| miss | 3742 | 0 | 0 |
+| ms/token | 738,6 | **141,18** [140,61-144,64] | **72,58** [72,45-72,73] |
+
+- **argmax IDENTICO 39/39** in tutti i confronti: caldo-vs-caldo, e
+  **freddo-ottimistico contro sync-caldo**. Quest'ultimo e' IL gate del replay:
+  39 token con 2,79 round medi ciascuno, 109 restore dello stato ricorrente, e
+  l'argmax non si sposta di una posizione. Se il restore fosse sbagliato la
+  deriva sarebbe cumulativa (il deltanet e' ricorrente) e divergerebbe subito.
+- routing IDENTICO chiave per chiave (3341 chiavi, 0 diff), miss 0 vs 0 a caldo.
+- ms/token a caldo: **−68,60 (−48,6%)**, coerente coi −71,99 di it.17 (i due run
+  distano ~3 ms, dentro la banda di dispersione).
+
+**IL PREZZO DEL REGIME FREDDO, misurato.** Ogni replay rigioca in media **32,3
+layer su 40 (80,7%)**: il primo layer sporco sta in basso e quasi tutto il token
+si ricalcola. E il repair FETCHA PIU' DI QUANTO SERVA: 3742 miss contro i 3341
+del path sync sullo stesso prompt (**+12,0%**), perche' un expert riparato puo'
+non finire nella `Sel` definitiva — il replay a valle, con l'hidden corretto,
+sceglie diversamente. Sono 910 selezioni contate come miss e mai usate. Il
+fetch e' avvenuto davvero: contarlo e' onesto, nasconderlo no. Il tempo CPU del
+repair e' **484,3 ms/token, il 65,6% del token freddo**.
+
+**E QUI IL NUMERO SMENTISCE LA MIA PREVISIONE DI it.16.** Avevo scritto che a
+cache fredda "il path ottimistico NUDO applicato al prefill freddo e' una
+regressione". Misurato: 738,6 ms/token contro i 1192,9 del sync freddo di it.17.
+**Non lo prendo per buono**: sono UN campione per braccio, in DUE run diversi,
+su una passata dominata dall'I/O — per il docket item 10 non e' una misura. Ma
+non e' nemmeno la conferma di quello che avevo previsto, e vale come segnale:
+la soglia della fase 5 va tarata su una misura fatta apposta (bracci
+interleavati nello stesso processo), non sulla mia intuizione di it.16 ne' su
+questi due numeri.
+
+**FASE 3b: DONE-WHEN VOCE PER VOCE.**
+- (a) submit/token e readback/token misurati prima e dopo nello stesso JSON, col
+  caso a residenza piena a 1 submit/token → **81 → 1**, misurati. ✓
+- (b) argmax identico al path attuale su un campione del golden 35B → 39/39. ✓
+- (c) ktest MoE q35 PASS invariati e GLM bit-identico → **87/87**. ✓
+- (d) conteggio dei miss e routing invariati sullo stesso campione → a caldo
+  identici (0 vs 0, routing chiave per chiave). **A FREDDO NO, e non puo'
+  esserlo**: +12,0% di fetch e' inerente al meccanismo, non un difetto
+  dell'implementazione. Il campione che il contratto nomina in (a) e' quello a
+  residenza piena; li' (d) e' soddisfatta alla lettera. Il numero freddo si
+  pubblica come fatto misurato, non si nasconde.
+
+**Gate**: tsc pulito, suite 410|9, ktest 87/87, 0 gpu-error, due JSON committati
+(`q35-optimistic-35b-it17.json` per il freddo-sync, `q35-optimistic-cold-35b-it18.json`
+per il freddo-ottimistico).

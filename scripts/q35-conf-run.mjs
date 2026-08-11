@@ -50,6 +50,11 @@ if (process.argv.includes("--misstrace")) qs.set("misstrace", "1");
 // submit unico (calda) sulla STESSA cache, submit/token e readback/token
 // riportati SEPARATI per passata.
 if (process.argv.includes("--optimistic")) qs.set("optimistic", "1");
+// Variante del gate: la passata FREDDA la fa il path ottimistico invece del
+// sync — cioe' il repair+replay nel suo regime peggiore (a cache vuota ogni
+// token e' sporco). Sta in un run a parte perche' la cache fredda esiste una
+// volta sola per processo.
+if (process.argv.includes("--opt-cold")) { qs.set("optimistic", "1"); qs.set("optcold", "1"); }
 const tap = arg("tap", null);
 if (tap !== null) qs.set("tap", tap);
 

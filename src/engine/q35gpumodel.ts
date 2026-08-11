@@ -117,8 +117,17 @@ export interface Q35GpuModel {
    * GPU→CPU (piu' mapAsync concorrenti risolte insieme valgono UNO: e' un
    * round-trip solo). Si contano su ENTRAMBI i path, altrimenti il "prima" del
    * done-when sarebbe una stima.
+   *
+   * `dirtyTokens`/`replays`/`replayLayers`/`repairMs` sono la TASSA del
+   * repair+replay: token con almeno un miss, giri rigiocati (piu' di uno per
+   * token = cascata), somma dei layer MoE rigiocati, e il tempo CPU di
+   * fetch+upload+flush. La tassa GPU del replay sta gia' dentro `submits`.
    */
-  perf(): { tokens: number; embedMs: number; readbackMs: number; argmaxMs: number; submits: number; readbacks: number };
+  perf(): {
+    tokens: number; embedMs: number; readbackMs: number; argmaxMs: number;
+    submits: number; readbacks: number;
+    dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
+  };
   /**
    * Accende/spegne il path a submit unico a caldo (solo se il modello e' stato
    * costruito con `select: "optimistic"`; altrimenti LANCIA — non esiste il
@@ -308,7 +317,13 @@ export async function createQ35GpuModel(
   const staging = device.createBuffer({ size: S.vocab * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
   const steps: Step[] = [];
-  const stateBufs: { buf: GPUBuffer; bytes: number }[] = [];
+  /**
+   * Stato RICORRENTE dei layer linear (deltanet). Il `layer` non è decorazione:
+   * il replay del path ottimistico rigioca i layer da un certo punto in giù e
+   * deve rimettere a posto lo stato di QUELLI, non di tutti — quelli a monte
+   * non si rigiocano e il loro stato è già quello giusto.
+   */
+  const stateBufs: { buf: GPUBuffer; bytes: number; layer: number }[] = [];
   const push = (code: string, bufs: GPUBuffer[], wgs: number | [number, number], withUni = false): void => {
     const p = pipe(code);
     const entries: GPUBindGroupEntry[] = bufs.map((b, i) => ({ binding: i, resource: { buffer: b } }));
@@ -362,8 +377,8 @@ export async function createQ35GpuModel(
       const wOut = await loadW(`${b}ssm_out.weight`);
       const convSt = sbuf(new Float32Array((S.linConvK - 1) * qkvDim));
       const stateS = sbuf(new Float32Array(S.linVHead * S.linHeadDim * S.linHeadDim));
-      stateBufs.push({ buf: convSt, bytes: (S.linConvK - 1) * qkvDim * 4 });
-      stateBufs.push({ buf: stateS, bytes: S.linVHead * S.linHeadDim * S.linHeadDim * 4 });
+      stateBufs.push({ buf: convSt, bytes: (S.linConvK - 1) * qkvDim * 4, layer: l });
+      stateBufs.push({ buf: stateS, bytes: S.linVHead * S.linHeadDim * S.linHeadDim * 4, layer: l });
       wqkv.push(xn, qkv);
       wz.push(xn, z);
       wb.push(xn, bRaw);
@@ -764,6 +779,9 @@ export async function createQ35GpuModel(
       dirtyB: GPUBuffer; dirtyStaging: GPUBuffer; selStaging: GPUBuffer;
       pipeR: GPUComputePipeline; bindR: GPUBindGroup;
       pAxpySel: GPUComputePipeline; bgAxpySel: GPUBindGroup;
+      hiddenCkpt: GPUBuffer;
+      stateShadow: { src: GPUBuffer; dst: GPUBuffer; bytes: number; layer: number }[];
+      stateShadowBytes: number;
       destroy(): void;
     } => {
       const dirtyB = device.createBuffer({
@@ -844,9 +862,35 @@ export async function createQ35GpuModel(
           { binding: 3, resource: { buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES } },
         ],
       });
+      // hiddenCkpt: l'hidden di INGRESSO di ogni segmento MoE. È l'input del
+      // replay — il rientro deve essere BIT-IDENTICO a ciò che il layer aveva
+      // visto nel giro ottimistico, altrimenti il replay non ripara: ricalcola
+      // un'altra cosa.
+      const hiddenCkpt = empty(nMoeLayer * d * 4);
+      // stateShadow: LA DIFFERENZA STRUTTURALE RISPETTO A GLM. Il replay di GLM
+      // è idempotente perché i suoi layer sono senza stato (il KV append
+      // riscrive la stessa posizione con gli stessi indici). Qui 30 layer su 40
+      // sono deltanet e aggiornano `convSt`/`stateS` IN PLACE: rigiocarli
+      // applicherebbe l'aggiornamento DUE VOLTE, e non con un errore — con uno
+      // stato ricorrente sbagliato e numeri plausibili.
+      //
+      // Lo snapshot costa poco perché ogni layer tocca il proprio stato UNA
+      // volta per token: lo stato all'ingresso del LAYER è lo stato all'ingresso
+      // del TOKEN. Quindi una copia sola a inizio token serve a tutti i round di
+      // replay, che ripartono sempre più in basso.
+      const stateShadow = stateBufs.map((s) => ({
+        src: s.buf,
+        dst: device.createBuffer({ size: Math.max(16, s.bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC }),
+        bytes: s.bytes, layer: s.layer,
+      }));
+      const stateShadowBytes = stateShadow.reduce((a, s) => a + s.bytes, 0);
       return {
         dirtyB, dirtyStaging, selStaging, pipeR, bindR, pAxpySel, bgAxpySel,
-        destroy: () => { dirtyB.destroy(); dirtyStaging.destroy(); selStaging.destroy(); },
+        hiddenCkpt, stateShadow, stateShadowBytes,
+        destroy: () => {
+          dirtyB.destroy(); dirtyStaging.destroy(); selStaging.destroy(); hiddenCkpt.destroy();
+          for (const s of stateShadow) s.dst.destroy();
+        },
       };
     })() : null;
     /** sentinel di `dirtyB`: [0] è un atomicMin sul layer MoE, [1] un atomicAdd */
@@ -869,141 +913,240 @@ export async function createQ35GpuModel(
       shadowCompare: shadow ? () => shadow.compare() : null,
       shadowStats: shadow ? () => shadow.stats() : null,
       runTokenOptimistic: opt ? async (read: boolean): Promise<Float32Array | null> => {
-        // reset di `dirtyB` PER TOKEN: `queue.writeBuffer` è ordinata prima
-        // dell'intero submit che segue, quindi arriva prima di ogni resolve.
-        device.queue.writeBuffer(opt.dirtyB, 0, dirtyInit as unknown as BufferSource);
-        // Error scope come CONTRATTO di ogni encode nuovo (landmine B1): una
-        // pipeline invalida fa droppare il submit IN SILENZIO e i readback
-        // tornano stale-ma-plausibili.
-        device.pushErrorScope("validation");
-        device.pushErrorScope("out-of-memory");
-        const enc = device.createCommandEncoder();
-        const gg2 = gemvGrid(d);
-        for (let m = 0; m < nMoeLayer; m++) {
-          // `moeAcc` si azzera DENTRO l'encoder. La `queue.writeBuffer` del path
-          // sync qui non funzionerebbe: è ordinata PRIMA dell'intero submit,
-          // quindi i 40 layer vedrebbero un solo azzeramento — l'ultimo.
-          enc.clearBuffer(moeAcc, 0, d * 4);
-          const pass = enc.beginComputePass();
-          for (let i = m === 0 ? 0 : cuts[m - 1]; i < cuts[m]; i++) {
-            const st = steps[i];
-            pass.setPipeline(st.pipe);
-            pass.setBindGroup(0, st.bind);
-            pass.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
-          }
-          // router+resolve: legge i logits che il GEMV appena accodato ha
-          // scritto e pubblica `Sel` per gli 8 dispatch che seguono, nello
-          // stesso pass. L'entry di `MoeIdx` è la (layer, k=0): il suo `selIdx`
-          // è la base della regione di PRODUZIONE del layer.
-          pass.setPipeline(opt.pipeR);
-          pass.setBindGroup(0, opt.bindR, [m * topK * MOE_IDX_STRIDE]);
-          pass.dispatchWorkgroups(1);
-          const E = expertCls[cfg.classOf(moeLayerAbs[m])];
-          for (let k2 = 0; k2 < topK; k2++) {
-            const dyn = (m * topK + k2) * MOE_IDX_STRIDE;
-            pass.setPipeline(E.pGate); pass.setBindGroup(0, E.bgGate, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
-            pass.setPipeline(E.pUp); pass.setBindGroup(0, E.bgUp, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
-            pass.setPipeline(pSilu); pass.setBindGroup(0, bgSilu); pass.dispatchWorkgroups(Math.ceil(dE / 64), 1, 1);
-            pass.setPipeline(E.pDown); pass.setBindGroup(0, E.bgDown, [dyn]); pass.dispatchWorkgroups(gg2[0], gg2[1], 1);
-            pass.setPipeline(opt.pAxpySel); pass.setBindGroup(0, opt.bgAxpySel, [dyn]); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
-          }
-          pass.setPipeline(pAdd); pass.setBindGroup(0, bgAddRes); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
-          pass.end();
-        }
-        const tail = enc.beginComputePass();
-        for (let i = cuts[nMoeLayer - 1]; i < steps.length; i++) {
-          const st = steps[i];
-          tail.setPipeline(st.pipe);
-          tail.setBindGroup(0, st.bind);
-          tail.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
-        }
-        tail.end();
-        if (read) enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4);
-        // `Sel` INTERA in coda: è il solo momento in cui le regioni dei 40 layer
-        // sono complete, ed è insieme la decisione del router e ciò che i kernel
-        // hanno letto davvero.
-        enc.copyBufferToBuffer(selBuf, 0, opt.selStaging, 0, nSel * SEL_BYTES);
-        enc.copyBufferToBuffer(opt.dirtyB, 0, opt.dirtyStaging, 0, 16);
-        device.queue.submit([enc.finish()]);
-        perfAcc.submits++;
-        // I1: da qui al readback la slotTable è INTOCCABILE — il resolve l'ha
-        // già letta e gli slot che ha pubblicato in `Sel` devono restare quelli.
-        cache.setInFlight(true);
-        const errOom = await device.popErrorScope();
-        const errVal = await device.popErrorScope();
-        if (errOom ?? errVal) throw new Error(`q35 optimistic error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
-        // Le mapAsync partono INSIEME (stesso submit alle spalle): un
-        // round-trip host solo, ed è per questo che vale UN readback.
-        const tRb = performance.now();
-        const maps: Promise<undefined>[] = [
-          opt.selStaging.mapAsync(GPUMapMode.READ),
-          opt.dirtyStaging.mapAsync(GPUMapMode.READ),
-        ];
-        if (read) maps.push(staging.mapAsync(GPUMapMode.READ));
-        await Promise.all(maps);
-        perfAcc.readbacks++;
-        perfAcc.readbackMs += performance.now() - tRb;
-        cache.setInFlight(false); // confine di token: la tabella torna toccabile
-        const su = new Uint32Array(opt.selStaging.getMappedRange().slice(0));
-        opt.selStaging.unmap();
-        const du = new Uint32Array(opt.dirtyStaging.getMappedRange().slice(0));
-        opt.dirtyStaging.unmap();
-        let lg: Float32Array | null = null;
-        if (read) {
-          lg = new Float32Array(staging.getMappedRange().slice(0, S.vocab * 4));
-          staging.unmap();
-        }
-        // I MISS si derivano dalla `Sel` e si incrociano col flag aggregato che
-        // ha scritto il kernel: due strade indipendenti verso lo stesso fatto.
-        // Una divergenza è un bug strutturale (il resolve ha scritto `Sel` e
-        // `dirtyB` in disaccordo), mai un dato da interpretare.
-        let missCount = 0, firstDirty = -1;
-        for (let m = 0; m < nMoeLayer; m++) {
-          for (let k2 = 0; k2 < topK; k2++) {
-            if ((su[(m * topK + k2) * 4 + 3] & 1) !== 0) {
-              missCount++;
-              if (firstDirty < 0) firstDirty = m;
+        // ---- UN GIRO: encode da `startLayer` + submit + readback di coda ----
+        // `startLayer` 0 è il giro normale; > 0 è il REPLAY, che rientra
+        // dall'hidden checkpointato e rimette a posto lo stato ricorrente dei
+        // soli layer che sta per rigiocare.
+        const runPass = async (startLayer: number, first: boolean): Promise<{
+          su: Uint32Array; lg: Float32Array | null; missCount: number; firstDirty: number;
+        }> => {
+          // reset di `dirtyB` PER GIRO: `queue.writeBuffer` è ordinata prima
+          // dell'intero submit che segue, quindi arriva prima di ogni resolve.
+          device.queue.writeBuffer(opt.dirtyB, 0, dirtyInit as unknown as BufferSource);
+          // Error scope come CONTRATTO di ogni encode nuovo (landmine B1): una
+          // pipeline invalida fa droppare il submit IN SILENZIO e i readback
+          // tornano stale-ma-plausibili.
+          device.pushErrorScope("validation");
+          device.pushErrorScope("out-of-memory");
+          const enc = device.createCommandEncoder();
+          if (first) {
+            // Snapshot dello stato ricorrente all'ingresso del TOKEN. Uno solo
+            // per token basta a tutti i round: ogni layer tocca il proprio
+            // stato una volta sola, quindi stato-all-ingresso-del-layer ==
+            // stato-all-ingresso-del-token.
+            for (const s of opt.stateShadow) enc.copyBufferToBuffer(s.src, 0, s.dst, 0, s.bytes);
+          } else {
+            // Rientro del replay: x torna a essere l'hidden che il layer aveva
+            // visto nel giro sporco, BIT-IDENTICO — è la condizione per cui il
+            // router del layer riscelga gli stessi expert e, coi miss ormai
+            // riparati, li risolva puliti.
+            //
+            // `first` e `startLayer === 0` NON sono la stessa cosa, e confonderli
+            // e' stato un bug vero (it.18, misurato al primo token a cache
+            // fredda): a cache vuota il primo layer sporco E' lo zero, quindi il
+            // replay riparte proprio da li' — e senza questo rientro `x`
+            // conterrebbe l'uscita del giro precedente invece dell'embedding.
+            // Il router di layer 0 sceglierebbe altri 8 expert, non residenti,
+            // e il round successivo troverebbe di nuovo il layer 0 sporco: il
+            // guard sul progresso alza, ma la causa e' qui.
+            enc.copyBufferToBuffer(opt.hiddenCkpt, startLayer * d * 4, x, 0, d * 4);
+            // E lo stato ricorrente dei layer RIGIOCATI torna quello di
+            // partenza. Senza, `deltaNetConv`/`deltaNetCore` applicherebbero
+            // l'aggiornamento due volte: nessun errore, uno stato sbagliato.
+            // I layer a monte NON si rigiocano e il loro stato è già giusto.
+            const fromAbs = startLayer === 0 ? 0 : moeLayerAbs[startLayer - 1] + 1;
+            for (const s of opt.stateShadow) {
+              if (s.layer >= fromAbs) enc.copyBufferToBuffer(s.dst, 0, s.src, 0, s.bytes);
             }
           }
-        }
-        const kernelFirst = du[0] === 0xffffffff ? -1 : du[0];
-        if (du[1] !== missCount || kernelFirst !== firstDirty) {
-          throw new Error(
-            `q35 optimistic: dirtyB (${du[1]} miss, primo layer MoE ${kernelFirst}) != derivazione ` +
-            `da Sel (${missCount} miss, primo layer MoE ${firstDirty}) — il resolve ha scritto Sel e ` +
-            "dirtyB in disaccordo: bug strutturale, token non interpretabile");
-        }
-        if (missCount > 0) {
-          // DEGRADO DEFINITO, non silenzioso: gli expert mancanti non hanno
-          // partecipato (contributo zero, `axpySelWgsl`), quindi il token è
-          // SBAGLIATO e si dice invece di restituire numeri plausibili.
-          // Il repair+replay che rende utilizzabile questo caso è la fetta
-          // successiva; qui il meccanismo esiste e il regime in cui conviene
-          // (residenza raggiunta) è quello in cui `missCount` è 0 per
-          // costruzione — misurato in it.16: 0 token sporchi su 39 a caldo.
-          throw new Error(
-            `q35 optimistic: ${missCount} MISS nella Sel di questo token (primo layer MoE ` +
-            `${firstDirty}) — token INVALIDO. Il path a submit unico esige la residenza già ` +
-            "raggiunta: senza repair+replay un expert mancante non partecipa e il risultato non " +
-            "è quello del path sync. Scaldare la cache col path sync (setOptimistic(false)).");
-        }
-        // Contabilità di fine token, dalla `Sel` letta in coda: routing (il
-        // numero che il gate confronta), hit e LRU. Nel path sync la fa
-        // `ensure` una selezione alla volta; qui la CPU vede tutto insieme e
-        // dopo, ma deve vedere ESATTAMENTE le stesse cose.
-        for (let m = 0; m < nMoeLayer; m++) {
-          const l = moeLayerAbs[m];
-          const experts = new Uint32Array(topK);
-          for (let k2 = 0; k2 < topK; k2++) {
-            const e = su[(m * topK + k2) * 4];
-            experts[k2] = e;
-            const key = cache.keyOf(l, e);
-            routing.set(key, (routing.get(key) ?? 0) + 1);
-            cache.noteResidentHit(l, e);
+          const gg2 = gemvGrid(d);
+          for (let m = startLayer; m < nMoeLayer; m++) {
+            // checkpoint dell'hidden di INGRESSO del segmento, fuori dal pass
+            // (i dispatch che hanno prodotto questo x sono già chiusi).
+            enc.copyBufferToBuffer(x, 0, opt.hiddenCkpt, m * d * 4, d * 4);
+            // `moeAcc` si azzera DENTRO l'encoder. La `queue.writeBuffer` del
+            // path sync qui non funzionerebbe: è ordinata PRIMA dell'intero
+            // submit, quindi i 40 layer vedrebbero un solo azzeramento —
+            // l'ultimo.
+            enc.clearBuffer(moeAcc, 0, d * 4);
+            const pass = enc.beginComputePass();
+            for (let i = m === 0 ? 0 : cuts[m - 1]; i < cuts[m]; i++) {
+              const st = steps[i];
+              pass.setPipeline(st.pipe);
+              pass.setBindGroup(0, st.bind);
+              pass.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+            }
+            // router+resolve: legge i logits che il GEMV appena accodato ha
+            // scritto e pubblica `Sel` per gli 8 dispatch che seguono, nello
+            // stesso pass. L'entry di `MoeIdx` è la (layer, k=0): il suo
+            // `selIdx` è la base della regione di PRODUZIONE del layer.
+            pass.setPipeline(opt.pipeR);
+            pass.setBindGroup(0, opt.bindR, [m * topK * MOE_IDX_STRIDE]);
+            pass.dispatchWorkgroups(1);
+            const E = expertCls[cfg.classOf(moeLayerAbs[m])];
+            for (let k2 = 0; k2 < topK; k2++) {
+              const dyn = (m * topK + k2) * MOE_IDX_STRIDE;
+              pass.setPipeline(E.pGate); pass.setBindGroup(0, E.bgGate, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
+              pass.setPipeline(E.pUp); pass.setBindGroup(0, E.bgUp, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
+              pass.setPipeline(pSilu); pass.setBindGroup(0, bgSilu); pass.dispatchWorkgroups(Math.ceil(dE / 64), 1, 1);
+              pass.setPipeline(E.pDown); pass.setBindGroup(0, E.bgDown, [dyn]); pass.dispatchWorkgroups(gg2[0], gg2[1], 1);
+              pass.setPipeline(opt.pAxpySel); pass.setBindGroup(0, opt.bgAxpySel, [dyn]); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
+            }
+            pass.setPipeline(pAdd); pass.setBindGroup(0, bgAddRes); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
+            pass.end();
           }
-          cache.noteSelection(l, experts);
+          const tail = enc.beginComputePass();
+          for (let i = cuts[nMoeLayer - 1]; i < steps.length; i++) {
+            const st = steps[i];
+            tail.setPipeline(st.pipe);
+            tail.setBindGroup(0, st.bind);
+            tail.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+          }
+          tail.end();
+          if (read) enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4);
+          // `Sel` INTERA in coda: è il solo momento in cui le regioni dei 40
+          // layer sono complete, ed è insieme la decisione del router e ciò che
+          // i kernel hanno letto davvero. Nel replay le entry dei layer non
+          // rigiocati restano quelle del giro prima, in VRAM: la copia è sempre
+          // dell'intera `Sel` e quindi le riporta comunque.
+          enc.copyBufferToBuffer(selBuf, 0, opt.selStaging, 0, nSel * SEL_BYTES);
+          enc.copyBufferToBuffer(opt.dirtyB, 0, opt.dirtyStaging, 0, 16);
+          device.queue.submit([enc.finish()]);
+          perfAcc.submits++;
+          // I1: da qui al readback la slotTable è INTOCCABILE — il resolve l'ha
+          // già letta e gli slot che ha pubblicato in `Sel` devono restare
+          // quelli. Il repair sta DOPO, al confine.
+          cache.setInFlight(true);
+          const errOom = await device.popErrorScope();
+          const errVal = await device.popErrorScope();
+          if (errOom ?? errVal) throw new Error(`q35 optimistic error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
+          // Le mapAsync partono INSIEME (stesso submit alle spalle): un
+          // round-trip host solo, ed è per questo che vale UN readback.
+          const tRb = performance.now();
+          const maps: Promise<undefined>[] = [
+            opt.selStaging.mapAsync(GPUMapMode.READ),
+            opt.dirtyStaging.mapAsync(GPUMapMode.READ),
+          ];
+          if (read) maps.push(staging.mapAsync(GPUMapMode.READ));
+          await Promise.all(maps);
+          perfAcc.readbacks++;
+          perfAcc.readbackMs += performance.now() - tRb;
+          cache.setInFlight(false); // confine di giro: la tabella torna toccabile
+          const su = new Uint32Array(opt.selStaging.getMappedRange().slice(0));
+          opt.selStaging.unmap();
+          const du = new Uint32Array(opt.dirtyStaging.getMappedRange().slice(0));
+          opt.dirtyStaging.unmap();
+          let lg: Float32Array | null = null;
+          if (read) {
+            lg = new Float32Array(staging.getMappedRange().slice(0, S.vocab * 4));
+            staging.unmap();
+          }
+          // I MISS si derivano dalla `Sel` e si incrociano col flag aggregato
+          // che ha scritto il kernel: due strade indipendenti verso lo stesso
+          // fatto. Una divergenza è un bug strutturale (il resolve ha scritto
+          // `Sel` e `dirtyB` in disaccordo), mai un dato da interpretare.
+          // Si guardano solo i layer RIGIOCATI: sopra `startLayer` la `Sel` è
+          // quella del giro precedente, i cui miss sono già stati riparati, e
+          // `dirtyB` è stato azzerato per questo giro.
+          let missCount = 0, firstDirty = -1;
+          for (let m = startLayer; m < nMoeLayer; m++) {
+            for (let k2 = 0; k2 < topK; k2++) {
+              if ((su[(m * topK + k2) * 4 + 3] & 1) !== 0) {
+                missCount++;
+                if (firstDirty < 0) firstDirty = m;
+              }
+            }
+          }
+          const kernelFirst = du[0] === 0xffffffff ? -1 : du[0];
+          if (du[1] !== missCount || kernelFirst !== firstDirty) {
+            throw new Error(
+              `q35 optimistic: dirtyB (${du[1]} miss, primo layer MoE ${kernelFirst}) != derivazione ` +
+              `da Sel (${missCount} miss, primo layer MoE ${firstDirty}) — il resolve ha scritto Sel e ` +
+              "dirtyB in disaccordo: bug strutturale, token non interpretabile");
+          }
+          return { su, lg, missCount, firstDirty };
+        };
+
+        let cur = await runPass(0, true);
+        // ---- contabilità PER PREFISSO + repair/replay iterativo ----
+        // I layer sopra il primo sporco sono DEFINITIVI: il replay riparte da
+        // `firstDirty` e non li tocca più. Contabilizzarli subito evita di
+        // doverli proteggere dall'eviction del repair, ed è anche il motivo per
+        // cui il pin-for-replay può limitarsi ai layer da `firstDirty` in giù.
+        const repaired = new Set<number>();
+        let accounted = 0;
+        const account = (upTo: number, su: Uint32Array): void => {
+          for (let m = accounted; m < upTo; m++) {
+            const l = moeLayerAbs[m];
+            const experts = new Uint32Array(topK);
+            for (let k2 = 0; k2 < topK; k2++) {
+              const e = su[(m * topK + k2) * 4];
+              experts[k2] = e;
+              const key = cache.keyOf(l, e);
+              routing.set(key, (routing.get(key) ?? 0) + 1);
+              // Gli expert RIPARATI in questo token sono già passati da
+              // `ensure` e contati come MISS: contarli anche come hit
+              // gonfierebbe le richieste. Gli altri non hanno visto `ensure`
+              // affatto — la contabilità e il touch della LRU sono qui.
+              if (!repaired.has(key)) cache.noteResidentHit(l, e);
+            }
+            cache.noteSelection(l, experts);
+          }
+          accounted = upTo;
+        };
+        // `lastFirst` parte a -1 e non a 0: a cache fredda il primo layer sporco
+        // E' lo zero, ed e' legittimo — il progresso stretto si pretende fra un
+        // round e il successivo, non fra il giro iniziale e il primo round.
+        let rounds = 0, lastFirst = -1;
+        while (cur.missCount > 0) {
+          if (rounds === 0) perfAcc.dirtyTokens++;
+          account(cur.firstDirty, cur.su);
+          // La convergenza è per PREFISSO: `firstDirty` deve crescere
+          // STRETTAMENTE a ogni round, quindi i round sono <= nMoeLayer. Se non
+          // cresce, o l'eviction ha toccato uno slot pinnato o il flush della
+          // tabella non ha seguito le writeBuffer degli slab: è un bug
+          // strutturale, non un caso da ritentare.
+          if (cur.firstDirty <= lastFirst) {
+            throw new Error(
+              `q35 optimistic: replay round ${rounds + 1} sporco allo STESSO layer MoE ` +
+              `${cur.firstDirty} (precedente ${lastFirst}) — progresso violato`);
+          }
+          if (++rounds > nMoeLayer + 1) {
+            throw new Error(`q35 optimistic: ${rounds} round di repair — oltre il cap teorico (${nMoeLayer} layer MoE)`);
+          }
+          lastFirst = cur.firstDirty;
+          // pin-for-replay del ROUND: gli slot che la `Sel` corrente
+          // referenzia dai layer >= firstDirty (miss inclusi, che stanno lì)
+          // non possono diventare vittime mentre si ripara.
+          const pinned = new Set<number>();
+          const misses: { l: number; e: number }[] = [];
+          for (let m = cur.firstDirty; m < nMoeLayer; m++) {
+            const l = moeLayerAbs[m];
+            for (let k2 = 0; k2 < topK; k2++) {
+              const o = (m * topK + k2) * 4;
+              const e = cur.su[o];
+              pinned.add(cache.keyOf(l, e));
+              if ((cur.su[o + 3] & 1) !== 0) misses.push({ l, e });
+            }
+          }
+          const tRep = performance.now();
+          // L'I/O sta FUORI dalla cache (il 35B legge per Range): si `await`ta
+          // solo ciò che manca e poi si consegnano i byte già in mano.
+          const got = await Promise.all(misses.map((ms) => readExpert(ms.l, ms.e)));
+          misses.forEach((ms, i) => {
+            cache.ensure(ms.l, ms.e, () => got[i], pinned);
+            repaired.add(cache.keyOf(ms.l, ms.e));
+          });
+          // UN flush, DOPO le writeBuffer degli slab: il dato prima della
+          // tabella che lo indirizza (R5 del design d'arena).
+          cache.flushSlotTable();
+          perfAcc.repairMs += performance.now() - tRep;
+          perfAcc.replays++;
+          perfAcc.replayLayers += nMoeLayer - cur.firstDirty;
+          cur = await runPass(cur.firstDirty, false);
         }
-        return lg;
+        account(nMoeLayer, cur.su);
+        return cur.lg;
       } : null,
       async runLayer(m: number, logitsF32: Float32Array): Promise<void> {
         const l = moeLayerAbs[m];
@@ -1082,7 +1225,10 @@ export async function createQ35GpuModel(
       },
     };
   }
-  const perfAcc = { tokens: 0, embedMs: 0, readbackMs: 0, argmaxMs: 0, submits: 0, readbacks: 0 };
+  const perfAcc = {
+    tokens: 0, embedMs: 0, readbackMs: 0, argmaxMs: 0, submits: 0, readbacks: 0,
+    dirtyTokens: 0, replays: 0, replayLayers: 0, repairMs: 0,
+  };
   /** path attivo: `true` solo se costruito con `select: "optimistic"` (fetta 3c) */
   let optimisticOn = opts.select === "optimistic";
   const zeroAcc = new Float32Array(d);

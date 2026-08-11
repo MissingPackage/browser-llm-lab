@@ -15,6 +15,8 @@ const cfg = {
   // ?optimistic=1 → gate della fetta 3c: passata sync (fredda) + passata a
   // submit unico (calda), numeri riportati separati
   optTrace: q.get("optimistic") === "1",
+  // ?optcold=1 → la passata fredda la fa il path ottimistico (repair+replay)
+  optCold: q.get("optcold") === "1",
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

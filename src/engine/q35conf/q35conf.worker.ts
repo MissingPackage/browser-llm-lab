@@ -40,17 +40,29 @@ interface Cfg {
    * ogni token è sporco, a caldo nessuno).
    */
   optTrace?: boolean;
+  /**
+   * fase-D 3b fetta 3c-bis: la passata FREDDA la fa il path OTTIMISTICO invece
+   * di quello sync. È il test del repair+replay nel suo regime peggiore — a
+   * cache vuota ogni token è sporco (it.16: 39/39) — e va in un run a parte
+   * perché la cache fredda esiste una volta sola per processo.
+   */
+  optCold?: boolean;
 }
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
 const pass2json = (
-  r: { submits: number; readbacks: number; hits: number; misses: number; ms: number },
+  r: {
+    submits: number; readbacks: number; hits: number; misses: number; ms: number;
+    dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
+  },
   n: number,
 ) => ({
   submits: r.submits, submitsPerToken: r.submits / n,
   readbacks: r.readbacks, readbacksPerToken: r.readbacks / n,
   hits: r.hits, misses: r.misses,
   msPerToken: r.ms / n,
+  dirtyTokens: r.dirtyTokens, replays: r.replays, replayLayers: r.replayLayers,
+  repairMs: r.repairMs,
 });
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
@@ -245,6 +257,7 @@ async function main(cfg: Cfg): Promise<void> {
     const runPass = async (optimistic: boolean): Promise<{
       argmax: number[]; submits: number; readbacks: number; hits: number; misses: number;
       routing: Record<string, number>; ms: number; error: string | null;
+      dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
     }> => {
       model.resetState();
       model.setOptimistic(optimistic);
@@ -279,6 +292,8 @@ async function main(cfg: Cfg): Promise<void> {
       return {
         argmax, submits: p1.submits - p0.submits, readbacks: p1.readbacks - p0.readbacks,
         hits: m1.hits - m0.hits, misses: m1.misses - m0.misses, routing, ms, error,
+        dirtyTokens: p1.dirtyTokens - p0.dirtyTokens, replays: p1.replays - p0.replays,
+        replayLayers: p1.replayLayers - p0.replayLayers, repairMs: p1.repairMs - p0.repairMs,
       };
     };
     // TRE passate, non due. La prima è FREDDA per forza (la cache parte vuota)
@@ -287,7 +302,12 @@ async function main(cfg: Cfg): Promise<void> {
     // sarebbe un confronto freddo-contro-caldo travestito da speedup. La
     // seconda passata è il path di OGGI sulla cache già calda, ed è quella
     // contro cui il numero va letto.
-    const syncCold = await runPass(false);
+    // La passata FREDDA: col path sync (il "prima" storico) o col path
+    // ottimistico (`--opt-cold`), che è il test vero del repair+replay perché a
+    // cache vuota ogni token è sporco. Non possono stare nello stesso run: la
+    // cache fredda esiste una volta sola per processo.
+    const coldOpt = cfg.optCold === true;
+    const syncCold = await runPass(coldOpt);
     // E il ms/token si misura come il docket item 10 impone, non con un
     // campione per braccio: bracci INTERLEAVATI, prima ripetizione SCARTATA
     // (la prima passata dopo il load paga compilazione e prime allocazioni),
@@ -330,7 +350,7 @@ async function main(cfg: Cfg): Promise<void> {
         "utilizzabile senza repair+replay, ed è la misura di it.16 a dirlo.",
       reps: REPS,
       passes: [
-        { pass: "sync-cold", tokensDone: syncCold.argmax.length, error: syncCold.error, ...pass2json(syncCold, Math.max(1, syncCold.argmax.length)) },
+        { pass: coldOpt ? "optimistic-cold" : "sync-cold", tokensDone: syncCold.argmax.length, error: syncCold.error, ...pass2json(syncCold, Math.max(1, syncCold.argmax.length)) },
         { pass: "sync-warm", tokensDone: syncWarm.argmax.length, error: syncWarm.error, ...pass2json(syncWarm, Math.max(1, syncWarm.argmax.length)), msPerTokenDisp: msSync },
         { pass: "optimistic-warm", tokensDone: optim.argmax.length, error: optim.error, ...pass2json(optim, Math.max(1, optim.argmax.length)), msPerTokenDisp: msOpt },
       ],
@@ -339,7 +359,13 @@ async function main(cfg: Cfg): Promise<void> {
         // (sync, caldo) contro pass 2 (ottimistico, caldo)
         comparedPasses: "sync-warm (1) vs optimistic-warm (2)",
         argmaxEqual, argmaxCompared: nCmp, argmaxTotal: n, argmaxIdentical: nCmp === n && argmaxEqual === n,
-        argmaxEqualVsCold: syncCold.argmax.slice(0, nCmp).filter((v, i) => v === optim.argmax[i]).length,
+        // Col path ottimistico a freddo questo confronto E' il gate del
+        // repair+replay: il token riparato deve dare lo STESSO argmax del path
+        // sync a caldo. Se il replay sbagliasse — stato ricorrente applicato
+        // due volte, rientro dall'hidden sbagliato — divergerebbe qui.
+        argmaxEqualColdVsSyncWarm: syncCold.argmax.slice(0, Math.min(syncCold.argmax.length, syncWarm.argmax.length))
+          .filter((v, i) => v === syncWarm.argmax[i]).length,
+        coldPath: coldOpt ? "optimistic" : "sync",
         routingKeys: keys.size, routingDiff, routingIdentical: routingDiff === 0,
         missesSyncWarm: syncWarm.misses, missesOptimistic: optim.misses,
         msPerTokenSyncWarm: msSync.median, msPerTokenOptimistic: msOpt.median,

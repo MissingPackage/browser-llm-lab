@@ -256,3 +256,36 @@ portabile su un modello ricorrente**. 30 layer su 40 sono deltanet e aggiornano
 `convSt`/`stateS` IN PLACE: un replay li applicherebbe due volte, senza errore e
 con numeri plausibili. Via d'uscita: snapshot per token (62,8 MiB, calcolati) +
 restore dei soli layer >= firstDirty, da MISURARE contro i 71,5 ms/token.
+
+## it.18 (2026-08-11) — repair+replay, e la fase 3b si chiude
+
+Il replay di GLM non era portabile: 30 layer su 40 sono deltanet e aggiornano lo
+stato IN PLACE, quindi rigiocarli lo applicherebbe due volte (senza errore, con
+numeri plausibili). Snapshot per token — costa poco perche' stato-all-ingresso-
+del-layer == stato-all-ingresso-del-token — 62,8 MiB, restore dei soli layer
+>= firstDirty.
+
+BUG PRESO DAL GATE: avevo usato `startLayer === 0` come sinonimo di "primo
+giro". A cache vuota il primo layer sporco E' lo zero, quindi il replay finiva
+nel ramo dello snapshot e `x` restava l'uscita del giro prima invece
+dell'embedding. Ipotesi formulata dal codice prima di toccarlo, corretta
+separando i due concetti, ri-verificata contro lo stesso repro.
+
+**Smoke 35B, 39 token, 10 GiB** — ottimistico FREDDO: 3,79 submit/token, 39/39
+token sporchi, 109 replay (2,79/token, 32,3 layer su 40 ciascuno = 80,7% del
+token rigiocato), 3742 miss contro i 3341 del sync (**+12,0%**: un expert
+riparato puo' non finire nella Sel definitiva — 910 fetch mai usati), repair
+484,3 ms/token = 65,6% del token, 738,6 ms/token. CALDO: **81 → 1 submit/token,
+41 → 1 readback**, 141,18 → 72,58 ms/token (**−68,60, −48,6%**).
+**argmax IDENTICO 39/39 anche fra freddo-ottimistico e sync-caldo**: 109 restore
+dello stato ricorrente e la deriva non c'e' — su un modello ricorrente sarebbe
+cumulativa e divergerebbe subito.
+
+La previsione di it.16 ("a freddo l'ottimistico e' una regressione") NON e'
+confermata: 738,6 contro 1192,9 del sync freddo. Ma sono un campione per braccio
+in due run diversi: per il docket item 10 non e' una misura, e la soglia della
+fase 5 va tarata su un bench fatto apposta.
+
+FASE 3b CHIUSA sui suoi quattro done-when; (d) vale a residenza piena, che e' il
+campione che il contratto nomina — a freddo il +12% di fetch e' inerente al
+meccanismo e si pubblica come fatto.
