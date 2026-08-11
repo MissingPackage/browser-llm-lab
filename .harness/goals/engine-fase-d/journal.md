@@ -2019,3 +2019,33 @@ chunk, cosi' due M girano sullo stesso contesto e la M resta l'unica variabile.
 
 **Gate**: tsc pulito, suite 440|9, JSON committati (`q35-prefillT8`,
 `q35-prefillT16`, `q35-prefillM8`).
+
+## it.34 (2026-08-11, fase 4) — il prefill a chunk sui MoE: il bivio, e perche' NON uso il path ottimistico
+
+Portare `prefillChunk` sul 35B vuol dire decidere chi sceglie gli expert dentro
+il chunk. Due strade, e la differenza non e' di comodita':
+
+**(A) Il router su GPU (path ottimistico di it.17).** Zero readback, ma il
+prefill e' esattamente la fase FREDDA: i miss sono il regime (it.16: 39 token su
+39 sporchi a cache vuota), quindi servirebbe repair+replay **a livello di
+chunk** — e le righe di un chunk sono interdipendenti, quindi non e' il replay
+di it.18 con un indice in piu': e' un'altra cosa.
+
+**(B) La selezione sulla CPU, col readback BATCHATO.** Per layer: segmento
+statico batchato per tutte le M righe → UN readback dei logit del router per
+tutte le M righe → selezione ed `ensure` per riga sulla CPU → catene expert.
+Sono **40 readback per CHUNK invece di 40 per TOKEN**: la riduzione dei sync e'
+M volte, che e' il grosso di cio' che il batch del prefill puo' dare, e il
+regime freddo resta gestito com'e' oggi (l'`ensure` precede il dispatch, sempre).
+
+**Prendo (B)**, e non solo per la semplicita': con (B) la selezione e la catena
+expert sono LE STESSE del path sequenziale, quindi il gate resta la
+**bit-identita' dei logits** — che e' il done-when della riga 4 e la cosa piu'
+forte che si possa chiedere. Con (A) il gate diventerebbe "argmax identico", piu'
+debole, e in cambio di un meccanismo che nel regime del prefill e' in perdita.
+E' la stessa logica con cui it.27 ha messo gli expert per riga invece del gather:
+prima il gate forte, poi l'ottimizzazione che lo indebolisce, se paga.
+
+**Conseguenza operativa**: nel chunk il MoE resta a 40 submit, mentre il resto
+del layer e' batchato. Il guadagno atteso e' quindi minore che sul denso — e la
+misura dira' quanto, invece di una proiezione.
