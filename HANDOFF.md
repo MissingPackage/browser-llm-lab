@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.39: CHECKPOINT A BLOCCATO dall'host — docket item 20 in attesa di ruling)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.40: CHECKPOINT A ripartito — docket 20 chiuso dai fatti, non-reg GLM IN BANDA (13,437/31,813/14,49 s), restano golden+cpuref+firma)
 
 ## 1. Next decidable
 
@@ -488,15 +488,39 @@ pretende — entro 30 MiB il delta della sessione desktop (1.160). Correttezza d
 GLM intatta (ktest 96/96, L2rel identico all'ultima decimale): manca la
 PRESTAZIONE a parita' di host.
 
-**BLOCCO IN ATTESA DI RULING — DOCKET ITEM 20**: la riga 6 pretende "host
-DICHIARATO, GPU scarica" e la condizione non e' soddisfatta; soddisfarla vuol
-dire liberare ~1,2 GiB di VRAM sulla macchina. Opzioni: **(a)** liberare la VRAM
-e rilanciare il b12 identico (unica strada per il confronto ±5%); (b)
-ri-baselinare a un budget che entra, perdendo il confronto storico; (c)
-rimandare e intanto fare i riferimenti q35. **Parere: (a), altrimenti (c).**
-I riferimenti q35 NON sono stati lanciati "intanto" apposta: il piano li mette
-dopo il gate di GLM, e anticiparli e' il modo di spendere ore di GPU su un
-albero che poi non passa.
+**it.40 — DOCKET ITEM 20 CHIUSO, SUPERATO DAI FATTI, e il primo braccio PASSA.**
+Il blocco chiedeva di liberare ~1,2 GiB di VRAM: ri-ancorato da disco, l'host ne
+teneva **577 MiB** (contro gli 817 del riferimento), quindi la premessa e'
+decaduta senza scegliere fra (a), (b) e (c). Rilanciato il b12 optimistic
+IDENTICO al pin (`config` confrontata programmaticamente, uguale):
+
+| metrica | rif. 2026-08-09 | oggi | delta |
+|---|---|---|---|
+| decode tok/s | 13,172 | **13,437** | **+2,01%** |
+| prefill tok/s | 31,265 | **31,813** | **+1,75%** |
+| TTFT ms | 14.744,9 | **14.490,8** | **-1,72%** |
+
+Tutte in banda ±5% e tutte dalla parte giusta. **Ma il numero che qualifica la
+non-regressione e' la MECCANICA, identica all'ultima cifra**: `residencyRatio`
+0,8210 · `pDirty` 0,9375 · `replaysPerToken` 1,1875 · `replayFracPerDirty`
+0,6459 · `missesPerToken` **4,781** — tutti uguali al riferimento. Il motore
+prende le STESSE decisioni di residenza sugli stessi token; varia solo il tempo
+di parete. JSON: `bench-glm-4090-b12-optimistic-nonreg-fase-d-it40-c.json`
+(`vramPeakMiB` 14.974, host `memUsedMiB` 615→623).
+
+**TRAPPOLA, docket item 21**: il runner esce **4** e non e' una regressione — i
+suoi gate sono il floor CPU di llama.cpp (13,43/56,58) e lo strutturale ≤2
+submit/token, che il RIFERIMENTO stesso fallisce. Oggi il decode e' anzi passato
+da FAIL a PASS (13,437 > 13,43). La non-regressione si legge confrontando le
+mediane col JSON di riferimento, **mai dall'exit code**.
+
+**Costate due run**: `--prefill-batch` e' un BOOLEANO (0/1), non una M — il
+riferimento e' a chunked M=16 e il default del runner e' 0; passare "16" lascia
+il prefill sequenziale IN SILENZIO (lo dice solo `config.prefillPath`). Commento
+d'uso del runner corretto.
+
+**RESTA del braccio 2**: golden AL PIN + cpuref + firma (conformance full GLM,
+~96+95 min), non lanciate. Poi i punti 3-6 del piano.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

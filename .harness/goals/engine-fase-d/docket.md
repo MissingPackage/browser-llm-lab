@@ -555,3 +555,35 @@ costa il confronto storico, che e' la ragione per cui quel riferimento esiste:
 un merge gate che cambia metro mentre lo si attraversa non e' un merge gate.
 
 Registrato it.39 (2026-08-11).
+
+**ITEM 20 — CHIUSO in it.40, SUPERATO DAI FATTI (nessun ruling servito).** La
+domanda era se liberare ~1,2 GiB di VRAM sulla macchina di chi lavora. Ri-ancorato
+da disco a inizio sessione, `nvidia-smi` dava **577 MiB usati / 15.372 liberi** —
+la sessione desktop e' oggi PIU' LEGGERA di quando fu preso il riferimento (817).
+La condizione della riga 6 e' soddisfatta a costo zero, quindi non e' stata scelta
+ne' la (a) ne' la (b) ne' la (c): la premessa e' decaduta. Il braccio e' stato
+rilanciato identico al pin e PASSA in banda +/-5% (13,437 / 31,813 / 14.490,8 ms
+contro 13,172 / 31,265 / 14.744,9), con la meccanica del path ottimistico identica
+all'ultima cifra (pDirty 0,9375, missesPerToken 4,781).
+
+## item 21 — l'exit code di `glm-bench-run.mjs` non dice quello che un merge gate gli chiederebbe (io, fase 6)
+
+I gate che il runner valuta sono il **floor CPU di llama.cpp** (13,43 decode /
+56,58 prefill, funzione obiettivo direction §2) e lo **strutturale <= 2
+submit/token**. Nessuno dei tre e' la banda di NON-REGRESSIONE, che e' il
+confronto con le mediane del riferimento. Conseguenza misurata in it.40: il
+riferimento b12 optimistic 2026-08-09 fallisce prefill e strutturale, quindi
+**exit 4 e' l'esito normale di una run perfettamente in banda** — e oggi, che il
+decode e' passato da FAIL a PASS sullo stesso gate, l'exit code e' rimasto 4
+lo stesso.
+
+Non e' un bug del runner: quei gate misurano un'altra cosa, e la misurano bene.
+E' un rischio del CHECKPOINT A, che e' un MERGE gate: chiunque automatizzi
+"checkpoint verde = exit 0" leggerebbe questa run come una bocciatura. Per ora
+l'ho annotato nel commento d'uso del runner e la lettura della non-regressione
+resta il confronto programmatico coi campi del JSON di riferimento.
+
+Aperto come item perche' la strada giusta (un flag `--nonreg <json-di-riferimento>`
+che confronti le mediane e faccia lui la banda, con un exit code suo) e' un cambio
+al runner, e l'albero e' congelato fino a fine checkpoint. Non lo apro adesso.
+Registrato it.40 (2026-08-11).

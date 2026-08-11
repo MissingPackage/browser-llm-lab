@@ -2,11 +2,24 @@
 // /glmbench.html (profilo su disco, stesso OPFS di routing/conformance) e
 // scrive il report con i gate tok/s. Uso:
 //   node scripts/glm-bench-run.mjs [--prompt 6] [--ngen 64] [--reps 3]
-//     [--budget-gib 11] [--attrib 1] [--out results/engine/...json]
-//     [--timeout-min 120]
+//     [--budget-gib 11|auto] [--attrib 1] [--select cpu|optimistic]
+//     [--prefill-batch 0|1] [--prefetch inforward] [--policy tier]
+//     [--park-frac F] [--ctx-max N] [--host-state quiescent|...]
+//     [--out results/engine/...json] [--timeout-min 120]
 // --attrib N: repliche DEDICATE di attribuzione (telemetria liv.1+2 accesa;
 // il loro wall NON entra nei gate). 0 le disattiva.
+// --prefill-batch e' un BOOLEANO (0/1), non una M: la M del prefill a chunk e'
+// la costante GLM_PREFILL_M nel worker, e la pagina legge `prefillbatch==="1"`.
+// Passare "16" lascia il prefill SEQUENZIALE e il report lo dice nel campo
+// config.prefillPath — che e' l'unico posto dove ci si accorge dello sbaglio
+// (costato due run in it.40, dove il riferimento da riprodurre e' a M=16).
 // Exit: 0 gate PASS, 4 gate FAIL (report scritto), 2 errore, 3 timeout.
+// ATTENZIONE (it.40): i gate del runner sono il FLOOR CPU di llama.cpp
+// (13.43/56.58) e lo strutturale <=2 submit/token — NON la banda di
+// non-regressione. Il riferimento b12 optimistic 2026-08-09 li fallisce
+// entrambi, quindi exit 4 e' l'esito NORMALE di questa run: la
+// non-regressione si legge confrontando le mediane col riferimento, non
+// dall'exit code.
 import { chromium } from "playwright";
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";

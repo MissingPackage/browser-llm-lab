@@ -2341,3 +2341,82 @@ derivato 10,56 GiB, picco molto sotto). Non li lancio in questa iterazione
 perche' il piano di it.38 li mette DOPO il gate di GLM, e cambiare l'ordine per
 "intanto facciamo qualcosa" e' esattamente il modo di ritrovarsi con ore di GPU
 spese su un albero che poi non passa il gate. Aspetto il ruling.
+
+## it.40 (2026-08-11, fase 6) — il CHECKPOINT A riparte: docket 20 evaporato, primo braccio IN BANDA
+
+**Il blocco di it.39 si e' sciolto senza un ruling, e non perche' abbia deciso
+io: la premessa non esiste piu'.** L'item 20 chiedeva al PI se liberare ~1,2 GiB
+di VRAM sulla macchina di chi lavora. Ri-ancorato da disco a inizio sessione,
+`nvidia-smi` dice **577 MiB usati / 15.372 liberi**: la sessione desktop e' oggi
+piu' leggera di quando fu preso il riferimento (817). La condizione della riga 6
+("host DICHIARATO, GPU scarica") e' soddisfatta a costo zero. Item 20 CHIUSO
+come SUPERATO DAI FATTI — non e' stata scelta la (a), la (b) o la (c): la
+domanda e' decaduta.
+
+**PRIMA del braccio, il banco di prova interattivo** (richiesta PI in sessione):
+`chat.html` + `src/engine/chat/`. E' il primo posto del repo dove il motore gira
+NON teacher-forced. Vincolo che mi sono dato e verificato: **non tocca una riga
+del motore** — serviva tutto gia' pubblico — cosi' l'albero resta congelato come
+il checkpoint pretende. L'unico file tracciato modificato e' `vite.config.ts`
+(una entry di build). tsc pulito, suite 440|9 invariata.
+
+**DUE RUN BUTTATE, stessa causa, ed e' mia.** Ho dedotto la semantica di un flag
+invece di leggerla.
+1. Prima invocazione senza `--prefill-batch`: il default del runner e' `0` e il
+   riferimento e' a **chunked M=16**. Esito: prefill 13,02 contro 31,26 (-58%),
+   TTFT 35,4 s contro 14,7. Preso confrontando `config.prefillPath` campo per
+   campo col riferimento, non guardando i tok/s.
+2. Seconda invocazione con `--prefill-batch 16`: **non ha fatto niente**. La
+   pagina legge `q.get("prefillbatch") === "1"` — e' un BOOLEANO, la M e' la
+   costante `GLM_PREFILL_M`. Un valore fuori dominio non e' un errore, e'
+   silenziosamente `false`.
+Corretto il commento d'uso di `glm-bench-run.mjs`, che non elencava ne'
+`--select` ne' `--prefill-batch` (ne' prefetch/policy/park-frac/ctx-max/
+host-state): e' il documento che avrebbe evitato entrambe. Le due run
+mis-invocate NON stanno in `results/`: erano errori di invocazione, non misure.
+
+**FALSO ALLARME che vale la pena scrivere**: la prima run urlava `hit 0.00%
+(retention 0.00%)` e verrebbe da cercare un bug nella cache. Ce l'ha anche il
+riferimento, con la sua nota accanto: nel path ottimistico solo i MISS passano
+da `ensure`, quindi hitRate 0 e' la semantica, non un sintomo. Confrontare col
+riferimento invece di leggere il numero da solo e' cio' che ha impedito di
+partire per la tangente.
+
+**BRACCIO 2 DEL CHECKPOINT A (non-regressione GLM, b12 optimistic) — PASSA.**
+`config` IDENTICA al riferimento (confronto programmatico, non a occhio):
+
+| metrica | rif. 2026-08-09 | oggi | delta |
+|---|---|---|---|
+| decode tok/s | 13,172 | **13,437** | **+2,01%** |
+| prefill tok/s | 31,265 | **31,813** | **+1,75%** |
+| TTFT ms | 14.744,9 | **14.490,8** | **-1,72%** |
+
+Tutte e tre **in banda +/-5%** e tutte e tre dalla parte giusta. Dispersione
+sulle 3 repliche dichiarata (stdev decode 0,265 contro 0,125 del riferimento:
+oggi rumore un po' maggiore, banda comunque larga il doppio del delta).
+
+**Il numero che qualifica la non-regressione NON sono i tok/s: e' la MECCANICA,
+identica all'ultima cifra.** `residencyRatio` 0,8210 = 0,8210 · `pDirty` 0,9375
+= 0,9375 · `replaysPerToken` 1,1875 = 1,1875 · `replayFracPerDirty` 0,6459 =
+0,6459 · `missesPerToken` **4,781 = 4,781**. Il motore prende esattamente le
+stesse decisioni di residenza sugli stessi token: cio' che varia e' solo il
+tempo di parete. Un delta di tok/s in banda con la meccanica che deriva sarebbe
+una non-regressione fortunata; questa e' una non-regressione strutturale.
+
+**EXIT CODE 4, e non e' una regressione — e' una trappola del runner.** I gate
+che il runner valuta sono il FLOOR CPU di llama.cpp (13,43 decode / 56,58
+prefill) e lo strutturale `<= 2 submit/token`. Il riferimento li fallisce
+ENTRAMBI (`decodePass: false`, `prefillPass: false`, submits 2,1875). Oggi:
+prefill FAIL come il riferimento (31,81 vs 56,58), strutturale FAIL con lo
+STESSO valore (2,1875), e **decode PASS — 13,437 supera i 13,43 che il
+riferimento non superava**. Quindi exit 4 e' l'esito NORMALE di questa run e
+l'exit code NON distingue "regredito" da "ancora sotto il floor CPU": chi
+automatizzasse il checkpoint sull'exit code leggerebbe un PASS come FAIL.
+Annotato nel runner e aperto come docket item 21.
+
+**Host**: dichiarato `user-session-light` come il riferimento, e piu' leggero
+davvero — `memUsedMiB` 615->623 contro 817->825; `vramPeakMiB` **14.974** contro
+15.160. Temperatura 46->50 (rif. 40->51).
+
+**Resta del braccio 2**: golden AL PIN, cpuref e firma (le conformance full
+GLM), che sono ~96+95 min e non sono state lanciate in questa iterazione.
