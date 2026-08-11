@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.32: orchestratore montato, logits BIT-IDENTICI, speedup 1,15x (non 2: il batch fonde i dispatch, non il traffico dei pesi))
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.33: fase 4 gateata bit-identica, speedup 1,22x a 1k di contesto e 2,02x a 6,5k)
 
 ## 1. Next decidable
 
@@ -372,7 +372,18 @@ I tre idiomi convivono — per-vettore = appiattimento (nVec x M), per-riga =
 maxAbs 0.** Era l'atteso per costruzione (ogni kernel batched e' ktestato
 bit-identico per riga).
 
-**MA LO SPEEDUP E' 1,151x, NON 2** (29,88 → 25,97 ms/token, primo chunk scartato
+**IL NUMERO E' UNA CURVA, NON UN NUMERO (it.33)**: a parita' di contesto la M
+quasi non conta — **1,218x a M=8 e 1,236x a M=16 su 1024 token** — il che
+conferma che i pesi non si amortizzano. Ma il guadagno **cresce col CONTESTO**:
+**2,019x a 6456 token** (M=8, 806 campioni). Spiegazione plausibile: a contesto
+lungo domina l'attenzione e le M righe leggono la STESSA KV da workgroup
+concorrenti — il riuso non lo fa il kernel, lo fa la cache della GPU. Ed e' il
+regime che conta: il prefill lungo e' dove il TTFT fa male. Logits bit-identici
+in tutti i run (fino a **200.394.240 f32 confrontati** senza una differenza).
+Il tetto del gate e' in TOKEN e non in chunk, cosi' due M girano sullo stesso
+contesto.
+
+**Il primo numero misurato era 1,151x, NON 2** (29,88 → 25,97 ms/token, primo chunk scartato
 per il docket 10: 489 ms il primo sequenziale contro ~240 i successivi). La
 proiezione di it.23 si reggeva su "il traffico dei pesi si legge una volta per
 chunk" e **non e' vero per questi kernel**: il modo `batch` mette `wid.z` = riga
