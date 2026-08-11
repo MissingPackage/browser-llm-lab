@@ -406,11 +406,6 @@ export async function createQ35GpuModel(
   // ---- PREFILL A CHUNK (fase 4, it.32): il piano gemello a M righe ----
   const M_MAX = Math.max(0, Math.min(16, Math.floor(opts.prefillM ?? 0)));
   const prefillOn = M_MAX > 0;
-  if (prefillOn && isMoe) {
-    throw new Error(
-      "q35gpumodel: prefillM non e' ancora cablato sui modelli MoE — la fase 4 monta prima il tipo " +
-      "di layer DENSO, dove il gate e' la bit-identita' coi logits sequenziali");
-  }
   /** scratch a M righe: row-major, passo di riga = la taglia per riga. */
   const bM = (perRow: number): GPUBuffer => empty(perRow * Math.max(1, M_MAX));
   const PB = prefillOn ? {
@@ -421,11 +416,18 @@ export async function createQ35GpuModel(
     qFull: bM(2 * qDim * 4), kCur: bM(kvDim * 4), vCur: bM(kvDim * 4),
     qB: bM(qDim * 4), gateB: bM(qDim * 4), qN: bM(qDim * 4), kN: bM(kvDim * 4),
     attnO: bM(qDim * 4), gateF: bM(dFfn ? dFfn * 4 : 16), upF: bM(dFfn ? dFfn * 4 : 16),
+    // MoE (it.34): il segmento STATICO si batcha (shexp + router GEMV); la
+    // catena expert resta per riga, ed e' il motivo per cui il gate resta la
+    // bit-identita'.
+    gateS: bM(Math.max(dE, 4) * 4), upS: bM(Math.max(dE, 4) * 4), dnS: bM(d * 4),
+    shScalar: bM(16), moeAcc: bM(d * 4), routerLogits: bM(Math.max(nE, 4) * 4),
     /** posizione per riga: la leggono rope, kvAppend e l'attenzione a chunk */
     rowPos: device.createBuffer({ size: Math.max(16, M_MAX * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }),
     /** indice di riga per la RICORRENZA (uniform, una entry ogni 256 B) */
     rowUni: device.createBuffer({ size: M_MAX * 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
     steps: [] as Step[],
+    /** confini dei segmenti statici nel piano gemello (uno per layer MoE) */
+    cuts: [] as number[],
   } : null;
   if (PB) {
     const u = new Uint32Array(M_MAX * 64);
@@ -625,6 +627,7 @@ export async function createQ35GpuModel(
       // della selezione su CPU, correttezza-prima: 1 sync/layer DICHIARATO).
       mark("shexp");
       push(rmsnormWgsl(d, S.rmsEps), [x, postNorm, xn], 1);
+      if (PB) pushB(rmsnormWgsl(d, S.rmsEps, true), [PB.x, postNorm, PB.xn], [M_MAX, 1, 1]);
       const shGate = await loadW(`${b}ffn_gate_shexp.weight`);
       const shUp = await loadW(`${b}ffn_up_shexp.weight`);
       const shDown = await loadW(`${b}ffn_down_shexp.weight`);
@@ -634,10 +637,19 @@ export async function createQ35GpuModel(
       push(siluMulWgsl(dE), [gateS, upS], Math.ceil(dE / 64));
       shDown.push(gateS, dnS);
       push(gemvF32Wgsl({ K: d, N: 1 }), [shScalarW, xn, shScalar], 1);
+      if (PB) {
+        shGate.pushB(PB.xn, PB.gateS);
+        shUp.pushB(PB.xn, PB.upS);
+        pushB(siluMulWgsl(dE, true), [PB.gateS, PB.upS], [Math.ceil(dE / 64), M_MAX, 1]);
+        shDown.pushB(PB.gateS, PB.dnS);
+        pushB(gemvF32Wgsl({ K: d, N: 1, batch: true }), [shScalarW, PB.xn, PB.shScalar], [1, 1, M_MAX]);
+      }
       push(axpyWgsl(d, true), [moeAcc, dnS, shScalar], Math.ceil(d / 64));
+      if (PB) pushB(axpyWgsl(d, true, true), [PB.moeAcc, PB.dnS, PB.shScalar], [Math.ceil(d / 64), M_MAX, 1]);
       mark("routerGemv");
       const router = await loadW(`${b}ffn_gate_inp.weight`);
       router.push(xn, routerLogits);
+      if (PB) { router.pushB(PB.xn, PB.routerLogits); PB.cuts.push(PB.steps.length); }
       cuts.push(steps.length);
       moeLayerAbs.push(l);
     }
@@ -690,6 +702,25 @@ export async function createQ35GpuModel(
      * cui la CPU veda la selezione prima della fine.
      */
     runTokenOptimistic: ((read: boolean) => Promise<Float32Array | null>) | null;
+    /**
+     * La META' CPU di `runLayer`: selezione, `ensure` dei mancanti, `Sel`,
+     * flush della slotTable. Separata perche' il prefill a chunk la chiama per
+     * OGNI riga del chunk e poi encoda tutte le catene expert; la selezione
+     * resta identica a quella del path sequenziale, ed e' il motivo per cui il
+     * gate della fase 4 e' la bit-identita' (it.34).
+     */
+    prepLayer(m: number, logitsF32: Float32Array, row?: number, pinAll?: Set<number>): Promise<void>;
+    /** La meta' GPU: i dispatch expert del layer, in un pass gia' aperto. */
+    encodeExperts(pass: GPUComputePassEncoder, m: number, addBg: GPUBindGroup, row?: number): void;
+    /**
+     * L'UNIONE degli expert scelti da tutte le righe del chunk per un layer.
+     * Vive qui perche' `routerSelect` e la cache stanno in questa chiusura, e
+     * serve PRIMA di qualunque `ensure`: e' il pin che impedisce alla riga r+1
+     * di evincere uno slot che i dispatch gia' encodati della riga r leggeranno.
+     */
+    pinUnion(m: number, logitsAll: Float32Array, rows: number, nExpertLogits: number): Set<number>;
+    /** cablaggio del prefill a chunk; `null` senza `prefillM` */
+    chunkRt: { bgAddRow: GPUBindGroup[]; routerStagingM: GPUBuffer } | null;
     destroy(): void;
   }
   let moe: MoeRt | null = null;
@@ -755,7 +786,13 @@ export async function createQ35GpuModel(
     // [nSel, 2·nSel) è l'ombra dove scrive il resolve GPU. Due regioni dello
     // stesso buffer e non due buffer: lo stesso kernel serve la fetta 3c
     // cambiando solo la entry di uniform che lo indirizza.
-    const nSelTot = shadowOn ? 2 * nSel : nSel;
+    // Nel prefill a chunk la `Sel` ha una dimensione in piu': la RIGA. Senza,
+    // le M scritture del layer finirebbero tutte allo stesso offset e — visto
+    // che `queue.writeBuffer` e' ordinata PRIMA del submit — ogni riga
+    // userebbe la selezione dell'ULTIMA. E' il primo dei due bug che il gate
+    // bit-identico ha preso (it.34).
+    const selRows = prefillOn ? M_MAX : 1;
+    const nSelTot = (shadowOn ? 2 * nSel : nSel) * selRows;
     const selBuf = device.createBuffer({
       size: nSelTot * SEL_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
@@ -769,22 +806,26 @@ export async function createQ35GpuModel(
     // il router: stesso `tableBase`, ma `selIdx` già spostato nell'ombra. È
     // così che il kernel di resolve resta identico fra ombra e produzione —
     // cambia la entry, non il WGSL.
-    const nIdx = nSel + (shadowOn ? nMoeLayer : 0);
+    const nIdx = nSel * selRows + (shadowOn ? nMoeLayer : 0);
     const moeIdxUni = device.createBuffer({
       size: nIdx * MOE_IDX_STRIDE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     {
       const u = new Uint32Array(nIdx * (MOE_IDX_STRIDE / 4));
-      for (let m = 0; m < nMoeLayer; m++) {
-        const tableBase = moeLayerAbs[m] * cfg.nExpert;
-        for (let k = 0; k < topK; k++) {
-          const selIdx = m * topK + k;
-          const w = selIdx * (MOE_IDX_STRIDE / 4);
-          u[w] = selIdx; u[w + 1] = tableBase; u[w + 2] = m; u[w + 3] = 0;
+      for (let row = 0; row < selRows; row++) {
+        for (let m = 0; m < nMoeLayer; m++) {
+          const tableBase = moeLayerAbs[m] * cfg.nExpert;
+          for (let k = 0; k < topK; k++) {
+            const selIdx = (row * nMoeLayer + m) * topK + k;
+            const w = selIdx * (MOE_IDX_STRIDE / 4);
+            u[w] = selIdx; u[w + 1] = tableBase; u[w + 2] = m; u[w + 3] = 0;
+          }
         }
-        if (shadowOn) {
+      }
+      if (shadowOn) {
+        for (let m = 0; m < nMoeLayer; m++) {
           const w = (nSel + m) * (MOE_IDX_STRIDE / 4);
-          u[w] = nSel + m * topK; u[w + 1] = tableBase; u[w + 2] = m; u[w + 3] = 0;
+          u[w] = nSel + m * topK; u[w + 1] = moeLayerAbs[m] * cfg.nExpert; u[w + 2] = m; u[w + 3] = 0;
         }
       }
       device.queue.writeBuffer(moeIdxUni, 0, u as unknown as BufferSource);
@@ -872,6 +913,18 @@ export async function createQ35GpuModel(
       });
     const bgSilu = mkBg(pSilu, [gateE, upE]);
     const bgAddRes = mkBg(pAdd, [x, moeAcc]);
+    // Nel prefill a chunk il residuo va sulla RIGA: stesso kernel, stesso
+    // `moeAcc`, solo la destinazione cambia (sotto-range di PB.x).
+    const bgAddRow = PB ? Array.from({ length: M_MAX }, (_, m2) => device.createBindGroup({
+      layout: pAdd.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: PB.x, offset: m2 * d * 4, size: d * 4 } },
+        { binding: 1, resource: { buffer: moeAcc } },
+      ],
+    })) : null;
+    const routerStagingM = PB
+      ? device.createBuffer({ size: Math.max(16, M_MAX * nE * 4), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ })
+      : null;
     // ---- OMBRA: router + resolve su GPU accanto alla selezione CPU (fetta 3b) ----
     // Il kernel è quello di it.13, in configurazione qwen35moe (softmax). Il
     // binding `bias` resta dichiarato anche qui e ci si lega un buffer di ZERI:
@@ -1114,6 +1167,7 @@ export async function createQ35GpuModel(
       shadowEncode: shadow ? (enc, m) => shadow.encode(enc, m) : null,
       shadowCompare: shadow ? () => shadow.compare() : null,
       shadowStats: shadow ? () => shadow.stats() : null,
+      chunkRt: PB && bgAddRow && routerStagingM ? { bgAddRow, routerStagingM } : null,
       runTokenOptimistic: opt ? async (read: boolean): Promise<Float32Array | null> => {
         // ---- UN GIRO: encode da `startLayer` + submit + readback di coda ----
         // `startLayer` 0 è il giro normale; > 0 è il REPLAY, che rientra
@@ -1236,7 +1290,7 @@ export async function createQ35GpuModel(
             const E = expertCls[cfg.classOf(moeLayerAbs[m])];
             pass = usePass("expert");
             for (let k2 = 0; k2 < topK; k2++) {
-              const dyn = (m * topK + k2) * MOE_IDX_STRIDE;
+              const dyn = (m * topK + k2) * MOE_IDX_STRIDE; // decode: riga 0
               pass.setPipeline(E.pGate); pass.setBindGroup(0, E.bgGate, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
               pass.setPipeline(E.pUp); pass.setBindGroup(0, E.bgUp, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
               pass.setPipeline(pSilu); pass.setBindGroup(0, bgSilu); pass.dispatchWorkgroups(Math.ceil(dE / 64), 1, 1);
@@ -1427,6 +1481,24 @@ export async function createQ35GpuModel(
         return cur.lg;
       } : null,
       async runLayer(m: number, logitsF32: Float32Array): Promise<void> {
+        await moe!.prepLayer(m, logitsF32);
+        const enc = device.createCommandEncoder();
+        const pass = enc.beginComputePass();
+        moe!.encodeExperts(pass, m, bgAddRes);
+        pass.end();
+        device.queue.submit([enc.finish()]);
+        perfAcc.submits++;
+      },
+      pinUnion(m: number, logitsAll: Float32Array, rows: number, nExpertLogits: number): Set<number> {
+        const l = moeLayerAbs[m];
+        const out = new Set<number>();
+        for (let r2 = 0; r2 < rows; r2++) {
+          const selR = routerSelect(logitsAll.subarray(r2 * nExpertLogits, (r2 + 1) * nExpertLogits), null, routerCfg);
+          for (const e of selR.experts) out.add(cache.keyOf(l, e));
+        }
+        return out;
+      },
+      async prepLayer(m: number, logitsF32: Float32Array, row = 0, pinAll?: Set<number>): Promise<void> {
         const l = moeLayerAbs[m];
         // Selezione: IL router unico, in configurazione qwen35moe (softmax,
         // niente bias, niente scale). Stessa matematica del cpuref, che prima
@@ -1444,8 +1516,13 @@ export async function createQ35GpuModel(
         }
         // i top-K del token devono coesistere: nessuno di loro può essere
         // vittima di eviction per far posto agli altri.
-        const pinned = new Set<number>();
-        for (const e of sel.experts) pinned.add(cache.keyOf(l, e));
+        // `pinAll` (prefill a chunk): il pin copre l'UNIONE di tutte le righe
+        // del layer, non i soli top-K di questa. Senza, l'`ensure` della riga
+        // r+1 potrebbe evincere uno slot che i dispatch GIA' ENCODATI della
+        // riga r leggeranno — e la writeBuffer del nuovo slab arriva prima del
+        // submit. E' il secondo dei due bug che il gate ha preso (it.34).
+        const pinned = pinAll ?? new Set<number>();
+        if (!pinAll) for (const e of sel.experts) pinned.add(cache.keyOf(l, e));
         const slots: SlotRef[] = [];
         for (const e of sel.experts) {
           const key = cache.keyOf(l, e);
@@ -1467,15 +1544,15 @@ export async function createQ35GpuModel(
           selF32[k2 * 4 + 2] = sel.weights[k2];
           selU32[k2 * 4 + 3] = 0;
         }
-        device.queue.writeBuffer(selBuf, m * topK * SEL_BYTES, selScratch);
+        device.queue.writeBuffer(selBuf, (row * nMoeLayer + m) * topK * SEL_BYTES, selScratch);
         // La tabella si pubblica DOPO gli `ensure` del layer: le writeBuffer
         // degli slab sono già in coda, quindi la tabella arriva dopo il dato che
         // indirizza (R5 del design d'arena — l'ordine inverso pubblicherebbe uno
         // slot ancora vuoto). Qui non la legge nessuno: serve dalla fetta 3b.
         cache.flushSlotTable();
-        const E = expertCls[cfg.classOf(l)];
-        const enc = device.createCommandEncoder();
-        const pass = enc.beginComputePass();
+      },
+      encodeExperts(pass: GPUComputePassEncoder, m: number, addBg: GPUBindGroup, row = 0): void {
+        const E = expertCls[cfg.classOf(moeLayerAbs[m])];
         const disp = (p2: GPUComputePipeline, b2: GPUBindGroup, wg: [number, number, number], dyn?: number): void => {
           pass.setPipeline(p2);
           if (dyn === undefined) pass.setBindGroup(0, b2);
@@ -1486,16 +1563,13 @@ export async function createQ35GpuModel(
         for (let k2 = 0; k2 < topK; k2++) {
           // l'offset dinamico sceglie la entry (layer, k) di MoeIdx, che punta
           // alla Sel di quell'expert: è l'unico parametro per-expert rimasto.
-          const dyn = (m * topK + k2) * MOE_IDX_STRIDE;
+          const dyn = ((row * nMoeLayer + m) * topK + k2) * MOE_IDX_STRIDE;
           disp(E.pGate, E.bgGate, [dE, 1, 1], dyn);
           disp(E.pUp, E.bgUp, [dE, 1, 1], dyn);
           disp(pSilu, bgSilu, [Math.ceil(dE / 64), 1, 1]);
           disp(E.pDown, E.bgDown, [gg2[0], gg2[1], 1], dyn);
         }
-        disp(pAdd, bgAddRes, [Math.ceil(d / 64), 1, 1]); // x += moeAcc (shexp + expert)
-        pass.end();
-        device.queue.submit([enc.finish()]);
-        perfAcc.submits++;
+        disp(pAdd, addBg, [Math.ceil(d / 64), 1, 1]); // x += moeAcc (shexp + expert)
       },
     };
   }
@@ -1739,14 +1813,60 @@ export async function createQ35GpuModel(
       perfAcc.tokens += M_MAX;
       device.pushErrorScope("validation");
       device.pushErrorScope("out-of-memory");
-      const enc = device.createCommandEncoder();
-      const p1 = enc.beginComputePass();
-      for (const st of PB.steps) {
-        p1.setPipeline(st.pipe);
-        p1.setBindGroup(0, st.bind);
-        p1.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+      const runSegB = (from: number, to: number, tail?: (e: GPUCommandEncoder) => void): void => {
+        const e2 = device.createCommandEncoder();
+        const pz = e2.beginComputePass();
+        for (let i = from; i < to; i++) {
+          const st = PB.steps[i];
+          pz.setPipeline(st.pipe);
+          pz.setBindGroup(0, st.bind);
+          pz.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+        }
+        pz.end();
+        tail?.(e2);
+        device.queue.submit([e2.finish()]);
+        perfAcc.submits++;
+      };
+      if (moe) {
+        // MoE: per layer, UN readback dei logit del router per TUTTE le M righe
+        // (invece di uno per token), poi selezione ed `ensure` per riga sulla
+        // CPU — identiche al path sequenziale, ed e' per questo che il gate e'
+        // la bit-identita' — e le M catene expert in un submit solo (it.34).
+        const cr = moe.chunkRt!;
+        let fromB = 0;
+        const zeroM = new Float32Array(M_MAX * d);
+        for (let li = 0; li < PB.cuts.length; li++) {
+          // `moeAcc` per riga va azzerato PRIMA del segmento statico: l'axpy
+          // dello shexp accumula, come nel path per riga (dove lo azzera una
+          // writeBuffer per layer). Ogni layer ha il suo submit, quindi la
+          // writeBuffer cade nel posto giusto.
+          device.queue.writeBuffer(PB.moeAcc, 0, zeroM as unknown as BufferSource);
+          runSegB(fromB, PB.cuts[li], (e2) => e2.copyBufferToBuffer(PB.routerLogits, 0, cr.routerStagingM, 0, M_MAX * nE * 4));
+          const lgAll = await readStaging(cr.routerStagingM, M_MAX * nE * 4);
+          // PRIMO giro: le selezioni di TUTTE le righe, per costruire il pin
+          // dell'unione prima di qualunque `ensure`.
+          const pinAll = moe.pinUnion(li, lgAll, M_MAX, nE);
+          const e3 = device.createCommandEncoder();
+          for (let m2 = 0; m2 < M_MAX; m2++) {
+            await moe.prepLayer(li, lgAll.subarray(m2 * nE, (m2 + 1) * nE), m2, pinAll);
+            // la riga entra nei buffer PER RIGA che la catena expert gia' usa:
+            // stessi kernel, stessi bind group, zero varianti nuove. Le copie
+            // sono operazioni di ENCODER, quindi il pass si apre dopo di loro —
+            // un pass per riga, e l'ordine dei dispatch lo garantisce l'encoder.
+            e3.copyBufferToBuffer(PB.xn, m2 * d * 4, xn, 0, d * 4);
+            e3.copyBufferToBuffer(PB.moeAcc, m2 * d * 4, moeAcc, 0, d * 4);
+            const pz = e3.beginComputePass();
+            moe.encodeExperts(pz, li, cr.bgAddRow[m2], m2);
+            pz.end();
+          }
+          device.queue.submit([e3.finish()]);
+          perfAcc.submits++;
+          fromB = PB.cuts[li];
+        }
+      } else {
+        runSegB(0, PB.steps.length);
       }
-      p1.end();
+      const enc = device.createCommandEncoder();
       // la head serve sulla SOLA ultima riga: si copia il suo hidden nel
       // buffer per riga e si riusano gli step di coda del decode, invariati.
       enc.copyBufferToBuffer(PB.x, (M_MAX - 1) * d * 4, x, 0, d * 4);

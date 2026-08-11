@@ -2049,3 +2049,61 @@ prima il gate forte, poi l'ottimizzazione che lo indebolisce, se paga.
 **Conseguenza operativa**: nel chunk il MoE resta a 40 submit, mentre il resto
 del layer e' batchato. Il guadagno atteso e' quindi minore che sul denso — e la
 misura dira' quanto, invece di una proiezione.
+
+### it.34 — il prefill a chunk sul 35B: 3,75x, BIT-IDENTICO, e tre bug presi dal gate
+
+**Montato** (strada (B), quella decisa sopra): il segmento statico del layer MoE
+e' batchato (shexp, scalare, router GEMV); per layer UN readback dei logit del
+router per tutte le M righe; poi selezione ed `ensure` per riga sulla CPU e le M
+catene expert in un submit. `runLayer` si e' spezzata in `prepLayer` (la meta'
+CPU) e `encodeExperts` (la meta' GPU), cosi' il path sequenziale e quello a
+chunk usano LO STESSO codice invece di due copie che divergono.
+
+**IL GATE HA PRESO TRE BUG, e nessuno dei tre sarebbe morto rumorosamente.**
+1. **`Sel` senza dimensione di riga.** Le M scritture del layer andavano tutte
+   allo stesso offset e — visto che `queue.writeBuffer` e' ordinata PRIMA del
+   submit — ogni riga avrebbe usato la selezione dell'ULTIMA. Risolto dando a
+   `Sel` e a `MoeIdx` la dimensione riga (solo quando il chunk e' cablato).
+2. **Il pin non copriva l'unione.** L'`ensure` della riga r+1 poteva evincere
+   uno slot che i dispatch GIA' ENCODATI della riga r avrebbero letto, e la
+   writeBuffer del nuovo slab sarebbe arrivata prima del submit: l'expert
+   sbagliato, con numeri plausibili. Risolto calcolando l'unione delle M
+   selezioni PRIMA di qualunque `ensure` (`pinUnion`).
+3. **`moeAcc` per riga mai azzerato.** Nel path per riga lo azzera una
+   `writeBuffer` per layer; nel chunk l'axpy dello shexp accumulava attraverso i
+   40 layer.
+
+Tutti e tre davano risultati **plausibili e sbagliati** — maxAbs 27,6 sui
+logits, cioe' un modello che "funziona". Li ha presi il confronto bit a bit, non
+un occhio.
+
+**E UNA TRAPPOLA DI MISURA, la stessa di it.17**: il primo giro riportava
+**30,8x**. Falso: il braccio sequenziale girava per primo a cache expert VUOTA e
+quello a chunk la trovava calda — era la cache che si riempiva, non il batch.
+Aggiunta una passata di scaldata prima dei due bracci.
+
+**NUMERI A PARITA' (35B, smoke, M=8, primo chunk scartato):**
+
+| | ms/token |
+|---|---|
+| sequenziale | 131,08 |
+| a chunk M=8 | **34,95** |
+| **speedup** | **3,750x** |
+
+**Logits BIT-IDENTICI: 993.280 su 993.280, maxAbs 0.**
+
+Il 3,75x e' molto piu' del 2,02x del denso a contesto lungo, e la ragione e'
+strutturale: sul MoE il batch toglie anche i **40 readback per token**, che
+diventano 40 per CHUNK. E' la voce che it.19 aveva misurato come dominante nel
+path sequenziale, ed e' esattamente cio' che il prefill a chunk amortizza.
+
+**Nota di contratto, e la scrivo invece di lasciarla implicita**: la riga 4 dice
+"pattern `planMoeChunk` + gemv batch". Il done-when MECCANICO (micro-bench
+prima/dopo + logits identici) e' soddisfatto, ma `planMoeChunk` — il piano a
+unione con gather — NON e' usato: it.27 ha scelto gli expert PER RIGA proprio
+per avere il gate bit-identico, e il gather resta l'incremento successivo
+(docket item 19). Se il PI considera `planMoeChunk` parte del done-when e non
+della descrizione, la riga non e' chiusa.
+
+**Gate**: tsc pulito, suite 440|9, logits bit-identici 993.280/993.280 sul 35B e
+31.784.960/31.784.960 sul 4B, JSON committati.

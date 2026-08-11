@@ -292,6 +292,12 @@ async function main(cfg: Cfg): Promise<void> {
     const nChunk = Math.min(Math.floor(GATE_TOKENS / M), Math.floor(all.length / M));
     if (nChunk < 3) throw new Error(`q35 prefillChunk gate: ${nChunk} chunk a M=${M} — servono almeno 3 (il primo si scarta)`);
     const toks = all.slice(0, nChunk * M);
+    // SCALDATA prima dei due bracci (it.34). Senza, sul MoE il braccio
+    // sequenziale gira a cache expert VUOTA e quello a chunk la trova calda: il
+    // primo giro dava 30,8x, che e' la cache che si riempie, non il batch.
+    // Stessa trappola di it.17, e la stessa cura: si misura a parita'.
+    model.resetState();
+    for (let i = 0; i < toks.length; i++) await model.step(toks[i], i, false);
     const seqLogits: Float32Array[] = [];
     const seqMs: number[] = [];
     model.resetState();
