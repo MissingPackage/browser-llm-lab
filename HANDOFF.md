@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.30: fase 4 a 5 voci su 6, non serve piu' nessun kernel; next = l'orchestratore)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.31: nessun cambio di kernel residuo, lista esatta per l'orchestratore su disco)
 
 ## 1. Next decidable
 
@@ -351,6 +351,26 @@ non e' per riga — e' la memoria che attraversa il chunk. ktest 94/94 con
 `dense-rows-deltanet-recurrence` BIT-IDENTICO su 3 righe **sullo stato che
 evolve** (se l'indicizzazione fosse sbagliata la catena divergerebbe al secondo
 passo). **Non serve piu' nessun kernel: resta solo orchestrazione.**
+
+**it.31**: una collisione temuta e VERIFICATA inesistente — `rmsnormWgsl` ha gia'
+un modo `batch` che q35 usa per le HEAD, ma quel `batch` e' PER-VETTORE
+(`wid.x` = indice del vettore) e i buffer sono row-major col passo di riga
+`nVec*len`: il vettore (riga, head) sta a `riga*nVec + head`, quindi dispatchare
+`nVec*M` fa gia' la cosa giusta. Vale anche per `stridedCopy`. ktest 96/96 con
+`dense-flat-rmsnorm-per-head` e `dense-flat-stridedcopy` BIT-IDENTICI, scritti
+alla geometria VERA di q35 (e' aritmetica di offset: vive o muore sui passi
+reali).
+
+**LISTA ESATTA per la prossima iterazione — nessun punto ha piu' incognite**:
+1. `Q35GpuModelOpts.prefillM?: number` (assente = non cambia una riga);
+2. scratch a M righe accanto a quelli per riga;
+3. `stepsB[]` + `pushB()` nello STESSO giro di `steps` — per-vettore =
+   appiattimento (nVec x M), per-riga = `gid.y`, ricorrenza = `rows` con M bind
+   group per layer che differiscono solo nell'offset dell'uniform;
+4. `prefillChunk(tokens, pos0)`: dequant di M righe, `rowPos`/`rowPast`, un
+   encoder, head sulla SOLA ultima riga;
+5. gate: `prefillChunk` vs `step()` sequenziale sul 4B, **logits bit-identici**,
+   piu' il micro-bench tok/s del done-when.
 
 RESTANO DUE VOCI, e **it.27 ne ha INVERTITO l'ordine col motivo**: prima
 l'**orchestratore a M righe**, poi il **gather K-quant**. Il motivo e' il GATE —
