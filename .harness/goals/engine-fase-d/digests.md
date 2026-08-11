@@ -473,3 +473,18 @@ ktest **94/94** con `dense-rows-deltanet-recurrence` BIT-IDENTICO su 3 righe
 **sullo stato che evolve**: se l'indicizzazione fosse sbagliata la catena
 divergerebbe al secondo passo. Fase 4: **5 voci su 6**, e non serve piu' nessun
 kernel — resta l'orchestrazione.
+
+## it.31 (2026-08-11) — la collisione che non c'era: l'appiattimento e' l'identita'
+
+`rmsnormWgsl` ha gia' un modo `batch` e q35 lo usa — ma per le HEAD, non per le
+righe: sembrava servisse una seconda dimensione. Non serve: quel `batch` e'
+PER-VETTORE (`wid.x` = indice del vettore) e i buffer sono row-major col passo di
+riga = nVec*len, quindi il vettore (riga, head) sta a `riga*nVec + head` e
+dispatchare nVec*M fa gia' la cosa giusta. Vale anche per `stridedCopy`.
+
+ktest **96/96** con `dense-flat-rmsnorm-per-head` e `dense-flat-stridedcopy`
+BIT-IDENTICI su 3 righe, scritti alla geometria VERA di q35 (la proprieta' e'
+un'aritmetica di offset: vive o muore sui passi reali).
+
+Conseguenza: **non serve piu' nessun cambio di kernel**. Restano buffer a M
+righe, lista di step gemella e driver — la lista esatta e' nel journal.

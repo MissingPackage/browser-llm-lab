@@ -2695,6 +2695,41 @@ async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
     out.push(bitCmp("dense-rows-deltanet-recurrence",
       new Float32Array(await g.read(ovM, M * nV * hd * 4)), refs, nV * hd));
   }
+  { // APPIATTIMENTO (fase 4, it.31): i kernel PER-VETTORE (rmsnorm per head,
+    // stridedCopy per head) non hanno bisogno di un modo "M righe". I buffer
+    // sono row-major con passo di riga = nVec*len, quindi il vettore (riga,
+    // head) sta all'indice riga*nVec + head: basta dispatchare nVec*M vettori
+    // invece di nVec. Qui si prova che l'identita' regge alla geometria VERA
+    // di q35 (rmsnorm per head su qB, stridedCopy che estrae q e gate da qFull).
+    const nHead = 4, headDim = 32;
+    const qDim = nHead * headDim;
+    const wN = g.buf(randF32(headDim, 31_800, 1));
+    const qs = Array.from({ length: M }, (_, m) => randF32(qDim, 31_810 + m, 0.7));
+    const refsN: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const o = g.empty(qDim * 4);
+      await g.run(rmsnormWgsl(headDim, 1e-6, true), [g.buf(qs[m]), wN, o], nHead);
+      refsN.push(new Float32Array(await g.read(o, qDim * 4)));
+    }
+    const oN = g.empty(M * qDim * 4);
+    await g.run(rmsnormWgsl(headDim, 1e-6, true), [rowsBuf(qs), wN, oN], nHead * M);
+    out.push(bitCmp("dense-flat-rmsnorm-per-head", new Float32Array(await g.read(oN, M * qDim * 4)), refsN, qDim));
+
+    // stridedCopy: da qFull [2*qDim per riga] estrae q (offset 0) e gate (hd)
+    const qFulls = Array.from({ length: M }, (_, m) => randF32(2 * qDim, 31_850 + m, 0.6));
+    const sc = (nVec: number) => stridedCopyWgsl({
+      nVec, len: headDim, srcStride: 2 * headDim, srcOffset: headDim, dstStride: headDim, dstOffset: 0,
+    });
+    const refsC: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const o = g.empty(qDim * 4);
+      await g.run(sc(nHead), [g.buf(qFulls[m]), o], Math.ceil(qDim / 64));
+      refsC.push(new Float32Array(await g.read(o, qDim * 4)));
+    }
+    const oC = g.empty(M * qDim * 4);
+    await g.run(sc(nHead * M), [rowsBuf(qFulls), oC], Math.ceil((M * qDim) / 64));
+    out.push(bitCmp("dense-flat-stridedcopy", new Float32Array(await g.read(oC, M * qDim * 4)), refsC, qDim));
+  }
   return out;
 }
 

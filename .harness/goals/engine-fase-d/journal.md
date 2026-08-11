@@ -1873,3 +1873,55 @@ gather vale 0,23x su 2,01x).
 
 **Gate**: tsc pulito, suite 440|9, ktest **94/94**, nessun run del modello (il
 testo non-`rows` e' identico, il decode non cambia).
+
+## it.31 (2026-08-11, fase 4) — una collisione temuta che non c'era, e meno lavoro per l'orchestratore
+
+Iniziando l'orchestratore ho visto una cosa che sembrava un problema:
+`rmsnormWgsl` ha gia' un modo `batch`, e q35 **lo usa gia'** — ma per le HEAD
+(`push(rmsnormWgsl(hd, eps, true), [qB, qNormW, qN], S.nHead)`), non per le
+righe. Sembrava servisse una seconda dimensione, cioe' toccare il kernel.
+
+**Non serve.** Il `batch` di quel kernel non e' "righe": e' **per-VETTORE**, con
+`wid.x` = indice del vettore. E i buffer sono row-major col passo di riga uguale
+a `nVec*len`, quindi il vettore (riga, head) sta esattamente all'indice
+`riga*nVec + head`. Dispatchare `nVec*M` vettori invece di `nVec` fa gia' la cosa
+giusta su un buffer [M, nVec*len]. **L'appiattimento e' l'identita', non una
+approssimazione.**
+
+Vale per tutta la famiglia per-vettore: `rmsnorm` per head e `stridedCopy` (che
+estrae q e gate da `qFull` con `srcStride 2*hd`: per (riga, head) l'offset e'
+`riga*2*qDim + head*2*hd = (riga*nVec + head)*2*hd`, e torna).
+
+**GATE — ktest 96/96**, due casi nuovi alla geometria VERA di q35:
+`dense-flat-rmsnorm-per-head` e `dense-flat-stridedcopy`, **BIT-IDENTICI su 3
+righe** contro il per-riga eseguito M volte. Li ho scritti coi numeri di q35
+(nHead x headDim, `srcStride 2*headDim`) e non con una geometria comoda, perche'
+la proprieta' che si sta provando e' un'aritmetica di offset e vive o muore sui
+passi reali.
+
+**Conseguenza sull'orchestratore**: due kernel in meno da toccare, e soprattutto
+la conferma che **non serve piu' nessun cambio di kernel** — l'ultimo dubbio
+aperto era questo. Restano solo i buffer a M righe, la lista di step gemella e
+il driver.
+
+**Perche' mi fermo qui invece di scrivere l'orchestratore**: e' l'ultima fetta
+grossa (~250 righe, un gate end-to-end e un run), la sessione e' lunga, e la
+regola del loop dice di consegnare su un confine pulito quando il dubbio sul
+budget e' concreto invece di lasciare un merge a meta'. Il prossimo giro parte da
+codice, non da ricognizione: sotto c'e' la lista esatta.
+
+**Da fare, in ordine** (nessuno dei punti ha piu' incognite):
+1. `Q35GpuModelOpts.prefillM?: number` — quando c'e', si costruisce anche la
+   lista gemella; quando manca, non cambia una riga (il 35B di default non la
+   vede nemmeno).
+2. Scratch a M righe accanto a quelli per riga (xM, xnM, qkvM, ...).
+3. `stepsB[]` + `pushB()` nello STESSO giro di `steps`, coi kernel batched gia'
+   ktestati; per-vettore = appiattimento (nVec x M), per-riga = `gid.y`,
+   ricorrenza = `rows` con M bind group per layer che differiscono solo
+   nell'offset dell'uniform.
+4. `prefillChunk(tokens, pos0)`: dequant di M righe, `rowPos`/`rowPast`, un
+   encoder, head sulla SOLA ultima riga (e' l'unica che serve al prefill).
+5. Gate: `prefillChunk` contro `step()` sequenziale sullo stesso prompt del 4B,
+   **logits bit-identici**, piu' il micro-bench tok/s che il done-when chiede.
+
+**Gate**: tsc pulito, suite 440|9, ktest **96/96**, nessun run del modello.
