@@ -1363,3 +1363,80 @@ vera e' stata falsificare l'ipotesi su cui stavo per spendere la fase 4.
 
 **Gate**: tsc pulito, suite 417|9, argmax 39/39, routing identico, miss 0,
 JSON committato (`q35-accumdown-35b-it21.json`).
+
+## it.22 (2026-08-11, FASE 4-BIS) — 64 lane invece di 2: il decode del 35B passa da 71,9 a 44,3 ms/token
+
+**Ruling PI incassato per primo** (docket item 15, opzione (a)): riga 4-bis
+aggiunta a PHASES fra la 3b e la 4, col done-when misurabile e i numeri di
+it.21 come "prima". E dichiarato PRIMA di cominciare: **non sara' bit-identico**
+— distribuire il lavoro su piu' lane cambia l'ordine delle somme f32, e in f32
+l'addizione non e' associativa. Il gate e' ktest contro cpuref, argmax identico,
+routing invariato.
+
+**La correzione.** I due kernel K-quant spartivano i SUPERBLOCCHI di una riga
+sui 64 thread (`for sb = t; sb < SB_PER_ROW`). Sul 35B `SB_PER_ROW = K/256` vale
+8 per gate/up (K=2048) e **2 per il down** (K=512): otto lane su 64, e due su
+64. L'unita' di lavoro diventa un PEZZO del gruppo — `lpu` valori dell'indice
+interno — scelto perche' le unita' arrivino a 64. La scelta sta in una funzione
+sola (`kquantWorkSplit(sbPerRow, groupsPerSb)`, 4 gruppi per q4_K e 2 per q6_K):
+i due kernel non hanno due aritmetiche, ne hanno una.
+
+**Il test che non serve la GPU** (`engine-kquant-worksplit.test.ts`): la
+BIIEZIONE della spartizione — ogni (superblocco, gruppo, l) coperto esattamente
+una volta, su 18 combinazioni di K e geometria. E' dove stanno gli errori che
+diventano numeri plausibili: un'unita' che copre due volte gonfia il prodotto
+scalare, una che salta lo taglia, e in entrambi i casi il modello continua a
+girare. 23 test, tutti verdi.
+
+**NUMERI (smoke 35B, 39 token, 10 GiB, sonda `--gpu-time` accesa in entrambi):**
+
+| categoria | it.21 | it.22 | delta |
+|---|---|---|---|
+| expert | 33,115 | **8,743** | **−24,372** |
+| coda (norma + head) | 6,859 | **1,415** | −5,444 |
+| statico | 14,523 | 16,144 | **+1,621** |
+| router | 2,833 | 3,169 | +0,336 |
+| **totale GPU** | **57,330** | **29,471** | **−27,859** |
+
+**ms/token a parita' di residenza** (bracci interleavati, prima coppia scartata):
+**71,90 → 44,26** = **−27,64 ms (−38,4%)**, cioe' da 13,9 a **22,6 tok/s** sul
+35B. La banda efficace del segmento expert va da **17,2 a 65,3 GB/s** (3,8x).
+La coda cala perche' anche la head e' un GEMV K-quant, e non ci avevo pensato:
+il guadagno l'ha presa senza che nessuno la toccasse.
+
+**IL NUMERO CHE NON MI TORNA, e lo lascio scritto invece di ignorarlo**: il
+segmento STATICO e' PEGGIORATO di 1,62 ms (+11%). Non e' rumore — nelle tre
+misure precedenti stava fra 14,52 e 14,53. Ipotesi che non ho verificato: nel
+regime nuovo le scale del superblocco si ri-estraggono una volta per unita'
+invece che una per superblocco, e sui GEMV statici K-quant con N grande la
+ridondanza potrebbe superare il guadagno. Ma sugli expert la stessa ridondanza
+c'e' ed e' stravinta 3,8 a 1, quindi la spiegazione non mi convince. Va sul
+docket (item 16) come lavoro di misura, non come congettura da correggere alla
+cieca.
+
+**GATE della 4-bis, voce per voce:**
+- (a) tempo del segmento expert e banda efficace misurati prima e dopo →
+  33,115 → 8,743 ms, 17,2 → 65,3 GB/s. **NOTA SUL "nello stesso JSON"**: la
+  formulazione l'ho scritta io e per una SOSTITUZIONE di kernel non e'
+  ottenibile alla lettera — il kernel vecchio non esiste piu' nell'albero. I
+  due JSON sono di run consecutivi sullo stesso host, stesso golden, stesso
+  budget, a minuti di distanza, che e' il rigore della prova a due bracci di
+  it.14. Lo dico invece di far finta che la riga sia soddisfatta com'e' scritta.
+- (b) ktest **87/87**, tolleranze contro cpuref invariate o MIGLIORI: q4_K
+  2048x512 maxRel 2,74e-4 → **5,58e-5**; q4_K 512x2048 2,02e-5 → 2,33e-5; il
+  blocco MoE reale del 35B a 6,4e-6 (q4_K down) e 8,9e-6 (q6_K down). ✓
+- (c) argmax **39/39 IDENTICO** sul golden smoke, routing **identico chiave per
+  chiave** (3341 chiavi, 0 differenze), miss 0. ✓
+- (d) GLM **bit-identico**: `glm-model-2layer` L2rel 2,072937787401139e-07,
+  la STESSA cifra di prima fino all'ultima decimale, e `glm-layer0-conformance`
+  a 2,35e-7. I suoi expert sono q4_0/q4_1 e non passano da questi kernel. ✓
+
+**Gate permanenti**: tsc pulito, suite **440 | 9** (+23 dal test nuovo),
+ktest 87/87, 0 gpu-error, JSON committato
+(`q35-occupancy-35b-it22.json`).
+
+**E la fase 4 va ri-guardata ORA**: la sua proiezione (it.19) assumeva tempo ∝
+dispatch ed era gia' caduta con it.21; adesso il segmento expert e' 8,7 ms su
+29,5 di tempo GPU (29,7%, era il 58%), quindi anche il peso relativo di cio' che
+il batching comprimerebbe e' cambiato. La riga 4 dice gia' "proiezione da
+RIFARE": si rifa' coi numeri di qui.

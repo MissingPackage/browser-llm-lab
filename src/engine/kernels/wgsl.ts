@@ -1463,6 +1463,32 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Q4_K: 36 word/superblocco (144 B) = [d,dmin f16][scales 12 B 6-bit][qs 128 B].
 // È gemvQ5K SENZA il piano qh (q1 fase 7: expert del 35B-A3B UD-Q4_K_S).
 /**
+ * SPARTIZIONE DEL LAVORO nei kernel K-quant (fase 4-bis, it.22). L'unita' non e'
+ * piu' il SUPERBLOCCO ma un pezzo di gruppo: `lpu` valori dell'indice interno
+ * `l`. Si sceglie `lpu` perche' le unita' totali arrivino a 64 — il numero di
+ * thread del workgroup — quando la riga lo consente.
+ *
+ * Perche' serve: prima i thread si spartivano i superblocchi
+ * (`for sb = t; sb < SB_PER_ROW`), e sul 35B SB_PER_ROW vale 8 per gate/up
+ * (K=2048) e 2 per il down (K=512): **8 lane attive su 64 e 2 su 64**. Il
+ * workgroup occupava uno slot per far lavorare due thread, con banda efficace
+ * misurata a 17,2 GB/s su ~500 disponibili (it.21).
+ *
+ * `groupsPerSb` e' 4 per q4_K (i gruppi j da 64 elementi) e 2 per q6_K (i
+ * gruppi n da 128). `lpu` e' una potenza di 2 <= 32, cosi' `32 % lpu == 0` e i
+ * pezzi coprono il gruppo esattamente.
+ */
+export function kquantWorkSplit(sbPerRow: number, groupsPerSb: number): {
+  lpu: number; chunks: number; unitsPerSb: number; units: number;
+} {
+  const want = (sbPerRow * groupsPerSb) / 2;
+  const lpu = Math.max(1, Math.min(32, 2 ** Math.floor(Math.log2(Math.max(1, want)))));
+  const chunks = 32 / lpu;
+  const unitsPerSb = groupsPerSb * chunks;
+  return { lpu, chunks, unitsPerSb, units: sbPerRow * unitsPerSb };
+}
+
+/**
  * CODA ACCUMULANTE, opzione `accum` (goal fase-D fase 4, it.21). Senza, il
  * kernel SCRIVE la riga: `y[r] = dot`. Con, ci ACCUMULA sopra il proprio
  * contributo pesato — `y[r] = y[r] + sel.w * dot` — col peso preso dalla `Sel`
@@ -1487,6 +1513,15 @@ export function gemvQ4KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; ac
   if (accum === true && !arena) throw new Error("q4K: accum esige il regime d'arena (il peso viene da Sel)");
   if (K % 256 !== 0) throw new Error("gemvQ4K: K non multiplo di 256");
   const sbPerRow = K / 256;
+  // OCCUPAZIONE (fase 4-bis, it.22). Prima l'unita' di lavoro era il
+  // SUPERBLOCCO e i thread se li spartivano: `for sb = t; sb < SB_PER_ROW`.
+  // Sul 35B SB_PER_ROW vale 8 per gate/up (K=2048) e 2 per il down (K=512),
+  // cioe' 8 lane attive su 64 e 2 su 64 — il workgroup occupava uno slot per
+  // far lavorare due thread, e la banda efficace misurata era 17,2 GB/s su
+  // ~500 (it.21). L'unita' diventa un PEZZO del superblocco: il gruppo j
+  // (64 elementi, due scale) diviso in blocchi da `lpu` valori di `l`, scelti
+  // perche' le unita' totali arrivino a 64 quando la riga lo consente.
+  const { lpu, chunks, unitsPerSb, units } = kquantWorkSplit(sbPerRow, 4);
   // UN SOLO corpo aritmetico per i due regimi: cambia da dove arrivano le
   // parole del blocco. Senza `arena` l'accesso resta `blocks[i]` diretto.
   const head = arena
@@ -1511,6 +1546,10 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   return `
 ${head}
 const SB_PER_ROW = ${sbPerRow}u;
+const LPU = ${lpu}u;
+const CHUNKS = ${chunks}u;
+const UNITS_PER_SB = ${unitsPerSb}u;
+const UNITS = ${units}u;
 var<workgroup> partial: array<f32, 64>;
 fn sbyte(base: u32, i: u32) -> u32 {
   return (blkw(base + (i >> 2u)) >> ((i & 3u) * 8u)) & 0xffu;
@@ -1521,36 +1560,38 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   if (r >= ${N}u) { return; }${pre}
   let t = lid.x;
   var acc = 0.0;
-  for (var sb = t; sb < SB_PER_ROW; sb = sb + 64u) {
+  for (var u = t; u < UNITS; u = u + 64u) {
+    let sb = u / UNITS_PER_SB;
+    let rem = u % UNITS_PER_SB;
+    let j = rem / CHUNKS;                   // gruppo da 64 elementi
+    let lo = (rem % CHUNKS) * LPU;          // primo l dell'unita'
     let wb = (r * SB_PER_ROW + sb) * 36u;   // base word del superblocco
     let dm = unpack2x16float(blkw(wb));   // (d, dmin)
     let xBase = sb * 256u;
-    for (var j = 0u; j < 4u; j = j + 1u) {  // 4 gruppi da 64 elementi
-      let is = 2u * j;
-      var sc1: u32; var mn1: u32; var sc2: u32; var mn2: u32;
-      if (is < 4u) {
-        sc1 = sbyte(wb, 4u + is) & 63u;
-        mn1 = sbyte(wb, 4u + is + 4u) & 63u;
-        sc2 = sbyte(wb, 4u + is + 1u) & 63u;
-        mn2 = sbyte(wb, 4u + is + 5u) & 63u;
-      } else {
-        sc1 = (sbyte(wb, 4u + is + 4u) & 0xfu) | ((sbyte(wb, 4u + is - 4u) >> 6u) << 4u);
-        mn1 = (sbyte(wb, 4u + is + 4u) >> 4u) | ((sbyte(wb, 4u + is) >> 6u) << 4u);
-        sc2 = (sbyte(wb, 4u + is + 5u) & 0xfu) | ((sbyte(wb, 4u + is - 3u) >> 6u) << 4u);
-        mn2 = (sbyte(wb, 4u + is + 5u) >> 4u) | ((sbyte(wb, 4u + is + 1u) >> 6u) << 4u);
-      }
-      let d1 = dm.x * f32(sc1); let min1 = dm.y * f32(mn1);
-      let d2 = dm.x * f32(sc2); let min2 = dm.y * f32(mn2);
-      var dot1 = 0.0; var sx1 = 0.0; var dot2 = 0.0; var sx2 = 0.0;
-      for (var l = 0u; l < 32u; l = l + 1u) {
-        let ql = sbyte(wb, 16u + j * 32u + l);   // qs a byte offset 16 (niente qh)
-        let x1 = x[xBase + j * 64u + l];
-        let x2 = x[xBase + j * 64u + 32u + l];
-        dot1 = dot1 + f32(ql & 0xfu) * x1; sx1 = sx1 + x1;
-        dot2 = dot2 + f32(ql >> 4u) * x2; sx2 = sx2 + x2;
-      }
-      acc = acc + d1 * dot1 - min1 * sx1 + d2 * dot2 - min2 * sx2;
+    let is = 2u * j;
+    var sc1: u32; var mn1: u32; var sc2: u32; var mn2: u32;
+    if (is < 4u) {
+      sc1 = sbyte(wb, 4u + is) & 63u;
+      mn1 = sbyte(wb, 4u + is + 4u) & 63u;
+      sc2 = sbyte(wb, 4u + is + 1u) & 63u;
+      mn2 = sbyte(wb, 4u + is + 5u) & 63u;
+    } else {
+      sc1 = (sbyte(wb, 4u + is + 4u) & 0xfu) | ((sbyte(wb, 4u + is - 4u) >> 6u) << 4u);
+      mn1 = (sbyte(wb, 4u + is + 4u) >> 4u) | ((sbyte(wb, 4u + is) >> 6u) << 4u);
+      sc2 = (sbyte(wb, 4u + is + 5u) & 0xfu) | ((sbyte(wb, 4u + is - 3u) >> 6u) << 4u);
+      mn2 = (sbyte(wb, 4u + is + 5u) >> 4u) | ((sbyte(wb, 4u + is + 1u) >> 6u) << 4u);
     }
+    let d1 = dm.x * f32(sc1); let min1 = dm.y * f32(mn1);
+    let d2 = dm.x * f32(sc2); let min2 = dm.y * f32(mn2);
+    var dot1 = 0.0; var sx1 = 0.0; var dot2 = 0.0; var sx2 = 0.0;
+    for (var l = lo; l < lo + LPU; l = l + 1u) {
+      let ql = sbyte(wb, 16u + j * 32u + l);   // qs a byte offset 16 (niente qh)
+      let x1 = x[xBase + j * 64u + l];
+      let x2 = x[xBase + j * 64u + 32u + l];
+      dot1 = dot1 + f32(ql & 0xfu) * x1; sx1 = sx1 + x1;
+      dot2 = dot2 + f32(ql >> 4u) * x2; sx2 = sx2 + x2;
+    }
+    acc = acc + d1 * dot1 - min1 * sx1 + d2 * dot2 - min2 * sx2;
   }
   partial[t] = acc;
   workgroupBarrier();
@@ -1640,8 +1681,13 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 export function gemvQ6KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; accum?: boolean }): string {
   const { K, N, arena, accum } = opts;
   if (accum === true && !arena) throw new Error("q6K: accum esige il regime d'arena (il peso viene da Sel)");
+  // OCCUPAZIONE (fase 4-bis, it.22): stessa correzione del q4_K. Qui il
+  // superblocco si divide in 2 gruppi da 128 e ogni giro di `l` copre 4 quant;
+  // l'unita' diventa un pezzo da `lpu6` valori di l dentro un gruppo, scelto
+  // perche' le unita' arrivino a 64 quando la riga lo consente.
   if (K % 256 !== 0) throw new Error("gemvQ6K: K non multiplo di 256");
   const sbPerRow = K / 256;
+  const { lpu: lpu6, chunks: chunks6, unitsPerSb: unitsPerSb6, units: units6 } = kquantWorkSplit(sbPerRow, 2);
   // UN SOLO corpo aritmetico per i due regimi: cambia da dove arrivano le
   // parole del blocco. Senza `arena` l'accesso resta `blocks[i]` diretto.
   const head = arena
@@ -1666,6 +1712,10 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   return `
 ${head}
 const SB_PER_ROW = ${sbPerRow}u;
+const LPU = ${lpu6}u;
+const CHUNKS = ${chunks6}u;
+const UNITS_PER_SB = ${unitsPerSb6}u;
+const UNITS = ${units6}u;
 var<workgroup> partial: array<f32, 64>;
 fn sbyte(base: u32, i: u32) -> u32 {
   return (blkw(base + (i >> 2u)) >> ((i & 3u) * 8u)) & 0xffu;
@@ -1679,15 +1729,19 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   if (r >= ${N}u) { return; }${pre}
   let t = lid.x;
   var acc = 0.0;
-  for (var sb = t; sb < SB_PER_ROW; sb = sb + 64u) {
+  for (var u = t; u < UNITS; u = u + 64u) {
+    let sb = u / UNITS_PER_SB;
+    let rem = u % UNITS_PER_SB;
+    let n = rem / CHUNKS;                       // gruppo da 128
+    let lo = (rem % CHUNKS) * LPU;              // primo l dell'unita'
     let wb = (r * SB_PER_ROW + sb) * 53u;
     let d = unpack2x16float(blkw(wb + 52u)).x; // d f16 a byte offset 208
     let xBase = sb * 256u;
-    for (var n = 0u; n < 2u; n = n + 1u) {       // 2 gruppi da 128
+    {
       let qlO = n * 64u;        // byte offset dentro ql (0 o 64)
       let qhO = 128u + n * 32u; // byte offset qh
       let scO = 192u + n * 8u;  // byte offset scales
-      for (var l = 0u; l < 32u; l = l + 1u) {
+      for (var l = lo; l < lo + LPU; l = l + 1u) {
         let is = l >> 4u;
         let qlA = sbyte(wb, qlO + l);
         let qlB = sbyte(wb, qlO + l + 32u);

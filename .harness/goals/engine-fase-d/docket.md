@@ -364,3 +364,23 @@ bit-identica per costruzione**. Distribuire il lavoro su piu' lane cambia
 l'ORDINE delle somme f32 dentro il prodotto scalare, e in f32 l'addizione non e'
 associativa. Il gate quindi non e' la bit-identita' ma: ktest contro cpuref con
 la tolleranza di oggi, argmax identico sul golden smoke, routing invariato.
+
+## item 16 — il segmento STATICO e' peggiorato di 1,62 ms con la 4-bis (io, fase 4-bis o 6)
+
+Misurato in it.22: rifacendo la spartizione del lavoro nei kernel K-quant, il
+segmento expert e' sceso da 33,115 a 8,743 ms/token (−73,6%) ma il segmento
+STATICO e' salito da 14,523 a **16,144** (+11,2%). Non e' rumore: nelle tre
+misure precedenti stava fra 14,52 e 14,53.
+
+Ipotesi NON verificata: nel regime nuovo le scale del superblocco si
+ri-estraggono una volta per UNITA' invece che una per superblocco, e sui GEMV
+statici K-quant la ridondanza potrebbe superare il guadagno. Non mi convince —
+sugli expert la stessa ridondanza c'e' ed e' stravinta 3,8 a 1 — quindi la
+spiegazione va misurata, non assunta: serve la sonda per-kernel dentro il
+segmento statico (oggi la categoria e' una sola e mescola attenzione, deltanet,
+shexp, router GEMV).
+
+Vale 1,62 ms su 44,26 di token (3,7%): non blocca niente, e infatti la 4-bis
+chiude comunque a −27,64 ms. Registrato perche' un +11% su una categoria dopo un
+cambio di kernel e' esattamente il tipo di cosa che si smette di vedere se non
+la si scrive. it.22 (2026-08-11).

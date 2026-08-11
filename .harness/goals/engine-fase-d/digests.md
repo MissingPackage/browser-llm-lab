@@ -339,3 +339,27 @@ riga sui 64 thread, e sul 35B sono 8 (gate/up, K=2048) e **2** (down, K=512) ⇒
 Docket item 15 (PI): l'ordine del contratto. La fase 4 vale zero sul decode, che
 e' dove sta la funzione obiettivo (13,9 tok/s contro i 30 dell'obiettivo), e la
 sua proiezione non regge piu'. Parere: fase 4-bis sui kernel PRIMA della 4.
+
+## it.22 (2026-08-11) — FASE 4-BIS: 64 lane invece di 2, e il 35B passa a 22,6 tok/s
+
+I kernel K-quant spartivano i SUPERBLOCCHI di una riga sui 64 thread: sul 35B
+sono 8 per gate/up (K=2048) e **2 per il down** (K=512), cioe' 8 lane su 64 e 2
+su 64. L'unita' diventa un pezzo del gruppo, scelta da una funzione sola
+(`kquantWorkSplit`) perche' le unita' arrivino a 64. Piu' un test CPU della
+BIIEZIONE della spartizione (ogni (superblocco, gruppo, l) coperto una volta
+sola, 18 geometrie): e' li' che nascono i numeri plausibili e sbagliati.
+
+**expert 33,115 → 8,743 ms/token** (−73,6%), banda efficace **17,2 → 65,3 GB/s**
+(3,8x), coda 6,859 → 1,415 (anche la head e' un GEMV K-quant), totale GPU 57,33
+→ 29,47. **Token 71,90 → 44,26 ms a parita' di residenza (−38,4%): da 13,9 a
+22,6 tok/s sul 35B.**
+
+Gate: ktest 87/87 con tolleranze invariate o MIGLIORI (q4_K 2048x512: 2,74e-4 →
+5,58e-5), argmax 39/39, routing identico chiave per chiave, GLM bit-identico
+(L2rel 2,072937787401139e-07, la stessa cifra fino all'ultima decimale). Suite
+440|9. Dichiarato prima di iniziare che NON sarebbe stato bit-identico, ed e'
+giusto cosi': cambia l'ordine delle somme f32.
+
+Docket item 16: il segmento STATICO e' PEGGIORATO di 1,62 ms (+11,2%) e non e'
+rumore. Ipotesi (ridondanza nell'estrazione delle scale) non verificata e non
+convincente — va misurata con una sonda per-kernel, non corretta alla cieca.
