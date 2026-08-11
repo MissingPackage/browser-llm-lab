@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.35: fase 5 aperta, budget expert DERIVATO (docket 11 chiuso))
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.36: fase 5 a 2 voci su 4 — budget derivato e policy esclusa coi numeri (docket 11 e 13 chiusi))
 
 ## 1. Next decidable
 
@@ -431,12 +431,20 @@ Misurato sul 35B: tetto 13 GiB, **allocati 1,94**, riserva 0,50, budget expert
 10,56. Run verde (argmax 39/39, routing identico, 0 miss, 43,74 ms/token).
 **Docket item 11 CHIUSO.**
 
-**Restano della riga 5**: (a) la POLICY d'ingresso del decode ottimistico — i
-numeri di partenza sono it.16 (39/39 token sporchi a freddo, 0/39 a caldo) e
-it.18 (freddo ottimistico 738,6 contro 1192,9 del sync, che pero' e' UN campione
-per braccio in due run diversi: la soglia va tarata su un bench fatto apposta);
-(b) il prefetch in-forward su q35 — delta misurato O esclusione motivata coi
-numeri (il recall q35 e' 82,67%@8); (c) tier/AUTOPIN su q35, idem.
+**Seconda voce fatta (it.36): la POLICY d'ingresso NON SERVE, esclusa coi
+numeri.** `debugEvictAll` (harness) rimette la cache a vuota, cosi' i due path
+partono entrambi da freddo NELLO STESSO PROCESSO — e l'ho fatto nei DUE ORDINI
+perche' il secondo braccio rilegge range di GGUF gia' toccati: ordine A 1111,50
+(sync) contro 650,92 (ottimistico), ordine B 1098,40 contro 660,67, cioe'
+**l'ordine sposta l'1,2%**. A freddo l'ottimistico e' **1,68x piu' veloce**, a
+caldo 3,05x: il replay costa (109 replay, +12% di fetch, 80,7% del token
+rigiocato) ma meno dei 77 round-trip per token del sync. La soglia progettata in
+it.16 non serve; la decisione sta nel codice accanto al flag, coi numeri.
+**Docket item 13 CHIUSO.**
+
+**Restano della riga 5**: (a) il prefetch in-forward su q35 — delta misurato O
+esclusione motivata coi numeri (il recall q35 e' 82,67%@8); (b) tier/AUTOPIN su
+q35, idem.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

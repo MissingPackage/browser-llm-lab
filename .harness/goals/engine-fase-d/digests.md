@@ -509,3 +509,19 @@ giro dava 30,8x perche' il braccio sequenziale girava a cache vuota.
 BIT-IDENTICI.** Piu' del 2,02x del denso perche' sul MoE il batch toglie anche i
 40 readback per token. Contratto: `planMoeChunk` non e' usato (expert per riga,
 scelta di it.27) — se conta come done-when la riga 4 resta aperta.
+
+## it.35-36 (2026-08-11) — fase 5: budget derivato, e la policy che non serve
+
+**it.35**: il budget dell'arena expert si DERIVA (tetto − allocato − riserva) con
+un contatore dentro i due helper di allocazione, invece della formula di GLM che
+qualcuno deve tenere aggiornata. Ctx-aware per costruzione (kCache/vCache si
+allocano con ctxMax e finiscono nel contatore). 35B: tetto 13 GiB, allocati
+**1,94**, budget expert 10,56. **Docket item 11 CHIUSO.**
+
+**it.36**: la POLICY d'ingresso del decode ottimistico e' **esclusa coi numeri**.
+`debugEvictAll` fa partire i due path da freddo nello stesso processo, e la
+misura e' ripetuta nei DUE ordini (il secondo braccio rilegge range gia'
+toccati): sync 1111,50 / 1098,40 contro ottimistico 650,92 / 660,67 — l'ordine
+sposta l'1,2%. **A freddo l'ottimistico e' 1,68x piu' veloce**, a caldo 3,05x: il
+replay costa meno dei 77 round-trip per token del sync. La soglia progettata in
+it.16 non serve. **Docket item 13 CHIUSO.**
