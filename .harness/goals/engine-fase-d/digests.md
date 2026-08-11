@@ -225,3 +225,34 @@ passate, submit/token riportati SEPARATI per freddo e caldo — mediarli
 nasconderebbe il fenomeno. E la 3c non sara' bit-identica per costruzione: i
 pesi vengono dal router GPU (3,80e-7 misurato in it.15), quindi il gate e'
 l'argmax identico + routing e miss invariati, come dice il contratto.
+
+## it.17 (2026-08-11) — fetta 3c: il token intero in un submit
+
+La `Sel` di produzione la scrive il ROUTER SU GPU (resolve dalla slotTable nello
+stesso dispatch, `dirtyB` sui miss). 40 segmenti statici + 40 router + 320
+dispatch expert in UN encoder, UN submit; il routing si ricostruisce alla fine
+dalla `Sel` letta in coda. I kernel expert non cambiano di una riga — e' cio'
+per cui l'indirezione della fetta 3a esisteva.
+
+Due pezzi nuovi: `clearBuffer(moeAcc)` dentro l'encoder (la `writeBuffer` e'
+ordinata prima dell'INTERO submit: i 40 layer vedrebbero un solo azzeramento) e
+`axpySelWgsl`, l'axpy col peso preso da `Sel.w` — i pesi ora nascono su GPU.
+Piu' `ExpertCache.noteResidentHit`: senza, la LRU non verrebbe mai toccata (nel
+path nuovo `ensure` non si chiama mai) e degraderebbe a FIFO.
+
+**Smoke 35B, 39 token, 10 GiB** — tre regimi separati:
+submit/token **81 → 1**, readback/token **41 → 1**, argmax **39/39 identico**,
+routing **identico chiave per chiave** (3341 chiavi, 0 diff), miss 0 vs 0.
+ms/token A PARITA' di residenza (bracci interleavati, prima coppia scartata,
+docket item 10): **143,49 [142,51-145,94] → 71,50 [71,05-71,57] = −71,99
+(−50,2%)**. Il primo giro del gate confrontava freddo contro caldo (1192,9 vs
+71,5): e' servita una terza passata perche' il numero fosse onesto.
+
+Correzione di fatto al docket item 8: i submit erano **81**, non 41 (ogni layer
+MoE ne fa due). I readback erano giusti.
+
+NON coperto, e precondizione della prossima fetta: il replay di GLM **non e'
+portabile su un modello ricorrente**. 30 layer su 40 sono deltanet e aggiornano
+`convSt`/`stateS` IN PLACE: un replay li applicherebbe due volte, senza errore e
+con numeri plausibili. Via d'uscita: snapshot per token (62,8 MiB, calcolati) +
+restore dei soli layer >= firstDirty, da MISURARE contro i 71,5 ms/token.

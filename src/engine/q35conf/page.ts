@@ -12,6 +12,9 @@ const cfg = {
   routerShadow: q.get("shadow") === "1",
   // ?misstrace=1 → profilo dei miss per token (2 passate sullo stesso prompt)
   missTrace: q.get("misstrace") === "1",
+  // ?optimistic=1 → gate della fetta 3c: passata sync (fredda) + passata a
+  // submit unico (calda), numeri riportati separati
+  optTrace: q.get("optimistic") === "1",
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

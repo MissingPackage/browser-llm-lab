@@ -154,6 +154,14 @@ misure due volte. Registrato it.10 (2026-08-10).
 "(a), fai la fase 3-bis". Riga aggiunta a PHASES fra la 3 e la 4.
 **Item 8 CHIUSO.**
 
+**Correzione di FATTO (it.17, 2026-08-11)**: il "41 submit" di questo item era
+una stima, e la stima era bassa della meta'. Misurati sul 35B con i contatori
+di `perf()`: **81 submit/token** (ogni layer MoE ne fa DUE — segmento statico e
+dispatch dinamici) e 41 readback/token (questi erano giusti). Non cambia
+nessuna decisione ne' riapre l'item: l'ordine di grandezza e la conclusione
+erano quelli. Sta qui perche' un numero citato tre volte in tre documenti
+diventa vero per ripetizione se nessuno lo misura.
+
 
 ## item 9 — il done-when della fase 3 NON e' soddisfatto: -3,3 contro >= -5,1 (PI)
 

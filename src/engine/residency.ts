@@ -701,6 +701,39 @@ export class ExpertCache {
     return this.cls[this.classOfLayer(layer)].lru.has(this.keyOf(layer, expert));
   }
 
+  /**
+   * HIT del path a submit unico (fase-D fase 3b, fetta 3c): l'expert era già
+   * residente quando il resolve su GPU l'ha risolto, quindi NESSUNO ha chiamato
+   * `ensure` — la CPU non ha visto la selezione mentre il token girava. Questa
+   * è la contabilità di quell'hit, fatta al confine di token dalla `Sel` letta
+   * in coda: conta l'hit e TOCCA la LRU esattamente come farebbe `ensure`.
+   *
+   * Serve perché senza il touch la recency degraderebbe all'ordine di
+   * inserimento — la LRU diventerebbe una FIFO e le vittime cambierebbero:
+   * il path ottimistico misurerebbe miss diversi dal path sync per un motivo
+   * che non ha niente a che vedere col meccanismo che sta provando.
+   *
+   * LANCIA se l'expert non è residente: chi chiama sta rileggendo una `Sel` che
+   * dichiarava HIT (flag miss a 0), e un disaccordo lì è un bug strutturale
+   * (eviction fra resolve e confine di token), non un dato da interpretare.
+   */
+  noteResidentHit(layer: number, expert: number): void {
+    const cls = this.classOfLayer(layer);
+    const c = this.cls[cls];
+    const key = this.keyOf(layer, expert);
+    const found = c.lru.get(key);
+    if (found === undefined) {
+      throw new Error(
+        `residency: noteResidentHit su expert non residente (layer ${layer}, expert ${expert}, ` +
+        `chiave ${key}) — la Sel del token lo dava risolto: eviction fra il resolve e il confine ` +
+        "di token, bug strutturale");
+    }
+    c.lru.delete(key);
+    c.lru.set(key, found);
+    this.s.hits++;
+    this.s.hitsResident++;
+  }
+
   /** Chiave globale dell'expert secondo la config di questa cache. */
   keyOf(layer: number, expert: number): number {
     return expertKeyFor(this.cfg, layer, expert);

@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a-3b fatte; next = fetta 3c (meccanismo a submit unico, opt-in), progettata su disco in it.16)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, 3b fette 1-2-3a-3b-3c fatte (it.17: 81->1 submit/token, argmax e routing identici, -71,99 ms/token a parita'); next = repair+replay, che su 30 layer ricorrenti esige un checkpoint di stato che GLM non aveva)
 
 ## 1. Next decidable
 
@@ -139,23 +139,48 @@ residenza raggiunta l'ottimistico da' **1 submit/token** (ed e' misurabile su
 questo stesso smoke, seconda passata); a cache fredda il repair+replay e' il
 REGIME e il path ottimistico NUDO sarebbe una regressione sul prefill.
 
-**PROSSIMO: fetta 3c** (progetto nel journal it.16, con la CORREZIONE DI SCOPO
-dello stesso giorno: la policy d'ingresso NON e' della 3b — la riga 5 di PHASES
-si intitola "decode ottimistico + policy" e dice "attivo dove la residenza lo
-consente", quindi la soglia e' della FASE 5, che usera' i numeri di it.16 per
-tararla). La 3c e' UNA cosa: il MECCANISMO, **opt-in**, col path sync di oggi
-che resta il default cosi' niente puo' regredire —
-path a submit unico — `Sel` di produzione dal router GPU, `dirty`
-(atomicMin primo layer sporco + atomicAdd conteggio), `hiddenCkpt` come input
-del replay, repair+replay al confine di token; pezzi noti da risolvere:
-`clearBuffer` per `moeAcc` dentro l'encoder, un axpy che legge il peso da
-`Sel.w` (i pesi ora nascono su GPU), il guard `setInFlight`, e `routing`
-ricostruita dalla `Sel` letta in coda (nessuno sulla CPU vede piu' la
-selezione). **GATE della 3c**: due passate con submit/token e readback/token riportati
-SEPARATI per freddo e caldo (mediarli nasconderebbe il fenomeno), piu' argmax
-identico e routing/miss invariati. **La 3c NON sara' bit-identica** per
-costruzione: i pesi arrivano dal router GPU in f32 (3,80e-7 misurato in it.15),
-quindi il gate e' quello del contratto (argmax + routing), non la bit-identita'.
+**FETTA 3c FATTA (it.17)**: il token intero in **UN submit**. La `Sel` di
+produzione la scrive il ROUTER SU GPU (resolve expert->slot dalla `slotTable`
+nello stesso dispatch, `dirtyB` con atomicMin sul primo layer MoE sporco e
+atomicAdd sul conteggio); 40 segmenti statici + 40 router + 320 dispatch expert
+in un encoder solo; il `routing` si ricostruisce alla fine dalla `Sel` copiata
+in coda, perche' mentre il token gira nessuno sulla CPU vede la selezione. **I
+kernel expert non cambiano di una riga** — cambia CHI riempie `Sel`, ed e' il
+pagamento dell'indirezione della fetta 3a. Pezzi nuovi: `clearBuffer(moeAcc)`
+DENTRO l'encoder (la `writeBuffer` e' ordinata prima dell'INTERO submit: i 40
+layer vedrebbero un solo azzeramento), `axpySelWgsl` (il peso di mixing nasce su
+GPU; sul MISS il contributo e' ZERO, degrado definito) e
+`ExpertCache.noteResidentHit` (senza, `ensure` non viene mai chiamata e la LRU
+degraderebbe a FIFO: il path nuovo misurerebbe miss diversi per un motivo che
+non c'entra col meccanismo).
+
+**GATE 3c (smoke 35B, 39 token, 320 sel/token, 10 GiB)** — tre regimi separati:
+submit/token **81 -> 1**, readback/token **41 -> 1**, argmax **39/39 IDENTICO**,
+routing **identico chiave per chiave** (3341 chiavi, 0 diff), miss 0 vs 0,
+hit+miss = 12.480 = 39x320 in tutte le passate. ms/token A PARITA' di residenza
+(bracci interleavati, 4 rip., prima coppia scartata — docket 10): **143,49
+[142,51-145,94] -> 71,50 [71,05-71,57] = -71,99 ms/token (-50,2%)**. Il primo
+giro del gate confrontava freddo (1192,9) contro caldo: e' servita una TERZA
+passata perche' il numero fosse onesto. ktest 87/87, suite 410|9, tsc pulito.
+JSON: `results/engine/q35-optimistic-35b-it17.json`.
+
+**PROSSIMO: il REPAIR+REPLAY**, che la riga 3b chiede esplicitamente ("miss
+rilevato su GPU con repair+replay dalla CPU") e senza cui il path ottimistico
+ALZA sul token sporco. La sua precondizione e' nuova e va detta prima:
+**il replay di GLM non e' portabile su un modello RICORRENTE**. GLM rigioca i
+layer da `firstDirty` in giu' rientrando da `hiddenCkpt`, ed e' idempotente
+perche' i suoi layer sono senza stato (il KV append riscrive la stessa
+posizione). Nel 35B **30 layer su 40 sono deltanet** e `deltaNetConv`/
+`deltaNetCore` aggiornano `convSt`/`stateS` IN PLACE: un replay li
+applicherebbe DUE VOLTE — senza errore, con numeri plausibili. Via d'uscita
+(economica perche' ogni layer tocca il proprio stato UNA volta per token, quindi
+stato all'ingresso del layer = stato all'ingresso del token): **snapshot per
+token** nell'encoder + restore dei soli layer >= `firstDirty`, valido anche per
+i round successivi. Costo CALCOLATO: 30 x (conv 98.304 B + S 2.097.152 B) =
+**62,8 MiB** di VRAM e una copia da 62,8 MiB per token — da MISURARE contro i
+71,5 ms/token di qui, non da assumere trascurabile. Servono anche `hiddenCkpt`
+(327 KB/token, ancora non scritto: sarebbe stato codice morto) e il pin-for-
+replay dei layer >= firstDirty.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

@@ -2250,6 +2250,40 @@ const arenaSlotWgsl = `
   let bi = slot / SLABS_PER_BUF;
   let base = (slot % SLABS_PER_BUF) * SLAB_W;`;
 
+/**
+ * axpy col peso di mixing PRESO DA `Sel` (goal fase-D fase 3b, fetta 3c):
+ * `out += Sel[selIdx].w * x`, con `selIdx` dall'uniform a dynamic offset.
+ *
+ * Esiste perche' nel path a submit unico i pesi NASCONO SU GPU — li scrive il
+ * router nella sua `Sel` — e la CPU non li vede piu' prima della fine del
+ * token. `axpyWgsl` legge il peso da un buffer che qualcuno deve aver
+ * riempito: nel path sync lo riempie la CPU dopo il readback del router, qui
+ * non c'e' nessuno a farlo. Non e' una variante di comodo: e' l'ultimo pezzo
+ * per-expert che la CPU ancora forniva.
+ *
+ * MISS (`flags` bit 0): il contributo e' ZERO e non i byte dello slot 0, che
+ * e' l'indirizzo di ripiego dei kernel d'arena. Il token resta comunque
+ * SBAGLIATO — un expert che manca cambia il risultato — ma sbagliato in modo
+ * DEFINITO: l'expert non partecipa, invece di partecipare coi pesi di un altro.
+ */
+export function axpySelWgsl(D: number): string {
+  return `${SEL_STRUCT_WGSL}
+${MOE_IDX_STRUCT_WGSL}
+@group(0) @binding(0) var<storage, read_write> out: array<f32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read> selBuf: array<Sel>;
+@group(0) @binding(3) var<uniform> moeIdx: MoeIdx;
+const D = ${D}u;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let i = gid.x;
+  if (i >= D) { return; }
+  let sel = selBuf[moeIdx.selIdx];
+  let w = select(sel.w, 0.0, (sel.flags & 1u) != 0u);
+  out[i] = out[i] + w * x[i];
+}`;
+}
+
 // gate+up+silu del blocco expert in UN dispatch (sostituisce 3 gemvQuant+siluMul).
 // x e' gia' normalizzato: si carica in shared cosi' com'e'.
 // Senza `arena` il testo emesso e' IDENTICO a quello di prima dello strato 1,

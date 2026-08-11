@@ -12,7 +12,7 @@ import {
   addInPlaceWgsl, ARGMAX_CHUNK, argmaxStage1Wgsl, argmaxStage2Wgsl, attnDecodeWgsl, axpyWgsl,
   gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
   gemvQ6KWgsl, gemvQuantWgsl, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
-  siluMulWgsl, stridedCopyWgsl, routerTopKWgsl,
+  siluMulWgsl, stridedCopyWgsl, routerTopKWgsl, axpySelWgsl,
   SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE, type KArenaOpts,
 } from "./kernels/wgsl";
 import { expertArenaBindings } from "./gpulimits";
@@ -111,8 +111,21 @@ export interface Q35GpuModel {
    * `readbackMs` = attesa del readback dei logits (604 KB sul 4B);
    * `argmaxMs` = il max su `vocab` float in CPU. Tutti e tre spariscono col
    * pattern decodeBatch — misurarli PRIMA e' come si decide se conviene.
+   *
+   * `submits` e `readbacks` (fetta 3c) sono i CONTATORI su cui la fase 3b si
+   * chiude: `submits` conta le `queue.submit`, `readbacks` i punti di attesa
+   * GPU→CPU (piu' mapAsync concorrenti risolte insieme valgono UNO: e' un
+   * round-trip solo). Si contano su ENTRAMBI i path, altrimenti il "prima" del
+   * done-when sarebbe una stima.
    */
-  perf(): { tokens: number; embedMs: number; readbackMs: number; argmaxMs: number };
+  perf(): { tokens: number; embedMs: number; readbackMs: number; argmaxMs: number; submits: number; readbacks: number };
+  /**
+   * Accende/spegne il path a submit unico a caldo (solo se il modello e' stato
+   * costruito con `select: "optimistic"`; altrimenti LANCIA — non esiste il
+   * cablaggio). E' quello che permette al gate di misurare le due passate sulla
+   * STESSA cache: passata sync a freddo, passata ottimistica a caldo.
+   */
+  setOptimistic(on: boolean): void;
   /** DEBUG (it.17): dopo step(), hidden x a valle del layer indicato (solo MoE). */
   readTap(layer: number): Promise<Float32Array>;
   /** Esito dell'OMBRA del router GPU; `null` se non è stata accesa. */
@@ -130,6 +143,26 @@ export interface Q35GpuModelOpts {
    * per layer, e si spegne di default.
    */
   routerShadow?: boolean;
+  /**
+   * Path di selezione degli expert (fase 3b, fetta 3c). PORT del `select` di
+   * `glmmodel`, con gli stessi nomi:
+   *
+   * - `"cpu"` (default): il path di oggi — un submit e un readback dei logits
+   *   del router PER LAYER, la CPU sceglie, `ensure`, e riempie `Sel`.
+   * - `"optimistic"`: il token intero in UN submit. La `Sel` di produzione la
+   *   scrive il router su GPU, che risolve expert→slot dalla `slotTable` e
+   *   marca `dirtyB` quando trova un MISS; nessuno sulla CPU vede la selezione
+   *   mentre il token gira, e il routing si ricostruisce dalla `Sel` letta in
+   *   coda.
+   *
+   * OPT-IN per costruzione: finché la residenza non è raggiunta il path sync
+   * costa meno (it.16: a cache fredda 39 token su 39 sono sporchi), e la
+   * SOGLIA d'ingresso è materia della fase 5 — qui c'è il meccanismo, non la
+   * policy. Costruire con `"optimistic"` costruisce ENTRAMBI i path e accende
+   * il secondo; `setOptimistic(false)` torna al primo a caldo (è così che il
+   * gate misura le due passate sulla stessa cache).
+   */
+  select?: "cpu" | "optimistic";
 }
 
 export async function createQ35GpuModel(
@@ -406,6 +439,14 @@ export async function createQ35GpuModel(
     /** Confronta l'ombra col la selezione CPU del layer appena eseguito. */
     shadowCompare: (() => Promise<void>) | null;
     shadowStats: (() => Q35RouterShadowStats) | null;
+    /**
+     * IL TOKEN INTERO IN UN SUBMIT (fetta 3c). `null` se il modello non è stato
+     * costruito con `select: "optimistic"`. Ritorna i logits se `read`, e fa da
+     * sé tutta la contabilità di fine token (routing, hit, miss): nel path
+     * sync quella contabilità la fa `runLayer`, qui non c'è nessun momento in
+     * cui la CPU veda la selezione prima della fine.
+     */
+    runTokenOptimistic: ((read: boolean) => Promise<Float32Array | null>) | null;
     destroy(): void;
   }
   let moe: MoeRt | null = null;
@@ -446,6 +487,11 @@ export async function createQ35GpuModel(
     });
     const routerCfg: RouterConfig = { ...ROUTER_QWEN35MOE, nUsed: topK };
     const shadowOn = opts.routerShadow === true;
+    if (shadowOn && opts.select === "optimistic") {
+      throw new Error(
+        "q35gpumodel: routerShadow e select \"optimistic\" insieme non hanno senso — l'ombra " +
+        "confronta il router GPU con la selezione CPU, e in optimistic la selezione CPU non esiste");
+    }
     const nMoeLayer = cuts.length;
     const nSel = nMoeLayer * topK;
     // `MoeIdx` si binda a dynamic offset: la spaziatura delle entry deve essere
@@ -709,6 +755,102 @@ export async function createQ35GpuModel(
         stats: () => ({ ...st }),
       };
     })() : null;
+    // ---- PATH A SUBMIT UNICO (fetta 3c): la `Sel` di produzione la scrive la GPU ----
+    // Cambia UN pezzo rispetto alla fetta 3a: chi riempie `Sel`. I kernel
+    // expert sono gli stessi, il bind group è lo stesso, l'offset dinamico è lo
+    // stesso — l'indirezione era stata costruita apposta perché questo passo
+    // costasse una entry di uniform e non una riscrittura (design §1).
+    const opt = opts.select === "optimistic" ? ((): {
+      dirtyB: GPUBuffer; dirtyStaging: GPUBuffer; selStaging: GPUBuffer;
+      pipeR: GPUComputePipeline; bindR: GPUBindGroup;
+      pAxpySel: GPUComputePipeline; bgAxpySel: GPUBindGroup;
+      destroy(): void;
+    } => {
+      const dirtyB = device.createBuffer({
+        size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+      });
+      const dirtyStaging = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      const selStaging = device.createBuffer({
+        size: nSel * SEL_BYTES, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+      // Router+resolve di PRODUZIONE: lo stesso kernel dell'ombra con in più il
+      // binding 7 (`dirtyB`) — [0] = primo layer MoE con miss (atomicMin), [1] =
+      // conteggio (atomicAdd). È l'unica differenza di WGSL fra ombra e
+      // produzione; la differenza di CABLAGGIO è la entry di `MoeIdx` che
+      // l'offset dinamico seleziona, e quella di produzione è la (layer, k=0),
+      // il cui `selIdx` punta alla regione che i kernel expert leggono.
+      const bgl = device.createBindGroupLayout({
+        entries: [
+          ...[0, 1].map((b) => ({ binding: b, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } })),
+          ...[2, 3, 4].map((b) => ({ binding: b, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" as const } })),
+          { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } },
+          {
+            binding: 6, visibility: GPUShaderStage.COMPUTE,
+            buffer: { type: "uniform" as const, hasDynamicOffset: true, minBindingSize: MOE_IDX_BYTES },
+          },
+          { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" as const } },
+        ],
+      });
+      const pipeR = device.createComputePipeline({
+        layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+        compute: {
+          module: device.createShaderModule({
+            code: routerTopKWgsl({
+              nExpert: nE, nUsed: topK, weightsScale: routerCfg.weightsScale,
+              clampMin: WEIGHTS_SUM_CLAMP_MIN, gating: routerCfg.gating,
+              resolve: { nExpert: nE, nUsed: topK, dirty: true },
+            }),
+          }),
+          entryPoint: "main",
+        },
+      });
+      const zeroBias = sbuf(new Float32Array(nE));
+      const ids = empty(topK * 4), wts = empty(topK * 4);
+      const bindR = device.createBindGroup({
+        layout: bgl,
+        entries: [
+          { binding: 0, resource: { buffer: routerLogits } },
+          { binding: 1, resource: { buffer: zeroBias } },
+          { binding: 2, resource: { buffer: ids } },
+          { binding: 3, resource: { buffer: wts } },
+          { binding: 4, resource: { buffer: selBuf } },
+          { binding: 5, resource: { buffer: cache.slotTableBuffer() } },
+          { binding: 6, resource: { buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES } },
+          { binding: 7, resource: { buffer: dirtyB } },
+        ],
+      });
+      // Il peso di mixing ora NASCE su GPU (campo `w` di `Sel`): l'axpy che
+      // legge da un buffer riempito dalla CPU non ha più nessuno che lo riempia.
+      const bglA = device.createBindGroupLayout({
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" as const } },
+          ...[1, 2].map((b) => ({ binding: b, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } })),
+          {
+            binding: 3, visibility: GPUShaderStage.COMPUTE,
+            buffer: { type: "uniform" as const, hasDynamicOffset: true, minBindingSize: MOE_IDX_BYTES },
+          },
+        ],
+      });
+      const pAxpySel = device.createComputePipeline({
+        layout: device.createPipelineLayout({ bindGroupLayouts: [bglA] }),
+        compute: { module: device.createShaderModule({ code: axpySelWgsl(d) }), entryPoint: "main" },
+      });
+      const bgAxpySel = device.createBindGroup({
+        layout: bglA,
+        entries: [
+          { binding: 0, resource: { buffer: moeAcc } },
+          { binding: 1, resource: { buffer: dnE } },
+          { binding: 2, resource: { buffer: selBuf } },
+          { binding: 3, resource: { buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES } },
+        ],
+      });
+      return {
+        dirtyB, dirtyStaging, selStaging, pipeR, bindR, pAxpySel, bgAxpySel,
+        destroy: () => { dirtyB.destroy(); dirtyStaging.destroy(); selStaging.destroy(); },
+      };
+    })() : null;
+    /** sentinel di `dirtyB`: [0] è un atomicMin sul layer MoE, [1] un atomicAdd */
+    const dirtyInit = new Uint32Array([0xffffffff, 0, 0, 0]);
     const routing = new Map<number, number>();
     const parkSlots = moeParkOf(cfg);
     const slotBytes: Record<string, number> = {};
@@ -722,10 +864,147 @@ export async function createQ35GpuModel(
         readMs: st.readMs, packMs: st.packMs, uploadMs: st.uploadMs,
       };
     },
-      destroy: () => cache.destroy(),
+      destroy: () => { opt?.destroy(); cache.destroy(); },
       shadowEncode: shadow ? (enc, m) => shadow.encode(enc, m) : null,
       shadowCompare: shadow ? () => shadow.compare() : null,
       shadowStats: shadow ? () => shadow.stats() : null,
+      runTokenOptimistic: opt ? async (read: boolean): Promise<Float32Array | null> => {
+        // reset di `dirtyB` PER TOKEN: `queue.writeBuffer` è ordinata prima
+        // dell'intero submit che segue, quindi arriva prima di ogni resolve.
+        device.queue.writeBuffer(opt.dirtyB, 0, dirtyInit as unknown as BufferSource);
+        // Error scope come CONTRATTO di ogni encode nuovo (landmine B1): una
+        // pipeline invalida fa droppare il submit IN SILENZIO e i readback
+        // tornano stale-ma-plausibili.
+        device.pushErrorScope("validation");
+        device.pushErrorScope("out-of-memory");
+        const enc = device.createCommandEncoder();
+        const gg2 = gemvGrid(d);
+        for (let m = 0; m < nMoeLayer; m++) {
+          // `moeAcc` si azzera DENTRO l'encoder. La `queue.writeBuffer` del path
+          // sync qui non funzionerebbe: è ordinata PRIMA dell'intero submit,
+          // quindi i 40 layer vedrebbero un solo azzeramento — l'ultimo.
+          enc.clearBuffer(moeAcc, 0, d * 4);
+          const pass = enc.beginComputePass();
+          for (let i = m === 0 ? 0 : cuts[m - 1]; i < cuts[m]; i++) {
+            const st = steps[i];
+            pass.setPipeline(st.pipe);
+            pass.setBindGroup(0, st.bind);
+            pass.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+          }
+          // router+resolve: legge i logits che il GEMV appena accodato ha
+          // scritto e pubblica `Sel` per gli 8 dispatch che seguono, nello
+          // stesso pass. L'entry di `MoeIdx` è la (layer, k=0): il suo `selIdx`
+          // è la base della regione di PRODUZIONE del layer.
+          pass.setPipeline(opt.pipeR);
+          pass.setBindGroup(0, opt.bindR, [m * topK * MOE_IDX_STRIDE]);
+          pass.dispatchWorkgroups(1);
+          const E = expertCls[cfg.classOf(moeLayerAbs[m])];
+          for (let k2 = 0; k2 < topK; k2++) {
+            const dyn = (m * topK + k2) * MOE_IDX_STRIDE;
+            pass.setPipeline(E.pGate); pass.setBindGroup(0, E.bgGate, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
+            pass.setPipeline(E.pUp); pass.setBindGroup(0, E.bgUp, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
+            pass.setPipeline(pSilu); pass.setBindGroup(0, bgSilu); pass.dispatchWorkgroups(Math.ceil(dE / 64), 1, 1);
+            pass.setPipeline(E.pDown); pass.setBindGroup(0, E.bgDown, [dyn]); pass.dispatchWorkgroups(gg2[0], gg2[1], 1);
+            pass.setPipeline(opt.pAxpySel); pass.setBindGroup(0, opt.bgAxpySel, [dyn]); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
+          }
+          pass.setPipeline(pAdd); pass.setBindGroup(0, bgAddRes); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
+          pass.end();
+        }
+        const tail = enc.beginComputePass();
+        for (let i = cuts[nMoeLayer - 1]; i < steps.length; i++) {
+          const st = steps[i];
+          tail.setPipeline(st.pipe);
+          tail.setBindGroup(0, st.bind);
+          tail.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+        }
+        tail.end();
+        if (read) enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4);
+        // `Sel` INTERA in coda: è il solo momento in cui le regioni dei 40 layer
+        // sono complete, ed è insieme la decisione del router e ciò che i kernel
+        // hanno letto davvero.
+        enc.copyBufferToBuffer(selBuf, 0, opt.selStaging, 0, nSel * SEL_BYTES);
+        enc.copyBufferToBuffer(opt.dirtyB, 0, opt.dirtyStaging, 0, 16);
+        device.queue.submit([enc.finish()]);
+        perfAcc.submits++;
+        // I1: da qui al readback la slotTable è INTOCCABILE — il resolve l'ha
+        // già letta e gli slot che ha pubblicato in `Sel` devono restare quelli.
+        cache.setInFlight(true);
+        const errOom = await device.popErrorScope();
+        const errVal = await device.popErrorScope();
+        if (errOom ?? errVal) throw new Error(`q35 optimistic error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
+        // Le mapAsync partono INSIEME (stesso submit alle spalle): un
+        // round-trip host solo, ed è per questo che vale UN readback.
+        const tRb = performance.now();
+        const maps: Promise<undefined>[] = [
+          opt.selStaging.mapAsync(GPUMapMode.READ),
+          opt.dirtyStaging.mapAsync(GPUMapMode.READ),
+        ];
+        if (read) maps.push(staging.mapAsync(GPUMapMode.READ));
+        await Promise.all(maps);
+        perfAcc.readbacks++;
+        perfAcc.readbackMs += performance.now() - tRb;
+        cache.setInFlight(false); // confine di token: la tabella torna toccabile
+        const su = new Uint32Array(opt.selStaging.getMappedRange().slice(0));
+        opt.selStaging.unmap();
+        const du = new Uint32Array(opt.dirtyStaging.getMappedRange().slice(0));
+        opt.dirtyStaging.unmap();
+        let lg: Float32Array | null = null;
+        if (read) {
+          lg = new Float32Array(staging.getMappedRange().slice(0, S.vocab * 4));
+          staging.unmap();
+        }
+        // I MISS si derivano dalla `Sel` e si incrociano col flag aggregato che
+        // ha scritto il kernel: due strade indipendenti verso lo stesso fatto.
+        // Una divergenza è un bug strutturale (il resolve ha scritto `Sel` e
+        // `dirtyB` in disaccordo), mai un dato da interpretare.
+        let missCount = 0, firstDirty = -1;
+        for (let m = 0; m < nMoeLayer; m++) {
+          for (let k2 = 0; k2 < topK; k2++) {
+            if ((su[(m * topK + k2) * 4 + 3] & 1) !== 0) {
+              missCount++;
+              if (firstDirty < 0) firstDirty = m;
+            }
+          }
+        }
+        const kernelFirst = du[0] === 0xffffffff ? -1 : du[0];
+        if (du[1] !== missCount || kernelFirst !== firstDirty) {
+          throw new Error(
+            `q35 optimistic: dirtyB (${du[1]} miss, primo layer MoE ${kernelFirst}) != derivazione ` +
+            `da Sel (${missCount} miss, primo layer MoE ${firstDirty}) — il resolve ha scritto Sel e ` +
+            "dirtyB in disaccordo: bug strutturale, token non interpretabile");
+        }
+        if (missCount > 0) {
+          // DEGRADO DEFINITO, non silenzioso: gli expert mancanti non hanno
+          // partecipato (contributo zero, `axpySelWgsl`), quindi il token è
+          // SBAGLIATO e si dice invece di restituire numeri plausibili.
+          // Il repair+replay che rende utilizzabile questo caso è la fetta
+          // successiva; qui il meccanismo esiste e il regime in cui conviene
+          // (residenza raggiunta) è quello in cui `missCount` è 0 per
+          // costruzione — misurato in it.16: 0 token sporchi su 39 a caldo.
+          throw new Error(
+            `q35 optimistic: ${missCount} MISS nella Sel di questo token (primo layer MoE ` +
+            `${firstDirty}) — token INVALIDO. Il path a submit unico esige la residenza già ` +
+            "raggiunta: senza repair+replay un expert mancante non partecipa e il risultato non " +
+            "è quello del path sync. Scaldare la cache col path sync (setOptimistic(false)).");
+        }
+        // Contabilità di fine token, dalla `Sel` letta in coda: routing (il
+        // numero che il gate confronta), hit e LRU. Nel path sync la fa
+        // `ensure` una selezione alla volta; qui la CPU vede tutto insieme e
+        // dopo, ma deve vedere ESATTAMENTE le stesse cose.
+        for (let m = 0; m < nMoeLayer; m++) {
+          const l = moeLayerAbs[m];
+          const experts = new Uint32Array(topK);
+          for (let k2 = 0; k2 < topK; k2++) {
+            const e = su[(m * topK + k2) * 4];
+            experts[k2] = e;
+            const key = cache.keyOf(l, e);
+            routing.set(key, (routing.get(key) ?? 0) + 1);
+            cache.noteResidentHit(l, e);
+          }
+          cache.noteSelection(l, experts);
+        }
+        return lg;
+      } : null,
       async runLayer(m: number, logitsF32: Float32Array): Promise<void> {
         const l = moeLayerAbs[m];
         // Selezione: IL router unico, in configurazione qwen35moe (softmax,
@@ -799,10 +1078,13 @@ export async function createQ35GpuModel(
         disp(pAdd, bgAddRes, [Math.ceil(d / 64), 1, 1]); // x += moeAcc (shexp + expert)
         pass.end();
         device.queue.submit([enc.finish()]);
+        perfAcc.submits++;
       },
     };
   }
-  const perfAcc = { tokens: 0, embedMs: 0, readbackMs: 0, argmaxMs: 0 };
+  const perfAcc = { tokens: 0, embedMs: 0, readbackMs: 0, argmaxMs: 0, submits: 0, readbacks: 0 };
+  /** path attivo: `true` solo se costruito con `select: "optimistic"` (fetta 3c) */
+  let optimisticOn = opts.select === "optimistic";
   const zeroAcc = new Float32Array(d);
   const tapStaging = device.createBuffer({ size: d * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   let tapLayer = -1;
@@ -855,8 +1137,10 @@ export async function createQ35GpuModel(
     pass.end();
     tail?.(enc);
     device.queue.submit([enc.finish()]);
+    perfAcc.submits++;
   };
   const readStaging = async (b: GPUBuffer, bytes: number): Promise<Float32Array> => {
+    perfAcc.readbacks++;
     await b.mapAsync(GPUMapMode.READ);
     const out = new Float32Array(b.getMappedRange().slice(0, bytes));
     b.unmap();
@@ -918,6 +1202,18 @@ export async function createQ35GpuModel(
       perfAcc.embedMs += performance.now() - tEmb;
       perfAcc.tokens++;
       device.queue.writeBuffer(uni, 0, new Uint32Array([pos, pos, 0, 0]));
+      if (moe && optimisticOn) {
+        // UN submit per il token intero: nessun readback del router, la
+        // selezione la fa e la risolve la GPU. I logits arrivano dalla stessa
+        // attesa che porta `Sel` e `dirtyB` (fetta 3c).
+        const lgOpt = await moe.runTokenOptimistic!(read);
+        if (!read || !lgOpt) return -1;
+        const tAmOpt = performance.now();
+        let bestO = -Infinity, biO = -1;
+        for (let i = 0; i < S.vocab; i++) if (lgOpt[i] > bestO) { bestO = lgOpt[i]; biO = i; }
+        perfAcc.argmaxMs += performance.now() - tAmOpt;
+        return biO;
+      }
       if (!moe) {
         runSeg(0, steps.length, read ? (enc) => enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4) : undefined);
       } else {
@@ -966,6 +1262,12 @@ export async function createQ35GpuModel(
       const v = tapValue;
       tapValue = null;
       return v ?? new Float32Array(0);
+    },
+    setOptimistic(on: boolean): void {
+      if (on && !moe?.runTokenOptimistic) {
+        throw new Error('q35gpumodel: setOptimistic(true) su un modello costruito senza select "optimistic"');
+      }
+      optimisticOn = on;
     },
     routerShadowStats: moe?.shadowStats ? () => moe!.shadowStats!() : null,
     moeStats: moe

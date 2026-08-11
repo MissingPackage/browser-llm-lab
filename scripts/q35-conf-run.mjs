@@ -46,6 +46,10 @@ if (process.argv.includes("--shadow")) qs.set("shadow", "1");
 // Profilo dei miss per token (2 passate: fredda e calda) — misura che precede
 // la fetta 3c: il decode ottimistico paga solo se i token sporchi sono pochi.
 if (process.argv.includes("--misstrace")) qs.set("misstrace", "1");
+// GATE della fetta 3c: passata sync (fredda, scalda la cache) + passata a
+// submit unico (calda) sulla STESSA cache, submit/token e readback/token
+// riportati SEPARATI per passata.
+if (process.argv.includes("--optimistic")) qs.set("optimistic", "1");
 const tap = arg("tap", null);
 if (tap !== null) qs.set("tap", tap);
 

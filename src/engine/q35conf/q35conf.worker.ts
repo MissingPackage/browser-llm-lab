@@ -32,7 +32,26 @@ interface Cfg {
   routerShadow?: boolean;
   /** fase-D 3b, prima della 3c: profilo dei MISS per token (2 passate). */
   missTrace?: boolean;
+  /**
+   * fase-D 3b fetta 3c: GATE del path a submit unico. Due passate sullo STESSO
+   * prompt e sulla STESSA cache — la prima col path sync di oggi (che scalda),
+   * la seconda con quello ottimistico — e i numeri riportati SEPARATI per
+   * passata. Mediarli nasconderebbe il fenomeno misurato in it.16 (a freddo
+   * ogni token è sporco, a caldo nessuno).
+   */
+  optTrace?: boolean;
 }
+
+/** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
+const pass2json = (
+  r: { submits: number; readbacks: number; hits: number; misses: number; ms: number },
+  n: number,
+) => ({
+  submits: r.submits, submitsPerToken: r.submits / n,
+  readbacks: r.readbacks, readbacksPerToken: r.readbacks / n,
+  hits: r.hits, misses: r.misses,
+  msPerToken: r.ms / n,
+});
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
 const progress = (msg: string) => post({ type: "progress", msg });
@@ -104,7 +123,10 @@ async function main(cfg: Cfg): Promise<void> {
     info,
     read: (name) => range(f.dataOffset + info(name).offset, q35TensorBytes(info(name))),
     readRange: (name, off, len) => range(f.dataOffset + info(name).offset + off, len),
-  }, ctxMax, arenaBudgetBytes, { routerShadow: cfg.routerShadow === true });
+  }, ctxMax, arenaBudgetBytes, {
+    routerShadow: cfg.routerShadow === true,
+    select: cfg.optTrace === true ? "optimistic" : "cpu",
+  });
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
 
@@ -207,6 +229,124 @@ async function main(cfg: Cfg): Promise<void> {
         dirtyTokens: pp.misses.filter((m) => m > 0).length,
         missPerTokenMedian: [...pp.misses].sort((a, b) => a - b)[Math.floor(pp.misses.length / 2)],
       })),
+      moe: model.moeStats!(),
+    };
+    post({ type: "done", report });
+    return;
+  }
+
+  if (cfg.optTrace) {
+    // GATE della fetta 3c. Le due passate girano sulla STESSA cache: la prima
+    // col path sync (che è anche ciò che porta la residenza a regime), la
+    // seconda col path a submit unico. `resetState` azzera lo stato ricorrente
+    // ma NON la cache expert — è lo stesso strumento di it.16.
+    const p = golden.prompts[0];
+    const tokens = [...p.promptTokens, ...p.generated];
+    const runPass = async (optimistic: boolean): Promise<{
+      argmax: number[]; submits: number; readbacks: number; hits: number; misses: number;
+      routing: Record<string, number>; ms: number; error: string | null;
+    }> => {
+      model.resetState();
+      model.setOptimistic(optimistic);
+      const p0 = model.perf(), m0 = model.moeStats!();
+      const t = performance.now();
+      const argmax: number[] = [];
+      // Un token SPORCO fa alzare `step` (degrado definito, I2: non si campiona
+      // mai). Qui si CATTURA invece di far morire il run: la passata si ferma
+      // dove si è rotta e il report esce lo stesso col perché — un gate che
+      // muore non lascia numeri, e i numeri delle passate precedenti sono già
+      // stati pagati in minuti di GPU.
+      let error: string | null = null;
+      try {
+        for (let i = 0; i < tokens.length; i++) {
+          argmax.push(await model.step(tokens[i], i, true));
+          if (i % 8 === 0) post({ type: "tick", msg: `${optimistic ? "optimistic" : "sync"} ${i}/${tokens.length}` });
+        }
+      } catch (e) {
+        error = e instanceof Error ? e.message.slice(0, 400) : String(e);
+        post({ type: "tick", msg: `pass ${optimistic ? "optimistic" : "sync"} interrotta a ${argmax.length}: ${error}` });
+      }
+      const ms = performance.now() - t;
+      const p1 = model.perf(), m1 = model.moeStats!();
+      // routing della PASSATA = cumulativo dopo meno cumulativo prima: la
+      // struttura è la stessa del gate di it.14, dove il numero che porta il
+      // peso è l'istogramma chiave per chiave e non il top-1.
+      const routing: Record<string, number> = {};
+      for (const [k, v] of Object.entries(m1.routing)) {
+        const dlt = v - (m0.routing[k] ?? 0);
+        if (dlt > 0) routing[k] = dlt;
+      }
+      return {
+        argmax, submits: p1.submits - p0.submits, readbacks: p1.readbacks - p0.readbacks,
+        hits: m1.hits - m0.hits, misses: m1.misses - m0.misses, routing, ms, error,
+      };
+    };
+    // TRE passate, non due. La prima è FREDDA per forza (la cache parte vuota)
+    // e il suo ms/token è dominato dall'I/O dei 3 341 miss: confrontarlo con
+    // quello del path ottimistico — che gira per costruzione a cache calda —
+    // sarebbe un confronto freddo-contro-caldo travestito da speedup. La
+    // seconda passata è il path di OGGI sulla cache già calda, ed è quella
+    // contro cui il numero va letto.
+    const syncCold = await runPass(false);
+    // E il ms/token si misura come il docket item 10 impone, non con un
+    // campione per braccio: bracci INTERLEAVATI, prima ripetizione SCARTATA
+    // (la prima passata dopo il load paga compilazione e prime allocazioni),
+    // mediana e dispersione riportate. I submit e i readback invece sono
+    // CONTATORI esatti: non hanno dispersione e una ripetizione basterebbe.
+    const REPS = 4;
+    const syncRuns: Awaited<ReturnType<typeof runPass>>[] = [];
+    const optRuns: Awaited<ReturnType<typeof runPass>>[] = [];
+    for (let r = 0; r < REPS; r++) {
+      syncRuns.push(await runPass(false));
+      optRuns.push(await runPass(true));
+      post({ type: "tick", msg: `rep ${r + 1}/${REPS}` });
+    }
+    const msOf = (rs: typeof syncRuns): number[] =>
+      rs.slice(1).map((r) => r.ms / Math.max(1, r.argmax.length)).sort((a, b) => a - b);
+    const disp = (v: number[]) => ({
+      median: v[Math.floor(v.length / 2)], min: v[0], max: v[v.length - 1], samples: v.length,
+    });
+    const msSync = disp(msOf(syncRuns)), msOpt = disp(msOf(optRuns));
+    const syncWarm = syncRuns[syncRuns.length - 1];
+    const optim = optRuns[optRuns.length - 1];
+    const n = tokens.length;
+    const nCmp = Math.min(syncWarm.argmax.length, optim.argmax.length);
+    const argmaxEqual = syncWarm.argmax.slice(0, nCmp).filter((v, i) => v === optim.argmax[i]).length;
+    const sync = syncWarm;
+    const keys = new Set([...Object.keys(sync.routing), ...Object.keys(optim.routing)]);
+    let routingDiff = 0;
+    for (const k of keys) if ((sync.routing[k] ?? 0) !== (optim.routing[k] ?? 0)) routingDiff++;
+    const report = {
+      schemaVersion: 1,
+      kind: `q35-optimistic-${cfg.model ?? "4b"}`,
+      date: new Date().toISOString().slice(0, 10),
+      model: M.file, arenaGiB: cfg.arenaGiB ?? 12,
+      tokens: n,
+      selectionsPerToken: (shape.nLayer as number) * (shape.nExpertUsed as number),
+      declared: "pass sync-cold = il path di oggi a cache FREDDA (è la passata che scalda: il suo " +
+        "ms/token è dominato dall'I/O dei miss e NON è il termine di paragone); poi REPS coppie " +
+        "interleavate sync-warm / optimistic-warm sulla stessa cache, prima coppia scartata " +
+        "(docket item 10). Freddo e caldo restano separati: a freddo il path ottimistico non è " +
+        "utilizzabile senza repair+replay, ed è la misura di it.16 a dirlo.",
+      reps: REPS,
+      passes: [
+        { pass: "sync-cold", tokensDone: syncCold.argmax.length, error: syncCold.error, ...pass2json(syncCold, Math.max(1, syncCold.argmax.length)) },
+        { pass: "sync-warm", tokensDone: syncWarm.argmax.length, error: syncWarm.error, ...pass2json(syncWarm, Math.max(1, syncWarm.argmax.length)), msPerTokenDisp: msSync },
+        { pass: "optimistic-warm", tokensDone: optim.argmax.length, error: optim.error, ...pass2json(optim, Math.max(1, optim.argmax.length)), msPerTokenDisp: msOpt },
+      ],
+      gate: {
+        // il confronto che qualifica la fetta è A PARITÀ di residenza: pass 1
+        // (sync, caldo) contro pass 2 (ottimistico, caldo)
+        comparedPasses: "sync-warm (1) vs optimistic-warm (2)",
+        argmaxEqual, argmaxCompared: nCmp, argmaxTotal: n, argmaxIdentical: nCmp === n && argmaxEqual === n,
+        argmaxEqualVsCold: syncCold.argmax.slice(0, nCmp).filter((v, i) => v === optim.argmax[i]).length,
+        routingKeys: keys.size, routingDiff, routingIdentical: routingDiff === 0,
+        missesSyncWarm: syncWarm.misses, missesOptimistic: optim.misses,
+        msPerTokenSyncWarm: msSync.median, msPerTokenOptimistic: msOpt.median,
+        msPerTokenDelta: msOpt.median - msSync.median,
+        submitsPerTokenOptimistic: optim.submits / Math.max(1, optim.argmax.length),
+        readbacksPerTokenOptimistic: optim.readbacks / Math.max(1, optim.argmax.length),
+      },
       moe: model.moeStats!(),
     };
     post({ type: "done", report });

@@ -950,3 +950,103 @@ Perche' scrivo la correzione invece di riscrivere il paragrafo: un pezzo di
 fase 5 assorbito dentro la 3b sarebbe scope creep travestito da completezza —
 la fase 3b avrebbe "finito" facendo anche altro, e la fase 5 sarebbe arrivata
 con una decisione gia' presa altrove e senza i suoi numeri.
+
+## it.17 (2026-08-11, fase 3b, fetta 3c) — il token intero in UN submit: 81 → 1
+
+**Cosa e' cambiato.** La `Sel` di produzione non la scrive piu' la CPU: la
+scrive il router su GPU, che risolve expert→slot dalla `slotTable` nello stesso
+dispatch e marca `dirtyB` (atomicMin sul primo layer MoE con miss, atomicAdd sul
+conteggio) quando trova un MISS. I 40 segmenti statici, i 40 router e i 320
+dispatch expert stanno in UN encoder e UN submit; il routing lo ricostruisce la
+CPU alla fine, dalla `Sel` copiata in coda, perche' mentre il token gira nessuno
+sulla CPU vede la selezione.
+
+**I kernel expert non sono cambiati di una riga.** E' il pagamento
+dell'indirezione costruita nella fetta 3a: cambia CHI riempie `Sel`, non chi la
+legge. L'unica differenza di cablaggio e' la entry di `MoeIdx` che l'offset
+dinamico seleziona.
+
+**I due pezzi nuovi, ed erano entrambi prevedibili dal progetto di it.16:**
+- `clearBuffer(moeAcc)` DENTRO l'encoder. La `queue.writeBuffer` del path sync
+  qui non funziona: e' ordinata prima dell'INTERO submit, quindi i 40 layer
+  vedrebbero un solo azzeramento — l'ultimo. Questo non e' un dettaglio di
+  stile: l'accumulatore sporco darebbe numeri plausibili e sbagliati.
+- `axpySelWgsl`, l'axpy col peso di mixing preso da `Sel[selIdx].w`. Il peso ora
+  NASCE su GPU; `axpyWgsl` lo legge da un buffer che nel path sync riempie la
+  CPU dopo il readback del router, e qui non c'e' piu' nessuno a riempirlo. Sul
+  MISS il contributo e' ZERO e non i byte dello slot 0 (che e' l'indirizzo di
+  ripiego dei kernel d'arena): il token resta comunque sbagliato — un expert che
+  manca cambia il risultato — ma sbagliato in modo DEFINITO.
+
+**La contabilita' e' il pezzo che non si vede.** Nel path sync ogni selezione
+passa da `ensure`, che conta hit/miss e TOCCA la LRU. Nel path a submit unico
+`ensure` non viene chiamata mai: senza rimedio la recency degraderebbe
+all'ordine di inserimento — la LRU diventerebbe una FIFO e le vittime
+cambierebbero, cioe' il path nuovo misurerebbe miss diversi per un motivo che
+non c'entra col meccanismo. Nasce `ExpertCache.noteResidentHit`, che al confine
+di token conta l'hit e tocca la LRU esattamente come farebbe `ensure`, e LANCIA
+se l'expert non e' residente (la `Sel` lo dava risolto: un disaccordo li' e'
+eviction fra resolve e confine di token, bug strutturale).
+
+**GATE, smoke 35B, 39 token, 320 selezioni/token, budget 10 GiB dichiarato.**
+Tre regimi, riportati SEPARATI (mediarli nasconderebbe il fenomeno di it.16):
+
+| | sync FREDDO | sync CALDO | ottimistico CALDO |
+|---|---|---|---|
+| submit/token | 81 | 81 | **1** |
+| readback/token | 41 | 41 | **1** |
+| miss | 3341 | 0 | **0** |
+| hit | 9139 | 12480 | 12480 |
+| ms/token | 1192,9 | **143,49** [142,51-145,94] | **71,50** [71,05-71,57] |
+
+- **argmax IDENTICO 39/39** contro il path sync (e anche contro la passata
+  fredda: 39/39).
+- **routing IDENTICO chiave per chiave**: 3341 chiavi, 0 differenze.
+- hit+miss = 12 480 = 39x320 in tutte e tre le passate: la contabilita' del
+  confine di token conta esattamente quanto quella di `ensure`.
+
+**Il numero di velocita' e' a PARITA' di residenza, e ci e' voluta una passata
+in piu' per averlo.** Il primo giro del gate aveva due passate — fredda (sync) e
+calda (ottimistica) — e dava "1192,9 → 71,5". Quel confronto e' freddo-contro-
+caldo travestito da speedup: la passata fredda paga l'I/O di 3341 miss. Il
+termine di paragone vero e' il path di OGGI sulla cache gia' calda, ed e' una
+terza passata. Piu' il docket item 10: bracci INTERLEAVATI, 4 ripetizioni, prima
+coppia scartata, mediana e dispersione. **−71,99 ms/token (−50,2%)**, con
+dispersione 3,43 ms sul braccio sync e 0,52 su quello ottimistico: il delta non
+e' rumore.
+
+**Il done-when (a) e' soddisfatto alla lettera** ("submit/token e readback/token
+misurati prima e dopo nello stesso JSON, col caso a residenza piena a 1
+submit/token"), e con lui (b) e (d) sul campione caldo.
+
+**Una correzione di fatto al docket item 8**: diceva "41 submit e 41 readback
+per token". I readback erano giusti, i submit no — sono **81**: ogni layer MoE
+ne fa due, uno per il segmento statico e uno per i dispatch dinamici. Il numero
+non cambia nessuna decisione (l'ordine di grandezza e la conclusione erano
+quelli), ma era una stima e adesso e' una misura.
+
+**COSA NON E' COPERTO, DETTO PRIMA DELLA PROSSIMA FETTA.** Il path ottimistico
+qui ALZA sul token sporco (degrado definito, invariante I2 di GLM: un token
+sporco non si campiona). Serve dunque il repair+replay, ed e' la fetta
+successiva. Portandolo ho trovato la sua precondizione, e non e' un dettaglio:
+
+> **il replay di GLM non e' portabile su un modello RICORRENTE.** GLM rigioca i
+> layer da `firstDirty` in giu' rientrando da `hiddenCkpt`, e questo e'
+> idempotente perche' i suoi layer sono senza stato (il KV append riscrive la
+> stessa posizione). Nel 35B **30 layer su 40 sono deltanet**, e
+> `deltaNetConv`/`deltaNetCore` aggiornano `convSt` e `stateS` IN PLACE: un
+> replay li applicherebbe DUE VOLTE. Un replay nudo non darebbe un errore —
+> darebbe uno stato ricorrente sbagliato e numeri plausibili.
+
+La via d'uscita c'e' ed e' economica, perche' ogni layer tocca il proprio stato
+UNA volta per token: lo stato all'ingresso del layer E' lo stato all'ingresso
+del token. Basta uno snapshot per token (nell'encoder, `copyBufferToBuffer`) e
+un restore dei soli layer >= `firstDirty` all'inizio del replay — un solo
+snapshot serve anche ai round successivi, che ripartono sempre piu' in basso.
+Costo, calcolato non stimato: 30 layer x (conv 98 304 B + S 2 097 152 B) =
+**62,8 MiB** di VRAM in piu' e una copia da 62,8 MiB per token dentro il submit
+che c'e' gia'. Va MISURATO contro i 71,5 ms/token di qui, non assunto
+trascurabile.
+
+**Gate permanenti**: tsc pulito, suite 410|9, 0 gpu-error nel run, JSON
+committato (`results/engine/q35-optimistic-35b-it17.json`).
