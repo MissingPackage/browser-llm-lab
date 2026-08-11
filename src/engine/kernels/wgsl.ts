@@ -206,24 +206,33 @@ ${sig}
 // head (qwen35: 64 su 256, partial_rotary 0.25 — il mrope text-only collassa
 // qui, spec q1 + cpuref ropeText), il resto passa invariato. Default =
 // headDim: testo storico INVARIATO per i chiamanti esistenti.
-export function ropeNeoxWgsl(nHead: number, headDim: number, freqBase: number, ropeDims = headDim): string {
+export function ropeNeoxWgsl(nHead: number, headDim: number, freqBase: number, ropeDims = headDim, batch?: boolean): string {
   const half = ropeDims / 2;
+  // batch (fase 4): gid.y = riga, posizione per riga da `rowPos` e vettore a
+  // offset di riga — stesso idioma di `kvAppendWgsl`. Senza `batch` il testo
+  // emesso e' IDENTICO a prima, byte per byte.
+  const pBind = batch
+    ? "@group(0) @binding(1) var<storage, read> rowPos: array<u32>;"
+    : "@group(0) @binding(1) var<uniform> P: TokParams;";
+  const posE = batch ? "rowPos[gid.y]" : "P.pos";
+  const rowOff = batch ? "gid.y * ROW_STRIDE + " : "";
+  const rowConst = batch ? `\nconst ROW_STRIDE = ${nHead * headDim}u;` : "";
   return `${TOK_PARAMS_WGSL}
 @group(0) @binding(0) var<storage, read_write> v: array<f32>;
-@group(0) @binding(1) var<uniform> P: TokParams;
+${pBind}
 const HALF = ${half}u;
 const HEAD_DIM = ${headDim}u;
-const N_PAIRS = ${nHead * half}u;
+const N_PAIRS = ${nHead * half}u;${rowConst}
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= N_PAIRS) { return; }
   let h = i / HALF;
   let j = i % HALF;
-  let theta = f32(P.pos) * pow(${freqBase}.0, -f32(j) / f32(HALF));
+  let theta = f32(${posE}) * pow(${freqBase}.0, -f32(j) / f32(HALF));
   let c = cos(theta);
   let s = sin(theta);
-  let base = h * HEAD_DIM;
+  let base = ${rowOff}h * HEAD_DIM;
   let a = v[base + j];
   let b = v[base + j + HALF];
   v[base + j] = a * c - b * s;
@@ -330,7 +339,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 }
 
 // silu(gate)*up, in-place su gate.
-export function siluMulWgsl(D: number): string {
+export function siluMulWgsl(D: number, batch?: boolean): string {
+  // batch (fase 4): gid.y = riga, indici a offset di riga. Senza, testo identico.
+  const e = batch ? "gid.y * D + i" : "i";
   return `
 @group(0) @binding(0) var<storage, read_write> gate: array<f32>;
 @group(0) @binding(1) var<storage, read> up: array<f32>;
@@ -339,14 +350,15 @@ const D = ${D}u;
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= D) { return; }
-  let g = gate[i];
-  gate[i] = (g / (1.0 + exp(-g))) * up[i];
+  let g = gate[${e}];
+  gate[${e}] = (g / (1.0 + exp(-g))) * up[${e}];
 }`;
 }
 
 // x *= sigmoid(g) — output gate dell'attention qwen35 (q1 fase 4:
 // attn_output_gate, il gate viaggia fuso in attn_q e NON riceve norm/rope).
-export function sigmoidMulWgsl(D: number): string {
+export function sigmoidMulWgsl(D: number, batch?: boolean): string {
+  const e = batch ? "gid.y * D + i" : "i";
   return `
 @group(0) @binding(0) var<storage, read_write> x: array<f32>;
 @group(0) @binding(1) var<storage, read> g: array<f32>;
@@ -355,7 +367,7 @@ const D = ${D}u;
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= D) { return; }
-  x[i] = x[i] / (1.0 + exp(-g[i]));
+  x[${e}] = x[${e}] / (1.0 + exp(-g[${e}]));
 }`;
 }
 
@@ -378,7 +390,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // x += y (residual), in-place.
-export function addInPlaceWgsl(D: number): string {
+export function addInPlaceWgsl(D: number, batch?: boolean): string {
+  const e = batch ? "gid.y * D + i" : "i";
   return `
 @group(0) @binding(0) var<storage, read_write> x: array<f32>;
 @group(0) @binding(1) var<storage, read> y: array<f32>;
@@ -387,7 +400,7 @@ const D = ${D}u;
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   if (i >= D) { return; }
-  x[i] = x[i] + y[i];
+  x[${e}] = x[${e}] + y[${e}];
 }`;
 }
 

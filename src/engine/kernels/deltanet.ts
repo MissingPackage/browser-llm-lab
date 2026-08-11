@@ -57,7 +57,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 /** β = sigmoid(βraw); g = a·softplus(αraw + dtBias). Dispatch: ceil(nV/64). */
-export function deltaNetGatesWgsl(nV: number): string {
+export function deltaNetGatesWgsl(nV: number, batch?: boolean): string {
+  // batch (fase 4): gid.y = riga. Le gate sono ROW-PARALLEL — dipendono solo da
+  // beta/alpha della riga — a differenza di conv e core, che sono la ricorrenza
+  // vera e restano per riga (misurata: 0,588 ms/token in tutto, it.23).
+  // Senza `batch` il testo emesso e' IDENTICO a prima, byte per byte.
+  const e = batch ? "gid.y * NV + h" : "h";
   return `
 @group(0) @binding(0) var<storage, read> betaRaw: array<f32>;
 @group(0) @binding(1) var<storage, read> alphaRaw: array<f32>;
@@ -70,11 +75,11 @@ const NV = ${nV}u;
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let h = gid.x;
   if (h >= NV) { return; }
-  beta[h] = 1.0 / (1.0 + exp(-betaRaw[h]));
-  let sp = alphaRaw[h] + dtBias[h];
+  beta[${e}] = 1.0 / (1.0 + exp(-betaRaw[${e}]));
+  let sp = alphaRaw[${e}] + dtBias[h];
   var spv = sp;
   if (sp <= 20.0) { spv = log(1.0 + exp(sp)); } // softplus, gomito ggml
-  g[h] = aCoef[h] * spv;
+  g[${e}] = aCoef[h] * spv;
 }`;
 }
 

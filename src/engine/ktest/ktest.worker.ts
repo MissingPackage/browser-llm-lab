@@ -2560,6 +2560,71 @@ async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
       [rowsBuf(srcs), dM], [Math.ceil((nVec * len) / 64), M, 1]);
     out.push(bitCmp("dense-batch-strided-copy", new Float32Array(await g.read(dM, M * dLen * 4)), refs, dLen));
   }
+  // ---- kernel a M righe che mancavano al path q35 (fase 4, it.25) ----
+  { // ropeNeox: posizioni per riga CRESCENTI (e' il caso del chunk di prefill)
+    const nHead = 3, headDim = 32, ropeDims = 16, base = 10000;
+    const len = nHead * headDim;
+    const basePos = 41;
+    const xs = Array.from({ length: M }, (_, m) => randF32(len, 31_100 + m, 0.7));
+    const refs: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const v = g.buf(xs[m]);
+      const uni = g.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      g.device.queue.writeBuffer(uni, 0, new Uint32Array([basePos + m, basePos + m, 0, 0]) as unknown as BufferSource);
+      await g.run(ropeNeoxWgsl(nHead, headDim, base, ropeDims), [v, uni], Math.ceil((nHead * ropeDims / 2) / 64));
+      refs.push(new Float32Array(await g.read(v, len * 4)));
+    }
+    const vM = rowsBuf(xs);
+    const posB = g.empty(M * 4);
+    g.device.queue.writeBuffer(posB, 0, Uint32Array.from({ length: M }, (_, m) => basePos + m) as unknown as BufferSource);
+    await g.run(ropeNeoxWgsl(nHead, headDim, base, ropeDims, true), [vM, posB], [Math.ceil((nHead * ropeDims / 2) / 64), M, 1]);
+    out.push(bitCmp("dense-batch-rope-neox", new Float32Array(await g.read(vM, M * len * 4)), refs, len));
+  }
+  { // elementwise: siluMul, sigmoidMul, addInPlace
+    const D = 96;
+    const mk = (seed: number) => Array.from({ length: M }, (_, m) => randF32(D, seed + m, 0.9));
+    for (const which of ["siluMul", "sigmoidMul", "addInPlace"] as const) {
+      const as = mk(31_200), bs = mk(31_300);
+      const code = (batch?: boolean): string => which === "siluMul"
+        ? siluMulWgsl(D, batch) : which === "sigmoidMul" ? sigmoidMulWgsl(D, batch) : addInPlaceWgsl(D, batch);
+      const refs: Float32Array[] = [];
+      for (let m = 0; m < M; m++) {
+        const a = g.buf(as[m]);
+        await g.run(code(), [a, g.buf(bs[m])], Math.ceil(D / 64));
+        refs.push(new Float32Array(await g.read(a, D * 4)));
+      }
+      const aM = rowsBuf(as), bM = rowsBuf(bs);
+      await g.run(code(true), [aM, bM], [Math.ceil(D / 64), M, 1]);
+      out.push(bitCmp(`dense-batch-${which}`, new Float32Array(await g.read(aM, M * D * 4)), refs, D));
+    }
+  }
+  { // deltaNetGates: row-parallel (conv e core NO: sono la ricorrenza)
+    const nV = 40;
+    const betas = Array.from({ length: M }, (_, m) => randF32(nV, 31_400 + m, 1.2));
+    const alphas = Array.from({ length: M }, (_, m) => randF32(nV, 31_450 + m, 1.2));
+    const aCoef = g.buf(randF32(nV, 31_500, 0.5));
+    const dtB = g.buf(randF32(nV, 31_510, 0.3));
+    const refs: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const bo = g.empty(nV * 4), go = g.empty(nV * 4);
+      await g.run(deltaNetGatesWgsl(nV), [g.buf(betas[m]), g.buf(alphas[m]), aCoef, dtB, bo, go], Math.ceil(nV / 64));
+      const b0 = new Float32Array(await g.read(bo, nV * 4));
+      const g0 = new Float32Array(await g.read(go, nV * 4));
+      const cat = new Float32Array(2 * nV);
+      cat.set(b0, 0); cat.set(g0, nV);
+      refs.push(cat);
+    }
+    const boM = g.empty(M * nV * 4), goM = g.empty(M * nV * 4);
+    await g.run(deltaNetGatesWgsl(nV, true), [rowsBuf(betas), rowsBuf(alphas), aCoef, dtB, boM, goM], [Math.ceil(nV / 64), M, 1]);
+    const bAll = new Float32Array(await g.read(boM, M * nV * 4));
+    const gAll = new Float32Array(await g.read(goM, M * nV * 4));
+    const got = new Float32Array(M * 2 * nV);
+    for (let m = 0; m < M; m++) {
+      got.set(bAll.subarray(m * nV, (m + 1) * nV), m * 2 * nV);
+      got.set(gAll.subarray(m * nV, (m + 1) * nV), m * 2 * nV + nV);
+    }
+    out.push(bitCmp("dense-batch-deltanet-gates", got, refs, 2 * nV));
+  }
   return out;
 }
 

@@ -404,3 +404,18 @@ chunk per q35 (`attnPrefillChunkWgsl` e' del path Qwen 2.5, legge un qkv fuso �
 non e' un drop-in), rope-neox batch, elementwise batch, gate deltanet batch, il
 path expert a GATHER per i K-quant (GLM ce l'ha solo per q4_0/q4_1) e
 l'orchestratore a M righe. Taglia della fase corretta da 2-3 a **3-5 iterazioni**.
+
+## it.25 (2026-08-11) — i kernel a M righe: tre voci dell'inventario su sei
+
+`ropeNeoxWgsl` (posizione per riga da `rowPos`), `siluMulWgsl`, `sigmoidMulWgsl`,
+`addInPlaceWgsl` e `deltaNetGatesWgsl` guadagnano il modo batch, con l'idioma
+della casa: senza `batch` il testo emesso e' identico byte per byte, quindi il
+decode non cambia. Le gate del deltanet sono row-parallel (conv e core no: sono
+la ricorrenza, 0,588 ms in tutto) — la distinzione che in it.19 avevo sbagliato.
+
+ktest **92/92** con 5 casi nuovi, tutti **BIT-IDENTICO su 3 righe** contro il
+kernel per-riga eseguito M volte; `dense-batch-rope-neox` con posizioni
+crescenti, che e' il caso vero di un chunk di prefill.
+
+Restano le tre voci grosse: attenzione a chunk per q35, gather K-quant,
+orchestratore a M righe.

@@ -1579,3 +1579,38 @@ di cominciare e non a meta'. Aggiornata la riga delle taglie.
 
 **Gate**: nessun codice toccato in questa iterazione (tsc pulito, suite 440|9
 invariate) — e' ricognizione e chiusura di un item, con l'evidenza su disco.
+
+## it.25 (2026-08-11, fase 4) — i kernel a M righe che mancavano, tre voci dell'inventario su sei
+
+Prima fetta di codice della fase 4, sulle voci 2-3-4 dell'inventario di it.24
+(quelle piccole e indipendenti; l'attenzione a chunk e il gather K-quant sono
+famiglie nuove e vanno da sole).
+
+**Fatti**: `ropeNeoxWgsl` batch (la posizione per riga da `rowPos`, il vettore a
+offset di riga — stesso idioma di `kvAppendWgsl`), `siluMulWgsl`,
+`sigmoidMulWgsl`, `addInPlaceWgsl` batch (indici a offset di riga), e
+`deltaNetGatesWgsl` batch. Quest'ultimo merita una riga: le GATE del deltanet
+sono row-parallel — dipendono solo da beta/alpha della riga — mentre conv e core
+sono la ricorrenza vera e restano per riga. E' la distinzione che it.23 ha
+misurato (0,588 ms in tutto) e che in it.19 avevo sbagliato, trattando l'intero
+blocco deltanet come non batchabile.
+
+**L'idioma e' quello della casa**: senza `batch` il testo emesso e' IDENTICO
+byte per byte a prima, quindi il path di decode non cambia di una virgola, e il
+corpo aritmetico esiste una volta sola per i due regimi.
+
+**GATE — ktest 92/92** (5 casi nuovi, tutti **BIT-IDENTICO su 3 righe**):
+`dense-batch-rope-neox` (posizioni CRESCENTI per riga: e' il caso vero di un
+chunk di prefill, dove ogni riga e' un token diverso), `dense-batch-siluMul`,
+`dense-batch-sigmoidMul`, `dense-batch-addInPlace`,
+`dense-batch-deltanet-gates`. Il confronto e' col kernel per-riga eseguito M
+volte: la prova non e' "il batch da' numeri plausibili" ma "da' gli STESSI bit".
+E i casi non-batch (`rope-neox`, `deltanet-gates`, ...) continuano a passare, che
+e' la verifica che l'idioma ha tenuto.
+
+**Resta della fase 4** (voci 1, 5, 6 dell'inventario): l'attenzione a chunk per
+q35, il path expert a gather per i K-quant, e l'orchestratore a M righe. Sono
+le tre grosse, e sono nell'ordine in cui vanno fatte.
+
+**Gate**: tsc pulito, suite 440|9, ktest **92/92**, nessun run del modello
+(niente e' cambiato nel path di decode: il testo non-batch e' identico).
