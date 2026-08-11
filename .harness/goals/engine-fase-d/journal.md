@@ -2420,3 +2420,49 @@ davvero — `memUsedMiB` 615->623 contro 817->825; `vramPeakMiB` **14.974** cont
 
 **Resta del braccio 2**: golden AL PIN, cpuref e firma (le conformance full
 GLM), che sono ~96+95 min e non sono state lanciate in questa iterazione.
+
+## it.41 (2026-08-11, fase 6) — il 2a rifatto a host QUIESCENT: la banda non serviva
+
+Rilanciato il braccio 2 identico (config confrontata col pin: IDENTICA) con
+l'host dichiarato **`quiescent`** invece di `user-session-light`. Non c'era
+nulla da spegnere — unico client GPU il compositor (`kwin_wayland`, 58 MiB),
+nessun Chrome residuo dagli smoke — e vite non e' spegnibile perche' e' lui che
+serve `/glmbench.html` al runner.
+
+| metrica | rif. 2026-08-09 | it.40 (light) | it.41 (**quiescent**) |
+|---|---|---|---|
+| decode tok/s | 13,172 | 13,437 (+2,01%) | **13,125 (-0,36%)** |
+| prefill tok/s | 31,265 | 31,813 (+1,75%) | **31,255 (-0,03%)** |
+| TTFT ms | 14.744,9 | 14.490,8 (-1,72%) | **14.749,4 (+0,03%)** |
+
+**La dispersione e' il vero risultato di questa iterazione**: stdev del decode
+**0,087** contro 0,125 del riferimento e 0,265 di it.40 — un terzo del rumore
+del braccio a sessione "light", e piu' basso del riferimento stesso. La GPU
+partiva a 35 C invece di 46. E' la prova che la dichiarazione dell'host non e'
+burocrazia: e' la larghezza della banda.
+
+**Il numero che conta lo dicono i due run INSIEME.** Fra loro differiscono del
+2,4% sul decode (13,437 contro 13,125), cioe' PIU' di quanto ciascuno disti dal
+riferimento. Quindi it.40 non aveva misurato un miglioramento del +2,01% e it.41
+non misura un peggioramento dello 0,36%: la variazione run-to-run su questo host
+e' ~2-3%, il motore sta SOPRA il riferimento entro il rumore, e la banda +-5%
+della riga 6 e' larga quel tanto che serve — non e' generosa, e' calibrata.
+
+**La meccanica resta identica all'ultima cifra in TUTTI E TRE i run**:
+`residencyRatio` 0,8210 · `pDirty` 0,9375 · `replaysPerToken` 1,1875 ·
+`replayFracPerDirty` 0,6459 · `missesPerToken` 4,781. Dopo un goal di
+unificazione del core, le decisioni di residenza sugli stessi token sono le
+stesse; varia solo il tempo di parete, e varia dentro il rumore dell'host.
+
+Exit code 4 di nuovo, e di nuovo NON e' una regressione (docket item 21): il
+prefill e lo strutturale falliscono i gate del floor CPU esattamente come li
+fallisce il riferimento. Qui il decode torna FAIL (13,125 < 13,43) mentre in
+it.40 era PASS: e' lo stesso rumore del 2,4%, e conferma che quel gate e' una
+soglia sul floor llama.cpp, non un giudizio di non-regressione.
+
+`vramPeakMiB` 14.982 (rif. 15.160), host `memUsedMiB` 623->631, temp 35->47 C.
+JSON: `bench-glm-4090-b12-optimistic-nonreg-fase-d-it41-quiescent.json`, che e'
+il run di GATE del braccio 2 (it.40-c resta come replica indipendente).
+
+**Braccio 2 del CHECKPOINT A, prima voce: PASSA.** Restano golden AL PIN,
+cpuref e firma.
