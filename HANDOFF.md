@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.33: fase 4 gateata bit-identica, speedup 1,22x a 1k di contesto e 2,02x a 6,5k)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.34: prefill a chunk anche sui MoE — 35B 3,750x a parita', logits bit-identici)
 
 ## 1. Next decidable
 
@@ -397,9 +397,31 @@ smoke del 4B ne da' 2 — il guard ha funzionato). E it.24 sbagliava: "i K-quant
 stanno solo negli expert" vale per il 35B, ma il **4B ha `ssm_out` in Q5_K** —
 aggiunto `batch` ai tre gemv K-quant non-arena.
 
-**PROSSIMO**: la fase 4 sui MoE (il 35B: `prefillM` oggi LANCIA sui MoE) —
-serve il path expert dentro il chunk, che it.27 ha deciso di fare PER RIGA per
-tenere il gate bit-identico, col gather come incremento successivo.
+**FASE 4 SUI MoE FATTA (it.34)** — strada (B): selezione sulla CPU col readback
+BATCHATO (40 readback per CHUNK invece che per TOKEN), non il router GPU, che nel
+prefill — la fase fredda per definizione — vorrebbe repair+replay di chunk. Cosi'
+selezione e catena expert restano quelle del sequenziale e **il gate resta la
+bit-identita'**. `runLayer` spezzata in `prepLayer` + `encodeExperts`: un codice
+solo per i due path.
+
+**IL GATE HA PRESO TRE BUG**, tutti con numeri plausibili (maxAbs 27,6):
+`Sel` senza dimensione di RIGA · il pin che non copriva l'UNIONE (l'`ensure` di
+una riga poteva evincere uno slot che i dispatch gia' encodati di un'altra
+avrebbero letto) · `moeAcc` per riga mai azzerato. Piu' la trappola di it.17: il
+primo giro dava 30,8x perche' il sequenziale girava a cache VUOTA.
+
+**A PARITA' (35B, M=8): 131,08 → 34,95 ms/token = 3,750x, logits
+993.280/993.280 BIT-IDENTICI.** Piu' del 2,02x del denso perche' sul MoE il
+batch toglie anche i 40 readback per token.
+
+**NOTA DI CONTRATTO**: la riga 4 nomina `planMoeChunk` (piano a unione +
+gather), che NON e' usato — it.27 ha scelto gli expert PER RIGA per avere il
+gate bit-identico, e il gather e' il docket item 19. Il done-when MECCANICO
+(micro-bench + logits identici) e' soddisfatto; se `planMoeChunk` conta come
+done-when e non come descrizione, la riga resta aperta.
+
+**PROSSIMO**: la fase 5 (decode ottimistico + policy + prefetch/tier/budget),
+che e' la riga dopo e agisce sul DECODE, cioe' sulla funzione obiettivo.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

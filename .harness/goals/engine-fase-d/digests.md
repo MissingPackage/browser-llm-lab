@@ -488,3 +488,24 @@ un'aritmetica di offset: vive o muore sui passi reali).
 
 Conseguenza: **non serve piu' nessun cambio di kernel**. Restano buffer a M
 righe, lista di step gemella e driver — la lista esatta e' nel journal.
+
+## it.34 (2026-08-11) — prefill a chunk sul 35B: 3,75x, bit-identico, tre bug presi dal gate
+
+Strada (B), decisa e scritta prima: selezione sulla CPU col readback BATCHATO —
+40 readback per CHUNK invece che per TOKEN — invece del router GPU, che nel
+prefill (la fase fredda per definizione) vorrebbe repair+replay di chunk. Cosi'
+selezione e catena expert restano quelle del path sequenziale e il gate resta la
+BIT-IDENTITA'. `runLayer` spezzata in `prepLayer` + `encodeExperts`: un solo
+codice per i due path.
+
+IL GATE HA PRESO TRE BUG, tutti con numeri plausibili (maxAbs 27,6 sui logits):
+`Sel` senza dimensione di riga (tutte le righe avrebbero usato la selezione
+dell'ultima), il pin che non copriva l'unione (l'ensure di una riga poteva
+evincere uno slot che i dispatch gia' encodati di un'altra avrebbero letto), e
+`moeAcc` per riga mai azzerato. Piu' la trappola di misura di it.17: il primo
+giro dava 30,8x perche' il braccio sequenziale girava a cache vuota.
+
+**A PARITA': 131,08 → 34,95 ms/token = 3,750x, logits 993.280/993.280
+BIT-IDENTICI.** Piu' del 2,02x del denso perche' sul MoE il batch toglie anche i
+40 readback per token. Contratto: `planMoeChunk` non e' usato (expert per riga,
+scelta di it.27) — se conta come done-when la riga 4 resta aperta.
