@@ -430,3 +430,15 @@ MISURA (decomporre i 15,12 ms), quindi la fase si puo' aprire sapendo dopo
 un'iterazione se vale la pena, invece di scommettere 2-3 iterazioni.
 
 Registrato it.23 (2026-08-11).
+
+### RULING PI 2026-08-11: (a) — FASE 4-TER PRIMA DELLA 4
+
+"ok con l'opzione che raccomandi" su item 17. Riga **4-ter** aggiunta a PHASES
+fra la 4-bis e la 4: si attacca il tempo che NON e' tempo GPU. **Item 17
+CHIUSO.**
+
+Il primo passo e' una MISURA — decomporre i 15,12 ms in encode / submit /
+attesa / argmax / embed — e la riga lo dice: se la decomposizione non trova
+almeno ~8 ms aggredibili, la fase si chiude come "esclusa coi numeri" invece di
+spendere iterazioni. E' la differenza che ho argomentato rispetto all'item 15:
+qui si sa dopo UNA iterazione se vale.
