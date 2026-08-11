@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.24: item 16 chiuso, inventario fase 4 fatto, taglia corretta a 3-5 it.)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.25: 3 voci su 6 dell'inventario fase 4 fatte, ktest 92/92)
 
 ## 1. Next decidable
 
@@ -311,7 +311,13 @@ lancio; restano deriva fra run o effetto globale.
 PRONTO e ktestato (`dense-batch-*` BIT-IDENTICO su 3 righe): `gemvQuantWgsl`
 batch per q4_0/q4_1/**q8_0**, che e' il kernel di TUTTO lo statico del 35B (la
 voce piu' grossa da comprimere), piu' `gemvF32`, `rmsnorm`, `kvAppend`,
-`stridedCopy`. DA FARE: (1) **attenzione a chunk per q35** —
+`stridedCopy`. **FATTE in it.25** (voci 2-3-4, ktest 92/92, tutte BIT-IDENTICHE su 3 righe
+contro il kernel per-riga eseguito M volte): `ropeNeoxWgsl` batch (posizione per
+riga da `rowPos`), `siluMul`/`sigmoidMul`/`addInPlace` batch, `deltaNetGates`
+batch (le gate sono row-parallel; conv e core NO). Idioma della casa: senza
+`batch` il testo emesso e' identico byte per byte, il decode non cambia.
+
+RESTANO LE TRE GROSSE: (1) **attenzione a chunk per q35** —
 `attnPrefillChunkWgsl` e' del path Qwen 2.5 e legge un `qkv` FUSO, mentre q35 ha
 q/k/v separati + q_norm/k_norm + rope-neox + gate sigmoid: non e' un drop-in;
 (2) `ropeNeoxWgsl` batch (oggi `pos` viene da un uniform); (3) elementwise batch
@@ -321,6 +327,7 @@ K-quant** — GLM ha `pairGemvSiluGather`/`gemvDownSlots` solo per q4_0/q4_1;
 (6) l'orchestratore a M righe in `q35gpumodel` (scratch per riga, `planMoeChunk`
 gia' parametrico da it.20, combine in ordine k).
 **Taglia della fase corretta da 2-3 a 3-5 iterazioni**, prima di cominciare.
+Avanzamento: 3 voci su 6 fatte (it.25), e sono le piccole.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
