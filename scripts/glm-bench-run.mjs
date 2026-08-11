@@ -26,6 +26,7 @@ import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { hostState } from "./lib/hoststate.mjs";
+import { watchGpuErrors, invalidPath } from "./lib/gpuerrors.mjs";
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -78,7 +79,8 @@ if (ctxMaxArg) qs.set("ctxmax", ctxMaxArg);
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
-page.on("pageerror", (e) => console.log("[glmbench][pageerror]", e.message.slice(0, 300)));
+// docket item 24
+const gpu = watchGpuErrors(page, "glmbench");
 if (budget === "auto") {
   // il ceiling si misura A CHROME LANCIATO: il footprint VRAM del browser
   // (~200-300 MiB di compositor) deve stare dentro "used", non dentro il
@@ -118,7 +120,13 @@ for (;;) {
     // VRAM osservato durante la run (campionato ogni 5 s dal poll)
     if (ceilingMeasured) report.allocCeilingMeasured = ceilingMeasured;
     if (vramPeakMiB > 0) report.vramPeakMiB = vramPeakMiB;
-    if (out) writeFileSync(join(ROOT, out), JSON.stringify(report, null, 1));
+    if (gpu.dirty) {
+      const bad = invalidPath(join(ROOT, out ?? "results/engine/glmbench-run.json"));
+      writeFileSync(bad, JSON.stringify({ ...report, gpuErrors: gpu.errors, invalid: true }, null, 1));
+      console.error(`[glmbench] RUN CONTAMINATA: ${gpu.errors.length} errori GPU — report in ${bad}`);
+      process.exit(5);
+    }
+    if (out) writeFileSync(join(ROOT, out), JSON.stringify({ ...report, gpuErrors: gpu.errors }, null, 1));
     const g = report.gates;
     console.log(
       `[glmbench] ${status} — decode ${g.decodeMedian.toFixed(2)} tok/s (gate ${g.decodeGateToksPerSec}: ${g.decodePass ? "PASS" : "FAIL"}) ` +

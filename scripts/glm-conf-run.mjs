@@ -4,6 +4,7 @@
 //   node scripts/glm-conf-run.mjs [--prompts 7] [--max-gen 128]
 //     [--budget-gib 12] [--out results/engine/...json] [--timeout-min 240]
 import { chromium } from "playwright";
+import { watchGpuErrors, invalidPath } from "./lib/gpuerrors.mjs";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -51,7 +52,8 @@ qs.set("budget", budget);
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
-page.on("pageerror", (e) => console.log("[glmconf][pageerror]", e.message.slice(0, 300)));
+// docket item 24
+const gpu = watchGpuErrors(page, "glmconf");
 await page.goto(`${BASE_URL}/glmconf.html?${qs}`, { waitUntil: "load" });
 
 let lastLive = "";
@@ -75,7 +77,13 @@ for (;;) {
       console.error(`[glmconf] ${status} — nessun report`);
       process.exit(2);
     }
-    if (out) writeFileSync(join(ROOT, out), JSON.stringify(report, null, 1));
+    if (gpu.dirty) {
+      const bad = invalidPath(join(ROOT, out ?? "results/engine/glmconf-run.json"));
+      writeFileSync(bad, JSON.stringify({ ...report, gpuErrors: gpu.errors, invalid: true }, null, 1));
+      console.error(`[glmconf] RUN CONTAMINATA: ${gpu.errors.length} errori GPU — report in ${bad}`);
+      process.exit(5);
+    }
+    if (out) writeFileSync(join(ROOT, out), JSON.stringify({ ...report, gpuErrors: gpu.errors }, null, 1));
     const g = report.gateGolden ?? {};
     console.log(`[glmconf] ${status} — top1 ${g.top1Ok}/${g.top1Tot} (${g.pct?.toFixed(3)}%) klMean ${report.secondary?.klMeanTop32?.toExponential(2)} maxDl ${report.secondary?.maxAbsDeltaLogit?.toFixed(3)}`);
     const c = report.gateCpuref;

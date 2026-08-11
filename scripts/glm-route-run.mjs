@@ -6,6 +6,7 @@
 //     [--out results/engine/routing-....json] [--timeout-min 180]
 // La vite su :5199 va avviata dal chiamante (come ktest-run).
 import { chromium } from "playwright";
+import { watchGpuErrors, invalidPath } from "./lib/gpuerrors.mjs";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
@@ -58,7 +59,8 @@ qs.set("budget", budget);
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
-page.on("pageerror", (e) => console.log("[glmroute][pageerror]", e.message.slice(0, 300)));
+// docket item 24: gli errori GPU decidono l'esito, non si stampano soltanto.
+const gpu = watchGpuErrors(page, "glmroute");
 await page.goto(`${BASE_URL}/glmroute.html?${qs}`, { waitUntil: "load" });
 
 let lastLive = "";
@@ -82,8 +84,16 @@ for (;;) {
       console.error(`[glmroute] ${status} — nessun report`);
       process.exit(2);
     }
+    if (gpu.dirty) {
+      const bad = invalidPath(join(ROOT, out ?? "results/engine/glmroute-run.json"));
+      writeFileSync(bad, JSON.stringify({ ...report, gpuErrors: gpu.errors, invalid: true }, null, 1));
+      console.error(`[glmroute] RUN CONTAMINATA: ${gpu.errors.length} errori GPU — i numeri NON sono una misura`);
+      for (const e of gpu.errors.slice(0, 3)) console.error(`  [${e.src}] ${e.text.slice(0, 160)}`);
+      console.error(`[glmroute] report in ${bad} (fuori dal percorso nominale, di proposito)`);
+      process.exit(5);
+    }
     if (out) {
-      writeFileSync(join(ROOT, out), JSON.stringify(report, null, 1));
+      writeFileSync(join(ROOT, out), JSON.stringify({ ...report, gpuErrors: gpu.errors }, null, 1));
       // determinismo del report: sha del file scritto nel log
       const sha = execFileSync("sha256sum", [join(ROOT, out)]).toString().split(" ")[0];
       console.log(`[glmroute] report → ${out} (sha256 ${sha})`);
