@@ -20,6 +20,7 @@ import { copyFileSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { hostState } from "./lib/hoststate.mjs";
+import { watchGpuErrors, invalidPath } from "./lib/gpuerrors.mjs";
 
 const arg = (name, dflt) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -48,7 +49,8 @@ const hostBefore = hostState(declared);
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
-page.on("pageerror", (e) => console.log("[q35bench][pageerror]", e.message.slice(0, 300)));
+// docket item 24: gli errori GPU non si stampano soltanto — decidono l'esito.
+const gpu = watchGpuErrors(page, "q35bench");
 await page.goto(`${BASE_URL}/q35conf.html?bench=${promptIdx},${nDecode}${modelTag !== "4b" ? `&model=${modelTag}` : ""}${arenaGiB ? `&arena=${arenaGiB}` : ""}${vramGiB ? `&vram=${vramGiB}` : ""}`, { waitUntil: "load" });
 
 const t0 = Date.now();
@@ -68,7 +70,18 @@ for (;;) {
     }
     // hostState() restituisce già {declared, before, after}: niente doppio
     // annidamento (nota verifier it.10) — before campionato all'avvio, after qui
-    const full = { ...report, arenaGiB: arenaGiB ? Number(arenaGiB) : null, vramTierGiB: vramGiB ? Number(vramGiB) : null, hostState: { declared, before: hostBefore.state?.before ?? hostBefore, after: hostState(declared).state?.before ?? null } };
+    const full = { ...report, arenaGiB: arenaGiB ? Number(arenaGiB) : null, vramTierGiB: vramGiB ? Number(vramGiB) : null, gpuErrors: gpu.errors, hostState: { declared, before: hostBefore.state?.before ?? hostBefore, after: hostState(declared).state?.before ?? null } };
+    // RUN CONTAMINATA (docket item 24): i numeri sono la velocita' di NON fare
+    // il lavoro. Il report si scrive lo stesso — l'evidenza serve — ma MAI al
+    // percorso nominale, o un glob su results/engine lo raccoglie come
+    // riferimento; e l'exit e' non-zero, cosi' un batch si ferma qui.
+    if (gpu.dirty) {
+      writeFileSync(invalidPath(out), JSON.stringify({ ...full, invalid: true }, null, 1));
+      console.error(`[q35bench] RUN CONTAMINATA: ${gpu.errors.length} errori GPU — i numeri NON sono una misura`);
+      for (const e of gpu.errors.slice(0, 3)) console.error(`  [${e.src}] ${e.text.slice(0, 160)}`);
+      console.error(`[q35bench] report scritto in ${invalidPath(out)} (fuori dal percorso nominale, di proposito)`);
+      process.exit(5);
+    }
     writeFileSync(out, JSON.stringify(full, null, 1));
     console.log(`[q35bench] done: decode ${report.decode.tokS.toFixed(2)} tok/s (p50 ${report.decode.msPerTokenP50.toFixed(1)} ms), prefill ${report.prefill.tokS.toFixed(1)} tok/s, TTFT ${(report.ttftMs / 1000).toFixed(1)} s -> ${out}`);
     process.exit(0);
