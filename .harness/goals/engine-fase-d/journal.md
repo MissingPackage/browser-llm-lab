@@ -2245,3 +2245,49 @@ cifra fino all'ultima decimale.
 
 **Gate**: tsc pulito, suite 440|9, ktest 96/96, argmax 39/39 e routing identico
 in entrambi i run sotto pressione, JSON committati.
+
+## it.38 (2026-08-11, fase 6) — i sensori PRIMA dei bench, e il piano del CHECKPOINT A
+
+**Perche' i sensori prima.** La regola di casa e' che i bench lunghi si fanno su
+codice finale, e il CHECKPOINT A e' fatto di ore di GPU. Un report che mente le
+invalida tutte, e ne avevo tre di aperti (docket item 12 + il rilievo di it.37):
+
+1. **`moeStats` non riportava la policy attiva.** Due run che differiscono per la
+   policy — cioe' esattamente il confronto di it.37 — si distinguevano solo dal
+   comando. Aggiunta.
+2. **`dispatchesPerToken` non era il numero di dispatch per token.** Era
+   `steps.length`, cioe' i soli step STATICI: non ha mai contato i per-expert.
+   Ora c'e' `dispatchBreakdown` con `static` / `dynamic` / `total`, e sul 35B il
+   totale e' **2.102** contro i 782 che il campo pubblicava (782 statici + 1.320
+   dinamici). Il vecchio campo resta per non rompere i JSON storici, ma accanto
+   c'e' la verita'.
+3. **`readTap` nel path ottimistico restituiva un array VUOTO.** Adesso lancia:
+   uno strumento di debug che tace quando dovrebbe urlare e' peggio che non
+   averlo.
+
+Piu' `vramPlan` nel report della conformance: il budget derivato si vede, invece
+di essere un numero che qualcuno ha passato.
+
+**Verificato**: gate verde sul 35B dopo i tre cambi (argmax 39/39, routing
+identico, `policy: "lru"` nel report, 44,37 ms/token in banda). tsc pulito,
+suite 440|9.
+
+**PIANO DEL CHECKPOINT A** (scritto qui perche' e' un merge gate e l'ordine
+conta; i run sono ore di GPU e vanno lanciati su albero congelato):
+
+1. **Albero congelato e host dichiarato.** Nessun cambio di codice dopo l'inizio
+   dei run: i runner scrivono `hostState` PRIMA e DOPO, ed e' quello che rende
+   confrontabili i numeri con i riferimenti storici.
+2. **GLM non-regressione PIENA** — e' la prima perche' e' il gate che protegge
+   il modello-tesi: `glm-bench-run.mjs` b12 optimistic contro
+   **13.172 / 31,26 / 14,74** in banda ±5%, golden AL PIN, cpuref, firma.
+   Se questa non passa, il resto non conta.
+3. **Riferimenti q35 NUOVI**: 4B, 9B e 35B ai tier 8/12/16 GiB, con
+   `--vram-gib` (il budget ora si DERIVA, quindi i tier sono tetti veri e non
+   budget asseriti) e `hostState`.
+4. **Gap nativo ri-misurato a parita'** — stesso host, stessa GPU scarica.
+5. **Ratchet golden q35 riverificati** (conformance full sui tre modelli).
+6. **`direction §7-bis` riscritto coi numeri veri**, e via la marcatura stale.
+
+**Nota sull'ordine 2-prima-di-3**: sono ore di GPU e se GLM regredisce vanno
+buttate. Il gate piu' fragile va per primo.

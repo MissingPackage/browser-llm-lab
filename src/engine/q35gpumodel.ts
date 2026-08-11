@@ -96,7 +96,15 @@ export interface Q35GpuModel {
   decodeBatch: ((tokens: ArrayLike<number>, posStart: number) => Promise<number[]>) | null;
   /** azzera gli stati ricorrenti (conv + S) di tutti i layer linear: nuovo prompt. */
   resetState(): void;
+  /**
+   * Dispatch per token, SCOMPOSTI (docket item 12). `static` sono gli step del
+   * piano precostruito; `dynamic` sono quelli per-expert, che il piano non
+   * contiene perche' dipendono dalla selezione. Il campo `total` e' quello che
+   * il nome prometteva e che finora non c'era: sul 35B sono 782 statici e
+   * 1.320 dinamici, cioe' 2.102 — non 782.
+   */
   dispatchesPerToken: number;
+  dispatchBreakdown: { static: number; dynamic: number; total: number };
   /** stats MoE (null sui densi): arena, routing esatto, residenza. */
   moeStats: (() => {
     hits: number; misses: number; uploadedBytes: number;
@@ -104,6 +112,9 @@ export interface Q35GpuModel {
     readMs: number; packMs: number; uploadMs: number;
     routing: Record<string, number>; nSlots: Record<string, number>;
     parkSlots: Record<string, number>; slotBytes: Record<string, number>;
+    /** policy di residenza ATTIVA: due run che differiscono per la policy si
+     *  distinguevano solo dal comando (docket item 12, rilievo di it.37) */
+    policy: "lru" | "tier";
   }) | null;
   /**
    * Scomposizione del costo per token (fase D fase 3): dove vanno i ms del
@@ -1754,6 +1765,13 @@ export async function createQ35GpuModel(
 
   return {
     dispatchesPerToken,
+    dispatchBreakdown: {
+      static: dispatchesPerToken,
+      // per layer MoE: topK x (gate, up, silu, down) + l'add del residuo, piu'
+      // il dispatch del router quando la selezione la fa la GPU.
+      dynamic: isMoe ? cuts.length * (topK * 4 + 1 + (opts.select === "optimistic" ? 1 : 0)) : 0,
+      get total(): number { return this.static + this.dynamic; },
+    },
     perf: () => ({ ...perfAcc }),
     decodeBatch: moe ? null : async (tokens: ArrayLike<number>, posStart: number): Promise<number[]> => {
       const k = tokens.length;
@@ -1870,6 +1888,12 @@ export async function createQ35GpuModel(
       return bi;
     },
     async readTap(layer: number): Promise<Float32Array> {
+      if (optimisticOn) {
+        throw new Error(
+          "q35gpumodel: readTap non e' cablato sul path a submit unico — il tap vive nel ramo " +
+          "sync di `step`. Restituire un array vuoto sarebbe uno strumento di debug che tace " +
+          "quando dovrebbe urlare (docket item 12)");
+      }
       tapLayer = layer;
       const v = tapValue;
       tapValue = null;
@@ -1990,6 +2014,7 @@ export async function createQ35GpuModel(
           ...moe!.stats(),
           routing: Object.fromEntries([...moe!.routing.entries()].map(([k2, v2]) => [String(k2), v2])),
           nSlots: moe!.nSlots, parkSlots: moe!.parkSlots, slotBytes: moe!.slotBytes,
+          policy: opts.expertPolicy ?? "lru",
         })
       : null,
     resetState(): void {
