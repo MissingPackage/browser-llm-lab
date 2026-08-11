@@ -239,3 +239,28 @@ Non e' una decisione da PI: e' mia, ed e' lavoro della fase 6 (il checkpoint
 che misura il 35B ai tier). Registrato qui per non perderlo. Nel frattempo i
 run di correttezza dichiarano il budget (`--arena-gib`, nuovo in it.14).
 it.14 (2026-08-11).
+
+## item 12 — due sensori che mentono in silenzio sul path nuovo (io, fase 6)
+
+Rilievi di margine di it.17, registrati per non perderli. Nessuno dei due e'
+una decisione da PI ed entrambi sono lavoro della fase 6 (il checkpoint che
+pubblica i numeri del 35B), non della fetta corrente:
+
+1. **`readTap` in modo ottimistico ritorna un `Float32Array` VUOTO** invece di
+   fallire: il tap e' cablato solo nel ramo sync di `step`, quindi chi lo usa
+   col path a submit unico riceve un array vuoto e non un errore. E' uno
+   strumento di debug che tace quando dovrebbe urlare.
+2. **`dispatchesPerToken` non e' il numero di dispatch per token.** E'
+   `steps.length`, cioe' i soli step STATICI: non ha mai contato i 5 dispatch
+   per expert (320 x 5 sul 35B), e col path ottimistico non conta nemmeno i 40
+   router. Viene pubblicato in ogni JSON di conformance e di bench col nome che
+   promette il totale — 782 sul 35B, quando i dispatch veri sono migliaia.
+
+Piu' una CONNESSIONE fra due cose gia' note: il repair+replay portera' 62,8 MiB
+di snapshot dello stato ricorrente (it.17), e il budget dell'arena del 35B non
+e' ctx-aware (item 11) — cioe' quei MiB andranno a sommarsi a un tetto che
+nessuno controlla, sullo stesso host dove 12 GiB gia' andavano in OOM. I due
+item vanno chiusi insieme o il secondo si accorgera' del primo con un
+VK_ERROR_OUT_OF_DEVICE_MEMORY.
+
+Registrato it.17 (2026-08-11).
