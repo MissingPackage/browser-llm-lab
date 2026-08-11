@@ -1776,3 +1776,64 @@ esclude. Chiudere adesso sarebbe usare la lettera della riga contro il suo scopo
 chiave, miss 0 in tutti e quattro i run; JSON committati (`q35-cpubreak`,
 `q35-nosnap`, `q35-nosnap2`, `q35-errscope`). Stabilita' run-to-run misurata di
 passaggio: 43,06 e 43,24 sullo stesso codice, +0,4%.
+
+## it.29 (2026-08-11, FASE 4-TER) — la quarta ipotesi cade, e la fase si CHIUDE come il suo done-when prevede
+
+**L'esperimento scritto in it.28**: i 40 `clearBuffer(moeAcc)` per token sono
+l'unica ragione per cui il pass si spezza a ogni layer; se gli ~11 ms di GPU
+fuori dai pass sono costo di boundary, togliendoli si vedono.
+
+**Due modi, ed erano entrambi migliorativi sulla carta.** (a) L'azzeramento si
+puo' ELIMINARE, non spostare: l'axpy dello shexp e' il primo contributo di
+`moeAcc` nel layer, e se SCRIVE invece di accumulare l'accumulatore non va
+azzerato (`axpyWgsl(..., assign)`; `0 + w·x` e `w·x` sono lo stesso f32 per ogni
+valore finito). Toglie 40 `clearBuffer` dal path ottimistico e 40 `writeBuffer`
+da quello sync. (b) Il checkpoint dell'hidden, l'altra operazione d'encoder, da
+`copyBufferToBuffer` a DISPATCH (`copyRowWgsl`, riga dall'uniform a dynamic
+offset). Con entrambe, il token diventa **1 pass invece di 41**.
+
+**MISURATO (mediana di 3, bracci interleavati, prima coppia scartata):**
+
+| variante | pass/token | ms/token |
+|---|---|---|
+| baseline (clearBuffer + copia d'encoder) | 41 | **43,32** [43,09-43,85] |
+| assign + copyRow a dispatch | **1** | 44,26 [43,81-44,26] |
+| assign + copia d'encoder | 41 | 44,36 [43,69-44,98] |
+
+**Nessun guadagno, e le differenze stanno dentro il rumore**: sullo STESSO codice
+avevo gia' misurato 43,06 e 43,24 (+0,4%), e qui le bande [43,09-43,85] e
+[43,69-44,98] si sovrappongono. La conclusione non dipende dal segno: **l'effetto
+e' ≤1 ms contro gli ~11 previsti dall'ipotesi. Refutata.**
+
+**Ho rimesso l'albero com'era.** Il cambio non e' peggiorativo in modo
+dimostrabile, ma non e' nemmeno migliorativo, e lo stato che ha misurato meglio
+e' quello di prima: `git checkout` sui sorgenti, e restano solo i JSON. La regola
+di casa e' preferire lo stato osservato-funzionante quando non si puo' nominare
+il guasto che si sta correggendo; qui il guasto non c'e'.
+
+**LA FASE 4-TER SI CHIUDE COME ESCLUSA COI NUMERI**, che e' esattamente cio' che
+il suo done-when prevede ("se le voci aggredibili sommano meno di ~8 ms").
+Bilancio di quattro ipotesi:
+
+| voce | misurata | esito |
+|---|---|---|
+| encode CPU dei 2400 dispatch | 1,267 ms | il sospetto n.1 dell'item 17, ed e' piccolo |
+| argmax + contabilita' + embed | 0,669 ms | |
+| snapshot dello stato ricorrente | 0,30 ms | refutata |
+| checkpoint dell'hidden | ~0 | refutata |
+| `popErrorScope` prima del readback | 0 | era attribuzione, non costo |
+| spezzare il pass a ogni layer | ≤1 ms, nel rumore | refutata |
+| **totale aggredibile trovato** | **~2,2 ms** | sotto la soglia degli 8 |
+
+**Cosa resta non spiegato, e va detto**: il token e' 43,3 ms, di cui ~41 di
+attesa GPU, ma la somma dei pass cronometrati e' 29,5. Restano **~11 ms di tempo
+GPU che nessun pass contiene e che nessuna delle quattro ipotesi spiega**. La
+spiegazione residua piu' plausibile — e non l'ho verificata — e' la latenza del
+round-trip GPU→CPU per token (wire Dawn + event loop del browser), che e'
+inerente a "un sync per token" e si attaccherebbe solo col PIPELINING: encodare
+il token N+1 mentre il readback di N e' in volo. E' un cambio di semantica del
+decode, non una riga di questa fase. Va sul docket (item 18), non deciso qui.
+
+**Gate**: tsc pulito, suite 440|9, argmax **39/39** e routing identico in tutti e
+tre i run dell'esperimento, JSON committati (`q35-onepass`, `q35-noclear`).
+Albero identico a it.28 (`git checkout`).

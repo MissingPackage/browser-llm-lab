@@ -442,3 +442,24 @@ attesa / argmax / embed — e la riga lo dice: se la decomposizione non trova
 almeno ~8 ms aggredibili, la fase si chiude come "esclusa coi numeri" invece di
 spendere iterazioni. E' la differenza che ho argomentato rispetto all'item 15:
 qui si sa dopo UNA iterazione se vale.
+
+## item 18 — restano ~11 ms di GPU che nessun pass contiene, e l'unica leva e' il pipelining (PI, ma non ora)
+
+Bilancio della fase 4-ter (it.28-29): il token del 35B e' 43,3 ms, di cui ~41 di
+attesa GPU e **1,94 di CPU**. Ma la somma dei pass cronometrati e' 29,5 ms:
+**~11 ms di tempo GPU non stanno in nessun pass**, e quattro ipotesi sono state
+misurate e refutate (snapshot dello stato 0,30 ms · checkpoint dell'hidden ~0 ·
+`popErrorScope` = attribuzione non costo · spezzare il pass ≤1 ms, nel rumore).
+
+La spiegazione residua piu' plausibile, NON verificata: la latenza del round-trip
+GPU→CPU per token (wire Dawn + event loop), inerente a "un sync per token". Si
+attaccherebbe solo col **PIPELINING** — encodare il token N+1 mentre il readback
+di N e' in volo — che cambia la semantica del decode (oggi la contabilita' di
+fine token e il repair vivono in quel readback) e vale la pena solo se prima si
+MISURA che quei ms sono davvero latenza e non lavoro.
+
+Non lo apro come fase: la 4-ter ha gia' consumato il suo mandato e si e' chiusa
+per esclusione com'era previsto. Sta qui perche' e' il piu' grosso singolo
+addendo rimasto nel token (11 su 43) e perche' la prossima volta che qualcuno
+guardera' quel numero deve trovare scritto cosa e' gia' stato escluso.
+Registrato it.29 (2026-08-11).
