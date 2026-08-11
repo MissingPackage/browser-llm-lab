@@ -2186,3 +2186,62 @@ regime freddo.
 
 **Gate**: tsc pulito, suite 440|9, argmax **39/39 identico** e routing identico
 in entrambi i run, JSON committati (`q35-coldboth`, `q35-coldboth-rev`).
+
+## it.37 (2026-08-11, FASE 5) — prefetch e AUTOPIN: due esclusioni, una strutturale e una misurata
+
+Ultime due voci della riga 5. Il done-when ammette "delta misurato O esclusione
+motivata coi numeri", e qui sono due esclusioni — ma di natura diversa, e la
+differenza va detta.
+
+**PREFETCH IN-FORWARD: escluso per STRUTTURA, con i numeri accanto.** Il
+prefetch di GLM esiste per riempire una finestra precisa: mentre la CPU aspetta
+il readback del router del layer L, fetcha gli expert predetti per L+1. Su q35
+quella finestra **non esiste piu'**: la fetta 3c ha portato i readback da 41 a 1
+per token. E non e' che sia solo piccola — durante il token la slotTable e'
+INTOCCABILE (invariante I1, `setInFlight`), quindi un prefetch li' dentro non
+sarebbe lento: sarebbe illegale.
+
+Resta il confine di token, dove pero' i fetch che servono sono quelli del
+REPAIR, e il repair sa ESATTAMENTE cosa gli manca (la lista viene da `Sel`),
+mentre il prefetch predice: il recall q35 e' **82,67%@8**, cioe' aggiungerebbe
+~17% di fetch sbagliati a un path che gia' fetcha esattamente il necessario.
+E il numero che chiude: senza prefetch, a freddo, l'ottimistico e' gia' **1,68x
+piu' veloce del sync** (it.36).
+
+**TIER / AUTOPIN: escluso per MISURA, sotto pressione vera.** Cablata la policy
+su q35 (non c'era: senza cablaggio non c'e' ne' delta ne' esclusione) e messa la
+cache sotto pressione col budget derivato — `--vram-gib 6` da' 3,56 GiB, cioe'
+**2134 slot per 3341 expert distinti**, quindi eviction vere.
+
+| | LRU | TIER (AUTOPIN) |
+|---|---|---|
+| sync-cold, miss | 3601 | 3601 |
+| sync-warm, miss | 2985 | **2980** |
+| ottimistico-warm, miss | 3592 | **3567** |
+| miss totali del run | 29.909 | **29.868** |
+| ms/token (ott. caldo) | 653,4 | 645,5 |
+
+**−0,14% di miss, e il tempo dentro il rumore.**
+
+**IL CAVEAT, che e' la parte onesta.** AUTOPIN ha soglie proprie:
+`AUTOPIN_MIN_HIST` = 5000 selezioni prima di pinnare qualcosa, repin ogni 2944.
+Questa passata ne fa 12.480, quindi la policy comincia ad agire dopo il 40% del
+run e fa due o tre passate di repin in tutto. **L'esclusione vale su questo
+corpus**, e il motivo per cui vale e' che il corpus e' corto per le soglie della
+policy stessa — non che AUTOPIN non funzioni. Ri-misurarla su corpus pieno e'
+lavoro della fase 6, dove i riferimenti si fanno comunque.
+
+**Un rilievo di margine**: `moeStats` non riporta la policy attiva (`policy:
+None` nel JSON anche col tier acceso). Due run che differiscono per la policy
+non si distinguono dal report — va sistemato prima della fase 6, che di report
+vive.
+
+**FASE 5 CHIUSA**, voce per voce: budget ctx-aware **derivato** (it.35, docket
+11) · decode ottimistico attivo, **soglia esclusa coi numeri** (it.36, docket
+13) · prefetch **escluso** (struttura + recall 82,67%) · tier/AUTOPIN **escluso**
+(−0,14% misurato sotto pressione, col caveat del corpus) · **GLM invariato**:
+ktest **96/96**, `glm-model-2layer` a L2rel 2,072937787401139e-07, la stessa
+cifra fino all'ultima decimale.
+
+**Gate**: tsc pulito, suite 440|9, ktest 96/96, argmax 39/39 e routing identico
+in entrambi i run sotto pressione, JSON committati.

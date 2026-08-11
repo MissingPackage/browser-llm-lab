@@ -265,6 +265,14 @@ export interface Q35GpuModelOpts {
   vramCeilingBytes?: number;
   /** riserva sopra il derivato (default 512 MiB): driver, frammentazione, staging */
   vramReserveBytes?: number;
+  /**
+   * Policy di residenza (fase 5): "lru" (default, il comportamento storico) o
+   * "tier" = LRU + AUTOPIN, che pinna gli expert caldi e li protegge
+   * dall'eviction. Su q35 non era cablata: la riga 5 chiede il delta misurato
+   * o l'esclusione coi numeri, e senza il cablaggio non c'e' ne' l'uno ne'
+   * l'altra.
+   */
+  expertPolicy?: "lru" | "tier";
 }
 
 export async function createQ35GpuModel(
@@ -812,6 +820,7 @@ export async function createQ35GpuModel(
       // router. Non cambia né quanti slot ci sono né quanta VRAM costano
       // (`expertSlots` non guarda il regime): cambia la taglia dei buffer di
       // classe, e con essa quanti sono.
+      policy: opts.expertPolicy ?? "lru",
       arena: true,
       // La tabella expertKey→slot in VRAM non la legge ancora nessuno in
       // questa fetta (il router è su CPU). Si accende qui perché è lo stesso

@@ -27,6 +27,8 @@ const cfg = {
   vramGiB: q.has("vram") ? Number(q.get("vram")) : undefined,
   // ?coldboth=1 → i due path misurati entrambi a freddo, stesso processo
   coldBoth: q.get("coldboth") === "1",
+  // ?policy=tier → LRU + AUTOPIN sulla cache expert (fase 5)
+  expertPolicy: (q.get("policy") === "tier" ? "tier" : undefined) as "tier" | undefined,
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

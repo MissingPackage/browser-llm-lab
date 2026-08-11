@@ -61,6 +61,8 @@ if (process.argv.includes("--gpu-time")) qs.set("gputime", "1");
 // I due path misurati entrambi a FREDDO nello stesso processo (cache svuotata
 // fra i bracci): e' il confronto che la policy d'ingresso della fase 5 esige.
 if (process.argv.includes("--cold-both")) qs.set("coldboth", "1");
+// Policy di residenza: "tier" = LRU + AUTOPIN (fase 5). Default lru.
+if (process.argv.includes("--tier")) qs.set("policy", "tier");
 // MISURA della fase 4-ter: quanto costa lo snapshot dello stato ricorrente
 // (62,8 MiB per token). Rompe il replay: solo a cache calda.
 if (process.argv.includes("--no-snapshot")) qs.set("nosnap", "1");

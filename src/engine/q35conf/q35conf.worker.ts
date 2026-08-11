@@ -70,6 +70,8 @@ interface Cfg {
    * policy d'ingresso esige e che finora stava in due run diversi (it.18).
    */
   coldBoth?: boolean;
+  /** fase 5: policy di residenza ("lru" default, "tier" = LRU + AUTOPIN). */
+  expertPolicy?: "lru" | "tier";
 }
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
@@ -175,6 +177,7 @@ async function main(cfg: Cfg): Promise<void> {
     debugNoStateSnapshot: cfg.noStateSnapshot === true,
     prefillM: cfg.prefillM,
     vramCeilingBytes: cfg.vramGiB !== undefined ? Math.floor(cfg.vramGiB * (1 << 30)) : undefined,
+    expertPolicy: cfg.expertPolicy,
   });
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
