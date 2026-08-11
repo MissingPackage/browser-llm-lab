@@ -363,3 +363,26 @@ giusto cosi': cambia l'ordine delle somme f32.
 Docket item 16: il segmento STATICO e' PEGGIORATO di 1,62 ms (+11,2%) e non e'
 rumore. Ipotesi (ridondanza nell'estrazione delle scale) non verificata e non
 convincente — va misurata con una sonda per-kernel, non corretta alla cieca.
+
+## it.23 (2026-08-11) — la proiezione della fase 4 rifatta dal basso, e dove va il token
+
+Marche per intervalli di step (`segMarks`) + `TSQ_PASSES` 256→512 con overflow
+CONTATO: il segmento statico si apre in 9 categorie. **La ricorrenza del
+deltanet — che in it.19 avevo dato come il vincolo strutturale della fase 4 —
+costa 0,588 ms, l'1,9%**: tutto il resto del blocco sono GEMV row-parallel
+(9,84 ms). Avevo scambiato "il layer e' ricorrente" con "il layer non si
+batcha".
+
+Decomposizione: expert 8,716 (28,7%) · ssmGemv 7,602 (25,0%) · router 3,155 ·
+attn 2,925 · shexp 2,333 · ssmOut 2,235 · tail 1,403 · routerGemv 0,701 ·
+**ssmRec 0,588** · norm/resid 0,701. Totale GPU 30,359.
+
+**Fase 4 rifatta dal basso: 28,96 → 14,38 ms = 2,01x** sul prefill (lo stesso
+numero di it.19 per ragioni completamente diverse). Pavimento: expert 6,86 +
+router 3,16 + attn 2,93 = il 90% del batched.
+
+Docket item 17 (PI): **15,12 ms del token (33,2%) NON sono tempo GPU** — encode,
+submit, attesa del readback, argmax su 151k logit, dequant dell'embedding — e
+nessuna riga del contratto li guarda. Servono −12 ms per i 30 tok/s e la fase 4
+ne vale zero (agisce sul TTFT). Parere: fase 4-ter prima della 4, il cui primo
+passo e' una misura.

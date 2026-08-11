@@ -384,3 +384,35 @@ Vale 1,62 ms su 44,26 di token (3,7%): non blocca niente, e infatti la 4-bis
 chiude comunque a −27,64 ms. Registrato perche' un +11% su una categoria dopo un
 cambio di kernel e' esattamente il tipo di cosa che si smette di vedere se non
 la si scrive. it.22 (2026-08-11).
+
+## item 17 — un terzo del token non e' tempo GPU, e nessuna fase lo guarda (PI)
+
+Misurato in it.23 sul 35B a caldo: il token dura **45,48 ms** (44,26 con la
+sonda spenta) e i pass GPU ne spiegano **30,36**. I restanti **15,12 ms — il
+33,2% — stanno fuori**: encode CPU dei ~2300 dispatch, submit, attesa del
+readback, argmax su 151k logit in CPU, dequant della riga di embedding.
+
+E' la seconda voce del token dopo gli expert (8,72), piu' grande del blocco
+GEMV del deltanet (9,84) e cinque volte il router. **Nessuna riga del contratto
+la tocca**: la fase 4 e' prefill, la 5 e' policy di residenza, la 7 e'
+spec-dec, e la 6 e' un checkpoint di misura.
+
+**Perche' e' PI-gated**: la funzione obiettivo del goal e' il decode sopra ~30
+tok/s. Siamo a 22,0-22,6 e servono −12 ms. Quei 15,12 ms sono il posto dove
+−12 ms sono aritmeticamente possibili senza toccare un kernel — e la fase 4,
+che e' la prossima riga, ne vale zero (agisce sul TTFT).
+
+Le opzioni, come per l'item 15:
+(a) fase 4-ter PRIMA della 4: attaccare il tempo fuori dai pass — decomporlo
+    (encode / submit / attesa / argmax / embed), poi l'argmax su GPU (esiste
+    gia' per i densi: `decodeBatch` lo fa), l'embed gather su GPU, e
+    l'overlap fra il readback di un token e l'encode del successivo;
+(b) fase 4 come da contratto, e questo dopo;
+(c) portarlo dentro la fase 6 (checkpoint), che gia' misura.
+
+**Il mio parere: (a)**, con la stessa logica con cui il PI ha accolto l'item 15
+— e in piu' qui c'e' un fatto che li' non c'era: il primo passo di (a) e' una
+MISURA (decomporre i 15,12 ms), quindi la fase si puo' aprire sapendo dopo
+un'iterazione se vale la pena, invece di scommettere 2-3 iterazioni.
+
+Registrato it.23 (2026-08-11).

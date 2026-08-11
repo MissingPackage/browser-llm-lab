@@ -1440,3 +1440,82 @@ dispatch ed era gia' caduta con it.21; adesso il segmento expert e' 8,7 ms su
 29,5 di tempo GPU (29,7%, era il 58%), quindi anche il peso relativo di cio' che
 il batching comprimerebbe e' cambiato. La riga 4 dice gia' "proiezione da
 RIFARE": si rifa' coi numeri di qui.
+
+## it.23 (2026-08-11, fase 4) — la proiezione RIFATTA dal basso, e un'altra mia previsione ridimensionata
+
+**Perche' serviva.** La proiezione di it.19 (2,02x) era costruita su "tempo ∝
+dispatch", che it.21 ha smentito; e it.22 ha cambiato le proporzioni (il
+segmento expert e' passato dal 58% al 29% del tempo GPU). Rifarla a occhio
+sarebbe stato inventare. Serviva la decomposizione del segmento STATICO, che
+finora era una categoria sola.
+
+**Strumento**: le marche (`segMarks`) — `{at, cat}` su INTERVALLI di step invece
+di un campo per step, cosi' i ~25 siti di `push` non si toccano. Con la sonda
+spenta il pass resta uno per layer (la forma di produzione); accesa, si spezza
+sulle marche. `TSQ_PASSES` da 256 a 512 perche' le categorie per layer sono 7 e
+281 pass non ci stavano — **e l'overflow ora si CONTA** (era silenzioso: avrebbe
+fatto sembrare piu' economici gli ultimi layer). Misurato: overflow 0.
+
+**DECOMPOSIZIONE (smoke 35B, 156 giri, 10 GiB):**
+
+| categoria | ms/token | % | cosa e' |
+|---|---|---|---|
+| expert | 8,716 | 28,7% | i 320 GEMV expert |
+| ssmGemv | 7,602 | 25,0% | qkv/z/beta/alpha dei 30 layer deltanet |
+| router | 3,155 | 10,4% | il top-8 su 256, un workgroup per layer |
+| attn | 2,925 | 9,6% | i 10 layer full-attention |
+| shexp | 2,333 | 7,7% | shared expert |
+| ssmOut | 2,235 | 7,4% | la proiezione d'uscita del deltanet |
+| tail | 1,403 | 4,6% | norma finale + head |
+| routerGemv | 0,701 | 2,3% | il GEMV che produce i logit del router |
+| **ssmRec** | **0,588** | **1,9%** | **conv + core: LA RICORRENZA** |
+| norm/resid/altro | 0,701 | 2,3% | |
+| **totale GPU** | **30,359** | | |
+
+**LA PREVISIONE DI it.19 ERA STRUTTURALMENTE GIUSTA E QUANTITATIVAMENTE
+IRRILEVANTE.** Avevo scritto che "30 layer su 40 sono deltanet, ricorrenti sul
+tempo" e che questo era il vincolo strutturale della fase 4. E' vero che non si
+batchano — ma la ricorrenza VERA (`deltaNetConv` + `deltaNetCore`) costa **0,588
+ms, l'1,9%**. Tutto il resto del blocco deltanet sono GEMV (`ssmGemv` +
+`ssmOut` = 9,84 ms, il 32%), che sono row-parallel come qualunque altro GEMV.
+Avevo scambiato "il layer e' ricorrente" con "il layer non si batcha".
+
+**PROIEZIONE DELLA FASE 4, rifatta dal basso su questi numeri** (M=16, token di
+prefill = 28,96 ms perche' `headCut` toglie gia' la coda):
+
+- comprimibili ~M (il traffico dei pesi si legge una volta per chunk):
+  ssmGemv + ssmOut + shexp + routerGemv + norm + resid = **13,572 → 0,85**
+- expert: si comprime solo per la MOLTEPLICITA' dell'unione, 1,27x a M=16
+  (256 expert, top-8): **8,716 → 6,86**
+- router: il lavoro e' per riga e resta, **3,155**
+- attn: ogni riga attende al proprio prefisso, non si comprime, **2,925**
+- ssmRec: **0,588**
+
+**28,96 → 14,38 ms, cioe' 2,01x.** Lo stesso numero di it.19 per ragioni
+completamente diverse — e stavolta e' costruito su categorie misurate invece
+che su un conteggio di dispatch. Il pavimento della fase 4 e' expert (6,86) +
+router (3,16) + attn (2,93) = 12,94 dei 14,38: **il 90%**.
+
+**QUELLO CHE LA PROIEZIONE DICE ANCHE, E CHE CONTA DI PIU'.** La fase 4 vale sul
+TTFT e zero sul decode, e la funzione obiettivo del goal e' il decode. Oggi il
+35B sta a **45,48 ms/token con la sonda accesa (44,26 spenta) = 22,0-22,6
+tok/s**; per 30 tok/s servono 33,3 ms, cioe' **−12 ms**. I candidati, misurati:
+
+1. **fuori dai pass: 15,12 ms, il 33,2% del token.** Non e' tempo GPU dei
+   kernel: e' encode CPU, submit, attesa del readback, argmax su 151k logit,
+   dequant della riga di embedding. E' la voce piu' grossa dopo gli expert e
+   nessuna fase del contratto la guarda.
+2. **router 3,155 ms** — 40 dispatch da 79 us, UN workgroup che fa softmax su
+   256 e top-8 in seriale sul thread 0 (docket item 14, gia' aperto).
+3. **expert 8,716 ms a 65,3 GB/s** e **ssmGemv+ssmOut 9,84 ms** per ~1,07 GB di
+   pesi = ~109 GB/s: entrambi lontani dal picco (~500).
+
+**Gate**: tsc pulito, suite 440|9, argmax 39/39, routing identico chiave per
+chiave, miss 0, overflow della sonda 0, JSON committato
+(`q35-statbreak-35b-it23.json`). Perturbazione della sonda dichiarata: con 12
+categorie invece di 3 il totale GPU passa da 29,47 a 30,36 (+3,0%) — piu'
+barriere, ed e' il prezzo di sapere dove vanno i ms.
+
+**Docket item 16 NON si chiude con questa misura**: per attribuire il +1,62 ms
+del segmento statico servirebbe la stessa granularita' PRIMA della 4-bis, cioe'
+rimettere il kernel vecchio. Resta aperto.

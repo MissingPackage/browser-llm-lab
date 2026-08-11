@@ -140,7 +140,7 @@ export interface Q35GpuModel {
    * la sonda accesa; `null` se la sonda non e' attiva (o `timestamp-query` non
    * concessa dal device). `ms` e' la somma dei pass, `n` il numero di pass.
    */
-  gpuTimeStats: (() => { tokens: number; byCat: Record<string, { ms: number; n: number }> }) | null;
+  gpuTimeStats: (() => { tokens: number; overflow: number; byCat: Record<string, { ms: number; n: number }> }) | null;
   /** DEBUG (it.17): dopo step(), hidden x a valle del layer indicato (solo MoE). */
   readTap(layer: number): Promise<Float32Array>;
   /** Esito dell'OMBRA del router GPU; `null` se non è stata accesa. */
@@ -337,6 +337,21 @@ export async function createQ35GpuModel(
 
   const steps: Step[] = [];
   /**
+   * ETICHETTE per la sonda dei tempi (fase 4, it.23): `{at, cat}` dice che dallo
+   * step `at` in poi si entra nella categoria `cat`. Sono MARCHE su intervalli e
+   * non un campo per step, cosi' i ~25 siti di `push` non si toccano.
+   *
+   * Serve a due domande insieme: quanto del segmento statico e' ROW-PARALLEL
+   * (cioe' quanto la fase 4 potrebbe comprimere batchando M righe) e quanto e'
+   * RICORRENTE (deltanet: resta M anche batchato); e dove sia finito il +1,62 ms
+   * che il segmento statico ha preso con la 4-bis (docket item 16).
+   */
+  const segMarks: { at: number; cat: string }[] = [];
+  const mark = (cat: string): void => {
+    if (segMarks.length > 0 && segMarks[segMarks.length - 1].at === steps.length) segMarks.pop();
+    segMarks.push({ at: steps.length, cat });
+  };
+  /**
    * Stato RICORRENTE dei layer linear (deltanet). Il `layer` non è decorazione:
    * il replay del path ottimistico rigioca i layer da un certo punto in giù e
    * deve rimettere a posto lo stato di QUELLI, non di tutti — quelli a monte
@@ -359,9 +374,11 @@ export async function createQ35GpuModel(
     const b = `blk.${l}.`;
     const attnNorm = await f32buf(`${b}attn_norm.weight`);
     const postNorm = await f32buf(`${b}post_attention_norm.weight`);
+    mark("norm");
     push(rmsnormWgsl(d, S.rmsEps), [x, attnNorm, xn], 1);
 
     if (q35IsFullAttn(S, l)) {
+      mark("attn");
       const wq = await loadW(`${b}attn_q.weight`);
       const wk = await loadW(`${b}attn_k.weight`);
       const wv = await loadW(`${b}attn_v.weight`);
@@ -385,6 +402,7 @@ export async function createQ35GpuModel(
       push(sigmoidMulWgsl(qDim), [attnO, gateB], Math.ceil(qDim / 64));
       wo.push(attnO, attnY);
     } else {
+      mark("ssmGemv");
       const wqkv = await loadW(`${b}attn_qkv.weight`);
       const wz = await loadW(`${b}attn_gate.weight`);
       const wb = await loadW(`${b}ssm_beta.weight`);
@@ -402,11 +420,18 @@ export async function createQ35GpuModel(
       wz.push(xn, z);
       wb.push(xn, bRaw);
       wa.push(xn, aRaw);
+      // Da qui la RICORRENZA: conv shifta lo stato e core aggiorna S. E' la
+      // parte che il batching M>1 non puo' comprimere (le righe di un chunk
+      // sono token consecutivi), quindi va misurata da sola: e' il pavimento
+      // della fase 4.
+      mark("ssmRec");
       push(deltaNetGatesWgsl(S.linVHead), [bRaw, aRaw, aBuf, dtBuf, bSig, gVal], 1);
       push(deltaNetConvWgsl(qkvDim, S.linConvK), [convSt, qkv, convW, convOut], Math.ceil(qkvDim / 64));
       push(deltaNetCoreWgsl({ hd: S.linHeadDim, nK: S.linKHead, nV: S.linVHead, eps: S.rmsEps }), [convOut, stateS, bSig, gVal, z, nrmBuf, gated], S.linVHead);
+      mark("ssmOut");
       wOut.push(gated, attnY);
     }
+    mark("resid");
     push(addInPlaceWgsl(d), [x, attnY], Math.ceil(d / 64));
 
     if (!isMoe) {
@@ -424,6 +449,7 @@ export async function createQ35GpuModel(
       // non dipende dalla selezione, accumula in moeAcc col gate sigmoid su
       // GPU) + router → routerLogits. La parte per-expert è DINAMICA (readback
       // della selezione su CPU, correttezza-prima: 1 sync/layer DICHIARATO).
+      mark("shexp");
       push(rmsnormWgsl(d, S.rmsEps), [x, postNorm, xn], 1);
       const shGate = await loadW(`${b}ffn_gate_shexp.weight`);
       const shUp = await loadW(`${b}ffn_up_shexp.weight`);
@@ -435,6 +461,7 @@ export async function createQ35GpuModel(
       shDown.push(gateS, dnS);
       push(gemvF32Wgsl({ K: d, N: 1 }), [shScalarW, xn, shScalar], 1);
       push(axpyWgsl(d, true), [moeAcc, dnS, shScalar], Math.ceil(d / 64));
+      mark("routerGemv");
       const router = await loadW(`${b}ffn_gate_inp.weight`);
       router.push(xn, routerLogits);
       cuts.push(steps.length);
@@ -984,6 +1011,7 @@ export async function createQ35GpuModel(
               });
               tsIdx++;
             } else {
+              if (canGpuTs) tsqOverflow++;
               cur = enc.beginComputePass();
             }
             return cur;
@@ -997,8 +1025,15 @@ export async function createQ35GpuModel(
             // submit, quindi i 40 layer vedrebbero un solo azzeramento —
             // l'ultimo.
             enc.clearBuffer(moeAcc, 0, d * 4);
+            // Con la sonda spenta e' UN pass "static" per layer; accesa, si
+            // spezza sulle marche (norm/attn/ssm/resid/shexp/routerGemv) — e'
+            // l'unico modo di sapere quanto del segmento e' ricorrente.
             let pass = usePass("static");
             for (let i = m === 0 ? 0 : cuts[m - 1]; i < cuts[m]; i++) {
+              if (canGpuTs) {
+                const mk = markAt.get(i);
+                if (mk !== undefined) pass = usePass(mk);
+              }
               const st = steps[i];
               pass.setPipeline(st.pipe);
               pass.setBindGroup(0, st.bind);
@@ -1276,8 +1311,12 @@ export async function createQ35GpuModel(
   /** path attivo: `true` solo se costruito con `select: "optimistic"` (fetta 3c) */
   let optimisticOn = opts.select === "optimistic";
   // ---- sonda di decomposizione del tempo GPU (fase 4, it.19) ----
-  // 3 pass per layer MoE + coda: 40x3+1 = 121 sul 35B. Il margine e' 2x.
-  const TSQ_PASSES = 256;
+  // Con le marche di it.23 le categorie per layer diventano 7 (norm, attn|ssm,
+  // resid, shexp, routerGemv, router, expert): 40x7+1 = 281 sul 35B. 512 da'
+  // un margine 1,8x — e l'overflow si CONTA, perche' una sonda che perde i
+  // pass finali in silenzio farebbe sembrare piu' economici gli ultimi layer.
+  const TSQ_PASSES = 512;
+  let tsqOverflow = 0;
   const canGpuTs = opts.telemetryGpu === true && device.features.has("timestamp-query");
   const tsqSet = canGpuTs ? device.createQuerySet({ type: "timestamp", count: TSQ_PASSES * 2 }) : null;
   const tsqResolve = canGpuTs
@@ -1288,6 +1327,8 @@ export async function createQ35GpuModel(
     : null;
   const tsqAcc = new Map<string, { ms: number; n: number }>();
   let tsqTokens = 0;
+  /** indice step → categoria, dalle marche: lookup O(1) dentro l'encoder */
+  const markAt = new Map<number, string>(segMarks.map((m) => [m.at, m.cat]));
   const zeroAcc = new Float32Array(d);
   const tapStaging = device.createBuffer({ size: d * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   let tapLayer = -1;
@@ -1476,7 +1517,7 @@ export async function createQ35GpuModel(
       optimisticOn = on;
     },
     gpuTimeStats: canGpuTs
-      ? () => ({ tokens: tsqTokens, byCat: Object.fromEntries([...tsqAcc.entries()].map(([k2, v2]) => [k2, { ...v2 }])) })
+      ? () => ({ tokens: tsqTokens, overflow: tsqOverflow, byCat: Object.fromEntries([...tsqAcc.entries()].map(([k2, v2]) => [k2, { ...v2 }])) })
       : null,
     routerShadowStats: moe?.shadowStats ? () => moe!.shadowStats!() : null,
     moeStats: moe
