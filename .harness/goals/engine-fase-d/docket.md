@@ -277,6 +277,16 @@ VK_ERROR_OUT_OF_DEVICE_MEMORY.
 
 Registrato it.17 (2026-08-11).
 
+### CHIUSO it.38 (2026-08-11) — i tre sensori sistemati prima dei bench
+
+`moeStats` riporta la `policy` attiva (era il rilievo di it.37: due run che
+differiscono per la policy si distinguevano solo dal comando) · nasce
+`dispatchBreakdown` con static/dynamic/total, e sul 35B il totale e' **2.102**
+contro i 782 che `dispatchesPerToken` pubblicava · `readTap` nel path
+ottimistico LANCIA invece di restituire un array vuoto. Piu' `vramPlan` nel
+report. Fatti PRIMA del checkpoint A perche' i bench lunghi si fanno su codice
+finale e un report che mente li invalida. **Item 12 CHIUSO.**
+
 ## item 13 — i tre numeri che la FASE 5 deve usare per tarare la soglia (io, fase 5)
 
 Misurati in it.18 sul regime freddo del path ottimistico (smoke 35B, 39 token,

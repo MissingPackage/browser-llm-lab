@@ -457,11 +457,27 @@ Misurato sul 35B: tetto 13 GiB, **allocati 1,94**, riserva 0,50, budget expert
 differiscono per la policy non si distinguono dal report, e la fase 6 di report
 vive.
 
+**it.38 — sensori sistemati PRIMA dei bench** (docket item 12 CHIUSO): `moeStats`
+riporta la `policy`; nasce `dispatchBreakdown` static/dynamic/**total**, e sul
+35B il totale e' **2.102** contro i 782 che `dispatchesPerToken` pubblicava;
+`readTap` sul path ottimistico LANCIA invece di restituire un array vuoto; e il
+report porta `vramPlan`. Verificato: gate verde (argmax 39/39, routing identico,
+44,37 ms/token).
+
 **PROSSIMO: la fase 6 — CHECKPOINT A.** E' il merge gate: non-regressione GLM
 PIENA (b12 optimistic in banda ±5%, golden al pin, cpuref, firma), riferimenti
 q35 NUOVI (4B/9B/35B ai tier 8/12/16) con hostState, gap nativo ri-misurato a
 parita', ratchet golden riverificati, e `direction §7-bis` riscritto coi numeri
 veri. Regola del goal: i bench pieni esistono SOLO qui e alla fase 8.
+
+**PIANO (it.38, nel journal)**: (1) albero CONGELATO e host dichiarato — nessun
+cambio di codice dopo l'inizio dei run; (2) **GLM non-reg PIENA per prima**
+(b12 optimistic contro 13.172/31,26/14,74 in banda ±5%, golden al pin, cpuref,
+firma): e' il gate che protegge il modello-tesi, e se non passa il resto e' da
+buttare; (3) riferimenti q35 nuovi 4B/9B/35B ai tier 8/12/16 con `--vram-gib`
+(dopo it.35 i tier sono TETTI veri, non budget asseriti) e `hostState`;
+(4) gap nativo a parita'; (5) ratchet golden riverificati; (6) `direction §7-bis`
+riscritto coi numeri veri.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
