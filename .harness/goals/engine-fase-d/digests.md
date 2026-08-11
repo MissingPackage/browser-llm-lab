@@ -434,3 +434,24 @@ e non quelle dopo — non serve una maschera, serve l'ordine nell'encoder.
 ktest **93/93** con `dense-batch-attn-chunk` BIT-IDENTICO su 3 righe a `nPast`
 CRESCENTE. Inventario fase 4: **4 voci su 6**; restano il gather K-quant e
 l'orchestratore.
+
+## it.28 (2026-08-11) — FASE 4-TER: i 15,12 ms "fuori dai pass" non sono CPU
+
+Ruling PI (a) incassato, riga 4-ter su PHASES col done-when che include l'uscita.
+Prima misura, e ribalta la mia ipotesi dell'item 17: il lavoro CPU e' **1,94
+ms/token, il 4,5%** — encode dei 2400 dispatch 1,267 · argmax 0,431 · contabilita'
+0,210 · embed 0,028. "L'attesa del readback" (29,19) non e' overhead: e' la GPU
+che lavora, e io l'avevo sommata alla CPU.
+
+Tre ipotesi sul residuo di 11,9 ms, due cadute: **snapshot dello stato ricorrente
+0,30 ms** (sonda `--no-snapshot` che LANCIA se serve un replay), **checkpoint
+dell'hidden ~0**. La terza — i due `popErrorScope` awaitati prima del readback —
+e' confermata come ATTRIBUZIONE e non come costo: spostandoli dopo, l'attesa
+passa a 40,43 e il residuo crolla a 0,98, ma il token non accelera (43,06 →
+43,32). Erano gia' tempo GPU.
+
+Dove siamo: token 43,1 = **40,4 GPU + 1,94 CPU**, ma la somma dei pass e' 29,5 →
+**~11 ms di GPU che nessun pass contiene**, e i boundary (~10 us l'uno) non lo
+spiegano. Sospetto rimasto: i **40 clearBuffer per token**, unica ragione per cui
+il pass si spezza a ogni layer. Esperimento gia' scritto: azzeramento con un
+dispatch DENTRO il pass, e il token diventa un pass solo invece di 41.

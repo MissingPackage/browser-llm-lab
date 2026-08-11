@@ -127,6 +127,18 @@ export interface Q35GpuModel {
     tokens: number; embedMs: number; readbackMs: number; argmaxMs: number;
     submits: number; readbacks: number;
     dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
+    /**
+     * FASE 4-TER (it.28): il token FUORI dai pass GPU, decomposto.
+     * `encodeMs` = registrare i ~2400 dispatch nel command buffer e fare il
+     * submit (CPU pura, e la GPU non ha ancora cominciato: e' seriale col
+     * lavoro GPU, non sovrapposta). `readbackMs` = attesa delle mapAsync, che
+     * NON e' overhead ma per lo piu' la GPU che lavora. `tailCpuMs` = la
+     * contabilita' di fine token (derivazione dei miss da Sel, routing,
+     * noteResidentHit). `embedMs` e `argmaxMs` erano gia' li'. `tokenMs` e' il
+     * totale di parete, cosi' il residuo non misurato si vede per differenza
+     * invece di essere assunto zero.
+     */
+    encodeMs: number; tokenMs: number; tailCpuMs: number;
   };
   /**
    * Accende/spegne il path a submit unico a caldo (solo se il modello e' stato
@@ -191,6 +203,19 @@ export interface Q35GpuModelOpts {
    * pena solo se il tempo sta dove i dispatch sono tanti.
    */
   telemetryGpu?: boolean;
+  /**
+   * SOLO HARNESS (fase 4-ter, it.28): salta lo SNAPSHOT dello stato ricorrente
+   * (62,8 MiB di copyBufferToBuffer per token, nati in it.18 per il replay).
+   * Serve a MISURARE quanto costa quella copia, che e' la piu' grossa
+   * operazione GPU fuori dai pass e quindi il sospetto numero uno per gli 11,9
+   * ms che la decomposizione CPU non spiega.
+   *
+   * Rompe il replay per costruzione — senza snapshot il restore leggerebbe
+   * ombre stantie — quindi il path LANCIA se un token risulta sporco invece di
+   * ripararlo con dati sbagliati. Si usa solo a cache calda, dove i token
+   * sporchi sono 0 per misura (it.16).
+   */
+  debugNoStateSnapshot?: boolean;
 }
 
 export async function createQ35GpuModel(
@@ -956,13 +981,21 @@ export async function createQ35GpuModel(
           // tornano stale-ma-plausibili.
           device.pushErrorScope("validation");
           device.pushErrorScope("out-of-memory");
+          const tEnc = performance.now();
           const enc = device.createCommandEncoder();
           if (first) {
+            if (opts.debugNoStateSnapshot !== true) {
             // Snapshot dello stato ricorrente all'ingresso del TOKEN. Uno solo
             // per token basta a tutti i round: ogni layer tocca il proprio
             // stato una volta sola, quindi stato-all-ingresso-del-layer ==
             // stato-all-ingresso-del-token.
-            for (const s of opt.stateShadow) enc.copyBufferToBuffer(s.src, 0, s.dst, 0, s.bytes);
+              for (const s of opt.stateShadow) enc.copyBufferToBuffer(s.src, 0, s.dst, 0, s.bytes);
+            }
+          } else if (opts.debugNoStateSnapshot === true) {
+            throw new Error(
+              "q35 optimistic: replay richiesto con debugNoStateSnapshot — lo stato ricorrente non e' " +
+              "stato salvato, quindi il restore leggerebbe ombre stantie. La sonda si usa solo a cache " +
+              "calda, dove i token sporchi sono 0.");
           } else {
             // Rientro del replay: x torna a essere l'hidden che il layer aveva
             // visto nel giro sporco, BIT-IDENTICO — è la condizione per cui il
@@ -1019,7 +1052,11 @@ export async function createQ35GpuModel(
           for (let m = startLayer; m < nMoeLayer; m++) {
             // checkpoint dell'hidden di INGRESSO del segmento, fuori dal pass
             // (i dispatch che hanno prodotto questo x sono già chiusi).
-            enc.copyBufferToBuffer(x, 0, opt.hiddenCkpt, m * d * 4, d * 4);
+            // Come lo snapshot, serve SOLO al replay: la sonda di misura lo
+            // salta insieme a quello (fase 4-ter, it.28).
+            if (opts.debugNoStateSnapshot !== true) {
+              enc.copyBufferToBuffer(x, 0, opt.hiddenCkpt, m * d * 4, d * 4);
+            }
             // `moeAcc` si azzera DENTRO l'encoder. La `queue.writeBuffer` del
             // path sync qui non funzionerebbe: è ordinata PRIMA dell'intero
             // submit, quindi i 40 layer vedrebbero un solo azzeramento —
@@ -1080,16 +1117,20 @@ export async function createQ35GpuModel(
           enc.copyBufferToBuffer(selBuf, 0, opt.selStaging, 0, nSel * SEL_BYTES);
           enc.copyBufferToBuffer(opt.dirtyB, 0, opt.dirtyStaging, 0, 16);
           device.queue.submit([enc.finish()]);
+          // CPU pura, e la GPU non ha ancora cominciato: e' seriale col lavoro
+          // GPU, non sovrapposta (fase 4-ter, it.28).
+          perfAcc.encodeMs += performance.now() - tEnc;
           perfAcc.submits++;
           // I1: da qui al readback la slotTable è INTOCCABILE — il resolve l'ha
           // già letta e gli slot che ha pubblicato in `Sel` devono restare
           // quelli. Il repair sta DOPO, al confine.
           cache.setInFlight(true);
-          const errOom = await device.popErrorScope();
-          const errVal = await device.popErrorScope();
-          if (errOom ?? errVal) throw new Error(`q35 optimistic error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
-          // Le mapAsync partono INSIEME (stesso submit alle spalle): un
-          // round-trip host solo, ed è per questo che vale UN readback.
+          // ORDINE (fase 4-ter, it.28): le mapAsync PRIMA, gli error scope DOPO.
+          // `popErrorScope` si risolve quando il device ha processato il lavoro,
+          // quindi awaitarlo PRIMA del readback e' una seconda attesa della
+          // stessa cosa. Il contratto non cambia — l'errore si cattura comunque
+          // e si alza prima di usare i byte letti; cambia che si aspetta una
+          // volta sola.
           const tRb = performance.now();
           const maps: Promise<undefined>[] = [
             opt.selStaging.mapAsync(GPUMapMode.READ),
@@ -1100,6 +1141,9 @@ export async function createQ35GpuModel(
           // altrimenti Dawn droppa il command buffer (known-issue fase A).
           if (canGpuTs && tsIdx > 0) maps.push(tsqStaging!.mapAsync(GPUMapMode.READ));
           await Promise.all(maps);
+          const errOom = await device.popErrorScope();
+          const errVal = await device.popErrorScope();
+          if (errOom ?? errVal) throw new Error(`q35 optimistic error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
           perfAcc.readbacks++;
           perfAcc.readbackMs += performance.now() - tRb;
           cache.setInFlight(false); // confine di giro: la tabella torna toccabile
@@ -1180,6 +1224,7 @@ export async function createQ35GpuModel(
         // `lastFirst` parte a -1 e non a 0: a cache fredda il primo layer sporco
         // E' lo zero, ed e' legittimo — il progresso stretto si pretende fra un
         // round e il successivo, non fra il giro iniziale e il primo round.
+        const tTail = performance.now();
         let rounds = 0, lastFirst = -1;
         while (cur.missCount > 0) {
           if (rounds === 0) perfAcc.dirtyTokens++;
@@ -1229,6 +1274,7 @@ export async function createQ35GpuModel(
           cur = await runPass(cur.firstDirty, false);
         }
         account(nMoeLayer, cur.su);
+        perfAcc.tailCpuMs += performance.now() - tTail;
         return cur.lg;
       } : null,
       async runLayer(m: number, logitsF32: Float32Array): Promise<void> {
@@ -1307,6 +1353,7 @@ export async function createQ35GpuModel(
   const perfAcc = {
     tokens: 0, embedMs: 0, readbackMs: 0, argmaxMs: 0, submits: 0, readbacks: 0,
     dirtyTokens: 0, replays: 0, replayLayers: 0, repairMs: 0,
+    encodeMs: 0, tokenMs: 0, tailCpuMs: 0,
   };
   /** path attivo: `true` solo se costruito con `select: "optimistic"` (fetta 3c) */
   let optimisticOn = opts.select === "optimistic";
@@ -1438,6 +1485,7 @@ export async function createQ35GpuModel(
       return ids;
     },
     async step(token: number, pos: number, read = true): Promise<number> {
+      const tTok = performance.now();
       const tEmb = performance.now();
       if (embdKind === "q6k") dequantQ6_K(embdRaw, token * rowBytes, rowBlocks, embRow);
       else if (embdKind === "q80") dequantQ8_0(embdRaw, token * rowBytes, rowBlocks, embRow);
@@ -1456,6 +1504,7 @@ export async function createQ35GpuModel(
         let bestO = -Infinity, biO = -1;
         for (let i = 0; i < S.vocab; i++) if (lgOpt[i] > bestO) { bestO = lgOpt[i]; biO = i; }
         perfAcc.argmaxMs += performance.now() - tAmOpt;
+        perfAcc.tokenMs += performance.now() - tTok;
         return biO;
       }
       if (!moe) {

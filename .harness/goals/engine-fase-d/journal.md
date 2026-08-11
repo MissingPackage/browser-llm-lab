@@ -1709,3 +1709,70 @@ non assunta.
 **Gate di questa iterazione**: nessun codice, e' il progetto della fetta scritto
 prima di iniziarla (pattern di it.13/it.16/it.19/it.24). tsc pulito, suite
 440|9, ktest 93/93 invariati dall'iterazione precedente.
+
+## it.28 (2026-08-11, FASE 4-TER) — i 15,12 ms "fuori dai pass" NON sono CPU, e la mia ipotesi dell'item 17 era sbagliata
+
+**Ruling PI incassato** (item 17, opzione (a)): riga 4-ter aggiunta a PHASES
+fra la 4-bis e la 4, col done-when che include l'USCITA — se le voci aggredibili
+sommano meno di ~8 ms la fase si chiude come esclusa coi numeri.
+
+**Prima misura, e ribalta l'ipotesi.** Nell'item 17 avevo scritto che i 15,12 ms
+erano "encode CPU dei ~2300 dispatch, submit, attesa del readback, argmax su
+151k logit, dequant dell'embedding". Decomposti (smoke 35B, passata calda):
+
+| voce | ms/token |
+|---|---|
+| attesa del readback (mapAsync) | 29,194 |
+| **encode CPU dei ~2400 dispatch** | **1,267** |
+| argmax su 151k logit | 0,431 |
+| contabilita' di fine token | 0,210 |
+| dequant della riga di embedding | 0,028 |
+| **residuo non attribuito** | **11,906** |
+
+**Il lavoro CPU e' 1,94 ms — il 4,5% del token.** L'encode dei 2400 dispatch, che
+avevo messo per primo nella lista dei sospetti, costa 1,27 ms. E "l'attesa del
+readback" non e' overhead: e' la GPU che lavora. Avevo sommato la GPU alla CPU e
+chiamato il totale "fuori dai pass".
+
+**Poi ho inseguito il residuo, e due ipotesi su tre sono cadute.**
+1. **Lo snapshot dello stato ricorrente** (62,8 MiB per token, nato in it.18): il
+   sospetto numero uno, perche' e' la piu' grossa operazione GPU fuori dai pass.
+   Misurato con una sonda che lo salta (`--no-snapshot`, che LANCIA se serve un
+   replay, cosi' non puo' dare numeri sbagliati in silenzio): **0,30 ms**.
+   Refutata.
+2. **Il checkpoint dell'hidden** (40 copie da 8 KB): **~0** (42,764 → 42,792,
+   dentro il rumore). Refutata.
+3. **I due `popErrorScope` awaitati PRIMA del readback**: confermata come
+   ATTRIBUZIONE, non come costo. Spostandoli dopo le mapAsync, l'attesa del
+   readback passa da 29,19 a **40,43 ms** e il residuo crolla da 11,91 a
+   **0,98** — ma il token NON accelera (43,06 → 43,32, dentro il rumore). Cioe'
+   quei 11,9 ms erano gia' tempo GPU: `popErrorScope` si risolve quando il
+   device ha processato il lavoro, quindi awaitarlo prima era una seconda attesa
+   della stessa cosa, non un costo in piu'. La riordino comunque, perche' ora
+   `readbackMs` significa "attesa totale della GPU" invece di una sua meta'
+   arbitraria — e' una correzione di CONTABILITA', non un guadagno, e la scrivo
+   cosi'.
+
+**DOVE SIAMO, ONESTAMENTE.** Il token e' 43,1 ms: **~40,4 di GPU** (attesa vera)
+e **1,94 di CPU**. Ma la somma dei pass cronometrati e' 29,5 ms (it.23): restano
+**~11 ms di tempo GPU che nessun pass contiene**. I pass boundary da soli non lo
+spiegano — la sonda che ne aggiunge 80 e poi 160 costa 1,2 ms per volta, cioe'
+~10 us l'uno, e i 41 boundary del regime normale valgono ~0,4 ms.
+
+**Il sospetto rimasto, e l'esperimento gia' scritto per la prossima iterazione**:
+i **40 `clearBuffer(moeAcc)` per token**, che sono l'unica ragione per cui il
+pass si SPEZZA a ogni layer (piu' il checkpoint dell'hidden, che pero' e'
+replay-only e costa 0). Se il costo sta li', si toglie sostituendo il
+`clearBuffer` con un dispatch di azzeramento DENTRO il pass — e il token
+diventa un pass solo invece di 41.
+
+**Il done-when della 4-ter NON si applica ancora**: le voci CPU sommano 1,94 —
+sotto la soglia degli 8 ms — ma la fase non si chiude per esclusione, perche' la
+decomposizione ha spostato il bersaglio invece di eliminarlo: gli ~11 ms
+esistono, sono GPU, e hanno un esperimento da una riga che li spiega o li
+esclude. Chiudere adesso sarebbe usare la lettera della riga contro il suo scopo.
+
+**Gate**: tsc pulito, suite 440|9, argmax **39/39**, routing identico chiave per
+chiave, miss 0 in tutti e quattro i run; JSON committati (`q35-cpubreak`,
+`q35-nosnap`, `q35-nosnap2`, `q35-errscope`). Stabilita' run-to-run misurata di
+passaggio: 43,06 e 43,24 sullo stesso codice, +0,4%.

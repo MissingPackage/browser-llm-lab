@@ -53,6 +53,8 @@ interface Cfg {
    * il report lo dichiara confrontando il ms/token con e senza sonda.
    */
   gpuTime?: boolean;
+  /** SOLO MISURA (fase 4-ter): senza snapshot dello stato ricorrente. */
+  noStateSnapshot?: boolean;
 }
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
@@ -60,6 +62,8 @@ const pass2json = (
   r: {
     submits: number; readbacks: number; hits: number; misses: number; ms: number;
     dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
+    encodeMs: number; embedMs: number; argmaxMs: number; tailCpuMs: number;
+    readbackMs: number; tokenMs: number;
   },
   n: number,
 ) => ({
@@ -69,6 +73,11 @@ const pass2json = (
   msPerToken: r.ms / n,
   dirtyTokens: r.dirtyTokens, replays: r.replays, replayLayers: r.replayLayers,
   repairMs: r.repairMs,
+  // FASE 4-TER: il token fuori dai pass GPU, per voce e per token
+  cpu: {
+    encodeMs: r.encodeMs / n, embedMs: r.embedMs / n, argmaxMs: r.argmaxMs / n,
+    tailCpuMs: r.tailCpuMs / n, readbackWaitMs: r.readbackMs / n, tokenMs: r.tokenMs / n,
+  },
 });
 
 const post = (m: unknown) => (self as unknown as Worker).postMessage(m);
@@ -148,6 +157,7 @@ async function main(cfg: Cfg): Promise<void> {
     routerShadow: cfg.routerShadow === true,
     select: cfg.optTrace === true ? "optimistic" : "cpu",
     telemetryGpu: cfg.gpuTime === true,
+    debugNoStateSnapshot: cfg.noStateSnapshot === true,
   });
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
@@ -268,6 +278,8 @@ async function main(cfg: Cfg): Promise<void> {
       argmax: number[]; submits: number; readbacks: number; hits: number; misses: number;
       routing: Record<string, number>; ms: number; error: string | null;
       dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
+      encodeMs: number; embedMs: number; argmaxMs: number; tailCpuMs: number;
+      readbackMs: number; tokenMs: number;
     }> => {
       model.resetState();
       model.setOptimistic(optimistic);
@@ -304,6 +316,9 @@ async function main(cfg: Cfg): Promise<void> {
         hits: m1.hits - m0.hits, misses: m1.misses - m0.misses, routing, ms, error,
         dirtyTokens: p1.dirtyTokens - p0.dirtyTokens, replays: p1.replays - p0.replays,
         replayLayers: p1.replayLayers - p0.replayLayers, repairMs: p1.repairMs - p0.repairMs,
+        encodeMs: p1.encodeMs - p0.encodeMs, embedMs: p1.embedMs - p0.embedMs,
+        argmaxMs: p1.argmaxMs - p0.argmaxMs, tailCpuMs: p1.tailCpuMs - p0.tailCpuMs,
+        readbackMs: p1.readbackMs - p0.readbackMs, tokenMs: p1.tokenMs - p0.tokenMs,
       };
     };
     // TRE passate, non due. La prima è FREDDA per forza (la cache parte vuota)

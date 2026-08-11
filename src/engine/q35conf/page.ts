@@ -19,6 +19,8 @@ const cfg = {
   optCold: q.get("optcold") === "1",
   // ?gputime=1 → decomposizione del tempo GPU del token per categoria
   gpuTime: q.get("gputime") === "1",
+  // ?nosnap=1 → misura: senza snapshot dello stato ricorrente (fase 4-ter)
+  noStateSnapshot: q.get("nosnap") === "1",
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,
