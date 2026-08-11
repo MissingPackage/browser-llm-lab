@@ -1136,3 +1136,63 @@ questi due numeri.
 **Gate**: tsc pulito, suite 410|9, ktest 87/87, 0 gpu-error, due JSON committati
 (`q35-optimistic-35b-it17.json` per il freddo-sync, `q35-optimistic-cold-35b-it18.json`
 per il freddo-ottimistico).
+
+## it.19 (2026-08-11, fase 4) — PREVISIONE SCRITTA PRIMA DI MISURARE: perche' il prefill batched sul 35B non puo' rendere come su GLM
+
+Ricognizione su `glmprefillplan.ts` + `glmmodel` (il prefill batched di GLM) e
+su `q35gpumodel`, prima di scrivere una riga. Due cose cambiano rispetto a GLM,
+ed entrambe abbassano il tetto.
+
+**1. TRENTA LAYER SU QUARANTA NON SI BATCHANO PER RIGHE.** Il batching M>1 del
+prefill fa girare M token insieme come righe di una GEMM. Funziona sui layer
+senza memoria fra token: attenzione (GLM: MLA; qui i 10 layer full-attn),
+shexp, router, expert. **Il deltanet e' ricorrente sul TEMPO**: `deltaNetConv`
+shifta lo stato e `deltaNetCore` aggiorna S token per token. Le righe di un
+chunk sono token CONSECUTIVI, quindi la riga m+1 dipende dallo stato prodotto
+dalla riga m: non e' parallelizzabile nella forma in cui il kernel esiste oggi.
+GLM non ha layer ricorrenti e questo problema non ce l'aveva. Esiste una forma
+chunkwise del delta rule (e' come si addestrano questi modelli), ma e' un kernel
+di ricerca, non un port — e non e' quello che la riga 4 di PHASES chiede.
+Conseguenza: nel chunk, i 2 dispatch ricorrenti per layer restano M, tutto il
+resto diventa 1.
+
+**2. L'UNIONE DEGLI EXPERT SI COMPRIME MOLTO MENO.** Il guadagno del batching
+per expert e' la MOLTEPLICITA' media (quante righe del chunk selezionano lo
+stesso expert): sotto quella si dividono sia i dispatch sia il traffico dei
+pesi. GLM ha 64 expert e top-4: a M=16 sono 64 selezioni su 64 expert,
+E[|unione|] ~ 40, molteplicita' ~1,6. Il 35B ha **256 expert e top-8**: a M=16
+sono 128 selezioni su 256 expert, E[|unione|] = 256·(1−(1−1/256)^128) = **100,9**,
+molteplicita' **1,27**. Il parco e' 4x piu' grande e la molteplicita' crolla.
+
+**LA PREVISIONE, in dispatch per layer per token** (statici row-parallel 17,
+ricorrenti 2, expert 5 per expert dell'unione; oggi: 19,5 statici + 40 expert =
+**59,5**):
+
+| M | \|unione\| | molteplicita' | disp/layer/token | vs oggi |
+|---|---|---|---|---|
+| 8 | 56,7 | 1,13 | 39,6 | 1,50x |
+| 16 | 100,9 | 1,27 | 34,6 | **1,72x** |
+| 32 | 162,0 | 1,58 | 27,8 | 2,14x |
+| 64 | 221,5 | 2,31 | 19,6 | 3,03x |
+
+Cioe': a M=16 il prefill batched toglie il 42% dei dispatch, non l'80% che il
+caso GLM lascerebbe sperare, e il residuo e' quasi tutto path expert.
+
+**MA LA PREVISIONE VALE SOLO SE IL TOKEN E' DISPATCH-BOUND, E QUESTO NON L'HO
+MISURATO.** L'aritmetica dice che potrebbe esserlo: 2382 dispatch/token (782
+statici + 320x5 expert) in 72,6 ms fanno **30,5 us per dispatch**, contro un
+lavoro vero per GEMV expert stimabile in 1-2 us (0,6 MB di pesi a ~500 GB/s).
+Un ordine di grandezza di scarto dice "overhead per dispatch", ma e' una stima
+di FLOP e banda fatta a mano, non una misura — e la banda vera di questi kernel
+non l'ho mai misurata sul 35B.
+
+**QUINDI PRIMA LO STRUMENTO, POI LA FETTA** (stesso schema di it.16): serve la
+decomposizione del token in tempo GPU — quanto va nel segmento statico, quanto
+nel router, quanto nei 1600 dispatch expert. Se il tempo sta negli expert e
+scala coi dispatch, la tabella qui sopra e' la previsione del guadagno di fase 4
+e la fetta si fa. Se sta altrove (attenzione, deltanet, coda), la fase 4 va
+ridiscussa PRIMA di spendere 2-3 iterazioni: il suo done-when e' un micro-bench
+tok/s prima/dopo, e un "dopo" che non si muove e' una fase spesa male.
+
+Previsione registrata PRIMA della misura, con la data e il commit di questa
+riga: mi aspetto che il segmento expert sia >= 60% del tempo GPU del token.
