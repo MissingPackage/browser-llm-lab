@@ -349,3 +349,18 @@ due volte: si ottimizza sopra un collo che poi sparisce (e' testualmente
 l'argomento con cui il PI ha accolto l'item 8).
 
 Registrato it.21 (2026-08-11).
+
+### RULING PI 2026-08-11: (a) — FASE 4-BIS PRIMA DELLA 4
+
+"sono d'accordo con (a)". I kernel expert K-quant si affrontano PRIMA del
+prefill batched. Riga **4-bis** aggiunta a PHASES fra la 3b e la 4, col
+done-when scritto qui sotto e i riferimenti misurati di it.19/it.21 come "prima"
+(17,2 GB/s efficaci, 33,1 ms/token sul segmento expert, 57,3 ms di tempo GPU).
+La fase 4 resta in piano ma la sua proiezione va RIFATTA dopo la 4-bis, perche'
+i numeri su cui si misura cambiano. **Item 15 CHIUSO.**
+
+DICHIARATO PRIMA DI COMINCIARE, come per la 3c: **la 4-bis NON sara'
+bit-identica per costruzione**. Distribuire il lavoro su piu' lane cambia
+l'ORDINE delle somme f32 dentro il prodotto scalare, e in f32 l'addizione non e'
+associativa. Il gate quindi non e' la bit-identita' ma: ktest contro cpuref con
+la tolleranza di oggi, argmax identico sul golden smoke, routing invariato.
