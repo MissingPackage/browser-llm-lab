@@ -386,3 +386,21 @@ submit, attesa del readback, argmax su 151k logit, dequant dell'embedding — e
 nessuna riga del contratto li guarda. Servono −12 ms per i 30 tok/s e la fase 4
 ne vale zero (agisce sul TTFT). Parere: fase 4-ter prima della 4, il cui primo
 passo e' una misura.
+
+## it.24 (2026-08-11) — item 16 chiuso da un fatto sui tipi, fase 4 ridimensionata
+
+Enumerati i tipi del GGUF: attn/ssm_out/shexp sono **Q8_0**, router/alpha/beta/
+norm/conv1d sono **F32**, i K-quant stanno SOLO negli `*_exps.weight`. Quindi il
+segmento statico non contiene nemmeno un GEMV K-quant e il +1,62 ms di it.22
+**non puo' venire dalla 4-bis**: stessi kernel, stessi dati, stesso lancio.
+Restano deriva fra run o effetto globale (il token e' passato da 71,9 a 44,3 ms:
+la GPU fa molto piu' lavoro al secondo). **Item 16 CHIUSO** — e l'ipotesi che
+avevo scritto (ridondanza nelle scale) era su un kernel che non partecipa: avere
+resistito alla correzione alla cieca e' stato giusto.
+
+INVENTARIO FASE 4. Pronto e ktestato: `gemvQuant` batch (q8_0 = TUTTO lo statico
+del 35B), `gemvF32`, `rmsnorm`, `kvAppend`, `stridedCopy`. Da fare: attenzione a
+chunk per q35 (`attnPrefillChunkWgsl` e' del path Qwen 2.5, legge un qkv fuso —
+non e' un drop-in), rope-neox batch, elementwise batch, gate deltanet batch, il
+path expert a GATHER per i K-quant (GLM ce l'ha solo per q4_0/q4_1) e
+l'orchestratore a M righe. Taglia della fase corretta da 2-3 a **3-5 iterazioni**.

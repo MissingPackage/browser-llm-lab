@@ -25,6 +25,6 @@ Gate PERMANENTI a ogni fase (impliciti in ogni done-when): ktest tutti PASS,
 | 8 | **CHECKPOINT B** — speedup o esclusione | speedup end-to-end del decode misurato con hostState O esclusione motivata coi numeri se sotto soglia utile; ratchet golden invariati; JSON committato | none | results/engine/**, docs/engine/** | ready |
 | 9 | Chiusura | checklist DONE WHEN del contratto voce per voce con evidenza; non-reg GLM piena fresca; direction/ledger/HANDOFF; docket triage; q1 docket item 14 CHIUSO (la parità c'è) | none | docs/**, HANDOFF.md, .harness/goals/** | ready |
 
-Taglie stimate (1-4 it.): 1→2-4 · 2→1-2 · 3→2-3 · 4→2-3 · 5→2-4 · 6→1 ·
-3b→3-5 · 4-bis→1-3 · 7→2-4 · 8→1 · 9→1. La fase 1 è la più rischiosa (tocca il core indurito di
+Taglie stimate (1-4 it.): 1→2-4 · 2→1-2 · 3→2-3 · 4→**3-5** (corretta in it.24 sull'inventario: servono attenzione a chunk per q35 e gather K-quant, due famiglie di kernel che non esistono) · 5→2-4 · 6→1 ·
+3b→3-5 · 4-bis→1-3 (fatta in 1) · 7→2-4 · 8→1 · 9→1. La fase 1 è la più rischiosa (tocca il core indurito di
 GLM): il paracadute è il ktest bit-exact, che gira in minuti.

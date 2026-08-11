@@ -385,6 +385,20 @@ chiude comunque a −27,64 ms. Registrato perche' un +11% su una categoria dopo 
 cambio di kernel e' esattamente il tipo di cosa che si smette di vedere se non
 la si scrive. it.22 (2026-08-11).
 
+### CHIUSO it.24 (2026-08-11) — non e' attribuibile alla 4-bis, per costruzione
+
+Enumerati i tipi dei tensori del 35B dal GGUF: attn (q/k/v/output/qkv/gate),
+ssm_out e shexp sono **Q8_0**; router, alpha, beta, norm e conv1d sono **F32**;
+i q4_K/q6_K stanno SOLO negli `*_exps.weight`. Il segmento statico non contiene
+nemmeno un GEMV K-quant: passa tutto da `gemvQuantWgsl` e `gemvF32Wgsl`, il cui
+testo emesso la 4-bis non ha cambiato di un byte. Stessi kernel, stessi dati,
+stesso lancio ⇒ il +1,62 ms non viene dal cambio. Restano deriva fra run o un
+effetto globale (il token e' passato da 71,9 a 44,3 ms: la stessa GPU fa molto
+piu' lavoro al secondo, e clock e potenza non sono gli stessi) — la classe di
+fenomeni per cui esistono `hostState` e i bracci interleavati. **Item 16
+CHIUSO.** E l'ipotesi che avevo scritto (ridondanza nell'estrazione delle scale)
+era sbagliata: la correzione sarebbe stata su un kernel che non partecipa.
+
 ## item 17 — un terzo del token non e' tempo GPU, e nessuna fase lo guarda (PI)
 
 Misurato in it.23 sul 35B a caldo: il token dura **45,48 ms** (44,26 con la

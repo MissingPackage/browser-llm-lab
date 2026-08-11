@@ -1519,3 +1519,63 @@ barriere, ed e' il prezzo di sapere dove vanno i ms.
 **Docket item 16 NON si chiude con questa misura**: per attribuire il +1,62 ms
 del segmento statico servirebbe la stessa granularita' PRIMA della 4-bis, cioe'
 rimettere il kernel vecchio. Resta aperto.
+
+## it.24 (2026-08-11, fase 4) — item 16 CHIUSO da un fatto sui tipi, e l'inventario che ridimensiona la fase
+
+**Item 16 (lo statico +1,62 ms dopo la 4-bis): chiuso, e non da una misura in
+piu' ma da una lettura del GGUF.** Ho enumerato i tipi dei tensori del 35B:
+
+| gruppo | tipo |
+|---|---|
+| attn q/k/v/output, attn_qkv, attn_gate | **Q8_0** |
+| ssm_out, shexp gate/up/down | **Q8_0** |
+| ffn_gate_inp (router), alpha, beta, norm, conv1d | **F32** |
+| SOLO gli expert (`*_exps.weight`) | q4_K / q6_K |
+
+Cioe': **il segmento statico non contiene NEMMENO UN GEMV K-quant.** Passa tutto
+da `gemvQuantWgsl` (q8_0) e `gemvF32Wgsl`, che la 4-bis non ha toccato — il
+testo emesso di quei due kernel e' identico byte per byte a prima. Quindi il
++1,62 ms **non puo' venire dal cambio**: sono gli stessi kernel, sugli stessi
+dati, con lo stesso lancio. Restano due spiegazioni, ed entrambe sono globali e
+non di codice: deriva fra run, oppure un effetto di sistema (il token e'
+passato da 71,9 a 44,3 ms, quindi la stessa GPU fa molto piu' lavoro al secondo
+— clock e potenza non sono gli stessi). E' esattamente la classe di fenomeni per
+cui il progetto ha `hostState` e la regola dei bracci interleavati.
+**Item 16 CHIUSO: non attribuibile alla 4-bis, per costruzione.**
+
+Nota metodologica che mi porto dietro: avevo scritto "l'ipotesi della ridondanza
+nell'estrazione delle scale non mi convince" e avevo ragione a non correggere
+alla cieca — la correzione sarebbe stata su un kernel che nemmeno partecipa.
+
+**INVENTARIO DELLA FASE 4** (ricognizione prima della fetta, come it.13/it.16/
+it.19). Cosa serve per far girare M righe insieme, e cosa c'e' gia':
+
+GIA' PRONTO (esiste ed e' ktestato, `dense-batch-*` BIT-IDENTICO su 3 righe):
+`gemvQuantWgsl` batch (q4_0/q4_1/**q8_0**) — ed e' il kernel di TUTTO lo statico
+del 35B, cioe' della voce piu' grossa da comprimere (ssmGemv 7,60 + ssmOut 2,24
++ shexp 2,33 + attn) · `gemvF32Wgsl` batch · `rmsnormWgsl` batch ·
+`kvAppendWgsl` batch · `stridedCopyWgsl` batch.
+
+DA FARE, e non e' poco:
+1. **attenzione a chunk per q35**. `attnPrefillChunkWgsl` esiste ma e' del path
+   Qwen 2.5: legge un `qkv` FUSO con quel layout, mentre q35 ha q/k/v separati,
+   q_norm/k_norm, rope-neox e un gate sigmoid. Non e' un drop-in.
+2. **`ropeNeoxWgsl` batch** — oggi prende `pos` da un uniform, serve per riga.
+3. **elementwise batch**: `siluMulWgsl`, `sigmoidMulWgsl`, `addInPlaceWgsl`,
+   `axpyWgsl` (offset di riga).
+4. **`deltaNetGatesWgsl` batch** (le gate sono row-parallel; conv e core NO,
+   restano M — ma costano 0,588 ms in totale, it.23).
+5. **il path expert a GATHER**: GLM ha `pairGemvSiluGatherWgsl` e
+   `gemvDownSlotsWgsl`, ma **solo per q4_0/q4_1**. Per i K-quant non esistono, e
+   sono il pezzo che comprime la voce piu' grossa dopo lo statico.
+6. **l'orchestratore**: un secondo forward a M righe in `q35gpumodel`, con gli
+   scratch per riga, il piano `planMoeChunk` (gia' parametrico da it.20) e la
+   combine in ordine k.
+
+**Conseguenza sulla TAGLIA**: PHASES stima la fase 4 in 2-3 iterazioni. Con sei
+voci di cui due sono famiglie di kernel nuove (attenzione a chunk, gather
+K-quant), **3-5 e' piu' onesto**, ed e' il tipo di correzione che va fatta prima
+di cominciare e non a meta'. Aggiornata la riga delle taglie.
+
+**Gate**: nessun codice toccato in questa iterazione (tsc pulito, suite 440|9
+invariate) — e' ricognizione e chiusura di un item, con l'evidenza su disco.
