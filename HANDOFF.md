@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.31: nessun cambio di kernel residuo, lista esatta per l'orchestratore su disco)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.32: orchestratore montato, logits BIT-IDENTICI, speedup 1,15x (non 2: il batch fonde i dispatch, non il traffico dei pesi))
 
 ## 1. Next decidable
 
@@ -361,40 +361,34 @@ un modo `batch` che q35 usa per le HEAD, ma quel `batch` e' PER-VETTORE
 alla geometria VERA di q35 (e' aritmetica di offset: vive o muore sui passi
 reali).
 
-**LISTA ESATTA per la prossima iterazione — nessun punto ha piu' incognite**:
-1. `Q35GpuModelOpts.prefillM?: number` (assente = non cambia una riga);
-2. scratch a M righe accanto a quelli per riga;
-3. `stepsB[]` + `pushB()` nello STESSO giro di `steps` — per-vettore =
-   appiattimento (nVec x M), per-riga = `gid.y`, ricorrenza = `rows` con M bind
-   group per layer che differiscono solo nell'offset dell'uniform;
-4. `prefillChunk(tokens, pos0)`: dequant di M righe, `rowPos`/`rowPast`, un
-   encoder, head sulla SOLA ultima riga;
-5. gate: `prefillChunk` vs `step()` sequenziale sul 4B, **logits bit-identici**,
-   piu' il micro-bench tok/s del done-when.
+**ORCHESTRATORE MONTATO E GATEATO (it.32)** — la fase 4 ha il suo done-when.
+`prefillM` opt-in (assente = non cambia una riga), scratch a M righe accanto a
+quelli per riga, lista di step GEMELLA nello stesso giro di `steps`, e
+`prefillChunk(tokens, pos0)`: M token in un submit, head sulla SOLA ultima riga.
+I tre idiomi convivono — per-vettore = appiattimento (nVec x M), per-riga =
+`gid.y`, ricorrenza = `rows` con un bind group per riga.
 
-RESTANO DUE VOCI, e **it.27 ne ha INVERTITO l'ordine col motivo**: prima
-l'**orchestratore a M righe**, poi il **gather K-quant**. Il motivo e' il GATE —
-con gli expert per riga dentro il chunk il confronto "logits batched == logits
-sequenziali" che la riga 4 chiede e' **BIT-IDENTICO per costruzione** (ogni
-kernel batched di it.25-26 e' ktestato bit-identico per riga), mentre col
-gather l'ordine delle somme cambia e serve la struttura a slot + combine in
-ordine k. E costa poco: a M=16 il batched fa 14,38 ms col gather e 16,25 senza
-(2,01x contro 1,78x), cioe' **l'89% del guadagno sta nell'orchestratore**.
+**GATE (4B, smoke, M=8, 5 chunk): LOGITS BIT-IDENTICI, 1.241.600/1.241.600,
+maxAbs 0.** Era l'atteso per costruzione (ogni kernel batched e' ktestato
+bit-identico per riga).
 
-**PROGETTO DELL'ORCHESTRATORE (it.27, su disco nel journal)**: (1) prima il tipo
-di layer DENSO (4B/9B) — stessa attenzione, stesso deltanet, FFN denso al posto
-del MoE: esercita tutta la macchina batched e ha il gate bit-identico; il MoE si
-aggiunge dopo ed e' l'unico pezzo nuovo. (2) Scratch a M righe ACCANTO a quelli
-per riga, non al posto (il decode resta quello che e'). (3) `rowPos`/`rowPast`
-storage per chunk. (4) Lista di step parallela costruita nello STESSO giro di
-`steps`. (5) La ricorrenza resta per riga dentro il chunk (M dispatch in
-sequenza, 0,588 ms/token). (6) Gate: `prefillChunk` contro `step()` sequenziale,
-logits BIT-IDENTICI, piu' il micro-bench tok/s.
-**Rischio dichiarato**: conv/core della riga m devono vedere lo stato della riga
-m−1; sono dispatch nello stesso pass e WebGPU li ordina — stessa proprieta' su
-cui si regge il path a submit unico di it.17, e va detta non assunta.
-**Taglia della fase corretta da 2-3 a 3-5 iterazioni**, prima di cominciare.
-Avanzamento: **5 voci su 6** (it.25-26-30). La taglia 3-5 iterazioni va ridimensionata: una delle due voci 'grosse' era una variante da trenta righe.
+**MA LO SPEEDUP E' 1,151x, NON 2** (29,88 → 25,97 ms/token, primo chunk scartato
+per il docket 10: 489 ms il primo sequenziale contro ~240 i successivi). La
+proiezione di it.23 si reggeva su "il traffico dei pesi si legge una volta per
+chunk" e **non e' vero per questi kernel**: il modo `batch` mette `wid.z` = riga
+e ogni workgroup rilegge la propria riga di pesi — fonde i DISPATCH, non il
+traffico. Per il 2x serve una GEMM vera (tile di pesi riusata su M righe), cioe'
+la famiglia `rmsPairGemmSiluChunkFast` del path Qwen 2.5, che esiste per
+un'altra geometria → **docket item 19**, non aperto come fetta.
+
+**Note**: M=16 non misurato (il gate pretende 3 chunk per scartare il primo, e lo
+smoke del 4B ne da' 2 — il guard ha funzionato). E it.24 sbagliava: "i K-quant
+stanno solo negli expert" vale per il 35B, ma il **4B ha `ssm_out` in Q5_K** —
+aggiunto `batch` ai tre gemv K-quant non-arena.
+
+**PROSSIMO**: la fase 4 sui MoE (il 35B: `prefillM` oggi LANCIA sui MoE) —
+serve il path expert dentro il chunk, che it.27 ha deciso di fare PER RIGA per
+tenere il gate bit-identico, col gather come incremento successivo.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
