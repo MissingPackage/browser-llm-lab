@@ -742,3 +742,28 @@ Parere: **(c) piu' (a)** — la sonda costa nulla e trasforma un fattore invisib
 in un campo; senza, ogni ri-misura futura ricadra' nello stesso buco. La (b) e'
 il ripiego se non si vuole toccare i floor mentre il checkpoint e' aperto.
 Registrato it.44 (2026-08-11).
+
+**CORREZIONE a item 26 (it.45, da audit indipendente).** Avevo scritto che
+13,43/56,58 sono "il denominatore della funzione obiettivo (direction §2)".
+**E' FALSO**: `direction.md:25` dice testualmente *"I floor derivati
+dall'oracolo CPU sono gate d'ingresso intermedi, mai obiettivi"*; la funzione
+obiettivo e' decode >=30 tok/s e TTFT <=4 s. La "ricaduta piu' larga"
+dell'item 26 era gonfiata: resta la scoperta (page cache 74,9%, floor caldo
+76,41/18,96, stdev che crolla), cade la sua urgenza. Item 26 declassato da
+blocco a **backlog**, e delle tre strade resta mia la (c) — il campo `mincore`
+nell'artefatto — che non chiede permessi.
+
+**ITEM 21, 22, 25 — RITIRATI COME RICHIESTE DI RULING (it.45).** L'audit ha
+ragione: sono meccanismo, cioe' miei per il ruling "decidere, non escalare", e
+la scusa "albero congelato" non regge visto che in questa stessa sessione ho
+modificato `glm-bench-run.mjs`, `q35-bench-run.mjs` e aggiunto
+`scripts/lib/gpuerrors.mjs`. La distinzione giusta l'avevo scritta io in it.43
+("solo harness: `git diff --name-only` non tocca `src/`") e non l'ho applicata.
+Restano come voci di LAVORO, non come domande:
+- 21 → `--nonreg <json>` in `glm-bench-run.mjs` (confronto mediane + exit suo)
+- 22 → gia' risolto dal contratto: PHASES riga 9 impone la non-reg piena fresca
+- 25 → `--optimistic` in `q35-bench-run.mjs` (1 riga) e riferimenti rifatti
+
+**ITEM 24 — chiuso male, e lo scrivo.** Ho scritto 35 righe di docket per
+chiedere il permesso di una cosa che ho poi fatto io stesso nella stessa
+sessione. Il difetto era vero e il fix e' buono; l'escalation era rumore.

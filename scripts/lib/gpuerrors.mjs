@@ -21,10 +21,12 @@
 // dovrebbe urlare è peggio che non averlo.
 
 // Le firme che Dawn/Chrome emettono quando un buffer nasce o diventa invalido.
-// Deliberatamente LARGA: un falso positivo costa una run ripetuta, un falso
-// negativo costa un riferimento sbagliato pubblicato.
+// "un falso positivo costa poco" NON regge su run da 2 ore: `WGSL` da solo
+// marcherebbe come contaminata qualunque run che stampi una diagnostica di
+// shader — e i worker di questo repo ne stampano. Quindi si matcha WGSL solo
+// quando compare accanto a un errore, non da solo.
 const GPU_RE =
-  /gpu error|vkAllocateMemory|OUT_OF_DEVICE_MEMORY|Invalid BindGroup|Invalid CommandBuffer|Invalid Buffer|is invalid due to|validation error|WGSL/i;
+  /gpu error|vkAllocateMemory|OUT_OF_DEVICE_MEMORY|Invalid BindGroup|Invalid CommandBuffer|Invalid Buffer|is invalid due to|validation error|WGSL[^\n]{0,80}(error|failed)|(error|failed)[^\n]{0,80}WGSL/i;
 
 /**
  * Attacca i listener e restituisce il collettore. Sostituisce il
