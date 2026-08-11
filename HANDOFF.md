@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); next = fase 4 con la proiezione rifatta)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling — un terzo del token non e' tempo GPU)
 
 ## 1. Next decidable
 
@@ -265,13 +265,43 @@ di cominciare: cambia l'ordine delle somme f32.
 convince — sugli expert la stessa ridondanza e' stravinta 3,8 a 1 — e va
 MISURATA con una sonda per-kernel dentro lo statico, non corretta alla cieca.
 
-**PROSSIMO: la fase 4 (prefill batched), con la proiezione RIFATTA.** Quella di
-it.19 assumeva tempo ∝ dispatch (smentita da it.21) e comunque partiva da un
-segmento expert che era il 58% del tempo GPU: ora e' il **29,7%** (8,743 su
-29,471). Prima di spendere 2-3 iterazioni va rifatto il conto su questi numeri,
-e i due vincoli strutturali restano: 30 layer su 40 sono deltanet e ricorrenti
-(i loro 2 dispatch per layer restano M), e l'unione degli expert comprime solo
-1,27x a M=16 (256 expert, top-8).
+**PROIEZIONE DELLA FASE 4 RIFATTA DAL BASSO (it.23)**, su categorie misurate e
+non su un conteggio di dispatch. Marche per intervalli di step + sonda a 12
+categorie (overflow contato, 0):
+
+| categoria | ms/token | % |
+|---|---|---|
+| expert | 8,716 | 28,7% |
+| ssmGemv | 7,602 | 25,0% |
+| router | 3,155 | 10,4% |
+| attn | 2,925 | 9,6% |
+| shexp | 2,333 | 7,7% |
+| ssmOut | 2,235 | 7,4% |
+| tail | 1,403 | 4,6% |
+| routerGemv | 0,701 | 2,3% |
+| **ssmRec (la ricorrenza)** | **0,588** | **1,9%** |
+| norm/resid/altro | 0,701 | 2,3% |
+| **totale GPU** | **30,359** | |
+
+**La ricorrenza del deltanet, che in it.19 avevo dato come IL vincolo
+strutturale della fase 4, costa 0,588 ms.** Il resto del blocco sono GEMV
+row-parallel (9,84 ms): avevo scambiato "il layer e' ricorrente" con "il layer
+non si batcha". **Fase 4 proiettata: 28,96 -> 14,38 ms = 2,01x** sul prefill,
+con pavimento expert 6,86 + router 3,16 + attn 2,93 = il 90% del batched.
+
+**DECISIONE APERTA — DOCKET ITEM 17 (PI)**: **15,12 ms del token (33,2%) NON
+sono tempo GPU** (encode CPU dei ~2300 dispatch, submit, attesa del readback,
+argmax su 151k logit, dequant dell'embedding) e nessuna riga del contratto li
+guarda. Il decode e' a **22,0-22,6 tok/s** e per i 30 dell'obiettivo servono
+**−12 ms**: quei 15,12 sono il posto dove sono aritmeticamente possibili senza
+toccare un kernel, e la fase 4 ne vale zero (agisce sul TTFT). Opzioni: (a)
+fase 4-ter prima della 4 — e il suo primo passo e' una MISURA, quindi si sa
+dopo un'iterazione se vale; (b) ordine invariato; (c) dentro la fase 6.
+**Parere mio: (a)**. Fino al ruling il lavoro procede sul contratto.
+
+**Aperti anche**: item 14 (il router e' 3,155 ms in 40 dispatch da 79 us, UN
+workgroup che fa softmax su 256 e top-8 in seriale) e item 16 (lo statico +1,62
+ms con la 4-bis: non attribuibile senza rimettere il kernel vecchio).
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
