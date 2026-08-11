@@ -2291,3 +2291,53 @@ conta; i run sono ore di GPU e vanno lanciati su albero congelato):
 
 **Nota sull'ordine 2-prima-di-3**: sono ore di GPU e se GLM regredisce vanno
 buttate. Il gate piu' fragile va per primo.
+
+## it.39 (2026-08-11, fase 6) — il primo braccio del CHECKPOINT A si ferma, e NON e' il codice
+
+Lanciata la non-regressione GLM (b12 optimistic, prompt 6, 64 gen, 3 rep), che
+il piano di it.38 metteva per prima perche' e' il gate piu' fragile. **Morta**,
+con una cascata di `Invalid BindGroup`. Ma il primo errore del log non e' quello:
+
+```
+GPU error: vkAllocateMemory failed with VK_ERROR_OUT_OF_DEVICE_MEMORY
+ - While calling [Device].CreateBuffer([BufferDescriptor]).
+```
+
+Tutti gli `Invalid BindGroup` che seguono sono **conseguenze**: buffer nati
+invalidi e poi bindati. Guardare l'ultimo errore invece del primo avrebbe fatto
+cercare un bug nei bind group — che e' esattamente dove non e'.
+
+**IPOTESI E PROVA, senza toccare codice.** Il JSON del riferimento porta
+`vramPeakMiB: 15160` e uno `hostState` con `memUsedMiB: 817` ("user-session-light"
+dichiarata). Oggi:
+
+| | MiB |
+|---|---|
+| picco che il riferimento richiede | **15.160** |
+| liberi ora | 13.971 |
+| **mancano** | **1.189** |
+| usati dalla sessione ora | 1.977 |
+| usati quando fu preso il riferimento | 817 |
+
+I 1.160 MiB in piu' che la sessione desktop tiene oggi sono, entro 30 MiB,
+esattamente i 1.189 che mancano. **Non e' una regressione: e' l'host.** E' la
+stessa diagnosi di it.14 (dove il braccio non modificato moriva uguale), fatta
+stavolta senza spendere un run perche' il riferimento porta con se' il suo
+`vramPeakMiB`.
+
+**E ktest lo conferma dal lato correttezza**: 96/96 con `glm-model-2layer` a
+L2rel 2,072937787401139e-07, la stessa cifra fino all'ultima decimale. Cio' che
+manca al checkpoint non e' la correttezza di GLM: e' la sua PRESTAZIONE misurata
+a parita' di host.
+
+**BLOCCO, e non lo decido io.** La riga 6 pretende "host DICHIARATO, GPU
+scarica": la condizione non e' soddisfatta e non e' una cosa che tocchi al
+motore — significa liberare 1,2 GiB di VRAM sulla macchina, cioe' chiudere roba
+sul desktop di chi lavora. Docket item 20, con due strade e il mio parere.
+
+**Cosa PUO' procedere intanto**: i riferimenti q35, che stanno nei tetti
+disponibili — il 35B a `--vram-gib 13` ha girato oggi senza problemi (budget
+derivato 10,56 GiB, picco molto sotto). Non li lancio in questa iterazione
+perche' il piano di it.38 li mette DOPO il gate di GLM, e cambiare l'ordine per
+"intanto facciamo qualcosa" e' esattamente il modo di ritrovarsi con ore di GPU
+spese su un albero che poi non passa il gate. Aspetto il ruling.

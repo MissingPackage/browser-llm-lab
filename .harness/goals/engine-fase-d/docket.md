@@ -525,3 +525,33 @@ La spiegazione plausibile e' che a contesto lungo domina l'attenzione e le M
 righe leggono la STESSA KV da workgroup concorrenti — il riuso non lo fa il
 kernel, lo fa la cache della GPU. Quindi la GEMM vera resta la strada per
 amortizzare i PESI, ma il meccanismo attuale gia' amortizza la KV dove conta.
+
+## item 20 — il CHECKPOINT A non e' eseguibile su questo host cosi' com'e' (PI)
+
+Il primo braccio (non-regressione GLM b12) e' morto con
+`VK_ERROR_OUT_OF_DEVICE_MEMORY`. **Non e' il codice**: il JSON del riferimento
+porta `vramPeakMiB: 15160` e uno `hostState` con `memUsedMiB: 817`; oggi la
+sessione ne tiene **1.977** e ne restano liberi **13.971**, cioe' **1.189 in
+meno di quanti il run ne pretende** — ed e' entro 30 MiB il delta della sessione
+desktop (1.160). La correttezza di GLM e' intatta (ktest 96/96, L2rel identico
+all'ultima decimale): manca la PRESTAZIONE a parita' di host.
+
+La riga 6 pretende "host DICHIARATO, GPU scarica", e la condizione non e'
+soddisfatta. Non e' una scelta di meccanismo: e' la macchina di chi lavora.
+
+Le opzioni:
+(a) **liberare ~1,2 GiB di VRAM** (sessione desktop piu' leggera: chiudere
+    browser/app che tengono la GPU) e ri-lanciare il b12 identico al
+    riferimento — e' l'unica strada che da' il confronto ±5% che la riga chiede;
+(b) **ri-baselinare a un budget che entra** (b10 o b11): si ottiene un numero
+    onesto ma NON confrontabile coi 13.172/31,26/14,74, quindi la riga 6 andrebbe
+    riscritta e il riferimento storico va dichiarato non riproducibile su questo
+    host;
+(c) rimandare il checkpoint a quando la macchina e' libera, e intanto fare i
+    riferimenti q35 (che nei tetti disponibili ci stanno).
+
+**Il mio parere: (a) se e' possibile liberare la VRAM, altrimenti (c)**. La (b)
+costa il confronto storico, che e' la ragione per cui quel riferimento esiste:
+un merge gate che cambia metro mentre lo si attraversa non e' un merge gate.
+
+Registrato it.39 (2026-08-11).
