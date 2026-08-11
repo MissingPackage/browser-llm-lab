@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, headCut gia' fatto)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, headCut fatto, piano di prefill parametrizzato it.20)
 
 ## 1. Next decidable
 
@@ -236,11 +236,26 @@ non viene sfiorato. NON misurata end-to-end (il gate gira `read=true`): la
 misura e' il micro-bench della fase 4. Provata la non-regressione: argmax 39/39,
 routing identico, miss 0.
 
-**PROSSIMO: la fetta della fase 4**, e il primo passo e' fase-1-shaped —
-`glmprefillplan.ts` e' cablato su `GLM47_FLASH` (nExpert 64, top-4) e va reso
-cfg-driven come `residency.ts`, non copiato per q35 (e' esattamente cio' che il
-gate strutturale del goal vieta). Poi i kernel M-righe per statico/router/expert
-e la combine in ordine k, che e' come GLM tiene l'identita' bit-a-bit col decode.
+**PASSO 1 DELLA FETTA FATTO (it.20)**: il piano del prefill non e' piu' di GLM.
+`glmprefillplan.ts` era cablato su `GLM47_FLASH` (64 expert, top-4) in SETTE
+punti; ora e' `moeprefillplan.ts` ed e' parametrico su `MoePlanShape
+{nExpert, nExpertUsed}` — config STRUTTURALE e non un import di
+`MoeModelConfig`, perche' `residency.ts` importa `GLM_PREFILL_M` da qui e
+dipendere di la' a runtime chiuderebbe un CICLO (`MoeModelConfig` e' assegnabile
+per struttura: l'unificazione la fa il sistema di tipi, senza dipendenza).
+I test girano su DUE famiglie (`describe.each`: GLM 64/top-4 e q35 256/top-8) su
+tutte le proprieta', identita' bit-a-bit con la catena del decode inclusa, piu'
+la controprova che l'ordine dell'unione DEVE divergere in f32 e un test che il
+default senza cfg e' ancora esattamente GLM. Suite **417|9**, ktest **87/87**
+(`prefill-moe-batched-vs-decode-chain` BIT-IDENTICO): il prefill di GLM non si e'
+mosso di un bit.
+
+**PROSSIMO: i kernel a M righe di q35** — statico/router/expert, gather per
+expert dell'unione, combine in ordine k (e' cosi' che GLM tiene l'identita'
+bit-a-bit col decode), e la scelta di M coi numeri di it.19 (proiezione 2,02x a
+M=16), non per analogia con GLM. Vincoli gia' noti e da rispettare: i 2 dispatch
+ricorrenti per layer deltanet restano M (30 layer su 40), e l'unione comprime
+solo 1,27x a M=16.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
