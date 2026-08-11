@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.40: CHECKPOINT A ripartito — docket 20 chiuso dai fatti, non-reg GLM IN BANDA (13,437/31,813/14,49 s), golden+cpuref IDENTICI (it.42), resta la firma routing (docket 22))
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.40: CHECKPOINT A ripartito — docket 20 chiuso dai fatti, non-reg GLM IN BANDA (13,437/31,813/14,49 s), golden+cpuref IDENTICI (it.42), riferimenti q35 8/9 (it.43), gap nativo NON a parita per page cache (it.44); docket 22-26 aperti)
 
 ## 1. Next decidable
 
@@ -542,8 +542,37 @@ di ciascuno. Nota: i conteggi di residenza identici al byte sono evidenza
 circostanziale fortissima che il routing sia invariato, ma NON sono il gate, che
 confronta l'istogramma per expert chiave per chiave.
 
-**RESTANO i punti 3-6 del piano**: riferimenti q35 (4B/9B/35B ai tier 8/12/16),
-gap nativo a parita', ratchet golden q35, `direction §7-bis` riscritto.
+**it.43 — PUNTO 3 (riferimenti q35): 8 celle su 9.** 4B **25,93/25,88/26,08**
+tok/s ai tier 8/12/16 e 9B **16,00/15,95/16,06**: spread 0,77% e 0,69%, cioe' il
+tier sui DENSI e' un no-op — misurato, oltre che letto nel codice
+(`vramCeilingBytes` vive solo nel ramo MoE). Contro q1: 4B decode **+13,3%**,
+prefill **+26,7%**; 9B **+10,0%** e **+22%**. 35B tier 8 = 1,26 (23.612 miss),
+tier 12 = 2,69 (9.908). **Tier 16 NON esiste su questa scheda**: 13,5 GiB di
+arena derivata + ~2 di modello contro ~15,1 allocabili.
+Aggiunto `--vram-gib` a `q35-bench-run.mjs` — senza, il done-when non era
+eseguibile (solo harness: `src/` intatto).
+
+**Tre difetti trovati, tutti a docket**: **23** `arenaNeeds` si negozia da
+`arenaGiB` (default 12) mentre il budget si deriva da `vramGiB` — due verita' per
+la stessa quantita'. **24 (GRAVE)** `q35-bench-run.mjs` esce 0 e SCRIVE il report
+anche con errori GPU: visto dal vivo, un run con `Invalid BindGroup` ha prodotto
+4,80 tok/s e miss 7.657 che continuano perfettamente la tendenza delle celle
+sane — JSON in quarantena. Le altre 8 celle verificate pulite. **25** i
+riferimenti misurano il path **SYNC** (`optimistic` non viene mai passato), non
+quello che il goal ha ottimizzato: un §7-bis scritto con 2,69 tok/s pubblica il
+numero di un path superato.
+
+**it.44 — PUNTO 4: il gap nativo NON e' a parita'.** `llama-bench` a build
+IDENTICA (`5f55650`): pp512 56,58 → **76,41** (+35,06%), tg64 13,43 → **18,96**
+(+41,16%). Causa verificata con `mincore`: il GGUF e' in page cache al **74,9%
+(12,01 GiB)** — la conformance di it.42 ha letto 1,1 TB dallo stesso inode.
+**Nessuno dei due artefatti dichiara lo stato della cache**, quindi "a parita'"
+non e' verificabile. Ricaduta: 13,43/56,58 sono il denominatore della funzione
+obiettivo e i gate di ogni run. **Docket 26** (la strada (a) vuole `vm.drop_caches`,
+cioe' root: non eseguito senza ruling).
+
+**RESTANO**: punto 5 (ratchet golden q35, ≤193 min — correttezza, quindi NON
+toccata da 25/26) e punto 6 (`direction §7-bis`, bloccato da 25 e 26).
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
