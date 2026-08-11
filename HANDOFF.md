@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.37: FASE 5 CHIUSA; next = fase 6, CHECKPOINT A)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.39: CHECKPOINT A BLOCCATO dall'host — docket item 20 in attesa di ruling)
 
 ## 1. Next decidable
 
@@ -478,6 +478,25 @@ buttare; (3) riferimenti q35 nuovi 4B/9B/35B ai tier 8/12/16 con `--vram-gib`
 (dopo it.35 i tier sono TETTI veri, non budget asseriti) e `hostState`;
 (4) gap nativo a parita'; (5) ratchet golden riverificati; (6) `direction §7-bis`
 riscritto coi numeri veri.
+
+**it.39 — IL PRIMO BRACCIO SI E' FERMATO, e non e' il codice.** La non-reg GLM
+b12 e' morta con `VK_ERROR_OUT_OF_DEVICE_MEMORY` (il primo errore del log; gli
+`Invalid BindGroup` a valle sono conseguenze). Il riferimento porta
+`vramPeakMiB: 15160` e uno `hostState` con `memUsedMiB: 817`; oggi la sessione ne
+tiene **1.977** e ne restano **13.971**, cioe' **1.189 in meno** di quanti il run
+pretende — entro 30 MiB il delta della sessione desktop (1.160). Correttezza di
+GLM intatta (ktest 96/96, L2rel identico all'ultima decimale): manca la
+PRESTAZIONE a parita' di host.
+
+**BLOCCO IN ATTESA DI RULING — DOCKET ITEM 20**: la riga 6 pretende "host
+DICHIARATO, GPU scarica" e la condizione non e' soddisfatta; soddisfarla vuol
+dire liberare ~1,2 GiB di VRAM sulla macchina. Opzioni: **(a)** liberare la VRAM
+e rilanciare il b12 identico (unica strada per il confronto ±5%); (b)
+ri-baselinare a un budget che entra, perdendo il confronto storico; (c)
+rimandare e intanto fare i riferimenti q35. **Parere: (a), altrimenti (c).**
+I riferimenti q35 NON sono stati lanciati "intanto" apposta: il piano li mette
+dopo il gate di GLM, e anticiparli e' il modo di spendere ore di GPU su un
+albero che poi non passa.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
