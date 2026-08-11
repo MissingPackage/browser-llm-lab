@@ -2107,3 +2107,38 @@ della descrizione, la riga non e' chiusa.
 
 **Gate**: tsc pulito, suite 440|9, logits bit-identici 993.280/993.280 sul 35B e
 31.784.960/31.784.960 sul 4B, JSON committati.
+
+## it.35 (2026-08-11, FASE 5) — il budget dell'arena si DERIVA, e docket item 11 si chiude
+
+Prima delle quattro voci della riga 5, e chiude anche un item aperto da it.14: il
+budget dell'arena expert del 35B era **un parametro fisso, 12 GiB di default,
+che nessuno controllava**. Su un host con 14,4 GiB liberi sfondava, e il
+fallimento era un `VK_ERROR_OUT_OF_DEVICE_MEMORY` alla `createBuffer` — rumoroso
+solo grazie al listener, coi buffer invalidi che lasciavano girare il modello su
+numeri plausibili (top1 1/5 nel run viziato di it.14).
+
+**Come lo deriva GLM e come lo derivo qui.** GLM sottrae termini CALCOLATI
+(`slabBudgetCtxAware`: tetto − non-expert − KV − buffer di lavoro − riserva), e
+ogni termine e' una formula che qualcuno deve tenere aggiornata — infatti il suo
+commento racconta di un OOM storico dovuto a un termine dimenticato. Qui si puo'
+fare di meglio: **il modello sa esattamente quanto ha preso**, perche' i buffer
+passano tutti da due helper. Un contatore dentro `empty`/`sbuf` e il budget e'
+`tetto − allocato − riserva`, senza formule da mantenere.
+
+**Ed e' ctx-aware per costruzione**, che era la richiesta della riga: `kCache` e
+`vCache` si allocano con `ctxMax` e finiscono nel contatore come tutto il resto.
+Lo stesso vale per il piano a M righe del prefill, se acceso — nessuno deve
+ricordarsi di aggiungerlo alla formula, perche' non c'e' formula.
+
+**Misurato (35B, tetto 13 GiB dichiarato)**: allocati **1,94 GiB** (pesi
+non-expert + KV a ctx 47 + scratch), riserva 0,50, **budget expert 10,56 GiB**.
+L'1,94 e' un numero che prima nessuno aveva: era dentro la differenza fra il
+budget chiesto e la VRAM vera, ed e' esattamente la parte che faceva sfondare.
+
+**Gate**: run verde col budget derivato — argmax **39/39 identico**, routing
+identico chiave per chiave, 0 miss a caldo, 43,74 ms/token (in banda coi ~44 di
+riferimento). tsc pulito, suite 440|9. **Docket item 11 CHIUSO.**
+
+Il vecchio parametro resta come default per non cambiare i run esistenti: senza
+`vramCeilingBytes` il comportamento e' quello di prima, e il JSON adesso porta
+la scomposizione (`vramPlan`) invece di un numero asserito.

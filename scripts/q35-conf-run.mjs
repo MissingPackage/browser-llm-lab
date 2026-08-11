@@ -63,6 +63,10 @@ if (process.argv.includes("--gpu-time")) qs.set("gputime", "1");
 if (process.argv.includes("--no-snapshot")) qs.set("nosnap", "1");
 // GATE della fase 4: prefill a chunk di M righe contro step() sequenziale, coi
 // logits confrontati BIT PER BIT.
+// Tetto VRAM: il budget dell'arena expert si DERIVA da qui meno cio' che il
+// modello ha davvero allocato meno la riserva (docket item 11).
+const vramGiB = arg("vram-gib", null);
+if (vramGiB) qs.set("vram", vramGiB);
 const prefillM = arg("prefill-m", null);
 if (prefillM) qs.set("prefillm", prefillM);
 const tap = arg("tap", null);

@@ -163,6 +163,12 @@ export interface Q35GpuModel {
    */
   lastLogits(): Float32Array | null;
   /**
+   * Come si e' arrivati al budget dell'arena expert: tetto, allocato davvero,
+   * riserva, budget. `null` sui densi (non c'e' arena). Sta nel report perche'
+   * un budget che nessuno vede e' un budget che nessuno controlla.
+   */
+  vramPlan(): { ceilingBytes: number | null; allocatedBytes: number; reserveBytes: number; expertBudgetBytes: number; ctxMax: number } | null;
+  /**
    * Tempo GPU per CATEGORIA accumulato sui token girati col path ottimistico e
    * la sonda accesa; `null` se la sonda non e' attiva (o `timestamp-query` non
    * concessa dal device). `ms` e' la somma dei pass, `n` il numero di pass.
@@ -238,6 +244,19 @@ export interface Q35GpuModelOpts {
    * Oggi cablato sul tipo di layer DENSO (4B/9B); il MoE e' il passo dopo.
    */
   prefillM?: number;
+  /**
+   * TETTO VRAM (fase 5, it.35, docket item 11). Con questo, il budget
+   * dell'arena expert si DERIVA — tetto meno cio' che il modello ha davvero
+   * allocato meno una riserva — invece di essere un parametro fisso che
+   * nessuno controlla. Il default storico (12 GiB) su un host con 14,4 GiB
+   * liberi sfondava, e il fallimento era `VK_ERROR_OUT_OF_DEVICE_MEMORY` alla
+   * createBuffer: rumoroso solo grazie al listener, coi buffer invalidi che
+   * lasciavano girare il modello su numeri plausibili (it.14).
+   * Se assente, resta il comportamento di prima.
+   */
+  vramCeilingBytes?: number;
+  /** riserva sopra il derivato (default 512 MiB): driver, frammentazione, staging */
+  vramReserveBytes?: number;
 }
 
 export async function createQ35GpuModel(
@@ -264,13 +283,26 @@ export async function createQ35GpuModel(
     }
     return p;
   };
+  /**
+   * BYTE ALLOCATI dal modello prima dell'arena expert (fase 5, it.35). Non e'
+   * una stima dei pesi non-expert: e' la SOMMA di cio' che questo file ha
+   * chiesto al device, contata dove si chiede. Serve al budget ctx-aware —
+   * GLM lo deriva sottraendo termini calcolati (`slabBudgetCtxAware`), qui si
+   * puo' fare di meglio perche' il modello sa esattamente quanto ha preso.
+   */
+  let allocBytes = 0;
+  let vramPlanOut: {
+    ceilingBytes: number | null; allocatedBytes: number; reserveBytes: number;
+    expertBudgetBytes: number; ctxMax: number;
+  } | null = null;
+  const track = (b: GPUBuffer, bytes: number): GPUBuffer => { allocBytes += Math.max(16, bytes); return b; };
   const sbuf = (data: Float32Array | Uint32Array): GPUBuffer => {
     const b = device.createBuffer({ size: Math.max(16, data.byteLength), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     device.queue.writeBuffer(b, 0, data as BufferSource);
-    return b;
+    return track(b, data.byteLength);
   };
   const empty = (bytes: number): GPUBuffer =>
-    device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+    track(device.createBuffer({ size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC }), bytes);
 
   // pesi quantizzati → upload (i raw si scartano subito: streaming)
   const q40 = async (name: string): Promise<{ qs: GPUBuffer; scales: GPUBuffer; k: number; n: number; kind: "q4_0" | "q4_1" }> => {
@@ -733,8 +765,26 @@ export async function createQ35GpuModel(
     // I limiti sono quelli NEGOZIATI col device (il conf worker chiede
     // slabClassBytes = 2 GiB): usarli invece di una costante evita il buffer
     // monolitico che in it.17 falliva in silenzio oltre il cap dell'adapter.
+    // BUDGET DERIVATO (it.35): il tetto meno cio' che e' gia' stato allocato
+    // meno la riserva. `allocBytes` non e' una stima — e' la somma contata dove
+    // i buffer si chiedono, quindi comprende pesi, KV, scratch e (se acceso) il
+    // piano a M righe del prefill, senza che nessuno debba ricordarsene.
+    const reserveB = opts.vramReserveBytes ?? 512 * (1 << 20);
+    const budgetDerived = opts.vramCeilingBytes !== undefined
+      ? opts.vramCeilingBytes - allocBytes - reserveB
+      : arenaBudgetBytes;
+    if (opts.vramCeilingBytes !== undefined && budgetDerived <= 0) {
+      throw new Error(
+        `q35 budget expert: ${budgetDerived} B <= 0 (tetto ${opts.vramCeilingBytes} − allocati ` +
+        `${allocBytes} − riserva ${reserveB}) — servono piu' VRAM o meno contesto, e dirlo qui e' ` +
+        "meglio che scoprirlo con una createBuffer che fallisce a meta' caricamento");
+    }
+    vramPlanOut = {
+      ceilingBytes: opts.vramCeilingBytes ?? null, allocatedBytes: allocBytes,
+      reserveBytes: reserveB, expertBudgetBytes: budgetDerived, ctxMax,
+    };
     const cache = new ExpertCache(device, {
-      budgetBytes: arenaBudgetBytes,
+      budgetBytes: budgetDerived,
       maxBindingBytes: device.limits.maxStorageBufferBindingSize,
       maxBufferBytes: device.limits.maxBufferSize,
       cfg,
@@ -1795,6 +1845,7 @@ export async function createQ35GpuModel(
       ? () => ({ tokens: tsqTokens, overflow: tsqOverflow, byCat: Object.fromEntries([...tsqAcc.entries()].map(([k2, v2]) => [k2, { ...v2 }])) })
       : null,
     lastLogits: () => lastLg,
+    vramPlan: () => vramPlanOut,
     prefillChunk: PB ? async (tokens: ArrayLike<number>, posStart: number): Promise<Float32Array> => {
       if (tokens.length !== M_MAX) {
         throw new Error(`q35 prefillChunk: chunk di ${tokens.length} righe, il piano gemello e' cotto su ${M_MAX}`);

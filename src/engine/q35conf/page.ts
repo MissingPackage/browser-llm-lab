@@ -23,6 +23,8 @@ const cfg = {
   noStateSnapshot: q.get("nosnap") === "1",
   // ?prefillm=8 → gate della fase 4: prefill a chunk contro step sequenziale
   prefillM: q.has("prefillm") ? Number(q.get("prefillm")) : undefined,
+  // ?vram=10.5 → tetto VRAM: il budget expert si deriva (docket item 11)
+  vramGiB: q.has("vram") ? Number(q.get("vram")) : undefined,
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

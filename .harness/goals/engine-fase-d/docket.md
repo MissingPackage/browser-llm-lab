@@ -240,6 +240,18 @@ che misura il 35B ai tier). Registrato qui per non perderlo. Nel frattempo i
 run di correttezza dichiarano il budget (`--arena-gib`, nuovo in it.14).
 it.14 (2026-08-11).
 
+### CHIUSO it.35 (2026-08-11) — derivato, non calcolato
+
+Il budget si deriva da `--vram-gib` (tetto) meno cio' che il modello ha DAVVERO
+allocato meno la riserva. Non e' la formula di GLM (`slabBudgetCtxAware`, che
+sottrae termini calcolati e che il suo stesso commento racconta essere gia'
+costata un OOM per un termine dimenticato): e' un contatore dentro i due helper
+di allocazione, quindi comprende pesi, KV, scratch e piano di prefill senza che
+nessuno debba ricordarsene — ed e' ctx-aware per costruzione, perche' `kCache` e
+`vCache` si allocano con `ctxMax`. Misurato sul 35B: tetto 13 GiB, **allocati
+1,94**, riserva 0,50, budget expert 10,56. Run verde (argmax 39/39, routing
+identico, 0 miss). **Item 11 CHIUSO.**
+
 ## item 12 — due sensori che mentono in silenzio sul path nuovo (io, fase 6)
 
 Rilievi di margine di it.17, registrati per non perderli. Nessuno dei due e'

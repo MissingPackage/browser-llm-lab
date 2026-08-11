@@ -62,6 +62,8 @@ interface Cfg {
    * riga contro il suo per-riga (it.25-26-30-31).
    */
   prefillM?: number;
+  /** fase 5 (docket item 11): tetto VRAM, da cui il budget expert si DERIVA. */
+  vramGiB?: number;
 }
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
@@ -166,9 +168,16 @@ async function main(cfg: Cfg): Promise<void> {
     telemetryGpu: cfg.gpuTime === true,
     debugNoStateSnapshot: cfg.noStateSnapshot === true,
     prefillM: cfg.prefillM,
+    vramCeilingBytes: cfg.vramGiB !== undefined ? Math.floor(cfg.vramGiB * (1 << 30)) : undefined,
   });
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
+  const vp = model.vramPlan();
+  if (vp) {
+    progress(`VRAM: tetto ${vp.ceilingBytes === null ? "n/d" : (vp.ceilingBytes / 2 ** 30).toFixed(2) + " GiB"} — ` +
+      `allocati ${(vp.allocatedBytes / 2 ** 30).toFixed(2)} — riserva ${(vp.reserveBytes / 2 ** 30).toFixed(2)} ` +
+      `⇒ budget expert ${(vp.expertBudgetBytes / 2 ** 30).toFixed(2)} GiB`);
+  }
 
   if (cfg.debugTap !== undefined) {
     const p0 = golden.prompts[0];
