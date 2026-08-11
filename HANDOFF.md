@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); next = fase 4, prefill chunked/batched q35)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, headCut gia' fatto)
 
 ## 1. Next decidable
 
@@ -206,13 +206,41 @@ campione per braccio, due run diversi, passata dominata dall'I/O: per il docket
 item 10 non e' una misura. Ma la soglia della fase 5 va tarata su un bench fatto
 apposta, non su quell'intuizione e nemmeno su questi due numeri.
 
-**PROSSIMO: fase 4** (prefill chunked/batched q35), che e' la riga successiva del
-contratto: pattern `planMoeChunk` + gemv batch portato a q35, micro-bench tok/s
-di prefill prima/dopo, logits del batched == sequenziali sul campione (gate
-secco). Nota di contesto per chi la attacca: il prefill del 35B gira gia' con
-`read=false` e ora, col path ottimistico acceso, un token e' UN submit — il
-margine che la fase 4 cerca e' nel BATCH sulle righe, non piu' nella
-serializzazione dei submit.
+**FASE 4 — MISURA PRIMA DELLA FETTA (it.19)**. Previsione registrata e
+committata PRIMA di misurare ("expert >= 60% del tempo GPU del token") e
+**SBAGLIATA**: e' 58,0% del tempo GPU e 45,3% di quello di parete. Sonda nuova
+(`--gpu-time`, opt-in, perturbazione misurata +1,7%): expert 33,44 ms (58,0%,
+1600 dispatch) · statico 14,53 (25,2%, 742) · coda 6,86 (11,9%) · router 2,83
+(4,9%, 40 dispatch); totale GPU 57,67 su 73,85 ms di token, quindi **16,18 ms
+(21,9%) stanno fuori dai pass** (encode CPU, submit, readback, argmax, embed).
+
+**IL NUMERO CHE REGGE: ~20 us per dispatch, uguale fra statico (19,6) ed expert
+(20,9)**, contro 1-2 us di lavoro stimato per GEMV. Due famiglie di kernel con
+taglie e traffico diversi che costano lo stesso per dispatch ⇒ il costo e' il
+per-dispatch, non il lavoro: il token e' DISPATCH-BOUND, e la fase 4 (che toglie
+dispatch) e' la leva giusta. Proiezione rifatta sui numeri veri a M=16: 57,67 ->
+**28,55 ms GPU (2,02x)**, col path expert al 92% del residuo perche' l'unione si
+comprime solo 1,27x (256 expert e top-8 contro i 64/top-4 di GLM).
+
+**I DUE VINCOLI STRUTTURALI DELLA FASE 4**, derivati prima della misura: (1) 30
+layer su 40 sono deltanet, RICORRENTI sul tempo — le righe di un chunk sono
+token consecutivi, quindi i 2 dispatch ricorrenti per layer restano M mentre
+tutto il resto diventa 1 (la forma chunkwise del delta rule esiste ma e' un
+kernel di ricerca, non un port); (2) l'unione degli expert comprime 1,27x a
+M=16 contro l'1,6x di GLM.
+
+**GIA' FATTO in it.19**: `headCut` — la coda (norma finale + head) vale 6,86
+ms/token (9,3%) e nel prefill veniva BUTTATA (`read=false` non legge i logits).
+Tolta su MoE e densi; la norma finale scrive `xn`, uno scratch, e il residuo `x`
+non viene sfiorato. NON misurata end-to-end (il gate gira `read=true`): la
+misura e' il micro-bench della fase 4. Provata la non-regressione: argmax 39/39,
+routing identico, miss 0.
+
+**PROSSIMO: la fetta della fase 4**, e il primo passo e' fase-1-shaped —
+`glmprefillplan.ts` e' cablato su `GLM47_FLASH` (nExpert 64, top-4) e va reso
+cfg-driven come `residency.ts`, non copiato per q35 (e' esattamente cio' che il
+gate strutturale del goal vieta). Poi i kernel M-righe per statico/router/expert
+e la combine in ordine k, che e' come GLM tiene l'identita' bit-a-bit col decode.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

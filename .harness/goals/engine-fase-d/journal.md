@@ -1196,3 +1196,69 @@ tok/s prima/dopo, e un "dopo" che non si muove e' una fase spesa male.
 
 Previsione registrata PRIMA della misura, con la data e il commit di questa
 riga: mi aspetto che il segmento expert sia >= 60% del tempo GPU del token.
+
+### it.19 — LA MISURA, e la previsione che avevo registrato E' SBAGLIATA
+
+Strumento nuovo (`--gpu-time`, opt-in): `timestamp-query` sui pass del path a
+submit unico, con il pass di ogni layer spezzato in tre — statico / router /
+expert — piu' la coda. Spezzare i pass PERTURBA (tre barriere invece di una) e
+la perturbazione e' misurata, non assunta: **73,85 contro 72,58 ms/token, +1,7%**.
+
+**Smoke 35B, 156 giri cronometrati, budget 10 GiB:**
+
+| categoria | ms/token | % del tempo GPU | pass/token | dispatch/token | us/dispatch |
+|---|---|---|---|---|---|
+| expert | 33,44 | **58,0%** | 40 | 1600 | 20,9 |
+| statico | 14,53 | 25,2% | 40 | 742 | 19,6 |
+| coda (norma+head) | 6,86 | 11,9% | 1 | 2 | — |
+| router | 2,83 | 4,9% | 40 | 40 | **70,8** |
+| **totale GPU** | **57,67** | 100% | 121 | 2384 | |
+
+Il token dura 73,85 ms: **16,18 ms (21,9%) stanno FUORI dai pass** — encode CPU,
+submit, attesa del readback, argmax, dequant della riga di embedding.
+
+**LA PREVISIONE ERA "expert >= 60% del tempo GPU del token". E' 58,0%.** Sbagliata,
+di poco ma sbagliata; e sul tempo di parete e' 45,3%, ancora piu' lontana. La
+registro come fallita invece di riscriverla: la scommessa era che il path expert
+dominasse abbastanza da rendere la fase 4 quasi tutta un problema di expert, e
+non e' cosi' — un quarto del tempo e' nel segmento statico, che si batcha molto
+meglio degli expert.
+
+**Il numero che invece regge, ed e' quello che conta**: **~20 us per dispatch,
+uguale fra statico (19,6) ed expert (20,9)**, contro un lavoro vero stimabile in
+1-2 us per GEMV expert. Due categorie con kernel diversi, taglie diverse e
+traffico diverso che costano lo stesso per dispatch dicono che il costo NON e'
+il lavoro: e' il per-dispatch. Il token e' dispatch-bound, e la fase 4 — che
+toglie dispatch — e' la leva giusta. (Il conto della banda lo conferma: 320
+selezioni x 1,785 MB = 571 MB/token, che a ~500 GB/s sarebbero 1,14 ms contro i
+33,4 misurati.)
+
+**PROIEZIONE DELLA FASE 4 rifatta sui numeri misurati** (M=16, |unione| 100,9):
+expert 33,44 → 26,36 (l'unione comprime solo 1,27x) · statico 14,53 → 2,01 (i
+682 dispatch row-parallel per token diventano 682 per chunk; restano i 60
+ricorrenti del deltanet) · router 2,83 → 0,18 · coda 6,86 → 0 nel prefill.
+**Totale GPU 57,67 → 28,55 ms, cioe' 2,02x.** Il collo resta il path expert: e'
+il 92% del tempo residuo.
+
+**E LA MISURA HA TROVATO UNA COSA CHE NON C'ENTRA COL BATCHING.** La coda —
+norma finale + head — vale 6,86 ms/token (9,3% del token) **e nel prefill viene
+buttata**: `step(token, pos, false)` la calcolava lo stesso, e la head scrive
+`logits`, che con `read=false` nessuno legge. Tolta (`headCut`, tre righe, su
+MoE e densi): la norma finale scrive `xn`, uno scratch, e il residuo `x` non
+viene sfiorato, quindi non cambia un solo numero.
+NON MISURATA end-to-end: il gate gira con `read=true` su ogni token, quindi la
+head c'e' comunque e il suo ms/token non si muove (72,96 contro 72,58, dentro
+la banda). Il guadagno vale sui token di PREFILL e lo misurera' il micro-bench
+della fase 4, che e' il done-when della riga. Quello che questa iterazione
+prova e' la NON-REGRESSIONE: argmax 39/39, routing identico chiave per chiave,
+miss 0.
+
+**Rilievo di margine**: il dispatch del router costa **70,8 us**, 3,5x un GEMV
+expert, ed e' UN workgroup — softmax su 256 expert e top-8 fatti dal thread 0 in
+seriale (`routerTopKWgsl`). Sono 2,83 ms/token, il 4,9%. Non e' lavoro di questa
+fase; va sul docket.
+
+**Gate**: tsc pulito, suite 410|9, 0 gpu-error, due JSON committati
+(`q35-gputime-35b-it19.json`, `q35-optimistic-35b-it19-headcut.json`).
+Nota di dispersione: la passata fredda oscilla fra 1137,8 e 1192,9 ms/token fra
+run diversi (~5%) — e' dominata dall'I/O e non e' un numero su cui appoggiarsi.

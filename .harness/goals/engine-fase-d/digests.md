@@ -289,3 +289,29 @@ fase 5 va tarata su un bench fatto apposta.
 FASE 3b CHIUSA sui suoi quattro done-when; (d) vale a residenza piena, che e' il
 campione che il contratto nomina — a freddo il +12% di fetch e' inerente al
 meccanismo e si pubblica come fatto.
+
+## it.19 (2026-08-11) — dove vanno i 73,85 ms di un token, e una previsione mia sbagliata
+
+Previsione registrata e committata PRIMA della misura: "expert >= 60% del tempo
+GPU". Misurato **58,0%** — sbagliata, di poco; sul tempo di parete e' 45,3%.
+
+Sonda nuova (`--gpu-time`, opt-in, perturbazione misurata +1,7%): expert 33,44 ms
+(58,0%, 1600 dispatch) · statico 14,53 (25,2%, 742) · coda 6,86 (11,9%) · router
+2,83 (4,9%, 40 dispatch). Totale GPU 57,67; **16,18 ms (21,9%) fuori dai pass**.
+
+IL NUMERO CHE REGGE: **~20 us per dispatch, uguale fra statico (19,6) ed expert
+(20,9)**, contro 1-2 us di lavoro stimato. Due famiglie di kernel con taglie e
+traffico diversi che costano lo stesso per dispatch ⇒ il costo e' il
+per-dispatch, non il lavoro. Il token e' dispatch-bound e la fase 4 e' la leva
+giusta. Proiezione rifatta sui numeri veri (M=16): 57,67 → 28,55 ms GPU
+(**2,02x**), col path expert che resta il 92% del residuo perche' l'unione
+comprime solo 1,27x (256 expert, top-8).
+
+TROVATO DI PASSAGGIO: la coda (norma finale + head) vale 6,86 ms/token e nel
+PREFILL viene buttata — `read=false` non legge i logits. Tolta (`headCut`, MoE e
+densi). Non misurata end-to-end (il gate gira read=true): la misura e' il
+micro-bench della fase 4. Qui e' provata la non-regressione: argmax 39/39,
+routing identico, miss 0.
+
+Docket item 14: il dispatch del router costa 70,8 us, 3,5x un GEMV expert — un
+workgroup che fa softmax su 256 expert e top-8 in seriale sul thread 0.

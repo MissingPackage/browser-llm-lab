@@ -55,6 +55,9 @@ if (process.argv.includes("--optimistic")) qs.set("optimistic", "1");
 // token e' sporco). Sta in un run a parte perche' la cache fredda esiste una
 // volta sola per processo.
 if (process.argv.includes("--opt-cold")) { qs.set("optimistic", "1"); qs.set("optcold", "1"); }
+// Decomposizione del tempo GPU del token per categoria (fase 4, it.19). PERTURBA:
+// spezza il pass di ogni layer in tre, quindi tre barriere invece di una.
+if (process.argv.includes("--gpu-time")) qs.set("gputime", "1");
 const tap = arg("tap", null);
 if (tap !== null) qs.set("tap", tap);
 

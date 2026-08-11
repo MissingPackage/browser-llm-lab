@@ -17,6 +17,8 @@ const cfg = {
   optTrace: q.get("optimistic") === "1",
   // ?optcold=1 → la passata fredda la fa il path ottimistico (repair+replay)
   optCold: q.get("optcold") === "1",
+  // ?gputime=1 → decomposizione del tempo GPU del token per categoria
+  gpuTime: q.get("gputime") === "1",
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

@@ -47,6 +47,12 @@ interface Cfg {
    * perché la cache fredda esiste una volta sola per processo.
    */
   optCold?: boolean;
+  /**
+   * fase 4 (it.19): decomposizione del tempo GPU del token per categoria
+   * (statico / router / expert / coda). Perturba la misura (spezza i pass) e
+   * il report lo dichiara confrontando il ms/token con e senza sonda.
+   */
+  gpuTime?: boolean;
 }
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
@@ -114,6 +120,9 @@ async function main(cfg: Cfg): Promise<void> {
   const moeCfg = isMoe ? q35MoeConfig(shape, info) : null;
   const { device } = await createEngineDevice({
     label: "q35conf",
+    // `timestamp-query` si chiede solo se l'adapter la espone; il modello
+    // controlla `device.features.has` e degrada dichiarando (gpuTimeStats null).
+    optionalFeatures: ["timestamp-query"],
     needs: (adapter) => ({
       ctxMax,
       head: { vocab: shape.vocab, dModel: shape.dModel },
@@ -138,6 +147,7 @@ async function main(cfg: Cfg): Promise<void> {
   }, ctxMax, arenaBudgetBytes, {
     routerShadow: cfg.routerShadow === true,
     select: cfg.optTrace === true ? "optimistic" : "cpu",
+    telemetryGpu: cfg.gpuTime === true,
   });
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
@@ -373,6 +383,7 @@ async function main(cfg: Cfg): Promise<void> {
         submitsPerTokenOptimistic: optim.submits / Math.max(1, optim.argmax.length),
         readbacksPerTokenOptimistic: optim.readbacks / Math.max(1, optim.argmax.length),
       },
+      gpuTime: model.gpuTimeStats ? model.gpuTimeStats() : null,
       moe: model.moeStats!(),
     };
     post({ type: "done", report });

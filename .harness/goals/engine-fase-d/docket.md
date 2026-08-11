@@ -289,3 +289,16 @@ riportata a freddo fra i bracci), non sulla mia intuizione di it.16 e nemmeno
 su questi due numeri.
 
 Registrato it.18 (2026-08-11).
+
+## item 14 — il dispatch del router costa 3,5 volte un GEMV expert (io, fase 5 o leva kernel)
+
+Misurato in it.19 con la sonda dei timestamp: **70,8 us per dispatch** contro i
+20,9 di un GEMV expert e i 19,6 di uno statico. E' UN workgroup: `routerTopKWgsl`
+fa il prefill dei logits in parallelo e poi lascia al thread 0 la softmax su 256
+expert e la selezione top-8 (nUsed x nExpert confronti in seriale). Sul 35B sono
+40 dispatch per token = **2,83 ms, il 4,9% del tempo GPU**.
+
+Non e' lavoro della fase 4 (che toglie dispatch, non li rende piu' veloci) e non
+e' una decisione da PI. Sta qui perche' e' il tipo di costo che si scopre una
+volta e poi non si ritrova piu': con GLM (64 expert, top-4) era un ottavo del
+lavoro seriale e nessuno l'aveva notato. Registrato it.19 (2026-08-11).

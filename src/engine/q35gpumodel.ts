@@ -135,6 +135,12 @@ export interface Q35GpuModel {
    * STESSA cache: passata sync a freddo, passata ottimistica a caldo.
    */
   setOptimistic(on: boolean): void;
+  /**
+   * Tempo GPU per CATEGORIA accumulato sui token girati col path ottimistico e
+   * la sonda accesa; `null` se la sonda non e' attiva (o `timestamp-query` non
+   * concessa dal device). `ms` e' la somma dei pass, `n` il numero di pass.
+   */
+  gpuTimeStats: (() => { tokens: number; byCat: Record<string, { ms: number; n: number }> }) | null;
   /** DEBUG (it.17): dopo step(), hidden x a valle del layer indicato (solo MoE). */
   readTap(layer: number): Promise<Float32Array>;
   /** Esito dell'OMBRA del router GPU; `null` se non è stata accesa. */
@@ -172,6 +178,19 @@ export interface Q35GpuModelOpts {
    * gate misura le due passate sulla stessa cache).
    */
   select?: "cpu" | "optimistic";
+  /**
+   * DECOMPOSIZIONE DEL TEMPO GPU del token (fase 4, it.19), solo sul path a
+   * submit unico. Spezza il pass di ogni layer in tre — statico / router /
+   * expert — e li cronometra con `timestamp-query`. E' opt-in e PERTURBA la
+   * misura: tre pass per layer invece di uno significa tre barriere invece di
+   * una, quindi il token cronometrato e' un po' piu' lento di quello vero. Si
+   * riporta anche il totale con la sonda spenta, cosi' la perturbazione si
+   * vede invece di essere assunta trascurabile.
+   *
+   * Serve a decidere la fase 4: il batching M>1 toglie DISPATCH, e vale la
+   * pena solo se il tempo sta dove i dispatch sono tanti.
+   */
+  telemetryGpu?: boolean;
 }
 
 export async function createQ35GpuModel(
@@ -423,6 +442,14 @@ export async function createQ35GpuModel(
     }
   }
 
+  // CONFINE DELLA CODA (fase 4, it.19): da qui in giu' ci sono solo la norma
+  // finale e la HEAD, e servono unicamente a chi legge i logits. Il prefill
+  // gira con `read=false` e li calcolava lo stesso, buttandoli: la sonda dei
+  // timestamp li ha misurati in **6,86 ms su 73,85 (9,3%) per token** sul 35B —
+  // il pezzo piu' grosso che si toglie senza cambiare un solo numero, perche'
+  // la head scrive `logits` (che nessuno legge) e la norma scrive `xn`, uno
+  // scratch: il residuo `x` non viene sfiorato.
+  const headCut = steps.length;
   push(rmsnormWgsl(d, S.rmsEps), [x, outNorm, xn], 1);
   headStep(xn, logits);
 
@@ -960,6 +987,33 @@ export async function createQ35GpuModel(
             }
           }
           const gg2 = gemvGrid(d);
+          // Pass per CATEGORIA (fase 4, it.19). Con la sonda spenta `usePass`
+          // non spezza mai: resta UN pass per layer, cioe' esattamente la forma
+          // che gira in produzione. Con la sonda accesa ne apre tre e li
+          // cronometra — piu' barriere, quindi un token un po' piu' lento: la
+          // perturbazione si riporta, non si assume trascurabile.
+          let tsIdx = 0;
+          const cats: string[] = [];
+          let cur: GPUComputePassEncoder | null = null;
+          let curCat = "";
+          const endPass = (): void => { if (cur) { cur.end(); cur = null; } };
+          const usePass = (cat: string): GPUComputePassEncoder => {
+            if (cur && canGpuTs && cat !== curCat) endPass();
+            if (cur) return cur;
+            curCat = cat;
+            if (canGpuTs && tsIdx < TSQ_PASSES) {
+              cats[tsIdx] = cat;
+              cur = enc.beginComputePass({
+                timestampWrites: {
+                  querySet: tsqSet!, beginningOfPassWriteIndex: tsIdx * 2, endOfPassWriteIndex: tsIdx * 2 + 1,
+                },
+              });
+              tsIdx++;
+            } else {
+              cur = enc.beginComputePass();
+            }
+            return cur;
+          };
           for (let m = startLayer; m < nMoeLayer; m++) {
             // checkpoint dell'hidden di INGRESSO del segmento, fuori dal pass
             // (i dispatch che hanno prodotto questo x sono già chiusi).
@@ -969,7 +1023,7 @@ export async function createQ35GpuModel(
             // submit, quindi i 40 layer vedrebbero un solo azzeramento —
             // l'ultimo.
             enc.clearBuffer(moeAcc, 0, d * 4);
-            const pass = enc.beginComputePass();
+            let pass = usePass("static");
             for (let i = m === 0 ? 0 : cuts[m - 1]; i < cuts[m]; i++) {
               const st = steps[i];
               pass.setPipeline(st.pipe);
@@ -980,10 +1034,12 @@ export async function createQ35GpuModel(
             // scritto e pubblica `Sel` per gli 8 dispatch che seguono, nello
             // stesso pass. L'entry di `MoeIdx` è la (layer, k=0): il suo
             // `selIdx` è la base della regione di PRODUZIONE del layer.
+            pass = usePass("router");
             pass.setPipeline(opt.pipeR);
             pass.setBindGroup(0, opt.bindR, [m * topK * MOE_IDX_STRIDE]);
             pass.dispatchWorkgroups(1);
             const E = expertCls[cfg.classOf(moeLayerAbs[m])];
+            pass = usePass("expert");
             for (let k2 = 0; k2 < topK; k2++) {
               const dyn = (m * topK + k2) * MOE_IDX_STRIDE;
               pass.setPipeline(E.pGate); pass.setBindGroup(0, E.bgGate, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
@@ -993,16 +1049,20 @@ export async function createQ35GpuModel(
               pass.setPipeline(opt.pAxpySel); pass.setBindGroup(0, opt.bgAxpySel, [dyn]); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
             }
             pass.setPipeline(pAdd); pass.setBindGroup(0, bgAddRes); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
-            pass.end();
+            endPass();
           }
-          const tail = enc.beginComputePass();
-          for (let i = cuts[nMoeLayer - 1]; i < steps.length; i++) {
+          const tail = usePass("tail");
+          for (let i = cuts[nMoeLayer - 1]; i < (read ? steps.length : headCut); i++) {
             const st = steps[i];
             tail.setPipeline(st.pipe);
             tail.setBindGroup(0, st.bind);
             tail.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
           }
-          tail.end();
+          endPass();
+          if (canGpuTs && tsIdx > 0) {
+            enc.resolveQuerySet(tsqSet!, 0, tsIdx * 2, tsqResolve!, 0);
+            enc.copyBufferToBuffer(tsqResolve!, 0, tsqStaging!, 0, tsIdx * 2 * 8);
+          }
           if (read) enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4);
           // `Sel` INTERA in coda: è il solo momento in cui le regioni dei 40
           // layer sono complete, ed è insieme la decisione del router e ciò che
@@ -1028,10 +1088,25 @@ export async function createQ35GpuModel(
             opt.dirtyStaging.mapAsync(GPUMapMode.READ),
           ];
           if (read) maps.push(staging.mapAsync(GPUMapMode.READ));
+          // La mapAsync dei timestamp parte DOPO il submit — mai prima,
+          // altrimenti Dawn droppa il command buffer (known-issue fase A).
+          if (canGpuTs && tsIdx > 0) maps.push(tsqStaging!.mapAsync(GPUMapMode.READ));
           await Promise.all(maps);
           perfAcc.readbacks++;
           perfAcc.readbackMs += performance.now() - tRb;
           cache.setInFlight(false); // confine di giro: la tabella torna toccabile
+          if (canGpuTs && tsIdx > 0) {
+            const ts = new BigUint64Array(tsqStaging!.getMappedRange().slice(0));
+            tsqStaging!.unmap();
+            for (let i = 0; i < tsIdx; i++) {
+              const dt = Number(ts[i * 2 + 1] - ts[i * 2]) / 1e6;
+              const c = cats[i];
+              const a = tsqAcc.get(c) ?? { ms: 0, n: 0 };
+              a.ms += dt; a.n++;
+              tsqAcc.set(c, a);
+            }
+            tsqTokens++;
+          }
           const su = new Uint32Array(opt.selStaging.getMappedRange().slice(0));
           opt.selStaging.unmap();
           const du = new Uint32Array(opt.dirtyStaging.getMappedRange().slice(0));
@@ -1231,6 +1306,19 @@ export async function createQ35GpuModel(
   };
   /** path attivo: `true` solo se costruito con `select: "optimistic"` (fetta 3c) */
   let optimisticOn = opts.select === "optimistic";
+  // ---- sonda di decomposizione del tempo GPU (fase 4, it.19) ----
+  // 3 pass per layer MoE + coda: 40x3+1 = 121 sul 35B. Il margine e' 2x.
+  const TSQ_PASSES = 256;
+  const canGpuTs = opts.telemetryGpu === true && device.features.has("timestamp-query");
+  const tsqSet = canGpuTs ? device.createQuerySet({ type: "timestamp", count: TSQ_PASSES * 2 }) : null;
+  const tsqResolve = canGpuTs
+    ? device.createBuffer({ size: TSQ_PASSES * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
+    : null;
+  const tsqStaging = canGpuTs
+    ? device.createBuffer({ size: TSQ_PASSES * 2 * 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ })
+    : null;
+  const tsqAcc = new Map<string, { ms: number; n: number }>();
+  let tsqTokens = 0;
   const zeroAcc = new Float32Array(d);
   const tapStaging = device.createBuffer({ size: d * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   let tapLayer = -1;
@@ -1361,7 +1449,10 @@ export async function createQ35GpuModel(
         return biO;
       }
       if (!moe) {
-        runSeg(0, steps.length, read ? (enc) => enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4) : undefined);
+        // stesso taglio della coda sui densi: il prefill del 4B/9B gira anche
+        // lui con `read=false` e pagava la head per buttarla. (`decodeBatch` no:
+        // li' l'argmax si calcola su GPU DAI logits, quindi la head serve.)
+        runSeg(0, read ? steps.length : headCut, read ? (enc) => enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4) : undefined);
       } else {
         tapWanted = tapLayer;
         // MoE segmentato (correttezza-prima, 1 readback router/layer DICHIARATO):
@@ -1391,7 +1482,7 @@ export async function createQ35GpuModel(
           }
           from = cuts[li];
         }
-        runSeg(from, steps.length, read ? (enc) => enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4) : undefined);
+        runSeg(from, read ? steps.length : headCut, read ? (enc) => enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4) : undefined);
       }
       if (!read) return -1;
       const tRb = performance.now();
@@ -1415,6 +1506,9 @@ export async function createQ35GpuModel(
       }
       optimisticOn = on;
     },
+    gpuTimeStats: canGpuTs
+      ? () => ({ tokens: tsqTokens, byCat: Object.fromEntries([...tsqAcc.entries()].map(([k2, v2]) => [k2, { ...v2 }])) })
+      : null,
     routerShadowStats: moe?.shadowStats ? () => moe!.shadowStats!() : null,
     moeStats: moe
       ? () => ({
