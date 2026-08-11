@@ -2,7 +2,19 @@
 // e scrive il JSON con hostState PRIMA/DOPO dichiarato (regola bench: mai
 // numeri senza host state). Uso:
 //   node scripts/q35-bench-run.mjs [--prompt-idx 4] [--n-decode 64]
+//     [--model 4b|9b|35b] [--vram-gib 12] [--arena-gib 11]
 //     [--declared user-session-light] [--out results/engine/...json]
+//
+// --vram-gib e --arena-gib NON sono sinonimi, e la differenza e' il senso della
+// fase 5 (it.35, docket item 11): `--arena-gib` ASSERISCE il budget dell'arena
+// expert, `--vram-gib` dichiara il TETTO da cui il budget si DERIVA (tetto meno
+// l'allocato vero meno la riserva). I riferimenti "ai tier" del CHECKPOINT A
+// vogliono il secondo: un tier e' un tetto di VRAM, non un budget che qualcuno
+// ha indovinato. Aggiunto in it.43 — la pagina leggeva gia' `?vram=`, mancava
+// solo il passaggio qui, e senza il done-when della riga 6 non era eseguibile.
+// NOTA: sui modelli DENSI (4b/9b) il tetto non ha effetto — `vramCeilingBytes`
+// vive solo nel ramo MoE (q35gpumodel: budget derivato -> ExpertCache) e sui
+// densi `vramPlan()` e' null. Un 4B a tier 8 e uno a tier 16 sono lo STESSO run.
 import { chromium } from "playwright";
 import { copyFileSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,7 +31,8 @@ const nDecode = arg("n-decode", "64");
 const declared = arg("declared", "undeclared");
 const modelTag = arg("model", "4b");
 const arenaGiB = arg("arena-gib", null);
-const outTag = arenaGiB ? `arena${arenaGiB}` : "fullresident";
+const vramGiB = arg("vram-gib", null);
+const outTag = vramGiB ? `tier${vramGiB}` : arenaGiB ? `arena${arenaGiB}` : "fullresident";
 const out = arg("out", join(ROOT, `results/engine/q35-bench-${modelTag}-${outTag}-${new Date().toISOString().slice(0, 10)}.json`));
 const golden = arg("golden", join(ROOT, `results/engine/golden/q35/golden-q35-${modelTag}-full-2026-08-10.json`));
 const PROFILE = process.env.E2E_PROFILE ?? join(homedir(), ".cache/blab-q35conf-profile");
@@ -36,7 +49,7 @@ const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService"
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
 const page = browser.pages()[0] ?? (await browser.newPage());
 page.on("pageerror", (e) => console.log("[q35bench][pageerror]", e.message.slice(0, 300)));
-await page.goto(`${BASE_URL}/q35conf.html?bench=${promptIdx},${nDecode}${modelTag !== "4b" ? `&model=${modelTag}` : ""}${arenaGiB ? `&arena=${arenaGiB}` : ""}`, { waitUntil: "load" });
+await page.goto(`${BASE_URL}/q35conf.html?bench=${promptIdx},${nDecode}${modelTag !== "4b" ? `&model=${modelTag}` : ""}${arenaGiB ? `&arena=${arenaGiB}` : ""}${vramGiB ? `&vram=${vramGiB}` : ""}`, { waitUntil: "load" });
 
 const t0 = Date.now();
 for (;;) {
@@ -55,7 +68,7 @@ for (;;) {
     }
     // hostState() restituisce già {declared, before, after}: niente doppio
     // annidamento (nota verifier it.10) — before campionato all'avvio, after qui
-    const full = { ...report, arenaGiB: arenaGiB ? Number(arenaGiB) : null, hostState: { declared, before: hostBefore.state?.before ?? hostBefore, after: hostState(declared).state?.before ?? null } };
+    const full = { ...report, arenaGiB: arenaGiB ? Number(arenaGiB) : null, vramTierGiB: vramGiB ? Number(vramGiB) : null, hostState: { declared, before: hostBefore.state?.before ?? hostBefore, after: hostState(declared).state?.before ?? null } };
     writeFileSync(out, JSON.stringify(full, null, 1));
     console.log(`[q35bench] done: decode ${report.decode.tokS.toFixed(2)} tok/s (p50 ${report.decode.msPerTokenP50.toFixed(1)} ms), prefill ${report.prefill.tokS.toFixed(1)} tok/s, TTFT ${(report.ttftMs / 1000).toFixed(1)} s -> ${out}`);
     process.exit(0);

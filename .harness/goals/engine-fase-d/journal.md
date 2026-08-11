@@ -2522,3 +2522,80 @@ lascia una voce della riga 6 scoperta.
 
 Restano poi i punti 3-6 del piano: riferimenti q35, gap nativo, ratchet golden
 q35, `direction §7-bis`.
+
+## it.43 (2026-08-11, fase 6) — riferimenti q35: 8 celle su 9, un tier irraggiungibile, e due difetti d'armatura
+
+Punto 3 del piano. **Prima di eseguire, due letture del codice che hanno cambiato
+l'esecuzione** (dopo it.40 i flag li leggo, non li deduco):
+
+1. **`q35-conf-run.mjs` non ha `--bench`**: i riferimenti li fa
+   `q35-bench-run.mjs`, che pero' esponeva solo `--arena-gib` e NON `--vram-gib`.
+   Il done-when della riga 6 chiede i tier "con `--vram-gib` (i tier ora sono
+   tetti VERI e non budget asseriti, dopo it.35)": **non era eseguibile**.
+   Aggiunto il passthrough (la pagina leggeva gia' `?vram=`), piu' `vramTierGiB`
+   nel report e il tag `tierN` nel nome del file. **Solo harness: `git diff
+   --name-only` non tocca `src/` — il motore sotto misura e' invariato.**
+2. **`vramCeilingBytes` vive solo nel ramo MoE** (q35gpumodel: budget derivato →
+   ExpertCache); sui densi `vramPlan()` e' null. Quindi 6 celle su 9 sono
+   degeneri per costruzione. Le ho girate lo stesso — e' un merge gate, la riga
+   dice 9 celle — ma sapendo cosa aspettarsi.
+
+**LA MATRICE (prompt idx 4, 64 decode, host `quiescent`, come i riferimenti q1):**
+
+| | decode | prefill | TTFT s | miss | upl GiB |
+|---|---|---|---|---|---|
+| 4B tier 8/12/16 | **25,93 / 25,88 / 26,08** | 32,9 / 33,0 / 32,9 | 22,7 / 22,0 / 21,4 | — | — |
+| 9B tier 8/12/16 | **16,00 / 15,95 / 16,06** | 18,7 / 19,2 / 18,7 | 36,3 / 34,6 / 35,0 | — | — |
+| 35B tier 8 | 1,26 | 1,12 | 355,5 | 23.612 | 39,7 |
+| 35B tier 12 | 2,69 | 2,10 | 194,3 | 9.908 | 16,6 |
+| 35B tier 16 | **FALLITO** | | | | |
+
+**La degenerazione dei densi e' MISURATA, non assunta**: spread 0,77% sul 4B e
+0,69% sul 9B fra tier 8 e tier 16. Il tier non li tocca, e ora c'e' il numero
+accanto alla lettura del codice.
+
+**Contro i riferimenti q1** (stesso prompt, stessi 64 decode): 4B decode
+22,93 → 25,93 (**+13,3%**) e prefill 25,97 → 32,9 (**+26,7%**); 9B decode
+14,55 → 16,00 (**+10,0%**), prefill 15,35 → 18,7 (**+22%**).
+
+**IL 35B NON MIGLIORA, E LA MIA SPIEGAZIONE ERA SBAGLIATA.** Avevo ipotesi
+"fetch-bound: ai tier stretti si aspetta la PCIe, quindi i guadagni di kernel
+non si vedono". **Falsa, e la sonda lo dice**: il fetch (read+pack+upload) vale
+40,5 ms/token a tier 8 e 18,8 a tier 12, cioe' **~5% del token** in entrambi i
+casi, contro p50 di 791,9 e 371,6 ms. Il collo NON e' l'I/O.
+
+Il motivo vero e' che **questi riferimenti non esercitano il path del goal**:
+`q35conf.worker` costruisce il modello con `select: cfg.optTrace ? "optimistic"
+: "cpu"`, e `q35-bench-run.mjs` non passa MAI `?optimistic=1` (`grep -c
+optimistic` = 0). I riferimenti misurano il path SYNC — un readback del router
+per layer — che e' il regime pre-fase-3b. Il report lo dichiara pure, nel campo
+`declared`: "sul MoE ancora un readback del router per layer". Sono numeri
+onesti di una cosa diversa da quella che il goal ha ottimizzato (44 ms/token,
+cioe' ~22,6 tok/s, sono del path ottimistico a caldo). → **docket item 25.**
+
+**TIER 16 NON E' RAGGIUNGIBILE SU QUESTA SCHEDA, e il come lo dimostra conta.**
+Primo tentativo (`--vram-gib 16` da solo): errore con diagnosi precisa del
+motore — "la classe q4k ha 7 buffer d'arena ⇒ 10 storage binding, il device ne
+concede 9". Ipotesi formulata dal codice: `arenaNeeds` (quanti buffer negoziare
+col device) si calcola da `arenaGiB`, che vale **12 di default**, mentre il
+budget si DERIVA da `vramGiB` — a tier 16 il derivato e' ~13,5 GiB chiesto a un
+device negoziato per 12. Torna coi fatti: tier 12 (derivato 9,5) e tier 8 (5,5)
+passano, solo il 16 sfonda. → **docket item 23.**
+
+Secondo tentativo, l'osservazione che discrimina "difetto d'armatura" da
+"scheda troppo piccola": `--vram-gib 16 --arena-gib 16`. Il guard dei binding
+sparisce e arriva **`VK_ERROR_OUT_OF_DEVICE_MEMORY` vero**: 13,5 GiB di arena +
+~2 di modello contro ~15,1 allocabili con Chrome vivo. **Tier 16 su una scheda
+da 16.376 MiB non esiste**, ed e' un fatto sul LADDER dei tier, non un bug.
+
+**E QUI LA LANDMINE DI it.14, DAL VIVO.** Quel secondo tentativo **e' uscito 0 e
+ha scritto un report**: decode 4,80 tok/s, miss 7.657, upload 12,8 GiB — numeri
+che continuano PERFETTAMENTE la tendenza di tier 8 e tier 12 (miss 23.612 →
+9.908 → 7.657). Sono spazzatura: i buffer erano invalidi (`Invalid BindGroup`,
+`Invalid CommandBuffer`) e il 4,80 e' la velocita' di NON fare il lavoro. Il
+JSON e' in quarantena fuori da `results/`. `q35-bench-run.mjs` LOGGA i
+`pageerror` ma non li guarda: uscirebbe 0 comunque. → **docket item 24**, ed e'
+il piu' grave dei tre perche' il prodotto di questa fase SONO i JSON.
+
+**Verificato che le altre 8 celle sono pulite**: un solo `pageerror` in tutto il
+log della matrice, ed e' nella cella tier 16. Le referenze non sono contaminate.

@@ -627,3 +627,81 @@ solo se si accetta di perdere la bisezione contro la fase 7. La (b) toglie un
 gate mentre lo si sta attraversando.
 
 Registrato it.42 (2026-08-11).
+
+## item 23 — `arenaNeeds` si negozia da `arenaGiB`, il budget si deriva da `vramGiB`: due verita' per la stessa quantita' (io, fase 6)
+
+`q35conf.worker` calcola `arenaNeeds` (quanti buffer d'arena negoziare col
+device) da `arenaGiB`, default **12**, mentre `createQ35GpuModel` DERIVA il
+budget da `vramCeilingBytes`. Finche' il derivato sta sotto i 12 GiB nessuno se
+ne accorge; sopra, il motore lancia con la diagnosi giusta ("la classe q4k ha 7
+buffer d'arena ⇒ 10 storage binding, il device ne concede 9").
+
+Misurato in it.43: tier 8 (derivato 5,5 GiB) e tier 12 (9,5) passano, tier 16
+(13,5) no. Il workaround esiste — passare anche `--arena-gib` allineato — ma e'
+esattamente il tipo di "ricordarsene" che it.35 ha tolto di mezzo introducendo
+il budget derivato.
+
+E' un difetto di COERENZA, non di correttezza (il guard urla, non tace). La
+strada e' far derivare anche `arenaNeeds` dal tetto invece che dal parametro
+asserito, cioe' toccare il worker: **albero congelato, non lo apro ora**.
+Registrato it.43 (2026-08-11).
+
+## item 24 — `q35-bench-run.mjs` esce 0 e SCRIVE il report anche con errori GPU (io, fase 6) — GRAVE
+
+Il runner registra `page.on("pageerror", ...)` ma lo usa solo per stampare: la
+condizione d'uscita e' `status.startsWith("done")`, e la pagina dice "done"
+perche' il worker ha postato il report. Se nel mezzo la GPU ha emesso errori
+non catturati, **il report viene scritto lo stesso e l'exit e' 0**.
+
+Visto DAL VIVO in it.43, ed e' la landmine di it.14 nella sua forma peggiore. Il
+run 35B a tier 16 con arena allineata ha prodotto: decode 4,80 tok/s, miss
+7.657, upload 12,8 GiB — numeri che continuano perfettamente la tendenza delle
+celle sane (miss 23.612 → 9.908 → 7.657) e che **nessuno guardando il JSON
+sospetterebbe**. Erano prodotti con `Invalid BindGroup`/`Invalid CommandBuffer`:
+il 4,80 e' la velocita' di non fare il lavoro. JSON in quarantena fuori da
+`results/`.
+
+Perche' e' grave adesso e non in astratto: il PRODOTTO della fase 6 sono i JSON
+di riferimento, e il punto 5 del piano (ratchet golden q35) e' fatto di altre
+ore di run. Un riferimento silenziosamente invalido si propaga in
+`direction §7-bis` e nel paper.
+
+La cura e' piccola e tutta nel runner: accumulare i `pageerror`/console GPU e
+uscire non-zero (o marcare il report `gpuErrors: [...]`) invece di stampare e
+proseguire. **Non l'ho fatta: albero congelato durante il checkpoint.** Nel
+frattempo verifico A MANO il log di ogni run per errori GPU e lo dichiaro —
+l'ho fatto per tutte le 9 celle di it.43 (una sola cella sporca, isolata).
+
+Decisione al PI: (a) fixare il runner ORA, perche' protegge le ore di run che
+restano nel checkpoint ed e' un percorso di solo-fallimento (non cambia nessun
+numero); (b) tenerlo per dopo il checkpoint e affidarsi al grep manuale
+dichiarato. **Parere: (a)** — "uno strumento che tace quando dovrebbe urlare e'
+peggio che non averlo" e' gia' la regola di casa (it.38, `readTap`), e qui il
+silenzio contamina il prodotto della fase.
+Registrato it.43 (2026-08-11).
+
+## item 25 — i riferimenti q35 misurano il path SYNC, non quello che il goal ha ottimizzato (PI, fase 6)
+
+`q35conf.worker` costruisce il modello con `select: cfg.optTrace ? "optimistic"
+: "cpu"`, e `q35-bench-run.mjs` non passa mai `?optimistic=1` (`grep -c
+optimistic` = 0). Quindi i riferimenti della riga 6 misurano il path con un
+readback del router PER LAYER — il regime pre-fase-3b. Il report lo dichiara nel
+campo `declared`, quindi non mente: misura onestamente un'altra cosa.
+
+Conseguenza misurata in it.43: sul 35B i tier nuovi non mostrano nessun
+guadagno rispetto ai riferimenti q1 (tier 12 = 2,69 tok/s), mentre il path
+ottimistico a caldo sta a ~44 ms/token = ~22,6 tok/s (it.22). Se
+`direction §7-bis` viene riscritto con 2,69, pubblica un numero vero di un path
+che il goal ha superato.
+
+Non e' una decisione di meccanismo: e' cosa DEVE misurare un "riferimento".
+(a) Stesso protocollo di q1 (sync) — massima comparabilita' storica, ma
+sottostima l'engine di ~8x sul 35B; (b) path ottimistico — il numero che
+rappresenta il motore di oggi, ma non confrontabile con le referenze q1;
+(c) **entrambi**, due colonne nello stesso JSON: comparabilita' storica E numero
+vero, al prezzo di raddoppiare i run del 35B (i densi non hanno il path
+ottimistico, quindi la colonna in piu' costa solo 3 run).
+
+Parere: **(c)**. Il costo e' basso proprio dove serve, e un riferimento che
+esiste per riscrivere §7-bis deve contenere il numero che §7-bis dovra' citare.
+Registrato it.43 (2026-08-11).
