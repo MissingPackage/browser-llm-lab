@@ -302,6 +302,17 @@ su questi due numeri.
 
 Registrato it.18 (2026-08-11).
 
+### CHIUSO it.36 (2026-08-11) — la soglia non serve
+
+Misurato nello STESSO processo (`debugEvictAll` fra i bracci) e nei DUE ordini,
+per limitare il confondente della cache di sistema: a freddo l'ottimistico fa
+650,92 / 660,67 ms/token contro 1111,50 / 1098,40 del sync — **1,68x piu'
+veloce**, con l'ordine che sposta l'1,2%. A caldo 43,57 contro 132,81 (3,05x).
+Il replay costa (109 replay, +12% di fetch, 80,7% del token rigiocato) ma costa
+MENO dei 77 round-trip per token del path sync. **La soglia e' esclusa coi
+numeri** e i tre numeri di questo item restano come descrizione del regime
+freddo. **Item 13 CHIUSO.**
+
 ## item 14 — il dispatch del router costa 3,5 volte un GEMV expert (io, fase 5 o leva kernel)
 
 Misurato in it.19 con la sonda dei timestamp: **70,8 us per dispatch** contro i

@@ -58,6 +58,9 @@ if (process.argv.includes("--opt-cold")) { qs.set("optimistic", "1"); qs.set("op
 // Decomposizione del tempo GPU del token per categoria (fase 4, it.19). PERTURBA:
 // spezza il pass di ogni layer in tre, quindi tre barriere invece di una.
 if (process.argv.includes("--gpu-time")) qs.set("gputime", "1");
+// I due path misurati entrambi a FREDDO nello stesso processo (cache svuotata
+// fra i bracci): e' il confronto che la policy d'ingresso della fase 5 esige.
+if (process.argv.includes("--cold-both")) qs.set("coldboth", "1");
 // MISURA della fase 4-ter: quanto costa lo snapshot dello stato ricorrente
 // (62,8 MiB per token). Rompe il replay: solo a cache calda.
 if (process.argv.includes("--no-snapshot")) qs.set("nosnap", "1");

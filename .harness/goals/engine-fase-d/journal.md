@@ -2142,3 +2142,47 @@ riferimento). tsc pulito, suite 440|9. **Docket item 11 CHIUSO.**
 Il vecchio parametro resta come default per non cambiare i run esistenti: senza
 `vramCeilingBytes` il comportamento e' quello di prima, e il JSON adesso porta
 la scomposizione (`vramPlan`) invece di un numero asserito.
+
+## it.36 (2026-08-11, fase 5) — la POLICY d'ingresso non serve, ed e' un numero a dirlo
+
+Seconda voce della riga 5. Il progetto di it.16 prevedeva una soglia — sync
+finche' i miss/token stanno sopra, ottimistico sotto, con isteresi — perche' a
+cache fredda ogni token e' sporco e il replay sembrava dover costare piu' del
+sync. it.18 aveva gia' misurato il contrario (738 contro 1193) ma l'aveva
+dichiarato NON una misura: un campione per braccio, in due run diversi.
+
+**Strumento**: `debugEvictAll` (solo harness) rimette la cache a vuota, cosi' i
+due path partono entrambi da freddo **nello stesso processo**. La cache fredda
+esiste una volta sola per processo, ed e' il motivo per cui finora i due bracci
+stavano in due run.
+
+**E l'ho fatto nei DUE ORDINI**, perche' il secondo braccio rilegge dal GGUF
+range che il primo ha gia' toccato — se la pagina e' in cache di sistema, il
+secondo braccio ha un vantaggio che non c'entra col meccanismo:
+
+| | sync a freddo | ottimistico a freddo |
+|---|---|---|
+| ordine A (sync per primo) | 1111,50 | 650,92 |
+| ordine B (ottimistico per primo) | 1098,40 | 660,67 |
+
+**L'ordine sposta l'1,2%**: il confondente e' limitato e la conclusione tiene.
+
+**RISULTATO: a freddo l'ottimistico e' 1,68x PIU' VELOCE del sync** (~656 contro
+~1105), e a caldo 3,05x (43,57 contro 132,81). Il replay costa davvero — 109
+replay, +12% di fetch, l'80,7% del token rigiocato ogni volta — ma costa **meno
+dei 77 round-trip per token** che il path sync paga comunque. E' coerente con
+it.19: nel path sync il tempo sta nei sync, non nel calcolo.
+
+**Quindi la soglia NON SERVE, ed e' esclusa coi numeri** — che e' esattamente
+cio' che il done-when della riga 5 ammette ("delta misurato O esclusione
+motivata coi numeri"). Il decode ottimistico si accende e basta. La decisione e'
+scritta nel codice accanto al flag, coi numeri, perche' chi la trovera' fra sei
+mesi vedra' un `let optimisticOn = ...` senza policy e si chiedera' se manca
+qualcosa.
+
+**Chiude anche il docket item 13**, che elencava i tre numeri con cui tarare la
+soglia: la soglia non c'e' piu', e i tre numeri restano come descrizione del
+regime freddo.
+
+**Gate**: tsc pulito, suite 440|9, argmax **39/39 identico** e routing identico
+in entrambi i run, JSON committati (`q35-coldboth`, `q35-coldboth-rev`).

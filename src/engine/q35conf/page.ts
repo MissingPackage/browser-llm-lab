@@ -25,6 +25,8 @@ const cfg = {
   prefillM: q.has("prefillm") ? Number(q.get("prefillm")) : undefined,
   // ?vram=10.5 → tetto VRAM: il budget expert si deriva (docket item 11)
   vramGiB: q.has("vram") ? Number(q.get("vram")) : undefined,
+  // ?coldboth=1 → i due path misurati entrambi a freddo, stesso processo
+  coldBoth: q.get("coldboth") === "1",
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

@@ -169,6 +169,14 @@ export interface Q35GpuModel {
    */
   vramPlan(): { ceilingBytes: number | null; allocatedBytes: number; reserveBytes: number; expertBudgetBytes: number; ctxMax: number } | null;
   /**
+   * SOLO HARNESS (fase 5, it.36): rimette la cache expert a VUOTA. Serve a
+   * misurare due path nello STESSO processo partendo entrambi da freddo — che
+   * e' l'unico modo di confrontarli davvero, visto che la cache fredda esiste
+   * una volta sola per processo e finora i due bracci stavano in due run.
+   * `null` sui densi (non c'e' arena).
+   */
+  debugEvictAll: (() => void) | null;
+  /**
    * Tempo GPU per CATEGORIA accumulato sui token girati col path ottimistico e
    * la sonda accesa; `null` se la sonda non e' attiva (o `timestamp-query` non
    * concessa dal device). `ms` e' la somma dei pass, `n` il numero di pass.
@@ -751,6 +759,8 @@ export async function createQ35GpuModel(
      * di evincere uno slot che i dispatch gia' encodati della riga r leggeranno.
      */
     pinUnion(m: number, logitsAll: Float32Array, rows: number, nExpertLogits: number): Set<number>;
+    /** SOLO HARNESS: svuota la cache expert (misura a freddo ripetibile). */
+    evictAll(): void;
     /** cablaggio del prefill a chunk; `null` senza `prefillM` */
     chunkRt: { bgAddRow: GPUBindGroup[]; routerStagingM: GPUBuffer } | null;
     destroy(): void;
@@ -1539,6 +1549,14 @@ export async function createQ35GpuModel(
         device.queue.submit([enc.finish()]);
         perfAcc.submits++;
       },
+      evictAll(): void {
+        const keys: number[] = [];
+        for (let l2 = cfg.denseLead; l2 < cfg.nLayer; l2++) {
+          for (let e2 = 0; e2 < cfg.nExpert; e2++) keys.push(cache.keyOf(l2, e2));
+        }
+        cache.debugMarkMiss(keys);
+        routing.clear();
+      },
       pinUnion(m: number, logitsAll: Float32Array, rows: number, nExpertLogits: number): Set<number> {
         const l = moeLayerAbs[m];
         const out = new Set<number>();
@@ -1629,7 +1647,20 @@ export async function createQ35GpuModel(
     dirtyTokens: 0, replays: 0, replayLayers: 0, repairMs: 0,
     encodeMs: 0, tokenMs: 0, tailCpuMs: 0,
   };
-  /** path attivo: `true` solo se costruito con `select: "optimistic"` (fetta 3c) */
+  /**
+   * Path attivo: `true` se costruito con `select: "optimistic"`.
+   *
+   * NIENTE SOGLIA D'INGRESSO, e la decisione e' misurata (fase 5, it.36). Il
+   * progetto di it.16 prevedeva una policy — sync finche' i miss/token stanno
+   * sopra una soglia, ottimistico sotto — perche' a cache fredda ogni token e'
+   * sporco e il replay sembrava dover costare piu' del sync. Misurato nello
+   * STESSO processo, svuotando la cache fra i bracci e ripetendo nei due ordini:
+   * a FREDDO l'ottimistico fa 651-661 ms/token contro 1098-1112 del sync
+   * (**1,68x piu' veloce**), e a caldo 43,6 contro 132,8 (3,05x). Il replay
+   * costa — 109 replay, +12% di fetch — ma costa MENO dei 77 round-trip per
+   * token che il path sync paga comunque. La soglia non serve: e' esclusa coi
+   * numeri, che e' cio' che il done-when della riga 5 ammette.
+   */
   let optimisticOn = opts.select === "optimistic";
   // ---- sonda di decomposizione del tempo GPU (fase 4, it.19) ----
   // Con le marche di it.23 le categorie per layer diventano 7 (norm, attn|ssm,
@@ -1846,6 +1877,7 @@ export async function createQ35GpuModel(
       : null,
     lastLogits: () => lastLg,
     vramPlan: () => vramPlanOut,
+    debugEvictAll: moe?.evictAll ?? null,
     prefillChunk: PB ? async (tokens: ArrayLike<number>, posStart: number): Promise<Float32Array> => {
       if (tokens.length !== M_MAX) {
         throw new Error(`q35 prefillChunk: chunk di ${tokens.length} righe, il piano gemello e' cotto su ${M_MAX}`);

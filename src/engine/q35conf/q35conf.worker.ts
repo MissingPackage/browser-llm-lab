@@ -64,6 +64,12 @@ interface Cfg {
   prefillM?: number;
   /** fase 5 (docket item 11): tetto VRAM, da cui il budget expert si DERIVA. */
   vramGiB?: number;
+  /**
+   * fase 5 (it.36): i DUE path misurati entrambi a FREDDO nello stesso
+   * processo, con la cache svuotata fra i bracci. E' il confronto che la
+   * policy d'ingresso esige e che finora stava in due run diversi (it.18).
+   */
+  coldBoth?: boolean;
 }
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
@@ -430,6 +436,14 @@ async function main(cfg: Cfg): Promise<void> {
     // cache fredda esiste una volta sola per processo.
     const coldOpt = cfg.optCold === true;
     const syncCold = await runPass(coldOpt);
+    // I DUE PATH A FREDDO, nello stesso processo: si svuota la cache expert e
+    // si rifa' la passata con l'altro path. Finora i due bracci stavano in due
+    // run (it.18) e il confronto non era una misura.
+    let coldOther: Awaited<ReturnType<typeof runPass>> | null = null;
+    if (cfg.coldBoth) {
+      model.debugEvictAll!();
+      coldOther = await runPass(!coldOpt);
+    }
     // E il ms/token si misura come il docket item 10 impone, non con un
     // campione per braccio: bracci INTERLEAVATI, prima ripetizione SCARTATA
     // (la prima passata dopo il load paga compilazione e prime allocazioni),
@@ -473,6 +487,11 @@ async function main(cfg: Cfg): Promise<void> {
       reps: REPS,
       passes: [
         { pass: coldOpt ? "optimistic-cold" : "sync-cold", tokensDone: syncCold.argmax.length, error: syncCold.error, ...pass2json(syncCold, Math.max(1, syncCold.argmax.length)) },
+        ...(coldOther ? [{
+          pass: coldOpt ? "sync-cold(evicted)" : "optimistic-cold(evicted)",
+          tokensDone: coldOther.argmax.length, error: coldOther.error,
+          ...pass2json(coldOther, Math.max(1, coldOther.argmax.length)),
+        }] : []),
         { pass: "sync-warm", tokensDone: syncWarm.argmax.length, error: syncWarm.error, ...pass2json(syncWarm, Math.max(1, syncWarm.argmax.length)), msPerTokenDisp: msSync },
         { pass: "optimistic-warm", tokensDone: optim.argmax.length, error: optim.error, ...pass2json(optim, Math.max(1, optim.argmax.length)), msPerTokenDisp: msOpt },
       ],
