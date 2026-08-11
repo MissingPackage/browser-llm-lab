@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, headCut fatto, piano di prefill parametrizzato it.20)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, it.21: la premessa della fase 4 e' caduta, docket item 15 in attesa di ruling PI sull'ordine)
 
 ## 1. Next decidable
 
@@ -236,26 +236,38 @@ non viene sfiorato. NON misurata end-to-end (il gate gira `read=true`): la
 misura e' il micro-bench della fase 4. Provata la non-regressione: argmax 39/39,
 routing identico, miss 0.
 
-**PASSO 1 DELLA FETTA FATTO (it.20)**: il piano del prefill non e' piu' di GLM.
-`glmprefillplan.ts` era cablato su `GLM47_FLASH` (64 expert, top-4) in SETTE
-punti; ora e' `moeprefillplan.ts` ed e' parametrico su `MoePlanShape
-{nExpert, nExpertUsed}` — config STRUTTURALE e non un import di
-`MoeModelConfig`, perche' `residency.ts` importa `GLM_PREFILL_M` da qui e
-dipendere di la' a runtime chiuderebbe un CICLO (`MoeModelConfig` e' assegnabile
-per struttura: l'unificazione la fa il sistema di tipi, senza dipendenza).
-I test girano su DUE famiglie (`describe.each`: GLM 64/top-4 e q35 256/top-8) su
-tutte le proprieta', identita' bit-a-bit con la catena del decode inclusa, piu'
-la controprova che l'ordine dell'unione DEVE divergere in f32 e un test che il
-default senza cfg e' ancora esattamente GLM. Suite **417|9**, ktest **87/87**
-(`prefill-moe-batched-vs-decode-chain` BIT-IDENTICO): il prefill di GLM non si e'
-mosso di un bit.
+**PASSO 1 (it.20)**: il piano del prefill non e' piu' di GLM —
+`moeprefillplan.ts`, parametrico su `MoePlanShape {nExpert, nExpertUsed}`
+(config STRUTTURALE e non un import di `MoeModelConfig`: `residency.ts` importa
+`GLM_PREFILL_M` da qui e dipendere di la' a runtime chiuderebbe un ciclo). Test
+su DUE famiglie, identita' bit-a-bit con la catena del decode inclusa. Suite
+417|9, ktest 87/87, prefill di GLM non mosso di un bit.
 
-**PROSSIMO: i kernel a M righe di q35** — statico/router/expert, gather per
-expert dell'unione, combine in ordine k (e' cosi' che GLM tiene l'identita'
-bit-a-bit col decode), e la scelta di M coi numeri di it.19 (proiezione 2,02x a
-M=16), non per analogia con GLM. Vincoli gia' noti e da rispettare: i 2 dispatch
-ricorrenti per layer deltanet restano M (30 layer su 40), e l'unione comprime
-solo 1,27x a M=16.
+**PASSO 2 (it.21) — E QUI SI E' ROTTA LA PREMESSA DELLA FASE.** Il down degli
+expert ora ACCUMULA col peso da `Sel` (`accum` sui kernel K-quant): −320
+dispatch/token, bit-identico per costruzione (argmax 39/39, routing identico,
+miss 0), e `axpySelWgsl`/`dnE`/`wBufs` spariscono. **Ma il tempo e' sceso di
+0,327 ms invece dei ~6,7 attesi: −1,02 us per dispatch rimosso contro i ~21 che
+it.19 sembrava dire.** I ~20 us medi erano totale/conteggio, non un costo fisso
+di lancio: **il token NON e' dispatch-bound, e la proiezione 2,02x della fase 4
+— costruita su tempo ∝ dispatch — NON REGGE PIU'**.
+
+**IL NUMERO CHE RESTA IN PIEDI**: gli expert leggono 571 MB di pesi per token
+(320 x 1,785 MB, byte misurati) in 33,1 ms = **17,2 GB/s efficaci** su ~500
+disponibili — il 3% della banda, per il 58% del tempo GPU. Ipotesi coerente ma
+NON provata: `gemvQ4K`/`gemvQ6K` spartiscono i superblocchi di UNA riga sui 64
+thread, e sul 35B sono 8 (gate/up, K=2048) e **2** (down, K=512) ⇒ 8 lane su 64
+e 2 su 64 attive. La prova sarebbe un kernel alternativo misurato contro questo.
+
+**DECISIONE APERTA — DOCKET ITEM 15 (PI)**: l'ordine del contratto. La fase 4
+vale zero sul DECODE, che e' dove sta la funzione obiettivo (il 35B fa 71,9
+ms/token = 13,9 tok/s; per 30 tok/s servono 33 ms), e la sua proiezione e'
+caduta. Opzioni: (a) fase 4-bis sui kernel expert PRIMA della 4; (b) ordine
+invariato; (c) fase 4 esclusa coi numeri (il suo done-when ammette l'esclusione
+motivata). **Parere mio: (a)** — e' testualmente l'argomento con cui il PI ha
+accolto l'item 8: ottimizzare sopra un collo che poi sparisce costa due volte.
+**Fino al ruling il lavoro procede sul contratto** (fase 4), ma la prossima
+iterazione dovrebbe partire dal ruling se c'e'.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
