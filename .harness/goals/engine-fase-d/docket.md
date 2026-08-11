@@ -587,3 +587,43 @@ Aperto come item perche' la strada giusta (un flag `--nonreg <json-di-riferiment
 che confronti le mediane e faccia lui la banda, con un exit code suo) e' un cambio
 al runner, e l'albero e' congelato fino a fine checkpoint. Non lo apro adesso.
 Registrato it.40 (2026-08-11).
+
+## item 22 — la `firma` della riga 6 resta scoperta per scelta di scope (PI, fase 6)
+
+La riga 6 chiede, per il braccio GLM: "b12 optimistic in banda +-5% + golden AL
+PIN + cpuref + **firma**". Dopo it.41 e it.42 lo stato e':
+
+- b12 optimistic in banda **✓** (it.41: -0,36% / -0,03% / +0,03%, stdev dimezzata)
+- golden AL PIN **✓** (it.42: 1012/1024 = 98,828125%, identico al riferimento)
+- cpuref **✓** (it.42: 256/256)
+- **firma ✗**
+
+La `firma` e' la ROUTING conformance (`glm-routing-conformance`, ~95 min):
+direction § la chiama per nome due volte — "full-corpus, routing = firma item
+14b" e "firma routing invariata ai conteggi". Il PI, in sessione, ha scelto
+"solo conformance ai logits" e poi ha confermato "vai coi logits full": e' una
+decisione di scope PRESA, non una dimenticanza, e sta qui perche' lascia una
+voce della riga 6 non soddisfatta.
+
+**Cosa abbiamo al posto suo, e quanto vale.** Nel report dei logits il blocco
+`residency` e' identico voce per voce al riferimento, `bytesUploaded` compreso
+AL BYTE su 4.999.280 richieste e 211.117 sfratti. Una selezione di expert
+diversa anche di poco muoverebbe miss, sfratti e byte caricati: e' evidenza
+circostanziale fortissima che il routing sia invariato. Ma non e' il gate — il
+gate confronta l'istogramma per expert chiave per chiave — e chiamare "firma"
+questa inferenza sarebbe esattamente il tipo di scorciatoia che il ratchet
+esiste per impedire.
+
+**Tre esiti possibili, nessuno dei quali decido io**: (a) lanciare la routing
+conformance prima di chiudere il checkpoint (~95 min, la riga 6 torna piena);
+(b) riscrivere la riga 6 togliendo `firma` e dichiarando per iscritto che il
+routing si considera coperto dai conteggi di residenza — cambio di contratto;
+(c) rimandarla alla riga 9 ("non-reg GLM piena fresca"), accettando che il
+CHECKPOINT A si chiuda con una voce scoperta e che, se saltasse li', non si
+sappia se e' stata l'unificazione del core o la fase 7 (spec-dec MTP).
+
+Parere: (a) se il checkpoint deve valere come merge gate; (c) e' difendibile
+solo se si accetta di perdere la bisezione contro la fase 7. La (b) toglie un
+gate mentre lo si sta attraversando.
+
+Registrato it.42 (2026-08-11).

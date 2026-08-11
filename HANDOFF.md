@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.40: CHECKPOINT A ripartito — docket 20 chiuso dai fatti, non-reg GLM IN BANDA (13,437/31,813/14,49 s), restano golden+cpuref+firma)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.40: CHECKPOINT A ripartito — docket 20 chiuso dai fatti, non-reg GLM IN BANDA (13,437/31,813/14,49 s), golden+cpuref IDENTICI (it.42), resta la firma routing (docket 22))
 
 ## 1. Next decidable
 
@@ -519,8 +519,31 @@ riferimento e' a chunked M=16 e il default del runner e' 0; passare "16" lascia
 il prefill sequenziale IN SILENZIO (lo dice solo `config.prefillPath`). Commento
 d'uso del runner corretto.
 
-**RESTA del braccio 2**: golden AL PIN + cpuref + firma (conformance full GLM,
-~96+95 min), non lanciate. Poi i punti 3-6 del piano.
+**it.42 — CONFORMANCE LOGITS FULL: non "in banda", IDENTICA cifra per cifra.**
+Config/`corpusHash`/`ggufSha256`/`oracle` confrontati col riferimento: identici.
+95,0 min contro 96,1. `gateGolden` **1012/1024 = 98,828125%** e `gateCpuref`
+**256/256** — gli STESSI numeri del riferimento, non "entro soglia"; `klMeanTop32`
+e `maxAbsDeltaLogit` uguali all'ultima cifra, e tutti e 8 i prompt con top1/klMean/
+maxDl identici.
+
+**Il risultato che chiude il buco di copertura** e' il blocco `residency`, cioe' la
+macchina che il goal ha RISCRITTO: hits 4.785.946 · misses 213.334 · evictions
+**211.117** · requests 4.999.280 · `bytesUploaded` 1.144.193.875.968 **al byte** ·
+retention 0,9577705189547295 — tutti identici. 211.117 sfratti riprodotti uno per
+uno: ktest non sfratta mai (2 layer, ci sta tutto) e il bench sfratta ma non guarda
+cosa esce, quindi questa e' la sola prova che l'eviction unificata regge sotto
+pressione vera. JSON: `conformance-glm47flash-full-nonreg-fase-d-it42.json`.
+
+**RIGA 6, braccio 2, voce per voce**: b12 in banda ✓ (it.41) · golden AL PIN ✓ ·
+cpuref ✓ · **firma ✗**. La `firma` e' la ROUTING conformance (~95 min; direction §:
+"routing = firma item 14b"), che il PI ha scelto di non fare ora. **Docket item 22**
+con tre esiti (lanciarla / riscrivere la riga / rimandarla alla riga 9) e il costo
+di ciascuno. Nota: i conteggi di residenza identici al byte sono evidenza
+circostanziale fortissima che il routing sia invariato, ma NON sono il gate, che
+confronta l'istogramma per expert chiave per chiave.
+
+**RESTANO i punti 3-6 del piano**: riferimenti q35 (4B/9B/35B ai tier 8/12/16),
+gap nativo a parita', ratchet golden q35, `direction §7-bis` riscritto.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta

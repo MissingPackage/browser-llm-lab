@@ -2466,3 +2466,59 @@ il run di GATE del braccio 2 (it.40-c resta come replica indipendente).
 
 **Braccio 2 del CHECKPOINT A, prima voce: PASSA.** Restano golden AL PIN,
 cpuref e firma.
+
+## it.42 (2026-08-11, fase 6) — conformance logits full: non "in banda", IDENTICA cifra per cifra
+
+Ruling PI in sessione: opzione (a), logits full adesso. Lanciata riproducendo la
+config del riferimento 2026-08-09 — `budgetGiB` **11** (non il default 12 del
+runner: i flag li ho LETTI, dopo la lezione di it.40), prompts/maxGen/prefetch
+null. `config`, `corpusHash`, `ggufSha256` e blocco `oracle` confrontati
+programmaticamente: identici. 95,0 min contro 96,1.
+
+**I DUE GATE DELLA RIGA 6 PASSANO, e non "entro soglia": con gli STESSI NUMERI.**
+
+| | riferimento 2026-08-09 | oggi |
+|---|---|---|
+| `gateGolden` top1 | **1012/1024 = 98,828125%** | **1012/1024 = 98,828125%** |
+| `gateCpuref` | **256/256** | **256/256** |
+| `klMeanTop32` | 0,0029912943397463533 | **la stessa, all'ultima cifra** |
+| `maxAbsDeltaLogit` | 58,567843466186524 | **la stessa, all'ultima cifra** |
+
+E i 1.024 controlli non sono aggregati fortunati: **tutti e 8 i prompt hanno
+top1, klMean e maxDl identici cifra per cifra** (p0 0,984375 · p1 0,9921875 ·
+p2 0,9765625 · p3 0,96875 · p4 0,9921875 · p5 1 · p6 1 · p7 0,9921875).
+
+**IL RISULTATO CHE CHIUDE IL BUCO DI COPERTURA** e' pero' un altro, ed e' il
+motivo per cui questa run andava fatta adesso e non a fine goal. Il blocco
+`residency` — la macchina che il goal ha RISCRITTO — e' identico voce per voce:
+
+    hits           4.785.946 = 4.785.946
+    misses           213.334 =   213.334
+    evictions        211.117 =   211.117
+    requests       4.999.280 = 4.999.280
+    bytesUploaded  1.144.193.875.968 = 1.144.193.875.968   (al BYTE)
+    retention      0,9577705189547295 = la stessa
+
+**211.117 sfratti riprodotti uno per uno.** Il `glm-model-2layer` di ktest non
+sfratta mai (a quel budget ci sta tutto) e il bench b12 sfratta ma non guarda
+cosa esce: questa e' la sola prova che l'eviction unificata si comporta come
+quella di prima SOTTO PRESSIONE VERA, su 5 milioni di richieste. Era
+esattamente il rischio non coperto argomentato prima di lanciare.
+
+Nota di forza probatoria, senza esagerare: `bytesUploaded` identico al byte su
+5M richieste implica che la SEQUENZA di expert richiesti e' stata la stessa —
+una selezione diversa anche di poco muoverebbe miss, sfratti e byte. E' evidenza
+circostanziale FORTISSIMA che il routing sia invariato, ma **non e' il gate
+`firma routing`**, che confronta l'istogramma per expert chiave per chiave ed e'
+un'altra run (`glm-routing-conformance`, ~95 min).
+
+**STATO DELLA RIGA 6, voce per voce.** Braccio 2 (GLM non-reg PIENA) = b12
+optimistic in banda ✓ (it.41) · golden AL PIN ✓ · cpuref ✓ · **firma ✗**. La
+`firma` della riga 6 e' la routing conformance (direction §: "routing = firma
+item 14b", "firma routing invariata ai conteggi"), che il PI ha deciso in
+sessione di NON fare ora scegliendo "solo conformance ai logits". Non e' una
+dimenticanza: e' una scelta di scope dichiarata, e va a docket item 22 perche'
+lascia una voce della riga 6 scoperta.
+
+Restano poi i punti 3-6 del piano: riferimenti q35, gap nativo, ratchet golden
+q35, `direction §7-bis`.
