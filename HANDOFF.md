@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.26: 4 voci su 6 dell'inventario fase 4, ktest 93/93)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.27: progetto dell'orchestratore su disco, ordine invertito col motivo)
 
 ## 1. Next decidable
 
@@ -325,10 +325,27 @@ e le righe precedenti dello stesso chunk (gia' in cache via `kvAppend`) e non
 quelle dopo — non serve una maschera, serve l'ordine nell'encoder. ktest 93/93,
 `dense-batch-attn-chunk` BIT-IDENTICO su 3 righe a `nPast` crescente.
 
-RESTANO DUE VOCI: (5) **il path expert a GATHER per i K-quant** — GLM ha
-`pairGemvSiluGather`/`gemvDownSlots` solo per q4_0/q4_1; (6) **l'orchestratore a
-M righe** in `q35gpumodel` (scratch per riga, `planMoeChunk` gia' parametrico da
-it.20, combine in ordine k).
+RESTANO DUE VOCI, e **it.27 ne ha INVERTITO l'ordine col motivo**: prima
+l'**orchestratore a M righe**, poi il **gather K-quant**. Il motivo e' il GATE —
+con gli expert per riga dentro il chunk il confronto "logits batched == logits
+sequenziali" che la riga 4 chiede e' **BIT-IDENTICO per costruzione** (ogni
+kernel batched di it.25-26 e' ktestato bit-identico per riga), mentre col
+gather l'ordine delle somme cambia e serve la struttura a slot + combine in
+ordine k. E costa poco: a M=16 il batched fa 14,38 ms col gather e 16,25 senza
+(2,01x contro 1,78x), cioe' **l'89% del guadagno sta nell'orchestratore**.
+
+**PROGETTO DELL'ORCHESTRATORE (it.27, su disco nel journal)**: (1) prima il tipo
+di layer DENSO (4B/9B) — stessa attenzione, stesso deltanet, FFN denso al posto
+del MoE: esercita tutta la macchina batched e ha il gate bit-identico; il MoE si
+aggiunge dopo ed e' l'unico pezzo nuovo. (2) Scratch a M righe ACCANTO a quelli
+per riga, non al posto (il decode resta quello che e'). (3) `rowPos`/`rowPast`
+storage per chunk. (4) Lista di step parallela costruita nello STESSO giro di
+`steps`. (5) La ricorrenza resta per riga dentro il chunk (M dispatch in
+sequenza, 0,588 ms/token). (6) Gate: `prefillChunk` contro `step()` sequenziale,
+logits BIT-IDENTICI, piu' il micro-bench tok/s.
+**Rischio dichiarato**: conv/core della riga m devono vedere lo stato della riga
+m−1; sono dispatch nello stesso pass e WebGPU li ordina — stessa proprieta' su
+cui si regge il path a submit unico di it.17, e va detta non assunta.
 **Taglia della fase corretta da 2-3 a 3-5 iterazioni**, prima di cominciare.
 Avanzamento: **4 voci su 6** (it.25-26). La taglia 3-5 iterazioni va ridimensionata: una delle due voci 'grosse' era una variante da trenta righe.
 
