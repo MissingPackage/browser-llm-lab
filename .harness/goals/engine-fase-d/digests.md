@@ -525,3 +525,20 @@ toccati): sync 1111,50 / 1098,40 contro ottimistico 650,92 / 660,67 — l'ordine
 sposta l'1,2%. **A freddo l'ottimistico e' 1,68x piu' veloce**, a caldo 3,05x: il
 replay costa meno dei 77 round-trip per token del sync. La soglia progettata in
 it.16 non serve. **Docket item 13 CHIUSO.**
+
+## it.37 (2026-08-11) — FASE 5 CHIUSA: due esclusioni, una strutturale e una misurata
+
+**Prefetch**: escluso per STRUTTURA. La finestra che riempiva — il readback del
+router per layer — non esiste piu' (41 → 1 per token, fetta 3c), e durante il
+token la slotTable e' intoccabile (I1): un prefetch li' non sarebbe lento,
+sarebbe illegale. Al confine di token servono i fetch del REPAIR, che sa
+esattamente cosa manca, contro un prefetch che predice all'82,67%@8.
+
+**Tier/AUTOPIN**: escluso per MISURA, sotto pressione vera (3,56 GiB = 2134 slot
+per 3341 expert distinti): LRU contro TIER da' 29.909 contro 29.868 miss —
+**−0,14%** — e tempo dentro il rumore. Caveat onesto: AUTOPIN_MIN_HIST e' 5000 e
+la passata fa 12.480 selezioni, quindi la policy agisce dopo il 40% del run;
+l'esclusione vale su questo corpus e la ri-misura e' della fase 6.
+
+FASE 5 CHIUSA: budget derivato · soglia esclusa · prefetch escluso · tier
+escluso · GLM invariato (ktest 96/96, L2rel identico all'ultima decimale).

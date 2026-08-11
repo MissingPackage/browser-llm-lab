@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.36: fase 5 a 2 voci su 4 — budget derivato e policy esclusa coi numeri (docket 11 e 13 chiusi))
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.37: FASE 5 CHIUSA; next = fase 6, CHECKPOINT A)
 
 ## 1. Next decidable
 
@@ -431,20 +431,37 @@ Misurato sul 35B: tetto 13 GiB, **allocati 1,94**, riserva 0,50, budget expert
 10,56. Run verde (argmax 39/39, routing identico, 0 miss, 43,74 ms/token).
 **Docket item 11 CHIUSO.**
 
-**Seconda voce fatta (it.36): la POLICY d'ingresso NON SERVE, esclusa coi
-numeri.** `debugEvictAll` (harness) rimette la cache a vuota, cosi' i due path
-partono entrambi da freddo NELLO STESSO PROCESSO — e l'ho fatto nei DUE ORDINI
-perche' il secondo braccio rilegge range di GGUF gia' toccati: ordine A 1111,50
-(sync) contro 650,92 (ottimistico), ordine B 1098,40 contro 660,67, cioe'
-**l'ordine sposta l'1,2%**. A freddo l'ottimistico e' **1,68x piu' veloce**, a
-caldo 3,05x: il replay costa (109 replay, +12% di fetch, 80,7% del token
-rigiocato) ma meno dei 77 round-trip per token del sync. La soglia progettata in
-it.16 non serve; la decisione sta nel codice accanto al flag, coi numeri.
-**Docket item 13 CHIUSO.**
+**FASE 5 CHIUSA (it.35-37)**, voce per voce:
+- **budget ctx-aware DERIVATO** (it.35): tetto − allocato − riserva, con un
+  contatore nei due helper di allocazione invece della formula di GLM. 35B:
+  tetto 13 GiB, allocati 1,94, budget expert 10,56. **Docket 11 CHIUSO.**
+- **soglia d'ingresso ESCLUSA COI NUMERI** (it.36): `debugEvictAll` fa partire i
+  due path da freddo nello stesso processo, misurato nei DUE ordini (l'ordine
+  sposta l'1,2%): a freddo l'ottimistico e' **1,68x piu' veloce** (651-661
+  contro 1098-1112), a caldo **3,05x** (43,6 contro 132,8). **Docket 13 CHIUSO.**
+- **prefetch ESCLUSO per struttura** (it.37): la finestra che riempiva — il
+  readback del router per layer — non esiste piu' (41→1), e durante il token la
+  slotTable e' intoccabile (I1). Al confine di token i fetch che servono sono
+  quelli del repair, che sa ESATTAMENTE cosa manca, contro un prefetch che
+  predice al **82,67%@8**.
+- **tier/AUTOPIN ESCLUSO per misura** (it.37): cablata la policy e messa la cache
+  sotto pressione vera (3,56 GiB = **2134 slot per 3341 expert**), LRU contro
+  TIER da' **−0,14% di miss** (29.909 → 29.868) e tempo dentro il rumore.
+  CAVEAT ONESTO: `AUTOPIN_MIN_HIST` e' 5000 e la passata fa 12.480 selezioni,
+  quindi la policy agisce solo dopo il 40% del run — l'esclusione vale su QUESTO
+  corpus, e la ri-misura su corpus pieno e' lavoro della fase 6.
+- **GLM invariato**: ktest **96/96**, `glm-model-2layer` L2rel
+  2,072937787401139e-07 fino all'ultima decimale.
 
-**Restano della riga 5**: (a) il prefetch in-forward su q35 — delta misurato O
-esclusione motivata coi numeri (il recall q35 e' 82,67%@8); (b) tier/AUTOPIN su
-q35, idem.
+**Rilievo aperto**: `moeStats` non riporta la policy attiva — due run che
+differiscono per la policy non si distinguono dal report, e la fase 6 di report
+vive.
+
+**PROSSIMO: la fase 6 — CHECKPOINT A.** E' il merge gate: non-regressione GLM
+PIENA (b12 optimistic in banda ±5%, golden al pin, cpuref, firma), riferimenti
+q35 NUOVI (4B/9B/35B ai tier 8/12/16) con hostState, gap nativo ri-misurato a
+parita', ratchet golden riverificati, e `direction §7-bis` riscritto coi numeri
+veri. Regola del goal: i bench pieni esistono SOLO qui e alla fase 8.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
