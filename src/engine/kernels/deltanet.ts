@@ -28,14 +28,26 @@ export interface DeltaNetDimsWgsl {
   eps: number;
 }
 
-/** conv causale per canale + SiLU + shift stato. Dispatch: ceil(C/64). */
-export function deltaNetConvWgsl(qkvDim: number, convK: number): string {
+/**
+ * conv causale per canale + SiLU + shift stato. Dispatch: ceil(C/64).
+ *
+ * `rows` (fase 4, it.30): x e outv sono matrici [M, C] e la RIGA arriva da un
+ * uniform a dynamic offset — non da `gid.y` come negli altri kernel batched.
+ * La ragione e' che questo kernel NON si batcha: e' la ricorrenza, e le righe
+ * vanno eseguite IN ORDINE perche' la riga m legge lo stato che ha lasciato la
+ * m−1. Quindi restano M dispatch, e cio' che serve e' solo dire a ciascuno su
+ * quale riga lavorare. Lo stato NON e' per riga: e' la memoria che attraversa
+ * il chunk. Senza `rows` il testo emesso e' IDENTICO byte per byte.
+ */
+export function deltaNetConvWgsl(qkvDim: number, convK: number, rows?: boolean): string {
   const K1 = convK - 1;
+  const rBind = rows ? "\n@group(0) @binding(4) var<uniform> rowIdx: vec4<u32>;" : "";
+  const rOff = rows ? "rowIdx.x * C + " : "";
   return `
 @group(0) @binding(0) var<storage, read_write> state: array<f32>; // [${K1}*C] tempo-major
 @group(0) @binding(1) var<storage, read> x: array<f32>;           // [C] qkv del token
 @group(0) @binding(2) var<storage, read> w: array<f32>;           // [C*${convK}] riga per canale
-@group(0) @binding(3) var<storage, read_write> outv: array<f32>;  // [C] post-SiLU
+@group(0) @binding(3) var<storage, read_write> outv: array<f32>;  // [C] post-SiLU${rBind}
 const C = ${qkvDim}u;
 const CK = ${convK}u;
 const K1 = ${K1}u;
@@ -46,13 +58,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   var s = 0.0;
   for (var i = 0u; i < CK; i = i + 1u) {
     var v = 0.0;
-    if (i < K1) { v = state[i * C + c]; } else { v = x[c]; }
+    if (i < K1) { v = state[i * C + c]; } else { v = x[${rOff}c]; }
     s = s + w[c * CK + i] * v;
   }
-  outv[c] = s / (1.0 + exp(-s)); // silu
+  outv[${rOff}c] = s / (1.0 + exp(-s)); // silu
   // shift della storia del canale c (colonna propria: nessuna race)
   for (var i = 0u; i + 1u < K1; i = i + 1u) { state[i * C + c] = state[(i + 1u) * C + c]; }
-  state[(K1 - 1u) * C + c] = x[c];
+  state[(K1 - 1u) * C + c] = x[${rOff}c];
 }`;
 }
 
@@ -87,8 +99,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * Ricorrenza per v-head + gated norm. Dispatch: [nV] workgroup, wg size hd.
  * convOut layout: [q(nK·hd) | k(nK·hd) | v(nV·hd)].
  */
-export function deltaNetCoreWgsl(d: DeltaNetDimsWgsl): string {
+export function deltaNetCoreWgsl(d: DeltaNetDimsWgsl, rows?: boolean): string {
   const keyDim = d.nK * d.hd;
+  // `rows` (fase 4, it.30): stessa ragione del conv — la ricorrenza non si
+  // batcha, quindi la riga arriva da un uniform e i dispatch restano M, in
+  // ordine. `S` non e' per riga: e' la memoria che attraversa il chunk.
+  const rBind = rows ? "\n@group(0) @binding(7) var<uniform> rowIdx: vec4<u32>;" : "";
+  const cvOff = rows ? `rowIdx.x * ${2 * keyDim + d.nV * d.hd}u + ` : "";
+  const nvOff = rows ? `rowIdx.x * ${d.nV}u + ` : "";
+  const vecOff = rows ? `rowIdx.x * ${d.nV * d.hd}u + ` : "";
   return `
 @group(0) @binding(0) var<storage, read> convOut: array<f32>;   // [${2 * keyDim + d.nV * d.hd}]
 @group(0) @binding(1) var<storage, read_write> S: array<f32>;   // [NV*HD*HD], [h][i*HD+j]
@@ -96,7 +115,7 @@ export function deltaNetCoreWgsl(d: DeltaNetDimsWgsl): string {
 @group(0) @binding(3) var<storage, read> g: array<f32>;         // [NV]
 @group(0) @binding(4) var<storage, read> z: array<f32>;         // [NV*HD] gate della norm
 @group(0) @binding(5) var<storage, read> normW: array<f32>;     // [HD]
-@group(0) @binding(6) var<storage, read_write> outv: array<f32>; // [NV*HD]
+@group(0) @binding(6) var<storage, read_write> outv: array<f32>; // [NV*HD]${rBind}
 const HD = ${d.hd}u;
 const NK = ${d.nK}u;
 const KEYDIM = ${keyDim}u;
@@ -110,9 +129,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   let t = lid.x;            // = colonna j dello stato
   let h = wid.x;            // v-head
   let kHead = h % NK;       // broadcast ggml_repeat: TILING, non gruppi
-  let qRaw = convOut[kHead * HD + t];
-  let kRaw = convOut[KEYDIM + kHead * HD + t];
-  let vj = convOut[2u * KEYDIM + h * HD + t];
+  let qRaw = convOut[${cvOff}kHead * HD + t];
+  let kRaw = convOut[${cvOff}KEYDIM + kHead * HD + t];
+  let vj = convOut[${cvOff}2u * KEYDIM + h * HD + t];
 
   // L2-norm di k (floor eps, semantica ggml_l2_norm)
   red[t] = kRaw * kRaw;
@@ -141,11 +160,11 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   workgroupBarrier();
 
   let base = h * HD * HD;
-  let decay = exp(g[h]);
+  let decay = exp(g[${nvOff}h]);
   // passata 1: sk_j con S decaduto (decay fuso, niente sweep separata)
   var sk = 0.0;
   for (var i = 0u; i < HD; i = i + 1u) { sk = sk + S[base + i * HD + t] * decay * kSh[i]; }
-  let dlt = beta[h] * (vj - sk);
+  let dlt = beta[${nvOff}h] * (vj - sk);
   // passata 2: update colonna j + output o_j = Σ_i S_new[i][j]·q[i]
   var o = 0.0;
   for (var i = 0u; i < HD; i = i + 1u) {
@@ -164,7 +183,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     stride = stride >> 1u;
   }
   let inv = 1.0 / sqrt(red[0] / f32(HD) + EPS);
-  let zj = z[h * HD + t];
-  outv[h * HD + t] = o * inv * normW[t] * (zj / (1.0 + exp(-zj)));
+  let zj = z[${vecOff}h * HD + t];
+  outv[${vecOff}h * HD + t] = o * inv * normW[t] * (zj / (1.0 + exp(-zj)));
 }`;
 }

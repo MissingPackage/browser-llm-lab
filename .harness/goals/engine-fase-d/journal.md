@@ -1837,3 +1837,39 @@ decode, non una riga di questa fase. Va sul docket (item 18), non deciso qui.
 **Gate**: tsc pulito, suite 440|9, argmax **39/39** e routing identico in tutti e
 tre i run dell'esperimento, JSON committati (`q35-onepass`, `q35-noclear`).
 Albero identico a it.28 (`git checkout`).
+
+## it.30 (2026-08-11, fase 4) — l'ultimo pezzo di kernel: la ricorrenza indicizzata per riga
+
+Progettando l'orchestratore (it.27) ho trovato il pezzo che il piano non aveva:
+**dentro un layer batched, conv e core girano per RIGA**, e i loro bind group
+oggi puntano ai buffer per-riga. Le due strade erano M bind group per layer per
+kernel — 30 layer x 16 righe x 2 = **960 bind group** — oppure indicizzare la
+riga da un uniform. La seconda, per la stessa ragione per cui i kernel d'arena
+prendono lo slot da `Sel`: l'indirizzo non sta nel bind group.
+
+**`rows` su `deltaNetConvWgsl` e `deltaNetCoreWgsl`**: x/outv (conv) e
+convOut/beta/g/z/outv (core) diventano matrici [M, ...] e la riga arriva da un
+uniform. Lo STATO no: `state` e `S` non sono per riga — sono la memoria che
+attraversa il chunk, ed e' esattamente il motivo per cui questi due kernel
+restano M dispatch in ordine invece di diventare uno solo. Senza `rows` il testo
+emesso e' identico byte per byte.
+
+**Perche' `rows` e non `gid.y` come negli altri batched**: gli altri kernel
+batched fanno tutte le righe in UN dispatch, e la riga e' una coordinata del
+lancio. Qui i dispatch restano M e devono essere ORDINATI: la riga e' un
+parametro, non una dimensione. Sono due idiomi diversi perche' sono due cose
+diverse, e confonderli avrebbe prodotto un kernel che sembra batchato e non lo e'.
+
+**GATE — ktest 94/94**, caso nuovo `dense-rows-deltanet-recurrence`:
+**BIT-IDENTICO su 3 righe** contro il kernel per-riga eseguito M volte **sullo
+stesso stato che evolve**. E' il test forte: se l'indicizzazione della riga fosse
+sbagliata, la catena divergerebbe al SECONDO passo, perche' la riga m legge lo
+stato che ha lasciato la m−1. Un test su una riga sola non l'avrebbe visto.
+
+**Inventario della fase 4: 5 voci su 6.** Non serve piu' nessun kernel per
+l'orchestratore — resta solo orchestrazione (voce 6), piu' il gather K-quant
+(voce 5) che it.27 ha spostato DOPO, col motivo (gate bit-identico subito, e il
+gather vale 0,23x su 2,01x).
+
+**Gate**: tsc pulito, suite 440|9, ktest **94/94**, nessun run del modello (il
+testo non-`rows` e' identico, il decode non cambia).

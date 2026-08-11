@@ -2650,6 +2650,51 @@ async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
       [rowsBuf(qs), kC, vC, oM, pastB], [nHead, M, 1]);
     out.push(bitCmp("dense-batch-attn-chunk", new Float32Array(await g.read(oM, M * qDim * 4)), refs, qDim));
   }
+  { // deltanet conv+core con la RIGA da uniform (fase 4, it.30): la ricorrenza
+    // non si batcha, quindi restano M dispatch IN ORDINE — qui si prova che
+    // indicizzare la riga da uniform da' gli stessi bit del kernel per-riga
+    // eseguito M volte, STATO COMPRESO (la riga m legge cio' che ha lasciato
+    // la m−1: se l'indicizzazione fosse sbagliata, la catena divergerebbe al
+    // secondo passo).
+    const hd = 16, nK = 2, nV = 4, convK = 4, eps = 1e-6;
+    const qkvDim = (2 * nK + nV) * hd;
+    const cvLen = 2 * nK * hd + nV * hd;
+    const xs = Array.from({ length: M }, (_, m) => randF32(qkvDim, 31_700 + m, 0.5));
+    const wConv = g.buf(randF32(qkvDim * convK, 31_710, 0.3));
+    const betas = Array.from({ length: M }, (_, m) => randF32(nV, 31_720 + m, 0.8));
+    const gs = Array.from({ length: M }, (_, m) => randF32(nV, 31_730 + m, -0.2));
+    const zs = Array.from({ length: M }, (_, m) => randF32(nV * hd, 31_740 + m, 0.5));
+    const normW = g.buf(randF32(hd, 31_750, 1));
+    const st0 = randF32((convK - 1) * qkvDim, 31_760, 0.2);
+    const S0 = randF32(nV * hd * hd, 31_770, 0.1);
+    // riferimento: kernel per-riga, M volte, sullo STESSO stato che evolve
+    const stR = g.buf(st0), SR = g.buf(S0);
+    const refs: Float32Array[] = [];
+    for (let m = 0; m < M; m++) {
+      const cv = g.empty(cvLen * 4), ov = g.empty(nV * hd * 4);
+      await g.run(deltaNetConvWgsl(qkvDim, convK), [stR, g.buf(xs[m]), wConv, cv], Math.ceil(qkvDim / 64));
+      await g.run(deltaNetCoreWgsl({ hd, nK, nV, eps }),
+        [cv, SR, g.buf(betas[m]), g.buf(gs[m]), g.buf(zs[m]), normW, ov], nV);
+      refs.push(new Float32Array(await g.read(ov, nV * hd * 4)));
+    }
+    // batch: stessi input a righe, riga da uniform, stato che evolve UNA volta
+    const stB = g.buf(st0), SB = g.buf(S0);
+    const cvM = g.empty(M * cvLen * 4), ovM = g.empty(M * nV * hd * 4);
+    const rowUni = Array.from({ length: M }, (_, m) => {
+      const b = g.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      g.device.queue.writeBuffer(b, 0, new Uint32Array([m, 0, 0, 0]) as unknown as BufferSource);
+      return b;
+    });
+    const xM = rowsBuf(xs), bM = rowsBuf(betas), gM = rowsBuf(gs), zM = rowsBuf(zs);
+    for (let m = 0; m < M; m++) {
+      await g.run(deltaNetConvWgsl(qkvDim, convK, true),
+        [stB, xM, wConv, cvM], Math.ceil(qkvDim / 64), rowUni[m]);
+      await g.run(deltaNetCoreWgsl({ hd, nK, nV, eps }, true),
+        [cvM, SB, bM, gM, zM, normW, ovM], nV, rowUni[m]);
+    }
+    out.push(bitCmp("dense-rows-deltanet-recurrence",
+      new Float32Array(await g.read(ovM, M * nV * hd * 4)), refs, nV * hd));
+  }
   return out;
 }
 

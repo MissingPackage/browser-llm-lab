@@ -455,3 +455,21 @@ Dove siamo: token 43,1 = **40,4 GPU + 1,94 CPU**, ma la somma dei pass e' 29,5 �
 spiegano. Sospetto rimasto: i **40 clearBuffer per token**, unica ragione per cui
 il pass si spezza a ogni layer. Esperimento gia' scritto: azzeramento con un
 dispatch DENTRO il pass, e il token diventa un pass solo invece di 41.
+
+## it.30 (2026-08-11) — la ricorrenza indicizzata per riga: 5 voci su 6
+
+Progettando l'orchestratore e' emerso che dentro un layer batched conv e core
+girano per RIGA: o 960 bind group (30 layer x 16 righe x 2 kernel) o la riga da
+un uniform. La seconda, per la stessa ragione dei kernel d'arena — l'indirizzo
+non sta nel bind group. `rows` su `deltaNetConv`/`deltaNetCore`: x/outv/convOut/
+beta/g/z diventano [M, ...], lo STATO no (e' la memoria che attraversa il chunk,
+ed e' il motivo per cui questi due restano M dispatch in ordine).
+
+Due idiomi diversi perche' due cose diverse: `gid.y` quando le righe stanno in
+UN dispatch, `rows` quando i dispatch restano M e vanno ordinati — confonderli
+avrebbe dato un kernel che sembra batchato e non lo e'.
+
+ktest **94/94** con `dense-rows-deltanet-recurrence` BIT-IDENTICO su 3 righe
+**sullo stato che evolve**: se l'indicizzazione fosse sbagliata la catena
+divergerebbe al secondo passo. Fase 4: **5 voci su 6**, e non serve piu' nessun
+kernel — resta l'orchestrazione.
