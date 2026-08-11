@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.34: prefill a chunk anche sui MoE — 35B 3,750x a parita', logits bit-identici)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.35: fase 5 aperta, budget expert DERIVATO (docket 11 chiuso))
 
 ## 1. Next decidable
 
@@ -420,8 +420,23 @@ gate bit-identico, e il gather e' il docket item 19. Il done-when MECCANICO
 (micro-bench + logits identici) e' soddisfatto; se `planMoeChunk` conta come
 done-when e non come descrizione, la riga resta aperta.
 
-**PROSSIMO**: la fase 5 (decode ottimistico + policy + prefetch/tier/budget),
-che e' la riga dopo e agisce sul DECODE, cioe' sulla funzione obiettivo.
+**FASE 5 APERTA (it.35)** — prima voce fatta: **il budget dell'arena expert si
+DERIVA** invece di essere asserito. Non con la formula di GLM
+(`slabBudgetCtxAware`, che sottrae termini calcolati ed e' gia' costata un OOM
+per un termine dimenticato) ma con un CONTATORE dentro i due helper di
+allocazione: `tetto − allocato − riserva`. E' ctx-aware per costruzione, perche'
+`kCache`/`vCache` si allocano con `ctxMax` e finiscono nel contatore come tutto
+il resto — piano di prefill compreso, senza che nessuno debba ricordarsene.
+Misurato sul 35B: tetto 13 GiB, **allocati 1,94**, riserva 0,50, budget expert
+10,56. Run verde (argmax 39/39, routing identico, 0 miss, 43,74 ms/token).
+**Docket item 11 CHIUSO.**
+
+**Restano della riga 5**: (a) la POLICY d'ingresso del decode ottimistico — i
+numeri di partenza sono it.16 (39/39 token sporchi a freddo, 0/39 a caldo) e
+it.18 (freddo ottimistico 738,6 contro 1192,9 del sync, che pero' e' UN campione
+per braccio in due run diversi: la soglia va tarata su un bench fatto apposta);
+(b) il prefetch in-forward su q35 — delta misurato O esclusione motivata coi
+numeri (il recall q35 e' 82,67%@8); (c) tier/AUTOPIN su q35, idem.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
