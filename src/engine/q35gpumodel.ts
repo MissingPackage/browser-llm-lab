@@ -12,7 +12,7 @@ import {
   addInPlaceWgsl, ARGMAX_CHUNK, argmaxStage1Wgsl, argmaxStage2Wgsl, attnDecodeWgsl, axpyWgsl,
   gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
   gemvQ6KWgsl, gemvQuantWgsl, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
-  siluMulWgsl, stridedCopyWgsl, routerTopKWgsl, axpySelWgsl,
+  siluMulWgsl, stridedCopyWgsl, routerTopKWgsl,
   SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE, type KArenaOpts,
 } from "./kernels/wgsl";
 import { expertArenaBindings } from "./gpulimits";
@@ -296,7 +296,7 @@ export async function createQ35GpuModel(
   const routerStaging = device.createBuffer({ size: Math.max(nE, 4) * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const moeAcc = empty(d * 4);
   const gateS = empty(Math.max(dE, 4) * 4), upS = empty(Math.max(dE, 4) * 4), dnS = empty(d * 4), shScalar = empty(16);
-  const gateE = empty(Math.max(dE, 4) * 4), upE = empty(Math.max(dE, 4) * 4), dnE = empty(d * 4);
+  const gateE = empty(Math.max(dE, 4) * 4), upE = empty(Math.max(dE, 4) * 4);
   /** confini dei segmenti statici: segmento i = steps[cuts[i-1]..cuts[i]) */
   const cuts: number[] = [];
   /**
@@ -651,25 +651,25 @@ export async function createQ35GpuModel(
         nBuf: geo.nBuf,
         pGate: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.gate) })),
         pUp: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.up) })),
+        // il down ACCUMULA in `moeAcc` col peso da `Sel` (fase 4, it.21):
+        // l'axpy che seguiva non esiste piu' — un dispatch in meno per expert,
+        // 320 per token sul 35B, e bit-identico per costruzione.
         pDown: mkPipe(dk === "q6_K"
-          ? gemvQ6KWgsl({ K: dE, N: d, arena: kar(L.down) })
-          : gemvQ4KWgsl({ K: dE, N: d, arena: kar(L.down) })),
-        bgGate: bg(xn, gateE), bgUp: bg(xn, upE), bgDown: bg(gateE, dnE),
+          ? gemvQ6KWgsl({ K: dE, N: d, arena: kar(L.down), accum: true })
+          : gemvQ4KWgsl({ K: dE, N: d, arena: kar(L.down), accum: true })),
+        bgGate: bg(xn, gateE), bgUp: bg(xn, upE), bgDown: bg(gateE, moeAcc),
       };
     };
     const expertCls: Record<ExpertClass, ReturnType<typeof mkExpertClass>> = {};
     for (const c of cfg.classes) expertCls[c] = mkExpertClass(c);
     const pSilu = pipe(siluMulWgsl(dE));
-    const pAxpy = pipe(axpyWgsl(d));
     const pAdd = pipe(addInPlaceWgsl(d));
-    const wBufs = Array.from({ length: topK }, () => device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }));
     const mkBg = (p2: GPUComputePipeline, entries: (GPUBuffer | GPUBufferBinding)[]): GPUBindGroup =>
       device.createBindGroup({
         layout: p2.getBindGroupLayout(0),
         entries: entries.map((e, i) => ({ binding: i, resource: (e as GPUBufferBinding).buffer ? (e as GPUBufferBinding) : { buffer: e as GPUBuffer } })),
       });
     const bgSilu = mkBg(pSilu, [gateE, upE]);
-    const bgAxpy = wBufs.map((w) => mkBg(pAxpy, [moeAcc, dnE, w]));
     const bgAddRes = mkBg(pAdd, [x, moeAcc]);
     // ---- OMBRA: router + resolve su GPU accanto alla selezione CPU (fetta 3b) ----
     // Il kernel è quello di it.13, in configurazione qwen35moe (softmax). Il
@@ -805,7 +805,6 @@ export async function createQ35GpuModel(
     const opt = opts.select === "optimistic" ? ((): {
       dirtyB: GPUBuffer; dirtyStaging: GPUBuffer; selStaging: GPUBuffer;
       pipeR: GPUComputePipeline; bindR: GPUBindGroup;
-      pAxpySel: GPUComputePipeline; bgAxpySel: GPUBindGroup;
       hiddenCkpt: GPUBuffer;
       stateShadow: { src: GPUBuffer; dst: GPUBuffer; bytes: number; layer: number }[];
       stateShadowBytes: number;
@@ -864,31 +863,6 @@ export async function createQ35GpuModel(
           { binding: 7, resource: { buffer: dirtyB } },
         ],
       });
-      // Il peso di mixing ora NASCE su GPU (campo `w` di `Sel`): l'axpy che
-      // legge da un buffer riempito dalla CPU non ha più nessuno che lo riempia.
-      const bglA = device.createBindGroupLayout({
-        entries: [
-          { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" as const } },
-          ...[1, 2].map((b) => ({ binding: b, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } })),
-          {
-            binding: 3, visibility: GPUShaderStage.COMPUTE,
-            buffer: { type: "uniform" as const, hasDynamicOffset: true, minBindingSize: MOE_IDX_BYTES },
-          },
-        ],
-      });
-      const pAxpySel = device.createComputePipeline({
-        layout: device.createPipelineLayout({ bindGroupLayouts: [bglA] }),
-        compute: { module: device.createShaderModule({ code: axpySelWgsl(d) }), entryPoint: "main" },
-      });
-      const bgAxpySel = device.createBindGroup({
-        layout: bglA,
-        entries: [
-          { binding: 0, resource: { buffer: moeAcc } },
-          { binding: 1, resource: { buffer: dnE } },
-          { binding: 2, resource: { buffer: selBuf } },
-          { binding: 3, resource: { buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES } },
-        ],
-      });
       // hiddenCkpt: l'hidden di INGRESSO di ogni segmento MoE. È l'input del
       // replay — il rientro deve essere BIT-IDENTICO a ciò che il layer aveva
       // visto nel giro ottimistico, altrimenti il replay non ripara: ricalcola
@@ -912,7 +886,7 @@ export async function createQ35GpuModel(
       }));
       const stateShadowBytes = stateShadow.reduce((a, s) => a + s.bytes, 0);
       return {
-        dirtyB, dirtyStaging, selStaging, pipeR, bindR, pAxpySel, bgAxpySel,
+        dirtyB, dirtyStaging, selStaging, pipeR, bindR,
         hiddenCkpt, stateShadow, stateShadowBytes,
         destroy: () => {
           dirtyB.destroy(); dirtyStaging.destroy(); selStaging.destroy(); hiddenCkpt.destroy();
@@ -1046,7 +1020,6 @@ export async function createQ35GpuModel(
               pass.setPipeline(E.pUp); pass.setBindGroup(0, E.bgUp, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
               pass.setPipeline(pSilu); pass.setBindGroup(0, bgSilu); pass.dispatchWorkgroups(Math.ceil(dE / 64), 1, 1);
               pass.setPipeline(E.pDown); pass.setBindGroup(0, E.bgDown, [dyn]); pass.dispatchWorkgroups(gg2[0], gg2[1], 1);
-              pass.setPipeline(opt.pAxpySel); pass.setBindGroup(0, opt.bgAxpySel, [dyn]); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
             }
             pass.setPipeline(pAdd); pass.setBindGroup(0, bgAddRes); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
             endPass();
@@ -1270,9 +1243,6 @@ export async function createQ35GpuModel(
         // indirizza (R5 del design d'arena — l'ordine inverso pubblicherebbe uno
         // slot ancora vuoto). Qui non la legge nessuno: serve dalla fetta 3b.
         cache.flushSlotTable();
-        for (let k2 = 0; k2 < topK; k2++) {
-          device.queue.writeBuffer(wBufs[k2], 0, new Float32Array([sel.weights[k2], 0, 0, 0]));
-        }
         const E = expertCls[cfg.classOf(l)];
         const enc = device.createCommandEncoder();
         const pass = enc.beginComputePass();
@@ -1291,7 +1261,6 @@ export async function createQ35GpuModel(
           disp(E.pUp, E.bgUp, [dE, 1, 1], dyn);
           disp(pSilu, bgSilu, [Math.ceil(dE / 64), 1, 1]);
           disp(E.pDown, E.bgDown, [gg2[0], gg2[1], 1], dyn);
-          disp(pAxpy, bgAxpy[k2], [Math.ceil(d / 64), 1, 1]);
         }
         disp(pAdd, bgAddRes, [Math.ceil(d / 64), 1, 1]); // x += moeAcc (shexp + expert)
         pass.end();

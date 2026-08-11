@@ -302,3 +302,50 @@ Non e' lavoro della fase 4 (che toglie dispatch, non li rende piu' veloci) e non
 e' una decisione da PI. Sta qui perche' e' il tipo di costo che si scopre una
 volta e poi non si ritrova piu': con GLM (64 expert, top-4) era un ottavo del
 lavoro seriale e nessuno l'aveva notato. Registrato it.19 (2026-08-11).
+
+## item 15 — il collo del 35B non e' dove il contratto sta guardando (PI: si cambia l'ordine?)
+
+**Cosa e' successo.** it.19 ha misurato la decomposizione del token e io ne ho
+tratto "il token e' dispatch-bound, ~20 us per dispatch": su quella lettura la
+fase 4 (prefill batched) proiettava 2,02x. it.21 ha fatto l'esperimento che la
+testava — togliere 320 dispatch per token, bit-identici — e la lettura e'
+CADUTA: −0,327 ms, cioe' **1,02 us per dispatch rimosso invece di 21**.
+
+**Il numero che resta in piedi**: gli expert leggono 571 MB di pesi per token
+(320 selezioni x 1,785 MB, byte misurati) in 33,1 ms = **17,2 GB/s efficaci**,
+su una GPU che ne fa ~500. E' il 3% della banda, ed e' il 58% del tempo GPU del
+token.
+
+**L'ipotesi sul perche'** (coerente col numero, NON provata): `gemvQ4K`/`gemvQ6K`
+spartiscono i superblocchi di UNA riga sui 64 thread del workgroup, e sul 35B
+sono 8 superblocchi per gate/up (K=2048) e **2 per il down** (K=512) ⇒ **8 lane
+attive su 64 e 2 su 64**. Il workgroup occupa uno slot per far lavorare due
+thread. Su GLM il rapporto era diverso (K piu' grandi) e il problema non si
+vedeva.
+
+**Perche' e' PI-gated.** Non e' una scelta di meccanismo dentro una fase: e'
+l'ordine del contratto. La fase 4 (prefill batched, 2-3 iterazioni) ora ha una
+proiezione che NON regge piu' — era costruita su tempo ∝ dispatch — e vale
+comunque zero sul DECODE, che e' dove sta la funzione obiettivo del goal
+(intelligenza sopra ~30 tok/s: il 35B oggi fa 71,9 ms/token = 13,9 tok/s, e per
+arrivare a 30 servono 33 ms). Riscrivere i kernel expert K-quant vale su
+prefill E decode, ed e' l'unico numero della decomposizione abbastanza grande da
+poter fare la differenza.
+
+Le opzioni:
+(a) fase 4-bis PRIMA della 4: kernel expert K-quant riscritti per occupazione,
+    gate = ktest contro cpuref + argmax identico sul golden, misura ms/token
+    prima/dopo. Poi la 4 col suo micro-bench, e la sua proiezione RIFATTA sui
+    numeri veri;
+(b) si tiene l'ordine: fase 4 come da contratto, e i kernel dopo;
+(c) si chiude la fase 4 come "esclusa coi numeri" (il done-when ammette
+    l'esclusione motivata) e si passa direttamente ai kernel.
+
+**Il mio parere: (a)**. La fase 4 non e' sbagliata — il prefill batched serve al
+TTFT — ma la sua taglia (2-3 iterazioni) e il suo valore vanno ridiscussi DOPO
+aver visto se i kernel expert si possono muovere, perche' se si muovono
+cambiano anche i numeri su cui la fase 4 si misura. E l'ordine sbagliato costa
+due volte: si ottimizza sopra un collo che poi sparisce (e' testualmente
+l'argomento con cui il PI ha accolto l'item 8).
+
+Registrato it.21 (2026-08-11).

@@ -1462,8 +1462,29 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // w = d·sc6bit·(nibble + bit_alto·16) − dmin·min6bit.
 // Q4_K: 36 word/superblocco (144 B) = [d,dmin f16][scales 12 B 6-bit][qs 128 B].
 // È gemvQ5K SENZA il piano qh (q1 fase 7: expert del 35B-A3B UD-Q4_K_S).
-export function gemvQ4KWgsl(opts: { K: number; N: number; arena?: KArenaOpts }): string {
-  const { K, N, arena } = opts;
+/**
+ * CODA ACCUMULANTE, opzione `accum` (goal fase-D fase 4, it.21). Senza, il
+ * kernel SCRIVE la riga: `y[r] = dot`. Con, ci ACCUMULA sopra il proprio
+ * contributo pesato — `y[r] = y[r] + sel.w * dot` — col peso preso dalla `Sel`
+ * che il preambolo d'arena ha gia' letto per sapere quale slot indirizzare.
+ *
+ * Serve a togliere un dispatch per expert: la catena era gate/up/silu/down/axpy
+ * e l'axpy spariva solo per non essere mai esistito. Sul 35B sono 320 dispatch
+ * per token (8 expert x 40 layer), su 2384 misurati in it.19 a ~21 us l'uno.
+ *
+ * BIT-IDENTICO per costruzione, e non "atteso identico": il dispatch che
+ * sostituisce (l'axpy col peso da Sel, nato in it.17 e rimosso qui perche'
+ * diventato codice morto) calcolava `out[i] + w * x[i]` in f32 con `x[i]`
+ * uguale ESATTAMENTE a questo `partial[0]`, che e' il valore che il kernel
+ * scriveva prima. Stessa espressione, stesse operazioni f32, stesso ordine.
+ * Sul MISS non si arriva qui — il preambolo d'arena esce prima — quindi il
+ * contributo e' zero, come lo era col guard esplicito di quell'axpy.
+ *
+ * Esige il regime d'arena: senza `Sel` non c'e' nessun peso da leggere.
+ */
+export function gemvQ4KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; accum?: boolean }): string {
+  const { K, N, arena, accum } = opts;
+  if (accum === true && !arena) throw new Error("q4K: accum esige il regime d'arena (il peso viene da Sel)");
   if (K % 256 !== 0) throw new Error("gemvQ4K: K non multiplo di 256");
   const sbPerRow = K / 256;
   // UN SOLO corpo aritmetico per i due regimi: cambia da dove arrivano le
@@ -1539,7 +1560,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     workgroupBarrier();
     stride = stride >> 1u;
   }
-  if (t == 0u) { y[r] = partial[0]; }
+  // coda accumulante (accum): vedi la nota sopra la funzione
+  if (t == 0u) { ${accum === true ? "y[r] = y[r] + sel.w * partial[0];" : "y[r] = partial[0];"} }
 }`;
 }
 
@@ -1615,8 +1637,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 
 // Q6_K: 53 word/superblocco (210 B + 2 pad) = [ql 128 B][qh 64 B][scales int8
 // 16 B][d f16]. w = d·sc_int8·(q6 − 32), q6 = nibble | 2 bit alti.
-export function gemvQ6KWgsl(opts: { K: number; N: number; arena?: KArenaOpts }): string {
-  const { K, N, arena } = opts;
+export function gemvQ6KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; accum?: boolean }): string {
+  const { K, N, arena, accum } = opts;
+  if (accum === true && !arena) throw new Error("q6K: accum esige il regime d'arena (il peso viene da Sel)");
   if (K % 256 !== 0) throw new Error("gemvQ6K: K non multiplo di 256");
   const sbPerRow = K / 256;
   // UN SOLO corpo aritmetico per i due regimi: cambia da dove arrivano le
@@ -1689,7 +1712,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     workgroupBarrier();
     stride = stride >> 1u;
   }
-  if (t == 0u) { y[r] = partial[0]; }
+  // coda accumulante (accum): vedi la nota sopra la funzione
+  if (t == 0u) { ${accum === true ? "y[r] = y[r] + sel.w * partial[0];" : "y[r] = partial[0];"} }
 }`;
 }
 
@@ -2249,40 +2273,6 @@ const arenaSlotWgsl = `
   let slot = select(0u, sel.slot, ok);
   let bi = slot / SLABS_PER_BUF;
   let base = (slot % SLABS_PER_BUF) * SLAB_W;`;
-
-/**
- * axpy col peso di mixing PRESO DA `Sel` (goal fase-D fase 3b, fetta 3c):
- * `out += Sel[selIdx].w * x`, con `selIdx` dall'uniform a dynamic offset.
- *
- * Esiste perche' nel path a submit unico i pesi NASCONO SU GPU — li scrive il
- * router nella sua `Sel` — e la CPU non li vede piu' prima della fine del
- * token. `axpyWgsl` legge il peso da un buffer che qualcuno deve aver
- * riempito: nel path sync lo riempie la CPU dopo il readback del router, qui
- * non c'e' nessuno a farlo. Non e' una variante di comodo: e' l'ultimo pezzo
- * per-expert che la CPU ancora forniva.
- *
- * MISS (`flags` bit 0): il contributo e' ZERO e non i byte dello slot 0, che
- * e' l'indirizzo di ripiego dei kernel d'arena. Il token resta comunque
- * SBAGLIATO — un expert che manca cambia il risultato — ma sbagliato in modo
- * DEFINITO: l'expert non partecipa, invece di partecipare coi pesi di un altro.
- */
-export function axpySelWgsl(D: number): string {
-  return `${SEL_STRUCT_WGSL}
-${MOE_IDX_STRUCT_WGSL}
-@group(0) @binding(0) var<storage, read_write> out: array<f32>;
-@group(0) @binding(1) var<storage, read> x: array<f32>;
-@group(0) @binding(2) var<storage, read> selBuf: array<Sel>;
-@group(0) @binding(3) var<uniform> moeIdx: MoeIdx;
-const D = ${D}u;
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let i = gid.x;
-  if (i >= D) { return; }
-  let sel = selBuf[moeIdx.selIdx];
-  let w = select(sel.w, 0.0, (sel.flags & 1u) != 0u);
-  out[i] = out[i] + w * x[i];
-}`;
-}
 
 // gate+up+silu del blocco expert in UN dispatch (sostituisce 3 gemvQuant+siluMul).
 // x e' gia' normalizzato: si carica in shared cosi' com'e'.

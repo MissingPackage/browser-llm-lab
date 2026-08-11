@@ -315,3 +315,27 @@ routing identico, miss 0.
 
 Docket item 14: il dispatch del router costa 70,8 us, 3,5x un GEMV expert — un
 workgroup che fa softmax su 256 expert e top-8 in seriale sul thread 0.
+
+## it.21 (2026-08-11) — 320 dispatch tolti, e l'ipotesi di it.19 e' caduta
+
+Il down degli expert ACCUMULA col peso da `Sel` (`accum` sui due kernel
+K-quant): la catena passa da gate/up/silu/down/axpy a gate/up/silu/down, −320
+dispatch/token, e `axpySelWgsl` (nato in it.17) sparisce con `dnE` e i `wBufs`.
+Bit-identico per costruzione — stessa espressione f32, stesso ordine — e
+verificato: argmax 39/39, routing identico chiave per chiave, miss 0.
+
+**MA il tempo non e' sceso come previsto**: expert 33,442 → 33,115 ms/giro,
+cioe' **−1,02 us per dispatch rimosso contro i ~21 attesi**. I ~20 us medi di
+it.19 non erano un costo fisso di lancio: erano totale/conteggio. **La lettura
+"il token e' dispatch-bound" e' SBAGLIATA, e con essa la proiezione 2,02x della
+fase 4**, che assumeva tempo proporzionale ai dispatch.
+
+Il numero che resta: gli expert leggono 571 MB/token in 33,1 ms = **17,2 GB/s
+efficaci** su ~500 disponibili (3% della banda, 58% del tempo GPU). Ipotesi
+coerente ma NON provata: `gemvQ4K`/`gemvQ6K` spartiscono i superblocchi di una
+riga sui 64 thread, e sul 35B sono 8 (gate/up, K=2048) e **2** (down, K=512) ⇒
+8 lane su 64 e 2 su 64 attive.
+
+Docket item 15 (PI): l'ordine del contratto. La fase 4 vale zero sul decode, che
+e' dove sta la funzione obiettivo (13,9 tok/s contro i 30 dell'obiettivo), e la
+sua proiezione non regge piu'. Parere: fase 4-bis sui kernel PRIMA della 4.

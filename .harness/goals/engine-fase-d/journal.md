@@ -1303,3 +1303,63 @@ GPU, e il ktest e' il paracadute che lo prova.
 righe per statico/router/expert su q35, il gather per expert dell'unione, la
 combine in ordine k, e la scelta di M — che va fatta coi numeri di it.19
 (proiezione 2,02x a M=16) e non per analogia con GLM.
+
+## it.21 (2026-08-11, fase 4) — l'esperimento da 320 dispatch che ha SMENTITO la lettura di it.19
+
+**Cosa ho fatto.** Il down degli expert ora ACCUMULA: `y[r] = y[r] + sel.w·dot`
+invece di scrivere `y[r] = dot` e lasciare a un axpy separato la moltiplicazione
+per il peso. Il peso ce l'aveva gia' in mano — il preambolo d'arena legge `Sel`
+per sapere quale slot indirizzare, e `sel.w` sta li'. Opzione `accum` sui due
+kernel K-quant, un dispatch per expert in meno: la catena passa da
+gate/up/silu/down/axpy a gate/up/silu/down. **320 dispatch/token in meno** su
+2384, e l'`axpySelWgsl` nato in it.17 diventa codice morto e sparisce (con lui
+`dnE`, i `wBufs` e il bind group dell'axpy del path sync).
+
+**Bit-identico per costruzione, non "atteso identico"**: l'axpy calcolava
+`out[i] + w·x[i]` in f32 con `x[i]` uguale ESATTAMENTE al `partial[0]` che il
+kernel scriveva; qui l'espressione, le operazioni f32 e l'ordine sono gli
+stessi. Verificato: **argmax 39/39, routing identico chiave per chiave** (3341
+chiavi, 0 differenze), miss 0.
+
+**E QUI IL NUMERO CHE NON TORNA.** it.19 aveva misurato ~20 us per dispatch,
+uguale fra statico (19,6) ed expert (20,9), e io ne avevo concluso che il token
+fosse DISPATCH-BOUND — con la proiezione della fase 4 (2,02x a M=16) costruita
+su quella lettura. Togliendo 320 dispatch mi aspettavo ~−6,7 ms. Misurato:
+
+| | it.19 | it.21 | delta |
+|---|---|---|---|
+| expert (ms/giro, sonda accesa) | 33,442 | **33,115** | **−0,327** |
+| totale GPU | 57,668 | 57,330 | −0,338 |
+
+**−1,02 us per dispatch rimosso, contro i ~21 attesi.** L'axpy era un kernel
+minuscolo (2048 elementi, 32 workgroup) e costava quanto il lavoro che faceva.
+Quindi i ~20 us medi di it.19 NON sono un costo fisso di lancio: sono
+semplicemente totale/conteggio, e l'uniformita' fra statico ed expert era una
+coincidenza di medie. **La conclusione "il token e' dispatch-bound" e' sbagliata,
+e con essa la proiezione 2,02x della fase 4**, che assumeva tempo ∝ dispatch.
+
+**COSA DICE INVECE IL NUMERO GIUSTO.** Se il tempo degli expert non e' lancio,
+e' lavoro — e allora va guardato il lavoro: 320 selezioni x 1,785 MB di slab =
+**571 MB di pesi letti per token in 33,1 ms = 17,2 GB/s efficaci**, su una
+scheda che ne fa ~500. Il 3% della banda. Il perche' e' nel kernel, e si legge
+dal sorgente: `gemvQ4K` distribuisce i SUPERBLOCCHI DI UNA RIGA sui 64 thread
+del workgroup (`for sb = t; sb < SB_PER_ROW; sb += 64`), e sul 35B
+SB_PER_ROW = K/256 vale **8 per gate/up (K=2048) e 2 per il down (K=512)**.
+Cioe' **8 lane attive su 64 (12,5%) e 2 su 64 (3,1%)**: il workgroup occupa uno
+slot intero per far lavorare due thread.
+
+**Conseguenze, e le tengo separate da cio' che ho verificato.** VERIFICATO: il
+tempo non scala coi dispatch (l'esperimento sopra), e la banda efficace e' 17,2
+GB/s (aritmetica su byte misurati e tempo misurato). NON VERIFICATO: che
+riscrivendo la distribuzione del lavoro nel kernel si recuperi banda — le lane
+inattive sono una spiegazione coerente col numero, non una prova, e potrebbero
+esserci altri colli (latenza, accessi non coalescenti sui superblocchi). La
+prova sarebbe un kernel alternativo misurato contro questo, ed e' lavoro che il
+contratto non assegna a nessuna fase. Va sul docket (item 15), con i numeri.
+
+**Il cambio resta**: −320 dispatch, −0,33 ms (0,5%), bit-identico, e tre
+oggetti in meno da mantenere. E' piccolo e lo dico piccolo — la sua utilita'
+vera e' stata falsificare l'ipotesi su cui stavo per spendere la fase 4.
+
+**Gate**: tsc pulito, suite 417|9, argmax 39/39, routing identico, miss 0,
+JSON committato (`q35-accumdown-35b-it21.json`).
