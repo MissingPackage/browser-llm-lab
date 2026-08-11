@@ -39,7 +39,7 @@ import { downIsQ4_1 } from "./expertstore";
 import { ExpertCache, expertKey, expertSlots, modelExpertPark, type ArenaGeometry, type ExpertClass, type ExpertRawBytes, type ExpertReader, type SlotRef, type BindRange } from "./residency";
 import { expertArenaBindings } from "./gpulimits";
 import { type CoreCounters } from "./telemetry";
-import { planMoeChunk, GLM_PREFILL_M } from "./glmprefillplan";
+import { planMoeChunk, GLM_PREFILL_M } from "./moeprefillplan";
 import {
   addInPlaceWgsl, gemvF32Wgsl, gemvGrid, gemvQ6KFastWgsl, gemvQ8HeadsWgsl,
   gemvQuantWgsl, kvAppendWgsl, mlaAttnSplitPartWgsl, mlaAttnSplitReduceWgsl,

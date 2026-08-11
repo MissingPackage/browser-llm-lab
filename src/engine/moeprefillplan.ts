@@ -1,6 +1,16 @@
 // Piano MoE del prefill batched M>1 (C3a fase 5, spec §5) — puro CPU-side,
 // testabile senza GPU (convenzione fase A, come prefillplan del path Qwen).
 //
+// PARAMETRICO SULLA FAMIGLIA dal goal fase-D fase 4 (it.20). Si chiamava
+// `glmprefillplan` ed era cablato su `GLM47_FLASH` (64 expert, top-4): per
+// portarlo a Qwen 3.6 (256 expert, top-8) la strada sbagliata era copiarlo, ed
+// e' esattamente cio' che il gate strutturale del goal vieta (direction §7-ter:
+// una meccanica, una implementazione). La config e' STRUTTURALE e minima —
+// `{nExpert, nExpertUsed}` — e non un import di `MoeModelConfig`: `residency.ts`
+// importa `GLM_PREFILL_M` da qui, quindi dipendere di la' a RUNTIME chiuderebbe
+// un ciclo. `MoeModelConfig` ha entrambi i campi ed e' assegnabile per
+// struttura: l'unificazione la fa il sistema di tipi, senza dipendenza.
+//
 // DECISIONE DI DESIGN (it.26, col criterio dei numeri di fase 4 — journal):
 // fra "Sel per token" (ripetere la catena expert del decode per ogni riga del
 // chunk: 4M dispatch/layer, pesi riletti una volta PER TOKEN selezionante) e
@@ -26,6 +36,19 @@
 // rischio è eliminata per costruzione, non tollerata.
 import type { RouterSelection } from "./moe";
 import { GLM47_FLASH as G } from "./shape";
+
+/**
+ * Geometria MoE che il piano usa. Minima di proposito: al raggruppamento per
+ * expert servono SOLO il parco e il top-K. `MoeModelConfig` (residency) le
+ * soddisfa per struttura.
+ */
+export interface MoePlanShape {
+  nExpert: number;
+  nExpertUsed: number;
+}
+
+/** La famiglia-tesi resta il default: chi non passa nulla ottiene GLM. */
+export const MOE_PLAN_GLM47: MoePlanShape = { nExpert: G.nExpert, nExpertUsed: G.nExpertUsed };
 
 /** M iniziale del prefill GLM (spec §5, `[ASSUMED]`; si tara sul TTFT). */
 export const GLM_PREFILL_M = 16;
@@ -56,23 +79,25 @@ export interface MoeChunkPlan {
  * Invariante (testato): ogni coppia (m, k) compare ESATTAMENTE una volta
  * nell'unione — il piano è una biiezione delle selezioni, non un campione.
  */
-export function planMoeChunk(selections: RouterSelection[], mMax = GLM_PREFILL_M): MoeChunkPlan {
+export function planMoeChunk(
+  selections: RouterSelection[], mMax = GLM_PREFILL_M, cfg: MoePlanShape = MOE_PLAN_GLM47,
+): MoeChunkPlan {
   const m = selections.length;
   if (m < 1 || m > mMax) throw new Error(`planMoeChunk: chunk di ${m} righe (ammesso 1..${mMax})`);
   const byExpert = new Map<number, Array<{ row: number; slot: number }>>();
-  const weights = new Float32Array(m * G.nExpertUsed);
+  const weights = new Float32Array(m * cfg.nExpertUsed);
   for (let row = 0; row < m; row++) {
     const sel = selections[row];
-    if (sel.experts.length !== G.nExpertUsed) {
-      throw new Error(`planMoeChunk: riga ${row} con ${sel.experts.length} expert (attesi ${G.nExpertUsed})`);
+    if (sel.experts.length !== cfg.nExpertUsed) {
+      throw new Error(`planMoeChunk: riga ${row} con ${sel.experts.length} expert (attesi ${cfg.nExpertUsed})`);
     }
-    for (let k = 0; k < G.nExpertUsed; k++) {
+    for (let k = 0; k < cfg.nExpertUsed; k++) {
       const e = sel.experts[k];
-      if (e < 0 || e >= G.nExpert) throw new Error(`planMoeChunk: expert ${e} fuori range (riga ${row}, k ${k})`);
+      if (e < 0 || e >= cfg.nExpert) throw new Error(`planMoeChunk: expert ${e} fuori range (riga ${row}, k ${k})`);
       let a = byExpert.get(e);
       if (!a) { a = []; byExpert.set(e, a); }
       a.push({ row, slot: k });
-      weights[row * G.nExpertUsed + k] = sel.weights[k]; // f64→f32, come selF32
+      weights[row * cfg.nExpertUsed + k] = sel.weights[k]; // f64→f32, come selF32
     }
   }
   const experts: MoeExpertBatch[] = [...byExpert.keys()].sort((a, b) => a - b).map((e) => {
@@ -98,13 +123,13 @@ export function planMoeChunk(selections: RouterSelection[], mMax = GLM_PREFILL_M
  */
 export function combineMoeRow(
   x: Float32Array, s: Float32Array, y: ReadonlyArray<Float32Array>,
-  weights: Float32Array, row: number,
+  weights: Float32Array, row: number, nExpertUsed: number = G.nExpertUsed,
 ): Float32Array {
   const out = new Float32Array(x.length);
   for (let i = 0; i < out.length; i++) {
     let t = s[i];
-    for (let k = 0; k < G.nExpertUsed; k++) {
-      const w = weights[row * G.nExpertUsed + k];
+    for (let k = 0; k < nExpertUsed; k++) {
+      const w = weights[row * nExpertUsed + k];
       t = Math.fround(t + Math.fround(w * y[k][i]));
     }
     out[i] = Math.fround(x[i] + t);

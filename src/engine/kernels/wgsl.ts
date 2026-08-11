@@ -2476,7 +2476,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 }
 
 // ============ PREFILL BATCHED M>1 — CATENA EXPERT SU UNIONE (fase 5, it.27) =
-// Il piano (glmprefillplan) raggruppa le selezioni del chunk per expert; ogni
+// Il piano (moeprefillplan) raggruppa le selezioni del chunk per expert; ogni
 // dispatch processa UN expert su tutte le righe che lo selezionano. La riga
 // raccolta arriva da `wid.z` via il buffer `gather` (u32: m | k<<16). Il corpo
 // aritmetico e' QUELLO dei gemelli decode (pairGemvSiluFast/gemvAccumFast):

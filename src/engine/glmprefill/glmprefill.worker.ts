@@ -11,7 +11,7 @@
 import { GLM47_FLASH as G, GLM47_FLASH_SHA256 } from "../shape";
 import { dequantQ4_0Row } from "../quant";
 import { createGlmModel, type GlmRouting } from "../glmmodel";
-import { GLM_PREFILL_M } from "../glmprefillplan";
+import { GLM_PREFILL_M } from "../moeprefillplan";
 import { GlmOpfsSource } from "../glmsource";
 import { slabBufferCap, grantedLimits } from "../gpulimits";
 import { createEngineDevice } from "../gpudevice";

@@ -33,7 +33,7 @@ import {
 } from "../quant";
 import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 import { createEngineDevice } from "../gpudevice";
-import { planMoeChunk } from "../glmprefillplan";
+import { planMoeChunk } from "../moeprefillplan";
 import { deltaNetConvWgsl, deltaNetGatesWgsl, deltaNetCoreWgsl } from "../kernels/deltanet";
 import { axpyWgsl, gemvQ4KWgsl, sigmoidMulWgsl } from "../kernels/wgsl";
 import { q35MoeFfnRefF64, type Q35MoeLayerWeights } from "../q35cpurefmodel";
@@ -2568,7 +2568,7 @@ async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
 // slot y[m][k] + combine k-order) contro la catena DECODE vera (pairGemvSilu +
 // gemvAccum in ordine k + addInPlace), stesse selezioni, stessi pesi sintetici
 // a geometria reale. L'atteso e' l'identita' BIT-A-BIT (il piano e' costruito
-// per questo — glmprefillplan); fallback dichiarato come R2: se la contrazione
+// per questo — moeprefillplan); fallback dichiarato come R2: se la contrazione
 // FMA cade in modo diverso fra i moduli, il gate si declassa a maxRel ≤ 1e-6
 // e il note lo dice.
 async function testPrefillMoeBatchedChain(g: Gpu): Promise<KResult> {

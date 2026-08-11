@@ -1262,3 +1262,44 @@ fase; va sul docket.
 (`q35-gputime-35b-it19.json`, `q35-optimistic-35b-it19-headcut.json`).
 Nota di dispersione: la passata fredda oscilla fra 1137,8 e 1192,9 ms/token fra
 run diversi (~5%) — e' dominata dall'I/O e non e' un numero su cui appoggiarsi.
+
+## it.20 (2026-08-11, fase 4) — il piano di prefill smette di essere di GLM
+
+Primo passo della fetta, ed e' fase-1-shaped: `glmprefillplan.ts` era cablato su
+`GLM47_FLASH` — 64 expert, top-4 — in SETTE punti (la taglia dell'array dei
+pesi, il passo `row*nExpertUsed+k` in due posti, il controllo del range
+dell'expert, il messaggio d'errore, e il loop di `combineMoeRow`). Portarlo a
+Qwen 3.6 copiandolo era la strada che il gate strutturale del goal vieta
+(direction §7-ter: una meccanica, una implementazione), quindi: parametrico.
+
+**La config e' STRUTTURALE e minima** — `MoePlanShape { nExpert, nExpertUsed }` —
+e NON un import di `MoeModelConfig`. Il motivo e' un ciclo: `residency.ts`
+importa `GLM_PREFILL_M` da questo file, quindi dipendere di la' a RUNTIME lo
+chiuderebbe. `MoeModelConfig` ha entrambi i campi ed e' assegnabile per
+struttura: l'unificazione la fa il sistema di tipi senza creare la dipendenza,
+e i call site passeranno la loro `cfg` senza conversioni.
+
+Il file si chiama ora `moeprefillplan.ts`: tenere il prefisso `glm` su un
+meccanismo condiviso e' il primo passo per ricopiarlo la prossima volta.
+Rinominato con `git mv` (la storia segue), sei import aggiornati.
+
+**I test girano su DUE famiglie** (`describe.each`): GLM 64/top-4 e q35
+256/top-8, sulle stesse proprieta' — biiezione delle selezioni, ordine
+deterministico, taglia dell'unione, pesi in selF32, validazione, e soprattutto
+l'IDENTITA' BIT-A-BIT fra il percorso a unione+combine e la catena del decode
+in ordine k, con la sua controprova (accumulare nell'ordine dell'unione DEVE
+divergere in f32, altrimenti la struttura a slot sarebbe complessita' inutile).
+Piu' un test che il default senza `cfg` e' ancora esattamente GLM.
+Non e' ridondanza: un piano che funziona solo col parco e il top-K di GLM
+passerebbe meta' di questi test e fallirebbe gli altri.
+
+**Gate**: tsc pulito, suite **417 | 9** (erano 410|9: +7 dalla seconda famiglia),
+ktest **87/87** — con `prefill-moe-batched-vs-decode-chain` BIT-IDENTICO e
+`glm-model-2layer` a L2rel 2,07e-7, cioe' il prefill batched di GLM non si e'
+mosso di un bit. Nessun run GPU nuovo: qui non e' cambiato niente che giri su
+GPU, e il ktest e' il paracadute che lo prova.
+
+**Resta della fase 4** (e ora il piano non e' piu' l'ostacolo): i kernel a M
+righe per statico/router/expert su q35, il gather per expert dell'unione, la
+combine in ordine k, e la scelta di M — che va fatta coi numeri di it.19
+(proiezione 2,02x a M=16) e non per analogia con GLM.

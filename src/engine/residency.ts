@@ -29,7 +29,7 @@ import { GLM47_FLASH as G } from "./shape";
 import { packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, type SlabLayout, type SlabTensorLayout } from "./moe";
 import { downIsQ4_1 } from "./expertstore";
 import { mlaPartialsLen } from "./mlasplit";
-import { GLM_PREFILL_M } from "./glmprefillplan";
+import { GLM_PREFILL_M } from "./moeprefillplan";
 
 /**
  * Classe di slab: l'ID della combinazione di formati (GLM: "q4_0"/"q4_1" dal

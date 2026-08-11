@@ -6,8 +6,13 @@
 // produce BIT-IDENTICO al percorso per-token del decode (accumulo k crescente).
 // È la condizione di identità della fase ridotta al suo nucleo ordinale: i
 // kernel GPU replicheranno questa struttura (slot y[m][k] + combine k-order).
+//
+// DUE FAMIGLIE dal goal fase-D fase 4 (it.20): le stesse proprietà si
+// verificano su GLM (64 expert, top-4) e su Qwen 3.6 (256 expert, top-8). Non
+// è ridondanza — è ciò che tiene onesta la parametrizzazione: un piano che
+// funziona solo col parco e col top-K di GLM passerebbe metà di questi test.
 import { describe, expect, it } from "vitest";
-import { planMoeChunk, combineMoeRow, GLM_PREFILL_M } from "../src/engine/glmprefillplan";
+import { planMoeChunk, combineMoeRow, GLM_PREFILL_M, type MoePlanShape } from "../src/engine/moeprefillplan";
 import type { RouterSelection } from "../src/engine/moe";
 import { GLM47_FLASH as G } from "../src/engine/shape";
 
@@ -19,23 +24,31 @@ const rng = (seed: number) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
-function randSelections(m: number, seed: number): RouterSelection[] {
+/** GLM è il default del piano; q35 è la seconda famiglia, con parco 4× e top-K 2×. */
+const SHAPES: { name: string; cfg: MoePlanShape }[] = [
+  { name: "glm-4.7-flash (64 expert, top-4)", cfg: { nExpert: G.nExpert, nExpertUsed: G.nExpertUsed } },
+  { name: "qwen3.6-35b (256 expert, top-8)", cfg: { nExpert: 256, nExpertUsed: 8 } },
+];
+
+function randSelections(m: number, seed: number, cfg: MoePlanShape): RouterSelection[] {
   const r = rng(seed);
   return Array.from({ length: m }, () => {
-    // 4 expert DISTINTI per token (contratto del router top-4)
+    // top-K expert DISTINTI per token (contratto del router)
     const ids = new Set<number>();
-    while (ids.size < G.nExpertUsed) ids.add(Math.floor(r() * G.nExpert));
+    while (ids.size < cfg.nExpertUsed) ids.add(Math.floor(r() * cfg.nExpert));
     return {
       experts: Int32Array.from(ids),
-      weights: Float64Array.from({ length: G.nExpertUsed }, () => r() * 1.8),
+      weights: Float64Array.from({ length: cfg.nExpertUsed }, () => r() * 1.8),
     };
   });
 }
 
-describe("planMoeChunk — proprietà strutturali", () => {
+describe.each(SHAPES)("planMoeChunk — proprietà strutturali [$name]", ({ cfg }) => {
+  const K = cfg.nExpertUsed;
+
   it("biiezione: ogni (riga, k) compare esattamente una volta nell'unione", () => {
-    const sels = randSelections(16, 42);
-    const plan = planMoeChunk(sels);
+    const sels = randSelections(16, 42, cfg);
+    const plan = planMoeChunk(sels, GLM_PREFILL_M, cfg);
     const seen = new Set<string>();
     for (const b of plan.experts) {
       expect(b.rows.length).toBe(b.slots.length);
@@ -47,11 +60,11 @@ describe("planMoeChunk — proprietà strutturali", () => {
         expect(sels[b.rows[i]].experts[b.slots[i]]).toBe(b.expert);
       }
     }
-    expect(seen.size).toBe(16 * G.nExpertUsed); // copertura totale
+    expect(seen.size).toBe(16 * K); // copertura totale
   });
 
   it("ordine deterministico: expert crescenti, righe crescenti dentro l'expert", () => {
-    const plan = planMoeChunk(randSelections(16, 7));
+    const plan = planMoeChunk(randSelections(16, 7, cfg), GLM_PREFILL_M, cfg);
     for (let i = 1; i < plan.experts.length; i++) {
       expect(plan.experts[i].expert).toBeGreaterThan(plan.experts[i - 1].expert);
     }
@@ -60,32 +73,35 @@ describe("planMoeChunk — proprietà strutturali", () => {
     }
   });
 
-  it("l'unione raggruppa davvero: |unione| ≤ min(4M, 64), e i pesi sono selF32", () => {
-    const sels = randSelections(16, 99);
-    const plan = planMoeChunk(sels);
-    expect(plan.experts.length).toBeLessThanOrEqual(Math.min(4 * 16, G.nExpert));
-    expect(plan.experts.length).toBeLessThan(4 * 16); // con 64 selezioni su 64 id, collisioni certe
+  it("l'unione raggruppa davvero: |unione| ≤ min(K·M, nExpert), e i pesi sono selF32", () => {
+    const sels = randSelections(16, 99, cfg);
+    const plan = planMoeChunk(sels, GLM_PREFILL_M, cfg);
+    expect(plan.experts.length).toBeLessThanOrEqual(Math.min(K * 16, cfg.nExpert));
+    // con K·16 selezioni su nExpert id le collisioni sono certe in entrambe le
+    // famiglie (GLM: 64 su 64; q35: 128 su 256 — compleanno)
+    expect(plan.experts.length).toBeLessThan(K * 16);
     for (let m = 0; m < 16; m++) {
-      for (let k = 0; k < G.nExpertUsed; k++) {
-        expect(plan.weights[m * G.nExpertUsed + k]).toBe(Math.fround(sels[m].weights[k]));
+      for (let k = 0; k < K; k++) {
+        expect(plan.weights[m * K + k]).toBe(Math.fround(sels[m].weights[k]));
       }
     }
   });
 
   it("validazione hard: chunk vuoto/oltre mMax, selezione monca, expert fuori range", () => {
-    expect(() => planMoeChunk([])).toThrow(/1\.\./);
-    expect(() => planMoeChunk(randSelections(GLM_PREFILL_M + 1, 1))).toThrow(/1\.\./);
-    const bad = randSelections(2, 3);
+    expect(() => planMoeChunk([], GLM_PREFILL_M, cfg)).toThrow(/1\.\./);
+    expect(() => planMoeChunk(randSelections(GLM_PREFILL_M + 1, 1, cfg), GLM_PREFILL_M, cfg)).toThrow(/1\.\./);
+    const bad = randSelections(2, 3, cfg);
     bad[1] = { experts: Int32Array.from([1, 2]), weights: Float64Array.from([0.1, 0.2]) };
-    expect(() => planMoeChunk(bad)).toThrow(/attesi 4/);
-    const oob = randSelections(1, 4);
-    oob[0].experts[2] = G.nExpert;
-    expect(() => planMoeChunk(oob)).toThrow(/fuori range/);
+    if (K !== 2) expect(() => planMoeChunk(bad, GLM_PREFILL_M, cfg)).toThrow(new RegExp(`attesi ${K}`));
+    const oob = randSelections(1, 4, cfg);
+    oob[0].experts[2] = cfg.nExpert;
+    expect(() => planMoeChunk(oob, GLM_PREFILL_M, cfg)).toThrow(/fuori range/);
   });
 });
 
-describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", () => {
+describe.each(SHAPES)("identità M=1 vs M>1 (percorso CPU f32) [$name]", ({ cfg }) => {
   const D = 32; // dimensione ridotta: l'identità è ordinale, non dimensionale
+  const K = cfg.nExpertUsed;
 
   // Expert finto ma non banale: y = fround(c_e · x[i]) + fround(x[perm]) — f32 a ogni op
   const fakeExpert = (e: number, x: Float32Array): Float32Array => {
@@ -106,17 +122,17 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
 
   it("eseguire il piano (unione + combine k-order) ≡ catena del decode, BIT-IDENTICO", () => {
     const M = 16;
-    const sels = randSelections(M, 1234);
+    const sels = randSelections(M, 1234, cfg);
     const r = rng(555);
     const xs = Array.from({ length: M }, () =>
       Float32Array.from({ length: D }, () => Math.fround(r() * 2 - 1)));
-    const plan = planMoeChunk(sels);
+    const plan = planMoeChunk(sels, GLM_PREFILL_M, cfg);
 
     // percorso DECODE (riferimento, catena di glmmodel): moeOut = shexp;
     // += w_k·y_k in ordine k; poi x += moeOut
     const refOut = xs.map((x, m) => {
       const moeOut = fakeShexp(x);
-      for (let k = 0; k < G.nExpertUsed; k++) {
+      for (let k = 0; k < K; k++) {
         const w = Math.fround(sels[m].weights[k]); // selF32
         const y = fakeExpert(sels[m].experts[k], x);
         for (let i = 0; i < D; i++) moeOut[i] = Math.fround(moeOut[i] + Math.fround(w * y[i]));
@@ -128,13 +144,13 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
 
     // percorso BATCHED: per expert dell'unione, scrivi y[m][k] negli slot;
     // l'ORDINE di esecuzione degli expert è quello dell'unione (diverso da k!)
-    const slots: Float32Array[][] = Array.from({ length: M }, () => new Array(G.nExpertUsed));
+    const slots: Float32Array[][] = Array.from({ length: M }, () => new Array<Float32Array>(K));
     for (const b of plan.experts) {
       for (let i = 0; i < b.rows.length; i++) {
         slots[b.rows[i]][b.slots[i]] = fakeExpert(b.expert, xs[b.rows[i]]);
       }
     }
-    const gotOut = xs.map((x, m) => combineMoeRow(x, fakeShexp(x), slots[m], plan.weights, m));
+    const gotOut = xs.map((x, m) => combineMoeRow(x, fakeShexp(x), slots[m], plan.weights, m, K));
 
     for (let m = 0; m < M; m++) {
       // uguaglianza ESATTA, elemento per elemento (Float32Array bit-uguali)
@@ -146,15 +162,15 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
     // Se questa controprova passasse (cioè fosse identico), la struttura a
     // slot sarebbe complessità inutile: il test la tiene onesta.
     const M = 8;
-    const sels = randSelections(M, 77);
+    const sels = randSelections(M, 77, cfg);
     const r = rng(888);
     const xs = Array.from({ length: M }, () =>
       Float32Array.from({ length: D }, () => Math.fround(r() * 2 - 1)));
-    const plan = planMoeChunk(sels);
+    const plan = planMoeChunk(sels, GLM_PREFILL_M, cfg);
 
     const refOut = xs.map((x, m) => {
       const moeOut = fakeShexp(x);
-      for (let k = 0; k < G.nExpertUsed; k++) {
+      for (let k = 0; k < K; k++) {
         const w = Math.fround(sels[m].weights[k]);
         const y = fakeExpert(sels[m].experts[k], x);
         for (let i = 0; i < D; i++) moeOut[i] = Math.fround(moeOut[i] + Math.fround(w * y[i]));
@@ -167,7 +183,7 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
     for (const b of plan.experts) {
       for (let i = 0; i < b.rows.length; i++) {
         const m = b.rows[i];
-        const w = plan.weights[m * G.nExpertUsed + b.slots[i]];
+        const w = plan.weights[m * K + b.slots[i]];
         const y = fakeExpert(b.expert, xs[m]);
         for (let j = 0; j < D; j++) unionOut[m][j] = Math.fround(unionOut[m][j] + Math.fround(w * y[j]));
       }
@@ -177,5 +193,20 @@ describe("identità M=1 vs M>1 (percorso CPU f32, nucleo ordinale della fase)", 
     }
     const anyDiff = unionOut.some((o, m) => o.some((v, i) => v !== refOut[m][i]));
     expect(anyDiff).toBe(true); // le somme riordinate DIVERGONO in f32
+  });
+});
+
+describe("default = GLM: chi non passa la config ottiene la famiglia-tesi", () => {
+  it("planMoeChunk senza cfg ≡ planMoeChunk con la cfg di GLM", () => {
+    const sels = randSelections(12, 2026, SHAPES[0].cfg);
+    const a = planMoeChunk(sels);
+    const b = planMoeChunk(sels, GLM_PREFILL_M, SHAPES[0].cfg);
+    expect(a.m).toBe(b.m);
+    expect(a.weights).toEqual(b.weights);
+    expect(a.experts.map((e) => e.expert)).toEqual(b.experts.map((e) => e.expert));
+    for (let i = 0; i < a.experts.length; i++) {
+      expect(a.experts[i].rows).toEqual(b.experts[i].rows);
+      expect(a.experts[i].slots).toEqual(b.experts[i].slots);
+    }
   });
 });
