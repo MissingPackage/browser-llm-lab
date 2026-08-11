@@ -1646,3 +1646,66 @@ delle due voci "grosse" era una variante.
 
 **Gate**: tsc pulito, suite 440|9, ktest **93/93**, nessun run del modello (il
 testo non-batch e' identico byte per byte, il decode non cambia).
+
+## it.27 (2026-08-11, fase 4) — PROGETTO DELL'ORCHESTRATORE scritto prima di scriverlo, e un cambio d'ORDINE motivato
+
+Le voci rimaste erano due — il gather K-quant (5) e l'orchestratore (6) — e
+l'inventario le metteva in quest'ordine. **Le inverto, e il motivo non e'
+comodita': e' il GATE.**
+
+**Il done-when della riga 4 chiede "logits del prefill batched == logits
+sequenziali sul campione (gate secco)".** Con gli expert PER RIGA dentro il
+chunk — cioe' lasciando la catena expert esattamente com'e' oggi e batchando
+solo il resto — quel confronto e' **BIT-IDENTICO per costruzione**, perche' ogni
+kernel batched che ho aggiunto in it.25-26 e' ktestato BIT-IDENTICO per riga
+contro il suo per-riga. Col gather, invece, l'ordine delle somme cambia
+(l'unione visita gli expert in ordine di id, non di k) e GLM ha dovuto
+inventare la struttura a slot + combine in ordine k proprio per recuperare
+l'identita'. Fare prima l'orchestratore significa avere il gate PIU' FORTE
+disponibile subito, e avere una base verificata su cui il gather diventa un
+delta misurabile invece che una variabile in piu'.
+
+**E costa poco in guadagno.** Sui numeri di it.23, il prefill batched a M=16:
+
+| | con gather | senza gather (expert per riga) |
+|---|---|---|
+| row-parallel /M | 0,85 | 0,85 |
+| expert | 6,86 | 8,72 |
+| router | 3,16 | 3,16 |
+| attn | 2,93 | 2,93 |
+| ssmRec | 0,59 | 0,59 |
+| **totale** | **14,38** | **16,25** |
+| vs 28,96 di oggi | 2,01x | **1,78x** |
+
+**Il gather vale 0,23x su 2,01x**: l'89% del guadagno della fase sta
+nell'orchestratore, non nel gather. Fare prima la parte che vale l'89% e col
+gate piu' forte e' l'ordine giusto, e il gather resta come incremento
+misurabile.
+
+**PROGETTO** (quello che la prossima iterazione implementa):
+1. **Prima il tipo di layer DENSO** (4B/9B): stessa attenzione, stesso deltanet,
+   FFN denso al posto del MoE. Esercita TUTTA la macchina batched (rmsnorm,
+   gemv, rope, kvAppend, attn-chunk, gate deltanet, silu, add) e il gate e'
+   bit-identico. Il MoE si aggiunge dopo, ed e' l'unico pezzo nuovo.
+2. Scratch a M righe accanto a quelli per riga (non al posto: il decode resta
+   quello che e', e la non-regressione e' per costruzione).
+3. `rowPos`/`rowPast` come storage, riempiti per chunk.
+4. Lista di step PARALLELA (`stepsB`), costruita nello STESSO giro di
+   `steps` — non in un secondo giro, perche' due giri sullo stesso file di pesi
+   sono due verita' che divergono al primo tensore aggiunto.
+5. La ricorrenza (`deltaNetConv`/`deltaNetCore`) resta per riga DENTRO il chunk:
+   M dispatch in sequenza. Costa 0,588 ms/token misurati (it.23) e non e'
+   comprimibile senza una forma chunkwise del delta rule, che e' ricerca.
+6. Gate: `prefillChunk(tokens, pos0)` contro `step()` sequenziale sullo stesso
+   prompt, **logits bit-identici**, piu' il micro-bench tok/s prima/dopo che il
+   done-when chiede.
+
+**Rischio dichiarato**: la ricorrenza per riga dentro un encoder batched vuole
+che i dispatch di conv/core della riga m vedano lo stato lasciato dalla riga
+m−1. Sono dispatch nello stesso pass e WebGPU li ordina, quindi funziona — ma e'
+la stessa proprieta' su cui si regge il path a submit unico (it.17) e va detta,
+non assunta.
+
+**Gate di questa iterazione**: nessun codice, e' il progetto della fetta scritto
+prima di iniziarla (pattern di it.13/it.16/it.19/it.24). tsc pulito, suite
+440|9, ktest 93/93 invariati dall'iterazione precedente.
