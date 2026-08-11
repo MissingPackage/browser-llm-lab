@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling — un terzo del token non e' tempo GPU)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.24: item 16 chiuso, inventario fase 4 fatto, taglia corretta a 3-5 it.)
 
 ## 1. Next decidable
 
@@ -300,8 +300,27 @@ dopo un'iterazione se vale; (b) ordine invariato; (c) dentro la fase 6.
 **Parere mio: (a)**. Fino al ruling il lavoro procede sul contratto.
 
 **Aperti anche**: item 14 (il router e' 3,155 ms in 40 dispatch da 79 us, UN
-workgroup che fa softmax su 256 e top-8 in seriale) e item 16 (lo statico +1,62
-ms con la 4-bis: non attribuibile senza rimettere il kernel vecchio).
+workgroup che fa softmax su 256 e top-8 in seriale). **Item 16 CHIUSO in it.24**:
+i tipi del GGUF dicono che il segmento statico non contiene nemmeno un GEMV
+K-quant (attn/ssm_out/shexp sono Q8_0, router/alpha/beta/norm sono F32, i
+K-quant stanno solo negli `*_exps.weight`), quindi il +1,62 ms non e'
+attribuibile alla 4-bis per costruzione — stessi kernel, stessi dati, stesso
+lancio; restano deriva fra run o effetto globale.
+
+**INVENTARIO DELLA FASE 4 (it.24)** — cosa serve per far girare M righe insieme.
+PRONTO e ktestato (`dense-batch-*` BIT-IDENTICO su 3 righe): `gemvQuantWgsl`
+batch per q4_0/q4_1/**q8_0**, che e' il kernel di TUTTO lo statico del 35B (la
+voce piu' grossa da comprimere), piu' `gemvF32`, `rmsnorm`, `kvAppend`,
+`stridedCopy`. DA FARE: (1) **attenzione a chunk per q35** —
+`attnPrefillChunkWgsl` e' del path Qwen 2.5 e legge un `qkv` FUSO, mentre q35 ha
+q/k/v separati + q_norm/k_norm + rope-neox + gate sigmoid: non e' un drop-in;
+(2) `ropeNeoxWgsl` batch (oggi `pos` viene da un uniform); (3) elementwise batch
+(siluMul, sigmoidMul, addInPlace, axpy); (4) `deltaNetGates` batch (conv e core
+restano M e costano 0,588 ms in tutto); (5) **il path expert a GATHER per i
+K-quant** — GLM ha `pairGemvSiluGather`/`gemvDownSlots` solo per q4_0/q4_1;
+(6) l'orchestratore a M righe in `q35gpumodel` (scratch per riga, `planMoeChunk`
+gia' parametrico da it.20, combine in ordine k).
+**Taglia della fase corretta da 2-3 a 3-5 iterazioni**, prima di cominciare.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
