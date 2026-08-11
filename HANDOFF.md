@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.29: fase 4-ter CHIUSA per esclusione coi numeri; next = fase 4, orchestratore)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.30: fase 4 a 5 voci su 6, non serve piu' nessun kernel; next = l'orchestratore)
 
 ## 1. Next decidable
 
@@ -343,6 +343,15 @@ e le righe precedenti dello stesso chunk (gia' in cache via `kvAppend`) e non
 quelle dopo — non serve una maschera, serve l'ordine nell'encoder. ktest 93/93,
 `dense-batch-attn-chunk` BIT-IDENTICO su 3 righe a `nPast` crescente.
 
+**it.30**: aggiunto il modo `rows` a `deltaNetConv`/`deltaNetCore` — dentro un
+layer batched la ricorrenza gira per RIGA, e le alternative erano 960 bind group
+(30 layer x 16 righe x 2 kernel) o la riga da uniform. Presa la seconda, per la
+stessa ragione dei kernel d'arena: l'indirizzo non sta nel bind group. Lo STATO
+non e' per riga — e' la memoria che attraversa il chunk. ktest 94/94 con
+`dense-rows-deltanet-recurrence` BIT-IDENTICO su 3 righe **sullo stato che
+evolve** (se l'indicizzazione fosse sbagliata la catena divergerebbe al secondo
+passo). **Non serve piu' nessun kernel: resta solo orchestrazione.**
+
 RESTANO DUE VOCI, e **it.27 ne ha INVERTITO l'ordine col motivo**: prima
 l'**orchestratore a M righe**, poi il **gather K-quant**. Il motivo e' il GATE —
 con gli expert per riga dentro il chunk il confronto "logits batched == logits
@@ -365,7 +374,7 @@ logits BIT-IDENTICI, piu' il micro-bench tok/s.
 m−1; sono dispatch nello stesso pass e WebGPU li ordina — stessa proprieta' su
 cui si regge il path a submit unico di it.17, e va detta non assunta.
 **Taglia della fase corretta da 2-3 a 3-5 iterazioni**, prima di cominciare.
-Avanzamento: **4 voci su 6** (it.25-26). La taglia 3-5 iterazioni va ridimensionata: una delle due voci 'grosse' era una variante da trenta righe.
+Avanzamento: **5 voci su 6** (it.25-26-30). La taglia 3-5 iterazioni va ridimensionata: una delle due voci 'grosse' era una variante da trenta righe.
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
