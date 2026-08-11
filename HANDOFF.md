@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, it.21: la premessa della fase 4 e' caduta, docket item 15 in attesa di ruling PI sull'ordine)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); next = fase 4 con la proiezione rifatta)
 
 ## 1. Next decidable
 
@@ -236,38 +236,42 @@ non viene sfiorato. NON misurata end-to-end (il gate gira `read=true`): la
 misura e' il micro-bench della fase 4. Provata la non-regressione: argmax 39/39,
 routing identico, miss 0.
 
-**PASSO 1 (it.20)**: il piano del prefill non e' piu' di GLM —
-`moeprefillplan.ts`, parametrico su `MoePlanShape {nExpert, nExpertUsed}`
-(config STRUTTURALE e non un import di `MoeModelConfig`: `residency.ts` importa
-`GLM_PREFILL_M` da qui e dipendere di la' a runtime chiuderebbe un ciclo). Test
-su DUE famiglie, identita' bit-a-bit con la catena del decode inclusa. Suite
-417|9, ktest 87/87, prefill di GLM non mosso di un bit.
+**FASE 4-BIS CHIUSA (it.22, ruling PI item 15 opzione (a))** — e' il guadagno
+piu' grosso del goal finora. I due kernel K-quant spartivano i SUPERBLOCCHI di
+una riga sui 64 thread; sul 35B `SB_PER_ROW = K/256` vale 8 per gate/up (K=2048)
+e **2 per il down** (K=512), cioe' 8 lane su 64 e 2 su 64. Ora l'unita' e' un
+PEZZO del gruppo, scelta da `kquantWorkSplit(sbPerRow, groupsPerSb)` perche' le
+unita' arrivino a 64 — una funzione sola per i due kernel — piu' un test CPU
+della BIIEZIONE della spartizione (18 geometrie).
 
-**PASSO 2 (it.21) — E QUI SI E' ROTTA LA PREMESSA DELLA FASE.** Il down degli
-expert ora ACCUMULA col peso da `Sel` (`accum` sui kernel K-quant): −320
-dispatch/token, bit-identico per costruzione (argmax 39/39, routing identico,
-miss 0), e `axpySelWgsl`/`dnE`/`wBufs` spariscono. **Ma il tempo e' sceso di
-0,327 ms invece dei ~6,7 attesi: −1,02 us per dispatch rimosso contro i ~21 che
-it.19 sembrava dire.** I ~20 us medi erano totale/conteggio, non un costo fisso
-di lancio: **il token NON e' dispatch-bound, e la proiezione 2,02x della fase 4
-— costruita su tempo ∝ dispatch — NON REGGE PIU'**.
+| | it.21 | it.22 |
+|---|---|---|
+| expert | 33,115 ms | **8,743** |
+| coda (norma+head) | 6,859 | 1,415 |
+| statico | 14,523 | 16,144 |
+| router | 2,833 | 3,169 |
+| totale GPU | 57,330 | **29,471** |
+| **ms/token** | **71,90** | **44,26** |
 
-**IL NUMERO CHE RESTA IN PIEDI**: gli expert leggono 571 MB di pesi per token
-(320 x 1,785 MB, byte misurati) in 33,1 ms = **17,2 GB/s efficaci** su ~500
-disponibili — il 3% della banda, per il 58% del tempo GPU. Ipotesi coerente ma
-NON provata: `gemvQ4K`/`gemvQ6K` spartiscono i superblocchi di UNA riga sui 64
-thread, e sul 35B sono 8 (gate/up, K=2048) e **2** (down, K=512) ⇒ 8 lane su 64
-e 2 su 64 attive. La prova sarebbe un kernel alternativo misurato contro questo.
+**−38,4% sul decode: da 13,9 a 22,6 tok/s sul 35B**, banda efficace del segmento
+expert da 17,2 a **65,3 GB/s**. Gate: ktest 87/87 con tolleranze invariate o
+MIGLIORI (q4_K 2048x512: 2,74e-4 -> 5,58e-5), argmax **39/39**, routing identico
+chiave per chiave, **GLM bit-identico** (L2rel 2,072937787401139e-07 fino
+all'ultima decimale). Suite 440|9. NON bit-identico su q35, e dichiarato prima
+di cominciare: cambia l'ordine delle somme f32.
 
-**DECISIONE APERTA — DOCKET ITEM 15 (PI)**: l'ordine del contratto. La fase 4
-vale zero sul DECODE, che e' dove sta la funzione obiettivo (il 35B fa 71,9
-ms/token = 13,9 tok/s; per 30 tok/s servono 33 ms), e la sua proiezione e'
-caduta. Opzioni: (a) fase 4-bis sui kernel expert PRIMA della 4; (b) ordine
-invariato; (c) fase 4 esclusa coi numeri (il suo done-when ammette l'esclusione
-motivata). **Parere mio: (a)** — e' testualmente l'argomento con cui il PI ha
-accolto l'item 8: ottimizzare sopra un collo che poi sparisce costa due volte.
-**Fino al ruling il lavoro procede sul contratto** (fase 4), ma la prossima
-iterazione dovrebbe partire dal ruling se c'e'.
+**DOCKET ITEM 16 aperto**: il segmento STATICO e' PEGGIORATO di 1,62 ms
+(+11,2%) e non e' rumore. L'ipotesi (ridondanza nell'estrazione delle scale) non
+convince — sugli expert la stessa ridondanza e' stravinta 3,8 a 1 — e va
+MISURATA con una sonda per-kernel dentro lo statico, non corretta alla cieca.
+
+**PROSSIMO: la fase 4 (prefill batched), con la proiezione RIFATTA.** Quella di
+it.19 assumeva tempo ∝ dispatch (smentita da it.21) e comunque partiva da un
+segmento expert che era il 58% del tempo GPU: ora e' il **29,7%** (8,743 su
+29,471). Prima di spendere 2-3 iterazioni va rifatto il conto su questi numeri,
+e i due vincoli strutturali restano: 30 layer su 40 sono deltanet e ricorrenti
+(i loro 2 dispatch per layer restano M), e l'unione degli expert comprime solo
+1,27x a M=16 (256 expert, top-8).
 
 **Regola dell'harness (docket 10)**: il primo passaggio dopo il load non si
 misura mai — si scarta una passata, si interleavano i bracci, si riporta
