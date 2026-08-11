@@ -283,7 +283,13 @@ async function main(cfg: Cfg): Promise<void> {
     const M = cfg.prefillM;
     const p = golden.prompts[0];
     const all = [...p.promptTokens, ...p.generated];
-    const nChunk = Math.floor(all.length / M);
+    // TETTO IN TOKEN, non in chunk (it.33): il guadagno del prefill a chunk
+    // CRESCE col contesto — misurato 1,17x su 47 token e 2,02x su 6456 — quindi
+    // due M confrontati a numero di CHUNK uguale girerebbero su contesti diversi
+    // e il confronto direbbe una cosa per un'altra. A parita' di token il
+    // contesto e' lo stesso e la M e' l'unica variabile.
+    const GATE_TOKENS = 1024;
+    const nChunk = Math.min(Math.floor(GATE_TOKENS / M), Math.floor(all.length / M));
     if (nChunk < 3) throw new Error(`q35 prefillChunk gate: ${nChunk} chunk a M=${M} — servono almeno 3 (il primo si scarta)`);
     const toks = all.slice(0, nChunk * M);
     const seqLogits: Float32Array[] = [];

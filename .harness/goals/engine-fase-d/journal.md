@@ -1978,3 +1978,44 @@ batch il prefill).
 
 **Gate**: tsc pulito, suite 440|9, logits bit-identici 1.241.600/1.241.600,
 JSON committato (`q35-prefillchunk8-4b-it32.json`).
+
+## it.33 (2026-08-11, fase 4) — il guadagno cresce col CONTESTO, non con M
+
+Volevo la curva in M che la riga 4 chiede come micro-bench. Il primo giro me
+l'ha fatta sbagliare e vale la pena raccontarlo: avevo cappato il gate a **6
+chunk**, quindi a M=8 misuravo 48 token di contesto e a M=16 ne misuravo 96 —
+due contesti diversi spacciati per due M diverse. Il tetto va sui TOKEN.
+
+**A parita' di contesto (1024 token, 4B, primo chunk scartato):**
+
+| M | chunk | ms/token seq → chunk | speedup |
+|---|---|---|---|
+| 8 | 128 | 32,39 → 26,59 | **1,218x** |
+| 16 | 64 | 31,98 → 25,88 | **1,236x** |
+
+**M quasi non conta**, ed e' coerente con l'item 19: il modo `batch` fonde i
+dispatch, non il traffico dei pesi, quindi raddoppiare le righe non raddoppia
+niente.
+
+**Ma il CONTESTO conta, e molto.** Un run precedente (non cappato, M=8, 807
+chunk = 6456 token, 806 campioni dopo lo scarto) ha dato **60,66 → 30,05
+ms/token = 2,019x**. Stesso codice, stessa M: cambia solo quanto e' lungo il
+contesto. La spiegazione plausibile — e la dico come plausibile — e' che a
+contesto lungo domina l'attenzione, e nel kernel a chunk le M righe leggono la
+STESSA KV cache da workgroup concorrenti: il riuso non lo fa il kernel, lo fa la
+cache della GPU. E' l'unica amortizzazione che questo meccanismo ottiene, e
+arriva da dove non l'avevo cercata.
+
+**Quindi il numero della fase 4 non e' un numero, e' una curva**: 1,22x a 1k di
+contesto, **2,02x a 6,5k**. E la seconda meta' e' il regime che conta, perche' il
+prefill lungo e' esattamente il caso in cui il TTFT fa male.
+
+**Gate in tutti e tre i run: LOGITS BIT-IDENTICI** — 31.784.960 su 31.784.960 a
+M=8, 15.892.480 su 15.892.480 a M=16, 200.394.240 su 200.394.240 nel run lungo.
+Duecento milioni di f32 confrontati bit a bit senza una differenza.
+
+**Correzione all'harness**: il tetto del gate ora e' in TOKEN (1024) e non in
+chunk, cosi' due M girano sullo stesso contesto e la M resta l'unica variabile.
+
+**Gate**: tsc pulito, suite 440|9, JSON committati (`q35-prefillT8`,
+`q35-prefillT16`, `q35-prefillM8`).

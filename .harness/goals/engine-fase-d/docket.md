@@ -483,3 +483,12 @@ bit-identici + micro-bench prima/dopo) e il guadagno c'e', anche se e' un terzo
 di quello sperato. Sta qui perche' la prossima persona che legge "2x" nella
 proiezione di it.23 deve trovare accanto il motivo per cui il misurato e' 1,15x.
 Registrato it.32 (2026-08-11).
+
+**AGGIORNAMENTO it.33**: il quadro e' meno cupo di cosi', e per una ragione che
+non avevo previsto. A parita' di contesto la M quasi non conta (1,218x a M=8 e
+1,236x a M=16 su 1024 token), il che CONFERMA che i pesi non si amortizzano. Ma
+il guadagno **cresce col CONTESTO**: **2,019x a 6456 token** (M=8, 806 campioni).
+La spiegazione plausibile e' che a contesto lungo domina l'attenzione e le M
+righe leggono la STESSA KV da workgroup concorrenti — il riuso non lo fa il
+kernel, lo fa la cache della GPU. Quindi la GEMM vera resta la strada per
+amortizzare i PESI, ma il meccanismo attuale gia' amortizza la KV dove conta.
