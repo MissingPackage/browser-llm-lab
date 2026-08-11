@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.28: fase 4-ter aperta col ruling (a) — il lavoro CPU e' 1,94 ms, il bersaglio sono ~11 ms di GPU fuori dai pass)
+# HANDOFF — browser-llm-lab   (updated 2026-08-11, sessione 28 — goal engine-fase-d in corso: core unificato + gate a invarianti, GLM bit-identico; fasi 1-2-3 chiuse, FASE 3b CHIUSA (it.11-18: 81->1 submit/token, 41->1 readback, argmax 39/39 identico anche col replay a freddo, -68,60 ms/token a parita'); fase 4 in corso: misurato che il token e' DISPATCH-BOUND (~20 us/dispatch), proiezione 2,02x a M=16, FASE 4-BIS CHIUSA it.22: 35B da 13,9 a 22,6 tok/s (-38,4%); it.23: proiezione rifatta (2,01x sul prefill), docket item 17 in attesa di ruling; it.29: fase 4-ter CHIUSA per esclusione coi numeri; next = fase 4, orchestratore)
 
 ## 1. Next decidable
 
@@ -289,31 +289,33 @@ row-parallel (9,84 ms): avevo scambiato "il layer e' ricorrente" con "il layer
 non si batcha". **Fase 4 proiettata: 28,96 -> 14,38 ms = 2,01x** sul prefill,
 con pavimento expert 6,86 + router 3,16 + attn 2,93 = il 90% del batched.
 
-**FASE 4-TER IN CORSO (ruling PI item 17 opzione (a), it.28)** — e la prima
-misura ha ribaltato l'ipotesi con cui l'avevo aperta. Decomposti i 15,12 ms:
-attesa del readback 29,194 (che **non e' overhead: e' la GPU che lavora** — li
-avevo sommati alla CPU) · encode CPU dei 2400 dispatch **1,267** · argmax 0,431 ·
-contabilita' di fine token 0,210 · embed 0,028 · residuo 11,906.
-**Il lavoro CPU e' 1,94 ms/token, il 4,5%.**
+**FASE 4-TER CHIUSA — ESCLUSA COI NUMERI (it.28-29)**, che e' l'esito che il suo
+done-when prevedeva. Il token del 35B e' 43,3 ms: **~41 di attesa GPU e 1,94 di
+CPU**. La mia ipotesi dell'item 17 ("encode CPU dei 2300 dispatch, submit,
+attesa del readback, argmax") era sbagliata su due punti: l'encode costa 1,267 ms
+e l'attesa del readback non e' overhead, e' la GPU che lavora — l'avevo sommata
+alla CPU.
 
-Tre ipotesi sul residuo, due CADUTE: snapshot dello stato ricorrente (62,8 MiB,
-sospetto numero uno) **0,30 ms**; checkpoint dell'hidden **~0**. La terza — i due
-`popErrorScope` awaitati prima del readback — e' ATTRIBUZIONE e non costo:
-spostandoli dopo, l'attesa passa a 40,43 e il residuo crolla a 0,98, ma il token
-non accelera (43,06 → 43,32, dentro il rumore). Il riordino resta perche' ora
-`readbackMs` significa "attesa totale della GPU"; e' contabilita', non guadagno.
+Quattro ipotesi misurate, quattro cadute: **snapshot dello stato ricorrente**
+(62,8 MiB/token, il sospetto n.1) **0,30 ms** · **checkpoint dell'hidden ~0** ·
+**`popErrorScope` prima del readback** = attribuzione, non costo (spostandolo
+l'attesa passa a 40,43 e il residuo crolla a 0,98, ma il token non accelera) ·
+**spezzare il pass a ogni layer** ≤1 ms e dentro il rumore (provato togliendo i
+40 `clearBuffer` — l'axpy dello shexp puo' SCRIVERE invece di accumulare — e
+portando il token a 1 pass invece di 41: 43,32 → 44,26, bande sovrapposte).
+Totale aggredibile trovato: **~2,2 ms**, sotto la soglia degli 8. L'albero e'
+stato rimesso com'era: il cambio non era migliorativo e lo stato che ha misurato
+meglio e' quello di prima.
 
-**DOVE SIAMO**: token 43,1 = **40,4 GPU + 1,94 CPU**, ma la somma dei pass
-cronometrati e' 29,5 → **~11 ms di GPU che nessun pass contiene**, e i boundary
-(~10 us l'uno, misurati) non lo spiegano.
-**PROSSIMO, esperimento gia' scritto**: i **40 `clearBuffer(moeAcc)` per token**
-sono l'unica ragione per cui il pass si spezza a ogni layer. Si sostituiscono con
-un dispatch di azzeramento DENTRO il pass e il token diventa **un pass solo
-invece di 41**: se gli ~11 ms stanno li', si vedono subito.
-Il done-when della 4-ter NON si applica ancora (le voci CPU sommano 1,94, sotto
-la soglia degli 8 ms, ma la decomposizione ha SPOSTATO il bersaglio invece di
-eliminarlo: chiudere per esclusione adesso sarebbe usare la lettera della riga
-contro il suo scopo).
+**DOCKET ITEM 18 (aperto, non deciso)**: restano **~11 ms di GPU che nessun pass
+contiene** (43,3 di token, ~41 di attesa, 29,5 di pass cronometrati). Spiegazione
+residua plausibile e NON verificata: la latenza del round-trip GPU→CPU per token,
+inerente a "un sync per token", attaccabile solo col **pipelining** (encodare il
+token N+1 mentre il readback di N e' in volo) — cambio di semantica del decode,
+da misurare prima di aprirlo.
+
+**PROSSIMO: la fase 4**, con l'orchestratore progettato in it.27 (expert per riga
+per avere il gate bit-identico; il gather dopo, vale 0,23x su 2,01x).
 
 **Aperti anche**: item 14 (il router e' 3,155 ms in 40 dispatch da 79 us, UN
 workgroup che fa softmax su 256 e top-8 in seriale). **Item 16 CHIUSO in it.24**:
