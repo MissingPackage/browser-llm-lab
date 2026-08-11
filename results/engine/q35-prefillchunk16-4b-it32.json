@@ -1,0 +1,25 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-prefillchunk-4b",
+ "date": "2026-08-11",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "chunkM": 16,
+ "chunks": 2,
+ "tokens": 32,
+ "declared": "bracci sullo STESSO modello e sullo stesso prompt; si confrontano i logits dell'ultima posizione di ogni chunk, che sono gli unici che il prefill produce. L'atteso e' la BIT-IDENTITA': ogni kernel batched e' ktestato bit-identico per riga.",
+ "gate": {
+  "bitEqual": 496640,
+  "compared": 496640,
+  "bitIdentical": true,
+  "maxAbs": 0
+ },
+ "msPerChunk": {
+  "sequential": 668.2300000190735,
+  "chunked": 408.55000001192093,
+  "speedup": 1.6356137559651829
+ },
+ "msPerToken": {
+  "sequential": 41.76437500119209,
+  "chunked": 25.534375000745058
+ }
+}

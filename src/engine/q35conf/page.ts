@@ -21,6 +21,8 @@ const cfg = {
   gpuTime: q.get("gputime") === "1",
   // ?nosnap=1 → misura: senza snapshot dello stato ricorrente (fase 4-ter)
   noStateSnapshot: q.get("nosnap") === "1",
+  // ?prefillm=8 → gate della fase 4: prefill a chunk contro step sequenziale
+  prefillM: q.has("prefillm") ? Number(q.get("prefillm")) : undefined,
   bench: q.has("bench")
     ? { promptIdx: Number(q.get("bench")!.split(",")[0]), nDecode: Number(q.get("bench")!.split(",")[1] ?? 64) }
     : undefined,

@@ -148,6 +148,21 @@ export interface Q35GpuModel {
    */
   setOptimistic(on: boolean): void;
   /**
+   * PREFILL A CHUNK (fase 4): M token in un solo submit, con i logits della
+   * SOLA ultima riga — il prefill non ha bisogno degli altri. `null` se il
+   * modello non e' stato costruito con `prefillM`. Il chunk deve essere PIENO:
+   * le taglie dei dispatch e il numero di vettori sono cotti nel piano gemello,
+   * quindi un chunk parziale vorrebbe un secondo piano (e non serve: la coda
+   * del prompt la fa `step`).
+   */
+  prefillChunk: ((tokens: ArrayLike<number>, posStart: number) => Promise<Float32Array>) | null;
+  /**
+   * I logits dell'ULTIMO `step(..., read=true)`. Esiste perche' il gate della
+   * fase 4 confronta i LOGITS e non l'argmax: due vettori possono avere lo
+   * stesso massimo ed essere diversi ovunque, e il done-when chiede i logits.
+   */
+  lastLogits(): Float32Array | null;
+  /**
    * Tempo GPU per CATEGORIA accumulato sui token girati col path ottimistico e
    * la sonda accesa; `null` se la sonda non e' attiva (o `timestamp-query` non
    * concessa dal device). `ms` e' la somma dei pass, `n` il numero di pass.
@@ -216,6 +231,13 @@ export interface Q35GpuModelOpts {
    * sporchi sono 0 per misura (it.16).
    */
   debugNoStateSnapshot?: boolean;
+  /**
+   * PREFILL A CHUNK (fase 4): costruisce, ACCANTO al piano per riga, un piano
+   * gemello che fa M token insieme. Assente = non cambia una riga, e il decode
+   * resta esattamente quello che era: la non-regressione e' per costruzione.
+   * Oggi cablato sul tipo di layer DENSO (4B/9B); il MoE e' il passo dopo.
+   */
+  prefillM?: number;
 }
 
 export async function createQ35GpuModel(
@@ -277,26 +299,46 @@ export async function createQ35GpuModel(
   };
   /** Loader GENERICO type-driven (it.17): gemv col kernel giusto per il tipo
    *  REALE del tensore (35B: attn/ssm_out/shexp Q8_0, alpha/beta F32). */
-  const loadW = async (name: string): Promise<{ n: number; k: number; push: (src: GPUBuffer, dst: GPUBuffer) => void }> => {
+  const loadW = async (name: string): Promise<{
+    n: number; k: number;
+    push: (src: GPUBuffer, dst: GPUBuffer) => void;
+    /** gemello a M righe (fase 4): no-op senza `prefillM` */
+    pushB: (src: GPUBuffer, dst: GPUBuffer) => void;
+  }> => {
     const t = r.info(name);
     const [k, n] = [t.dims[0], t.dims[1]];
     if (t.type === GGML_TYPE.F32) {
       const w = await f32buf(name);
-      return { n, k, push: (src, dst) => push(gemvF32Wgsl({ K: k, N: n }), [w, src, dst], gemvGrid(n)) };
+      return {
+        n, k,
+        push: (src, dst) => push(gemvF32Wgsl({ K: k, N: n }), [w, src, dst], gemvGrid(n)),
+        pushB: (src, dst) => pushB(gemvF32Wgsl({ K: k, N: n, batch: true }), [w, src, dst], [gemvGrid(n)[0], gemvGrid(n)[1], M_MAX]),
+      };
     }
     if (t.type === GGML_TYPE.Q4_0 || t.type === GGML_TYPE.Q4_1) {
       const w = await q40(name);
-      return { n, k, push: (src, dst) => gemv(w, src, dst) };
+      return { n, k, push: (src, dst) => gemv(w, src, dst), pushB: (src, dst) => gemvB(w, src, dst) };
     }
     if (t.type === GGML_TYPE.Q8_0) {
       const w = await q80(name);
-      return { n, k, push: (src, dst) => gemv(w, src, dst, "q8_0") };
+      return { n, k, push: (src, dst) => gemv(w, src, dst, "q8_0"), pushB: (src, dst) => gemvB(w, src, dst, "q8_0") };
     }
     if (t.type === GGML_TYPE.Q4_K || t.type === GGML_TYPE.Q5_K || t.type === GGML_TYPE.Q6_K) {
       const blockBytes = t.type === GGML_TYPE.Q4_K ? 144 : t.type === GGML_TYPE.Q5_K ? Q5_K_BLOCK_BYTES : Q6_K_BLOCK_BYTES;
       const w = await kquant(name, blockBytes);
       const code = t.type === GGML_TYPE.Q4_K ? gemvQ4KWgsl({ K: k, N: n }) : t.type === GGML_TYPE.Q5_K ? gemvQ5KWgsl({ K: k, N: n }) : gemvQ6KWgsl({ K: k, N: n });
-      return { n, k, push: (src, dst) => push(code, [w.blocks, src, dst], gemvGrid(n)) };
+      // Sul 35B i pesi statici sono tutti Q8_0/F32 e i K-quant stanno solo
+      // negli expert (it.24) — ma il 4B ha `ssm_out` in Q5_K, quindi il gemello
+      // a M righe serve anche qui: l'inventario valeva per un modello, non per
+      // la famiglia (it.32).
+      const codeB = t.type === GGML_TYPE.Q4_K
+        ? gemvQ4KWgsl({ K: k, N: n, batch: true })
+        : t.type === GGML_TYPE.Q5_K ? gemvQ5KWgsl({ K: k, N: n, batch: true }) : gemvQ6KWgsl({ K: k, N: n, batch: true });
+      return {
+        n, k,
+        push: (src, dst) => push(code, [w.blocks, src, dst], gemvGrid(n)),
+        pushB: (src, dst) => pushB(codeB, [w.blocks, src, dst], [gemvGrid(n)[0], gemvGrid(n)[1], M_MAX]),
+      };
     }
     throw new Error(`q35gpumodel: loadW tipo ${t.type} non gestito (${name})`);
   };
@@ -361,6 +403,35 @@ export async function createQ35GpuModel(
   const staging = device.createBuffer({ size: S.vocab * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
   const steps: Step[] = [];
+  // ---- PREFILL A CHUNK (fase 4, it.32): il piano gemello a M righe ----
+  const M_MAX = Math.max(0, Math.min(16, Math.floor(opts.prefillM ?? 0)));
+  const prefillOn = M_MAX > 0;
+  if (prefillOn && isMoe) {
+    throw new Error(
+      "q35gpumodel: prefillM non e' ancora cablato sui modelli MoE — la fase 4 monta prima il tipo " +
+      "di layer DENSO, dove il gate e' la bit-identita' coi logits sequenziali");
+  }
+  /** scratch a M righe: row-major, passo di riga = la taglia per riga. */
+  const bM = (perRow: number): GPUBuffer => empty(perRow * Math.max(1, M_MAX));
+  const PB = prefillOn ? {
+    x: bM(d * 4), xn: bM(d * 4), attnY: bM(d * 4),
+    qkv: bM(qkvDim * 4), z: bM(inner * 4),
+    bRaw: bM(S.linVHead * 4), aRaw: bM(S.linVHead * 4), bSig: bM(S.linVHead * 4), gVal: bM(S.linVHead * 4),
+    convOut: bM(qkvDim * 4), gated: bM(inner * 4),
+    qFull: bM(2 * qDim * 4), kCur: bM(kvDim * 4), vCur: bM(kvDim * 4),
+    qB: bM(qDim * 4), gateB: bM(qDim * 4), qN: bM(qDim * 4), kN: bM(kvDim * 4),
+    attnO: bM(qDim * 4), gateF: bM(dFfn ? dFfn * 4 : 16), upF: bM(dFfn ? dFfn * 4 : 16),
+    /** posizione per riga: la leggono rope, kvAppend e l'attenzione a chunk */
+    rowPos: device.createBuffer({ size: Math.max(16, M_MAX * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }),
+    /** indice di riga per la RICORRENZA (uniform, una entry ogni 256 B) */
+    rowUni: device.createBuffer({ size: M_MAX * 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
+    steps: [] as Step[],
+  } : null;
+  if (PB) {
+    const u = new Uint32Array(M_MAX * 64);
+    for (let m = 0; m < M_MAX; m++) u[m * 64] = m;
+    device.queue.writeBuffer(PB.rowUni, 0, u as unknown as BufferSource);
+  }
   /**
    * ETICHETTE per la sonda dei tempi (fase 4, it.23): `{at, cat}` dice che dallo
    * step `at` in poi si entra nella categoria `cat`. Sono MARCHE su intervalli e
@@ -394,6 +465,38 @@ export async function createQ35GpuModel(
     const kk = kind ?? w.kind ?? "q4_0";
     push(gemvQuantWgsl({ kind: kk, K: w.k, N: w.n, hasBias: false }), [w.qs, w.scales, src, dst], gemvGrid(w.n));
   };
+  // ---- gemelli a M righe (fase 4). `pushB` scrive SOLO nel piano gemello. ----
+  const pushB = (code: string, bufs: GPUBuffer[], wgs: [number, number, number]): void => {
+    if (!PB) return;
+    const p = pipe(code);
+    const bind = device.createBindGroup({
+      layout: p.getBindGroupLayout(0),
+      entries: bufs.map((b, i) => ({ binding: i, resource: { buffer: b } })),
+    });
+    PB.steps.push({ pipe: p, bind, wgs });
+  };
+  /**
+   * La RICORRENZA: M step, uno per riga, IN ORDINE. Un bind group per riga, e
+   * l'unica differenza fra loro e' l'offset dell'uniform che porta l'indice —
+   * i buffer sono gli stessi (it.30).
+   */
+  const pushBRows1 = (code: string, bufs: GPUBuffer[], wg: number, row: number): void => {
+    if (!PB) return;
+    const p = pipe(code);
+    const bind = device.createBindGroup({
+      layout: p.getBindGroupLayout(0),
+      entries: [
+        ...bufs.map((b, i) => ({ binding: i, resource: { buffer: b } })),
+        { binding: bufs.length, resource: { buffer: PB.rowUni, offset: row * 256, size: 16 } },
+      ],
+    });
+    PB.steps.push({ pipe: p, bind, wgs: [wg, 1, 1] });
+  };
+  const gemvB = (w: { qs: GPUBuffer; scales: GPUBuffer; k: number; n: number; kind?: "q4_0" | "q4_1" | "q8_0" }, src: GPUBuffer, dst: GPUBuffer, kind?: "q4_0" | "q4_1" | "q8_0"): void => {
+    const kk = kind ?? w.kind ?? "q4_0";
+    const [gx, gy] = gemvGrid(w.n);
+    pushB(gemvQuantWgsl({ kind: kk, K: w.k, N: w.n, hasBias: false, batch: true }), [w.qs, w.scales, src, dst], [gx, gy, M_MAX]);
+  };
 
   for (let l = 0; l < S.nLayer; l++) {
     const b = `blk.${l}.`;
@@ -401,6 +504,7 @@ export async function createQ35GpuModel(
     const postNorm = await f32buf(`${b}post_attention_norm.weight`);
     mark("norm");
     push(rmsnormWgsl(d, S.rmsEps), [x, attnNorm, xn], 1);
+    if (PB) pushB(rmsnormWgsl(d, S.rmsEps, true), [PB.x, attnNorm, PB.xn], [M_MAX, 1, 1]);
 
     if (q35IsFullAttn(S, l)) {
       mark("attn");
@@ -415,10 +519,21 @@ export async function createQ35GpuModel(
       wq.push(xn, qFull);
       wk.push(xn, kCur);
       wv.push(xn, vCur);
+      if (PB) { wq.pushB(PB.xn, PB.qFull); wk.pushB(PB.xn, PB.kCur); wv.pushB(PB.xn, PB.vCur); }
       push(stridedCopyWgsl({ nVec: S.nHead, len: hd, srcStride: 2 * hd, srcOffset: 0, dstStride: hd, dstOffset: 0 }), [qFull, qB], Math.ceil(qDim / 64));
       push(stridedCopyWgsl({ nVec: S.nHead, len: hd, srcStride: 2 * hd, srcOffset: hd, dstStride: hd, dstOffset: 0 }), [qFull, gateB], Math.ceil(qDim / 64));
       push(rmsnormWgsl(hd, S.rmsEps, true), [qB, qNormW, qN], S.nHead);
       push(rmsnormWgsl(hd, S.rmsEps, true), [kCur, kNormW, kN], S.nKvHead);
+      if (PB) {
+        // APPIATTIMENTO (it.31): questi kernel sono PER-VETTORE, e il vettore
+        // (riga, head) sta all'indice riga*nVec + head. Si dispatchano nVec*M
+        // vettori e l'aritmetica degli offset torna da sola — provato
+        // bit-identico alla geometria vera.
+        pushB(stridedCopyWgsl({ nVec: S.nHead * M_MAX, len: hd, srcStride: 2 * hd, srcOffset: 0, dstStride: hd, dstOffset: 0 }), [PB.qFull, PB.qB], [Math.ceil((M_MAX * qDim) / 64), 1, 1]);
+        pushB(stridedCopyWgsl({ nVec: S.nHead * M_MAX, len: hd, srcStride: 2 * hd, srcOffset: hd, dstStride: hd, dstOffset: 0 }), [PB.qFull, PB.gateB], [Math.ceil((M_MAX * qDim) / 64), 1, 1]);
+        pushB(rmsnormWgsl(hd, S.rmsEps, true), [PB.qB, qNormW, PB.qN], [S.nHead * M_MAX, 1, 1]);
+        pushB(rmsnormWgsl(hd, S.rmsEps, true), [PB.kCur, kNormW, PB.kN], [S.nKvHead * M_MAX, 1, 1]);
+      }
       push(ropeNeoxWgsl(S.nHead, hd, S.ropeFreqBase, S.ropeDims), [qN], Math.ceil((S.nHead * S.ropeDims / 2) / 64), true);
       push(ropeNeoxWgsl(S.nKvHead, hd, S.ropeFreqBase, S.ropeDims), [kN], Math.ceil((S.nKvHead * S.ropeDims / 2) / 64), true);
       push(kvAppendWgsl(kvDim), [kN, kCache], Math.ceil(kvDim / 64), true);
@@ -426,6 +541,17 @@ export async function createQ35GpuModel(
       push(attnDecodeWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: hd, ctxMax }), [qN, kCache, vCache, attnO], S.nHead, true);
       push(sigmoidMulWgsl(qDim), [attnO, gateB], Math.ceil(qDim / 64));
       wo.push(attnO, attnY);
+      if (PB) {
+        pushB(ropeNeoxWgsl(S.nHead, hd, S.ropeFreqBase, S.ropeDims, true), [PB.qN, PB.rowPos], [Math.ceil((S.nHead * S.ropeDims / 2) / 64), M_MAX, 1]);
+        pushB(ropeNeoxWgsl(S.nKvHead, hd, S.ropeFreqBase, S.ropeDims, true), [PB.kN, PB.rowPos], [Math.ceil((S.nKvHead * S.ropeDims / 2) / 64), M_MAX, 1]);
+        pushB(kvAppendWgsl(kvDim, true), [PB.kN, kCache, PB.rowPos], [Math.ceil(kvDim / 64), M_MAX, 1]);
+        pushB(kvAppendWgsl(kvDim, true), [PB.vCur, vCache, PB.rowPos], [Math.ceil(kvDim / 64), M_MAX, 1]);
+        // l'append PRECEDE l'attenzione: e' cosi' che la riga m vede le righe
+        // precedenti del chunk, e la causalita' non ha bisogno di maschere (it.26)
+        pushB(attnDecodeWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: hd, ctxMax, batch: true }), [PB.qN, kCache, vCache, PB.attnO, PB.rowPos], [S.nHead, M_MAX, 1]);
+        pushB(sigmoidMulWgsl(qDim, true), [PB.attnO, PB.gateB], [Math.ceil(qDim / 64), M_MAX, 1]);
+        wo.pushB(PB.attnO, PB.attnY);
+      }
     } else {
       mark("ssmGemv");
       const wqkv = await loadW(`${b}attn_qkv.weight`);
@@ -445,6 +571,19 @@ export async function createQ35GpuModel(
       wz.push(xn, z);
       wb.push(xn, bRaw);
       wa.push(xn, aRaw);
+      if (PB) {
+        wqkv.pushB(PB.xn, PB.qkv);
+        wz.pushB(PB.xn, PB.z);
+        wb.pushB(PB.xn, PB.bRaw);
+        wa.pushB(PB.xn, PB.aRaw);
+        pushB(deltaNetGatesWgsl(S.linVHead, true), [PB.bRaw, PB.aRaw, aBuf, dtBuf, PB.bSig, PB.gVal], [1, M_MAX, 1]);
+        // LA RICORRENZA: M step IN ORDINE, riga da uniform. Lo stato non e' per
+        // riga — e' la memoria che attraversa il chunk (it.30).
+        for (let m = 0; m < M_MAX; m++) {
+          pushBRows1(deltaNetConvWgsl(qkvDim, S.linConvK, true), [convSt, PB.qkv, convW, PB.convOut], Math.ceil(qkvDim / 64), m);
+          pushBRows1(deltaNetCoreWgsl({ hd: S.linHeadDim, nK: S.linKHead, nV: S.linVHead, eps: S.rmsEps }, true), [PB.convOut, stateS, PB.bSig, PB.gVal, PB.z, nrmBuf, PB.gated], S.linVHead, m);
+        }
+      }
       // Da qui la RICORRENZA: conv shifta lo stato e core aggiorna S. E' la
       // parte che il batching M>1 non puo' comprimere (le righe di un chunk
       // sono token consecutivi), quindi va misurata da sola: e' il pavimento
@@ -455,9 +594,11 @@ export async function createQ35GpuModel(
       push(deltaNetCoreWgsl({ hd: S.linHeadDim, nK: S.linKHead, nV: S.linVHead, eps: S.rmsEps }), [convOut, stateS, bSig, gVal, z, nrmBuf, gated], S.linVHead);
       mark("ssmOut");
       wOut.push(gated, attnY);
+      if (PB) wOut.pushB(PB.gated, PB.attnY);
     }
     mark("resid");
     push(addInPlaceWgsl(d), [x, attnY], Math.ceil(d / 64));
+    if (PB) pushB(addInPlaceWgsl(d, true), [PB.x, PB.attnY], [Math.ceil(d / 64), M_MAX, 1]);
 
     if (!isMoe) {
       const wg = await q40(`${b}ffn_gate.weight`);
@@ -469,6 +610,14 @@ export async function createQ35GpuModel(
       push(siluMulWgsl(dFfn), [gateF, upF], Math.ceil(dFfn / 64));
       gemv(wd, gateF, attnY);
       push(addInPlaceWgsl(d), [x, attnY], Math.ceil(d / 64));
+      if (PB) {
+        pushB(rmsnormWgsl(d, S.rmsEps, true), [PB.x, postNorm, PB.xn], [M_MAX, 1, 1]);
+        gemvB(wg, PB.xn, PB.gateF);
+        gemvB(wu, PB.xn, PB.upF);
+        pushB(siluMulWgsl(dFfn, true), [PB.gateF, PB.upF], [Math.ceil(dFfn / 64), M_MAX, 1]);
+        gemvB(wd, PB.gateF, PB.attnY);
+        pushB(addInPlaceWgsl(d, true), [PB.x, PB.attnY], [Math.ceil(d / 64), M_MAX, 1]);
+      }
     } else {
       // MoE (it.17): il segmento STATICO del layer chiude con shexp (statico:
       // non dipende dalla selezione, accumula in moeAcc col gate sigmoid su
@@ -1350,6 +1499,7 @@ export async function createQ35GpuModel(
       },
     };
   }
+  let lastLg: Float32Array | null = null;
   const perfAcc = {
     tokens: 0, embedMs: 0, readbackMs: 0, argmaxMs: 0, submits: 0, readbacks: 0,
     dirtyTokens: 0, replays: 0, replayLayers: 0, repairMs: 0,
@@ -1500,6 +1650,7 @@ export async function createQ35GpuModel(
         // attesa che porta `Sel` e `dirtyB` (fetta 3c).
         const lgOpt = await moe.runTokenOptimistic!(read);
         if (!read || !lgOpt) return -1;
+        lastLg = lgOpt;
         const tAmOpt = performance.now();
         let bestO = -Infinity, biO = -1;
         for (let i = 0; i < S.vocab; i++) if (lgOpt[i] > bestO) { bestO = lgOpt[i]; biO = i; }
@@ -1546,6 +1697,7 @@ export async function createQ35GpuModel(
       if (!read) return -1;
       const tRb = performance.now();
       const lg = await readStaging(staging, S.vocab * 4);
+      lastLg = lg;
       const tAm = performance.now();
       perfAcc.readbackMs += tAm - tRb;
       let best = -Infinity, bi = -1;
@@ -1568,6 +1720,58 @@ export async function createQ35GpuModel(
     gpuTimeStats: canGpuTs
       ? () => ({ tokens: tsqTokens, overflow: tsqOverflow, byCat: Object.fromEntries([...tsqAcc.entries()].map(([k2, v2]) => [k2, { ...v2 }])) })
       : null,
+    lastLogits: () => lastLg,
+    prefillChunk: PB ? async (tokens: ArrayLike<number>, posStart: number): Promise<Float32Array> => {
+      if (tokens.length !== M_MAX) {
+        throw new Error(`q35 prefillChunk: chunk di ${tokens.length} righe, il piano gemello e' cotto su ${M_MAX}`);
+      }
+      if (posStart + M_MAX > ctxMax) throw new Error("q35 prefillChunk: contesto pieno");
+      const tEmb = performance.now();
+      const rows = new Float32Array(M_MAX * d);
+      const pos = new Uint32Array(M_MAX);
+      for (let m = 0; m < M_MAX; m++) {
+        dequantRow(tokens[m] as number, rows, m * d);
+        pos[m] = posStart + m;
+      }
+      device.queue.writeBuffer(PB.x, 0, rows as unknown as BufferSource);
+      device.queue.writeBuffer(PB.rowPos, 0, pos as unknown as BufferSource);
+      perfAcc.embedMs += performance.now() - tEmb;
+      perfAcc.tokens += M_MAX;
+      device.pushErrorScope("validation");
+      device.pushErrorScope("out-of-memory");
+      const enc = device.createCommandEncoder();
+      const p1 = enc.beginComputePass();
+      for (const st of PB.steps) {
+        p1.setPipeline(st.pipe);
+        p1.setBindGroup(0, st.bind);
+        p1.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+      }
+      p1.end();
+      // la head serve sulla SOLA ultima riga: si copia il suo hidden nel
+      // buffer per riga e si riusano gli step di coda del decode, invariati.
+      enc.copyBufferToBuffer(PB.x, (M_MAX - 1) * d * 4, x, 0, d * 4);
+      const p2 = enc.beginComputePass();
+      for (let i = headCut; i < steps.length; i++) {
+        const st = steps[i];
+        p2.setPipeline(st.pipe);
+        p2.setBindGroup(0, st.bind);
+        p2.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+      }
+      p2.end();
+      enc.copyBufferToBuffer(logits, 0, staging, 0, S.vocab * 4);
+      device.queue.submit([enc.finish()]);
+      perfAcc.submits++;
+      const tRb = performance.now();
+      await staging.mapAsync(GPUMapMode.READ);
+      const errOom = await device.popErrorScope();
+      const errVal = await device.popErrorScope();
+      if (errOom ?? errVal) throw new Error(`q35 prefillChunk error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
+      const lg = new Float32Array(staging.getMappedRange().slice(0, S.vocab * 4));
+      staging.unmap();
+      perfAcc.readbacks++;
+      perfAcc.readbackMs += performance.now() - tRb;
+      return lg;
+    } : null,
     routerShadowStats: moe?.shadowStats ? () => moe!.shadowStats!() : null,
     moeStats: moe
       ? () => ({

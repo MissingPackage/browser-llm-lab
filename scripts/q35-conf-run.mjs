@@ -61,6 +61,10 @@ if (process.argv.includes("--gpu-time")) qs.set("gputime", "1");
 // MISURA della fase 4-ter: quanto costa lo snapshot dello stato ricorrente
 // (62,8 MiB per token). Rompe il replay: solo a cache calda.
 if (process.argv.includes("--no-snapshot")) qs.set("nosnap", "1");
+// GATE della fase 4: prefill a chunk di M righe contro step() sequenziale, coi
+// logits confrontati BIT PER BIT.
+const prefillM = arg("prefill-m", null);
+if (prefillM) qs.set("prefillm", prefillM);
 const tap = arg("tap", null);
 if (tap !== null) qs.set("tap", tap);
 

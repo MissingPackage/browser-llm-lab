@@ -1925,3 +1925,56 @@ codice, non da ricognizione: sotto c'e' la lista esatta.
    **logits bit-identici**, piu' il micro-bench tok/s che il done-when chiede.
 
 **Gate**: tsc pulito, suite 440|9, ktest **96/96**, nessun run del modello.
+
+## it.32 (2026-08-11, fase 4) — l'orchestratore gira, i logits sono BIT-IDENTICI, e lo speedup e' 1,15x invece di 2
+
+**Montato**: `prefillM` (opt-in; assente, non cambia una riga), scratch a M righe
+accanto a quelli per riga, lista di step GEMELLA costruita nello stesso giro di
+`steps`, e `prefillChunk(tokens, pos0)` — M token in un submit, con la head sulla
+SOLA ultima riga (l'unica che il prefill produce). I tre idiomi convivono come
+progettato: per-vettore = appiattimento (nVec x M), per-riga = `gid.y`,
+ricorrenza = `rows` con un bind group per riga che differisce solo nell'offset
+dell'uniform.
+
+**GATE (4B, smoke, M=8, 5 chunk): logits BIT-IDENTICI, 1.241.600 su 1.241.600,
+maxAbs 0.** Non "vicini": identici. Era l'atteso per costruzione — ogni kernel
+batched e' ktestato bit-identico per riga — ed e' il done-when della riga 4
+soddisfatto alla lettera.
+
+**E QUI IL NUMERO CHE CORREGGE LA MIA PROIEZIONE.** Misurato (primo chunk
+SCARTATO, docket item 10 — e il perche' si vede: 489 ms il primo chunk
+sequenziale contro ~240 i successivi):
+
+| | ms/token |
+|---|---|
+| sequenziale | 29,88 |
+| a chunk M=8 | **25,97** |
+| **speedup** | **1,151x** |
+
+La proiezione di it.23 diceva ~2x, e si reggeva su "il traffico dei pesi si legge
+una volta per chunk". **Non e' vero per questi kernel**: il modo `batch` di
+`gemvQuant`/`gemvF32`/K-quant mette `wid.z` = riga e ogni workgroup (riga, riga
+d'uscita) **rilegge la propria riga di pesi**. Fonde i DISPATCH, non il
+traffico. Il guadagno misurato e' quello che resta — meno dispatch e un po' di
+riuso in L2 — ed e' 1,15x, non 2.
+
+**Per avere il 2x servirebbe una GEMM vera**, che carica una tile di pesi e la
+moltiplica per M righe: e' la famiglia `rmsPairGemmSiluChunkFast` del path Qwen
+2.5, che esiste ma per un'altra geometria. Non e' una riga di questa fetta: e'
+un'altra fetta, e va decisa coi numeri (docket item 19).
+
+**M=16 non misurato**: il gate pretende almeno 3 chunk per poter scartare il
+primo, e lo smoke del 4B ha 47 token — a M=16 fanno 2. Il guard ha fatto il suo
+mestiere invece di lasciarmi citare una mediana di due campioni di cui uno
+freddo. Serve un prompt piu' lungo, ed e' materia del bench, non del gate.
+
+**Una cosa che l'inventario aveva sbagliato**: it.24 concludeva "sul 35B i pesi
+statici sono tutti Q8_0/F32, i K-quant stanno solo negli expert". Vero per il
+35B — ma il **4B ha `ssm_out` in Q5_K**, e il primo run e' morto proprio li'.
+L'inventario valeva per UN MODELLO e l'avevo scritto come se valesse per la
+famiglia. Aggiunto il modo `batch` ai tre gemv K-quant non-arena (con guard
+esplicito: `batch` e `arena` non si combinano — l'arena e' il path expert, il
+batch il prefill).
+
+**Gate**: tsc pulito, suite 440|9, logits bit-identici 1.241.600/1.241.600,
+JSON committato (`q35-prefillchunk8-4b-it32.json`).

@@ -1539,8 +1539,9 @@ export function kquantWorkSplit(sbPerRow: number, groupsPerSb: number): {
  *
  * Esige il regime d'arena: senza `Sel` non c'e' nessun peso da leggere.
  */
-export function gemvQ4KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; accum?: boolean }): string {
-  const { K, N, arena, accum } = opts;
+export function gemvQ4KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean }): string {
+  const { K, N, arena, accum, batch } = opts;
+  if (batch === true && arena) throw new Error("q4K: batch e arena non si combinano (l'arena e' il path expert, il batch il prefill)");
   if (accum === true && !arena) throw new Error("q4K: accum esige il regime d'arena (il peso viene da Sel)");
   if (K % 256 !== 0) throw new Error("gemvQ4K: K non multiplo di 256");
   const sbPerRow = K / 256;
@@ -1574,6 +1575,14 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   gBase = base + ${arena.tensorWords}u;
   if (!ok) { return; }`
     : "";
+  // batch (fase 4): wid.z = riga; x e y sono matrici [M, K] e [M, N].
+  // Senza, il testo emesso e' identico byte per byte.
+  const XR = batch ? "xR + " : "";
+  const YR = batch ? `wid.z * ${N}u + ` : "";
+  const xRowPre = batch ? `\n  let xR = wid.z * ${K}u;` : "";
+  const tailAcc = accum === true
+    ? `y[${YR}r] = y[${YR}r] + sel.w * partial[0];`
+    : `y[${YR}r] = partial[0];`;
   return `
 ${head}
 const SB_PER_ROW = ${sbPerRow}u;
@@ -1587,7 +1596,7 @@ fn sbyte(base: u32, i: u32) -> u32 {
 }
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;${xRowPre}
   if (r >= ${N}u) { return; }${pre}
   let t = lid.x;
   var acc = 0.0;
@@ -1617,8 +1626,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     var dot1 = 0.0; var sx1 = 0.0; var dot2 = 0.0; var sx2 = 0.0;
     for (var l = lo; l < lo + LPU; l = l + 1u) {
       let ql = sbyte(wb, 16u + j * 32u + l);   // qs a byte offset 16 (niente qh)
-      let x1 = x[xBase + j * 64u + l];
-      let x2 = x[xBase + j * 64u + 32u + l];
+      let x1 = x[${XR}xBase + j * 64u + l];
+      let x2 = x[${XR}xBase + j * 64u + 32u + l];
       dot1 = dot1 + f32(ql & 0xfu) * x1; sx1 = sx1 + x1;
       dot2 = dot2 + f32(ql >> 4u) * x2; sx2 = sx2 + x2;
     }
@@ -1633,14 +1642,19 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     stride = stride >> 1u;
   }
   // coda accumulante (accum): vedi la nota sopra la funzione
-  if (t == 0u) { ${accum === true ? "y[r] = y[r] + sel.w * partial[0];" : "y[r] = partial[0];"} }
+  if (t == 0u) { ${tailAcc} }
 }`;
 }
 
-export function gemvQ5KWgsl(opts: { K: number; N: number }): string {
-  const { K, N } = opts;
+export function gemvQ5KWgsl(opts: { K: number; N: number; batch?: boolean }): string {
+  const { K, N, batch } = opts;
   if (K % 256 !== 0) throw new Error("gemvQ5K: K non multiplo di 256");
   const sbPerRow = K / 256;
+  // batch (fase 4): wid.z = riga; x e y sono matrici [M, K] e [M, N].
+  // Senza, il testo emesso e' identico byte per byte.
+  const XR = batch ? "xR + " : "";
+  const YR = batch ? `wid.z * ${N}u + ` : "";
+  const xRowPre = batch ? `\n  let xR = wid.z * ${K}u;` : "";
   return `
 @group(0) @binding(0) var<storage, read> blocks: array<u32>;
 @group(0) @binding(1) var<storage, read> x: array<f32>;
@@ -1652,7 +1666,7 @@ fn sbyte(base: u32, i: u32) -> u32 {
 }
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;${xRowPre}
   if (r >= ${N}u) { return; }
   let t = lid.x;
   var acc = 0.0;
@@ -1682,8 +1696,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
       for (var l = 0u; l < 32u; l = l + 1u) {
         let ql = sbyte(wb, 48u + j * 32u + l);   // qs a byte offset 48
         let qh = sbyte(wb, 16u + l);             // qh a byte offset 16
-        let x1 = x[xBase + j * 64u + l];
-        let x2 = x[xBase + j * 64u + 32u + l];
+        let x1 = x[${XR}xBase + j * 64u + l];
+        let x2 = x[${XR}xBase + j * 64u + 32u + l];
         var q1 = f32(ql & 0xfu);
         if ((qh & u1) != 0u) { q1 = q1 + 16.0; }
         var q2 = f32(ql >> 4u);
@@ -1703,14 +1717,15 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     workgroupBarrier();
     stride = stride >> 1u;
   }
-  if (t == 0u) { y[r] = partial[0]; }
+  if (t == 0u) { y[${YR}r] = partial[0]; }
 }`;
 }
 
 // Q6_K: 53 word/superblocco (210 B + 2 pad) = [ql 128 B][qh 64 B][scales int8
 // 16 B][d f16]. w = d·sc_int8·(q6 − 32), q6 = nibble | 2 bit alti.
-export function gemvQ6KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; accum?: boolean }): string {
-  const { K, N, arena, accum } = opts;
+export function gemvQ6KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean }): string {
+  const { K, N, arena, accum, batch } = opts;
+  if (batch === true && arena) throw new Error("q6K: batch e arena non si combinano (l'arena e' il path expert, il batch il prefill)");
   if (accum === true && !arena) throw new Error("q6K: accum esige il regime d'arena (il peso viene da Sel)");
   // OCCUPAZIONE (fase 4-bis, it.22): stessa correzione del q4_K. Qui il
   // superblocco si divide in 2 gruppi da 128 e ogni giro di `l` copre 4 quant;
@@ -1740,6 +1755,14 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   gBase = base + ${arena.tensorWords}u;
   if (!ok) { return; }`
     : "";
+  // batch (fase 4): wid.z = riga; x e y sono matrici [M, K] e [M, N].
+  // Senza, il testo emesso e' identico byte per byte.
+  const XR = batch ? "xR + " : "";
+  const YR = batch ? `wid.z * ${N}u + ` : "";
+  const xRowPre = batch ? `\n  let xR = wid.z * ${K}u;` : "";
+  const tailAcc = accum === true
+    ? `y[${YR}r] = y[${YR}r] + sel.w * partial[0];`
+    : `y[${YR}r] = partial[0];`;
   return `
 ${head}
 const SB_PER_ROW = ${sbPerRow}u;
@@ -1756,7 +1779,7 @@ fn sint8(base: u32, i: u32) -> f32 {
 }
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let r = wid.x + wid.y * ${GEMV_GRID_X}u;
+  let r = wid.x + wid.y * ${GEMV_GRID_X}u;${xRowPre}
   if (r >= ${N}u) { return; }${pre}
   let t = lid.x;
   var acc = 0.0;
@@ -1782,10 +1805,10 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
         let q3 = f32((qlA >> 4u) | (((qh >> 4u) & 3u) << 4u)) - 32.0;
         let q4 = f32((qlB >> 4u) | (((qh >> 6u) & 3u) << 4u)) - 32.0;
         let e = xBase + n * 128u + l;
-        acc = acc + d * (sint8(wb, scO + is) * q1 * x[e]
-                       + sint8(wb, scO + is + 2u) * q2 * x[e + 32u]
-                       + sint8(wb, scO + is + 4u) * q3 * x[e + 64u]
-                       + sint8(wb, scO + is + 6u) * q4 * x[e + 96u]);
+        acc = acc + d * (sint8(wb, scO + is) * q1 * x[${XR}e]
+                       + sint8(wb, scO + is + 2u) * q2 * x[${XR}e + 32u]
+                       + sint8(wb, scO + is + 4u) * q3 * x[${XR}e + 64u]
+                       + sint8(wb, scO + is + 6u) * q4 * x[${XR}e + 96u]);
       }
     }
   }
@@ -1798,7 +1821,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     stride = stride >> 1u;
   }
   // coda accumulante (accum): vedi la nota sopra la funzione
-  if (t == 0u) { ${accum === true ? "y[r] = y[r] + sel.w * partial[0];" : "y[r] = partial[0];"} }
+  if (t == 0u) { ${tailAcc} }
 }`;
 }
 

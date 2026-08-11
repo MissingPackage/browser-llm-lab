@@ -463,3 +463,23 @@ per esclusione com'era previsto. Sta qui perche' e' il piu' grosso singolo
 addendo rimasto nel token (11 su 43) e perche' la prossima volta che qualcuno
 guardera' quel numero deve trovare scritto cosa e' gia' stato escluso.
 Registrato it.29 (2026-08-11).
+
+## item 19 — il `batch` dei gemv fonde i dispatch, non il traffico dei pesi (io, fase 4)
+
+Misurato in it.32: il prefill a chunk del 4B da' **1,151x** (29,88 → 25,97
+ms/token, M=8, primo chunk scartato) contro i ~2x che la proiezione di it.23
+prometteva. La proiezione si reggeva su "il traffico dei pesi si legge una volta
+per chunk", e **non e' vero per questi kernel**: il modo `batch` mette `wid.z` =
+riga e ogni workgroup (riga, riga d'uscita) rilegge la propria riga di pesi.
+Fonde i dispatch, non il traffico.
+
+Per avere l'amortizzazione serve una GEMM vera — una tile di pesi caricata una
+volta e moltiplicata per M righe — cioe' la famiglia
+`rmsPairGemmSiluChunkFast`/`rmsGemmQkvChunkFast` del path Qwen 2.5, che esiste
+ma per un'altra geometria e un altro layout di pesi.
+
+Non lo apro come fetta adesso: la fase 4 ha il suo done-when soddisfatto (logits
+bit-identici + micro-bench prima/dopo) e il guadagno c'e', anche se e' un terzo
+di quello sperato. Sta qui perche' la prossima persona che legge "2x" nella
+proiezione di it.23 deve trovare accanto il motivo per cui il misurato e' 1,15x.
+Registrato it.32 (2026-08-11).

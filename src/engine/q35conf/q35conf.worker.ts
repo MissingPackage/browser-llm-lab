@@ -55,6 +55,13 @@ interface Cfg {
   gpuTime?: boolean;
   /** SOLO MISURA (fase 4-ter): senza snapshot dello stato ricorrente. */
   noStateSnapshot?: boolean;
+  /**
+   * fase 4: GATE del prefill a chunk. Confronta i logits di `prefillChunk` con
+   * quelli del `step()` sequenziale sullo stesso prompt — l'atteso e' la
+   * BIT-IDENTITA', perche' ogni kernel batched e' ktestato bit-identico per
+   * riga contro il suo per-riga (it.25-26-30-31).
+   */
+  prefillM?: number;
 }
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
@@ -158,6 +165,7 @@ async function main(cfg: Cfg): Promise<void> {
     select: cfg.optTrace === true ? "optimistic" : "cpu",
     telemetryGpu: cfg.gpuTime === true,
     debugNoStateSnapshot: cfg.noStateSnapshot === true,
+    prefillM: cfg.prefillM,
   });
   const loadMs = performance.now() - t0;
   progress(`modello su GPU in ${(loadMs / 1000).toFixed(1)} s (${model.dispatchesPerToken} dispatch/token)`);
@@ -264,6 +272,74 @@ async function main(cfg: Cfg): Promise<void> {
       moe: model.moeStats!(),
     };
     post({ type: "done", report });
+    return;
+  }
+
+  if (cfg.prefillM) {
+    // GATE DELLA FASE 4. Due bracci sullo STESSO prompt e sullo stesso modello:
+    // (a) `step()` sequenziale, che e' il path di oggi; (b) `prefillChunk` a M
+    // righe. Si confrontano i LOGITS dell'ultima posizione del chunk, che sono
+    // gli unici che il prefill produce — e l'atteso e' bit per bit, non "vicino".
+    const M = cfg.prefillM;
+    const p = golden.prompts[0];
+    const all = [...p.promptTokens, ...p.generated];
+    const nChunk = Math.floor(all.length / M);
+    if (nChunk < 3) throw new Error(`q35 prefillChunk gate: ${nChunk} chunk a M=${M} — servono almeno 3 (il primo si scarta)`);
+    const toks = all.slice(0, nChunk * M);
+    const seqLogits: Float32Array[] = [];
+    const seqMs: number[] = [];
+    model.resetState();
+    for (let c = 0; c < nChunk; c++) {
+      const t0c = performance.now();
+      for (let i = 0; i < M - 1; i++) await model.step(toks[c * M + i], c * M + i, false);
+      await model.step(toks[c * M + M - 1], c * M + M - 1, true);
+      seqMs.push(performance.now() - t0c);
+      seqLogits.push(model.lastLogits()!);
+    }
+    model.resetState();
+    const chunkLogits: Float32Array[] = [];
+    const chunkMs: number[] = [];
+    for (let c = 0; c < nChunk; c++) {
+      const t0c = performance.now();
+      const lg = await model.prefillChunk!(toks.slice(c * M, (c + 1) * M), c * M);
+      chunkMs.push(performance.now() - t0c);
+      chunkLogits.push(lg);
+    }
+    let bitEqual = 0, maxAbs = 0, cmp = 0;
+    for (let c = 0; c < nChunk; c++) {
+      for (let i = 0; i < shape.vocab; i++) {
+        const a = seqLogits[c][i], b = chunkLogits[c][i];
+        cmp++;
+        if (Object.is(a, b)) bitEqual++;
+        else maxAbs = Math.max(maxAbs, Math.abs(a - b));
+      }
+    }
+    // Il PRIMO chunk si scarta (docket item 10: il primo passaggio dopo il load
+    // paga compilazione e prime allocazioni). Con due soli campioni la mediana
+    // sarebbe quello.
+    const med = (v: number[]): number => {
+      const w = v.slice(1).sort((a, b) => a - b);
+      return w[Math.floor(w.length / 2)];
+    };
+    post({
+      type: "done",
+      report: {
+        schemaVersion: 1,
+        kind: `q35-prefillchunk-${cfg.model ?? "4b"}`,
+        date: new Date().toISOString().slice(0, 10),
+        model: MODELS[cfg.model ?? "4b"].file, chunkM: M, chunks: nChunk, tokens: nChunk * M,
+        declared: "bracci sullo STESSO modello e sullo stesso prompt; si confrontano i logits " +
+          "dell'ultima posizione di ogni chunk, che sono gli unici che il prefill produce. " +
+          "L'atteso e' la BIT-IDENTITA': ogni kernel batched e' ktestato bit-identico per riga.",
+        gate: { bitEqual, compared: cmp, bitIdentical: bitEqual === cmp, maxAbs },
+        msPerChunk: {
+          sequential: med(seqMs), chunked: med(chunkMs), speedup: med(seqMs) / med(chunkMs),
+          discardedFirst: true, samples: nChunk - 1,
+          seqAll: seqMs.map((v) => Math.round(v * 100) / 100), chunkAll: chunkMs.map((v) => Math.round(v * 100) / 100),
+        },
+        msPerToken: { sequential: med(seqMs) / M, chunked: med(chunkMs) / M },
+      },
+    });
     return;
   }
 
