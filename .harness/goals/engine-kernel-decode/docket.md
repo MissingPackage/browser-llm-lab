@@ -11,7 +11,11 @@ approva**: è il gate "mostrami il file prima di eseguire". Le celle di misura
 sono state test-fittate a tempo di scrittura (ruling C7) — v. item 2, che è
 uscito proprio da lì.
 
-STATO: in attesa.
+STATO: **APPROVATO dal PI 2026-08-13** ("vai. Fai tutto con gli strumenti che
+hai scelto. Usa loop, research-campaign, sdd-conductor, second-opinion, ecc.").
+Autorizzati esplicitamente: loop autonomo, research-campaign, sdd-conductor,
+second-opinion. Il PI è ASSENTE (dorme): tutto ciò che non è nel grant di
+autorità del contratto si registra qui e si aspetta, non si decide.
 
 ## item 2 — il motore ha un tetto di contesto che i suoi limiti non dichiarano (io, fase 1)
 
