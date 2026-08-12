@@ -4,31 +4,28 @@
 
 **Fase 7 in corso: far predire due token per volta invece di uno.** Il modello
 Qwen porta con sé una testa ausiliaria (MTP) che, guardando lo stato interno,
-tira a indovinare il token successivo-successivo. Se indovina spesso, ogni
-passata del modello produce due token invece di uno.
+tira a indovinare il token successivo-successivo: se indovina spesso, ogni
+passata ne produce due.
 
-L'ho fatta girare in CPU: indovina il **74%** delle volte nel regime che conta —
-quello in cui il decode gira davvero, cioè sul testo che il modello sta
-producendo lui. Sul testo umano (più difficile, e non è il caso d'uso) fa il 50%.
+L'ho fatta girare in CPU: indovina il **74%** delle volte nel regime che conta,
+quello in cui il decode gira davvero — sul testo che il modello sta producendo
+lui. Sul testo umano (più difficile, e non è il caso d'uso) fa il 50%.
 
-**Il 31,8% di ieri era rumore di campionamento, non un difetto**: 22 posizioni
-di campione, dove un solo colpo vale 4,5 punti. Su 62 posizioni i numeri sopra.
+**Il 31,8% di ieri era rumore**, non un difetto: 22 posizioni, dove un solo
+colpo vale 4,5 punti. I numeri qui sopra sono su 62.
 
 **L'anomalia di ieri è chiusa e non era un bug.** Spostare di uno le posizioni
 non poteva cambiare niente: quel meccanismo di rotazione guarda solo le
-*distanze* fra posizioni, mai i loro valori assoluti, e nella testa scalano
-tutte insieme. Il parametro inutile è stato rimosso. L'attenzione dentro la
-testa funziona — azzerandola l'accuratezza scende da 50 a 31 — e la nostra
-implementazione combacia voce per voce con quella di riferimento di vLLM, letta
-oggi.
+*distanze* fra posizioni, mai i valori assoluti, e nella testa scalano tutte
+insieme. Il parametro inutile è rimosso. L'attenzione dentro la testa funziona
+(azzerandola si scende da 50 a 31) e la nostra implementazione combacia voce per
+voce con quella di riferimento di vLLM, letta oggi.
 
 **Prossimo passo, non serve una tua decisione**: portare la testa sulla GPU e
-chiudere il ciclo vero — la testa propone un token, il modello lo verifica nella
-stessa passata, si tiene solo se coincide. Il gate della fase è secco: i token
-accettati devono essere identici a quelli prodotti oggi. Se il 74% regge, il 4B
-passa da 25,9 a ~39 token/s (col 50%, ~34): il primo superamento
-dell'obiettivo. Riferimento CPU rieseguibile: `Q35_MTP=1 npx vitest run
-tests/engine-q35-mtp-accept.test.ts` (~5 min, niente GPU).
+chiudere il ciclo — la testa propone un token, il modello lo verifica nella
+stessa passata, si tiene solo se coincide. Gate secco: i token accettati
+identici a quelli di oggi. Riferimento CPU rieseguibile: `Q35_MTP=1 npx vitest
+run tests/engine-q35-mtp-accept.test.ts` (~5 min, niente GPU).
 
 ## 2. Mappa
 
@@ -52,10 +49,8 @@ il 3% che avevo scritto ieri: rifà anche la proiezione sul vocabolario.
 
 **Nebbia** (non ancora deciso né specificato)
 
-- Quanto valga davvero il 74%: 23 posizioni danno un intervallo 52-90%, e il
-  campione è un prompt solo
-- Se il 35B abbia lo stesso accept-rate: mai misurato (il riferimento CPU sul
-  35B costerebbe ore; si misurerà sulla GPU)
+- Quanto valga davvero il 74%: 23 posizioni danno 52-90%, e su un prompt solo
+- Se il 35B abbia lo stesso accept-rate: mai misurato (in CPU costerebbe ore)
 - Se GLM possa avere una testa equivalente: mai valutato
 - Cosa debbano misurare i "riferimenti" — il percorso storico (confrontabile) o
   quello di oggi (vero). Nessuno dei due da solo basta
@@ -80,6 +75,10 @@ il 3% che avevo scritto ieri: rifà anche la proiezione sul vocabolario.
   variazione fra due run identiche è ~2,4%, più della distanza dal riferimento.
 - **Un tetto di 16 GiB di VRAM non esiste su questa scheda** (16.376 MiB
   totali): la richiesta sfonda.
+- **Un campione da 22 posizioni non distingue niente**: ±1 colpo vale ±4,5
+  punti, e it.50-51 ci ha perso due iterazioni. Prima di concludere da un
+  conteggio di successi, guarda rango e log-prob del bersaglio: stessa
+  informazione, varianza molto più bassa, spesso costo zero.
 - **Leggere i parametri di un runner prima di spenderci sopra minuti di GPU.**
   Due volte in una sessione ho lanciato run con flag sbagliati dedotti invece
   che letti.
