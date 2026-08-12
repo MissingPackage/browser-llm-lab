@@ -3089,3 +3089,52 @@ secondo. Il meccanismo c'e', il gate c'e', la velocita' no — e la causa non e'
 piu' un'ipotesi da sviluppare ma una misura da prendere.
 
 Gate: tsc pulito, suite **442|10**, ktest **99 PASS / 0 FAIL**.
+
+## it.56 (2026-08-12, fase 7) — dove vanno i 60 ms: il corpo a 2 righe costa 1,70x, non 1,1x
+
+Iterazione 10 di 2-4 sulla fase 7. Misura, non ottimizzazione (docket item 31).
+
+**Metodo**: `step(read=false)` esegue il CORPO e basta — la coda (norma finale +
+lm_head + argmax + readback) e' tagliata dal `headCut` della fase 4 — e una
+fence su `queue.onSubmittedWorkDone()` rende il tempo confrontabile col token
+intero, che aspetta il readback per costruzione. 12 token per braccio, dopo il
+prefill.
+
+| | ms |
+|---|---|
+| token intero | 34,7 |
+| — corpo | **27,1** |
+| — coda (norma + lm_head + argmax + readback) | **7,6** |
+| passata di verifica (2 righe + 2 code + draft) | 66,8 |
+| — corpo a 2 righe, per differenza | **46,2** |
+| — due code | 15,2 |
+| — draft della testa | 5,5 |
+
+**IL NUMERO: corpo2 / corpo = 1,70x.** A pesi letti una volta sola dovrebbe
+stare intorno a 1,1x. Il piano batch, su questo modello, NON amortizza.
+
+**L'ipotesi principale e' architetturale, non di cablaggio**: 24 layer su 32 del
+4B sono DeltaNet, e una RICORRENZA non si batcha per costruzione — lo stato
+attraversa i token, quindi le M righe vanno eseguite in ordine, una alla volta,
+qualunque sia il piano. Lo speculative decoding e' nato sui transformer puri,
+dove verificare K token costa una lettura dei pesi; su un ibrido ricorrente la
+ricorrenza deve comunque fare K passi. Se e' cosi', il tetto non si sposta con
+altro cablaggio.
+
+**Non e' ancora discriminata da**: le mie copie di snapshot per layer (~50 MB a
+passata, 48 dispatch) che stanno DENTRO `corpo2` e che non ho attribuito a
+parte.
+
+**L'aritmetica di cosa resta possibile**, coi numeri misurati: per battere i
+34,4 ms/token sequenziali con 1,5 token a passata serve una passata <= 51,6 ms;
+oggi e' 66,8. Batchando la coda sulle due righe (una lm_head invece di due) si
+scende a ~59,2 — ancora sopra. Con l'accept-rate del regime vero (74%, 1,74
+token a passata) la soglia sale a ~60 ms e i 59,2 la sfiorano.
+
+**Detto senza girarci intorno: lo spec-dec su questo modello paga al massimo in
+modo marginale, e solo se entrambe le condizioni tengono.** La prossima leva —
+una sola coda invece di due — e' cheap e la misura decide; se anche dopo resta
+sopra il sequenziale, la fase 7 si chiude come ESCLUSIONE COI NUMERI, che e' lo
+stesso esito gia' applicato a prefetch e policy a livelli (it.37).
+
+Gate: tsc pulito, ktest **100 PASS / 0 FAIL**, suite invariata.

@@ -779,6 +779,27 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult[]> {
   }
   seqSpecB.length = N;
   const specBMs = (performance.now() - t4) / N;
+
+  // ---- DOVE VANNO I 60 ms DELLA PASSATA (it.56) ----
+  // Non si ottimizza a naso: si separa il CORPO del modello dalla CODA
+  // (norma finale + lm_head + argmax + readback). `step(read=false)` esegue
+  // esattamente il corpo — la coda e' tagliata dal `headCut` della fase 4 — e
+  // una fence sulla coda della queue rende il tempo confrontabile con quello
+  // del token intero, che aspetta il readback per costruzione.
+  const fence = (): Promise<undefined> => g.device.queue.onSubmittedWorkDone();
+  const K = 12;
+  await prefill();
+  await fence();
+  const t5 = performance.now();
+  for (let k = 0, q5 = P; k < K; k++, q5++) await model.step(tokens[q5 % tokens.length], q5, false);
+  await fence();
+  const bodyMs = (performance.now() - t5) / K;
+  await prefill();
+  await fence();
+  const t6 = performance.now();
+  for (let k = 0, q6 = P; k < K; k++, q6++) await model.step(tokens[q6 % tokens.length], q6, true);
+  await fence();
+  const fullMs = (performance.now() - t6) / K;
   const pf = model.perf();
   model.destroy();
 
@@ -798,7 +819,21 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult[]> {
       : `${N}/${N} token IDENTICI al sequenziale su ENTRAMBI i path · per-riga ${passes} passate ${acceptedPasses} accettate (${accPass.toFixed(0)}%) · batch ${passesB} passate ${acceptedB} accettate (${accPassB.toFixed(0)}%), ${pf.specRejects} rollback · ms/token: sequenziale ${seqMs.toFixed(1)} · spec per-riga ${specMs.toFixed(1)} · spec batch ${specBMs.toFixed(1)}`,
     metrics: { acceptedPct: accPassB, msPerTokenSpec: specMs, msPerTokenSpecBatched: specBMs, msPerTokenSeq: seqMs },
   };
-  return [rAccept, rInv];
+  // La passata di verifica batch, ricostruita: corpo a 2 righe + DUE code.
+  // Il modello atteso e' `corpo2 + 2*coda`; quanto il corpo a 2 righe costa
+  // davvero si ottiene per differenza, ed e' il numero che dice se il batch
+  // sta amortizzando la lettura dei pesi o no.
+  const tailMs = fullMs - bodyMs;
+  const passMs = specBMs * N / Math.max(1, passesB);
+  const body2Ms = passMs - 2 * tailMs - msPerDraft;
+  const rCost: KResult = {
+    kernel: "q35-mtp-costo-verifica",
+    pass: bodyMs > 0 && tailMs > 0,
+    maxAbs: NaN, maxRel: NaN,
+    note: `token intero ${fullMs.toFixed(1)} = corpo ${bodyMs.toFixed(1)} + coda ${tailMs.toFixed(1)} (norma+lm_head+argmax+readback) · passata di verifica ${passMs.toFixed(1)} = corpo2 ${body2Ms.toFixed(1)} + 2 code ${(2 * tailMs).toFixed(1)} + draft ${msPerDraft.toFixed(1)} · corpo2/corpo = ${(body2Ms / bodyMs).toFixed(2)}x`,
+    metrics: { bodyMs, tailMs, passMs, body2Ms, body2Ratio: body2Ms / bodyMs },
+  };
+  return [rAccept, rInv, rCost];
 }
 
 /** Full-model GPU 4B teacher-forced: argmax GPU == ORACOLO sul golden smoke (fase 4 slice 3). */

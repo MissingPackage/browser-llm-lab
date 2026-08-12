@@ -901,3 +901,18 @@ vale a M=2, o la differenza sta nel mio cablaggio della verifica (la copia di
 L'uscita non e' sbagliata — entrambi i path danno i token del greedy — ma due
 sensori che dovrebbero coincidere non coincidono, e in questo progetto quella e'
 sempre stata una cosa da chiudere prima di fidarsi dei numeri (item 12).
+
+
+### it.56 — ITEM 31 RISPOSTO DALLA MISURA
+
+`step(read=false)` (corpo) contro token intero, 12 token per braccio con fence:
+token 34,7 = corpo 27,1 + coda 7,6. Passata di verifica 66,8 = corpo2 46,2 +
+2 code 15,2 + draft 5,5. **corpo2/corpo = 1,70x.**
+
+Candidato (b) — la lm_head due volte — vale 7,6 ms ed e' la sola leva rimasta
+a costo basso. Candidato (a) — la ricorrenza DeltaNet non batchabile — e' ora
+l'ipotesi principale e sarebbe un TETTO, non un difetto: 24 layer su 32 sono
+ricorrenti e la ricorrenza fa K passi qualunque sia il piano.
+
+Resta non attribuito lo snapshot per layer (~50 MB a passata) che sta dentro
+corpo2.
