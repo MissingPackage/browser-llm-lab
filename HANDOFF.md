@@ -27,15 +27,24 @@ speculativa una posizione alla volta **48,8**, speculativa a due posizioni in
 un colpo **41,2**. Far leggere i pesi una volta sola ha recuperato il 16%, e
 non basta.
 
-**E il conto non torna**, che è la cosa importante: verificare due posizioni
-insieme costa 60,4 ms contro i 34,6 di una sola, cioè 1,75 volte per il doppio
-del lavoro — ma se i pesi si leggessero davvero una volta dovrebbe fermarsi
-intorno a 1,15. Qualcosa nella passata costa più di quanto dovrebbe.
+**Misurato dove va il tempo** (questo era il passo di stasera): un token intero
+è 34,7 ms = **27,1 di corpo + 7,6 di coda** (la proiezione finale sul
+vocabolario). Una passata di verifica è 66,8 = **46,2 di corpo a due righe** +
+15,2 di due code + 5,5 del draft. Il corpo a due righe costa **1,70 volte**
+quello a una: a pesi letti una volta dovrebbe fermarsi a ~1,1.
 
-**Prossimo passo, non serve una tua decisione**: *misurare* invece di
-ottimizzare a naso. Il progetto ha già una sonda che attribuisce il tempo ai
-singoli segmenti sulla scheda; va puntata sulla passata di verifica. I tre
-sospetti sono nel docket, nessuno dei tre è ancora escluso.
+**L'ipotesi principale non è un difetto ma un tetto**: 24 layer su 32 di questo
+modello hanno una memoria che scorre da un token al successivo, e una ricorrenza
+non si può eseguire "in parallelo su due token" — i due passi vanno fatti in
+ordine comunque. La predizione doppia è nata sui modelli senza memoria interna,
+dove verificare due token costa quanto verificarne uno.
+
+**Prossimo passo, non serve una tua decisione**: resta una sola leva a costo
+basso — fare la proiezione finale una volta per entrambe le righe invece di due
+(vale 7,6 ms). Porta la passata a ~59 ms: sopra la soglia di convenienza col
+50% di accettazione, appena sotto col 74% del regime vero. **Se dopo quella
+misura resta sopra, chiudo la fase come esclusione motivata dai numeri**, come
+è già stato fatto per altre due ottimizzazioni di questo goal.
 Riferimenti rieseguibili: `Q35_MTP=1 npx vitest run
 tests/engine-q35-mtp-accept.test.ts` (~5 min, CPU) e `node
 .harness/tools/engine-ktest.mjs` con `npx vite` acceso (~3 min, GPU).
