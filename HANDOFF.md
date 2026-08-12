@@ -11,21 +11,23 @@ L'ho fatta girare in CPU: indovina il **74%** delle volte nel regime che conta,
 quello in cui il decode gira davvero — sul testo che il modello sta producendo
 lui. Sul testo umano (più difficile, e non è il caso d'uso) fa il 50%.
 
-**Il 31,8% di ieri era rumore**, non un difetto: 22 posizioni, dove un solo
-colpo vale 4,5 punti. I numeri qui sopra sono su 62.
+(Il 31,8% di ieri era rumore, non un difetto: 22 posizioni, dove un solo colpo
+vale 4,5 punti. E l'anomalia che sembrava un bug non lo era — spostare di uno le
+posizioni non può cambiare niente, quella rotazione guarda solo le *distanze*
+fra posizioni. Dettagli in journal it.51, insieme al confronto con
+l'implementazione di riferimento di vLLM: combacia voce per voce.)
 
-**L'anomalia di ieri è chiusa e non era un bug.** Spostare di uno le posizioni
-non poteva cambiare niente: quel meccanismo di rotazione guarda solo le
-*distanze* fra posizioni, mai i valori assoluti, e nella testa scalano tutte
-insieme. Il parametro inutile è rimosso. L'attenzione dentro la testa funziona
-(azzerandola si scende da 50 a 31) e la nostra implementazione combacia voce per
-voce con quella di riferimento di vLLM, letta oggi.
+**La testa gira già sulla GPU** e dà gli stessi numeri del riferimento CPU
+(scarto relativo 2,6 su 10 milioni): il blocco è cablato e testato, e non è
+servito scrivere un solo kernel nuovo.
 
-**Prossimo passo, non serve una tua decisione**: portare la testa sulla GPU e
-chiudere il ciclo — la testa propone un token, il modello lo verifica nella
+**Prossimo passo, non serve una tua decisione**: infilare la testa nel modello
+vero — caricarne i pesi accanto agli altri, darle la sua memoria di contesto — e
+poi chiudere il ciclo: la testa propone un token, il modello lo verifica nella
 stessa passata, si tiene solo se coincide. Gate secco: i token accettati
-identici a quelli di oggi. Riferimento CPU rieseguibile: `Q35_MTP=1 npx vitest
-run tests/engine-q35-mtp-accept.test.ts` (~5 min, niente GPU).
+identici a quelli di oggi. Riferimenti rieseguibili: `Q35_MTP=1 npx vitest run
+tests/engine-q35-mtp-accept.test.ts` (~5 min, CPU) e `node
+.harness/tools/engine-ktest.mjs` con `npx vite` acceso (~2 min, GPU).
 
 ## 2. Mappa
 
