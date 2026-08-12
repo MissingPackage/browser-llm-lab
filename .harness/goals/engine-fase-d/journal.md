@@ -2703,3 +2703,36 @@ la stessa ragione.
 (21.388.319.008 B) con le sha LFS. Scaricato **solo il 4B**, sha256 verificata
 contro il pin. Il 35B si scarica quando il reader passa sul piccolo: 21 GB per
 un reader non ancora scritto sono spesi male.
+
+## it.48 (2026-08-12, fase 7) — il reader della testa MTP, e un'assunzione presa dal test
+
+Iterazione 2 di 2-4. Distanza dall'obiettivo invariata (nessuna misura di
+prestazione in questa iterazione): 13,4 / 22,6 contro 30 tok/s.
+
+`validateQwen35` ora riconosce la testa. Due cose, non una:
+- `Q35Shape.mtpLayers` da `qwen35.nextn_predict_layers` (0 sui file base);
+- il corpo del loop dei layer ESTRATTO in `expectBlock(b, full)`, perche' i
+  chiamanti sono due — i layer del modello e la testa, che e' un blocco
+  identico. Duplicare venti `expect` sarebbe stata una seconda verita' sulla
+  stessa forma, ed e' esattamente cio' che il gate strutturale del goal vieta.
+
+**L'ASSUNZIONE CHE IL TEST HA PRESO.** Avevo dedotto dai nomi dei tensori che il
+modello avesse 32 layer con la testa a `blk.32`. Il file dice `block_count` =
+**33**: la testa E' CONTATA nei blocchi. Il primo giro del test e' morto con
+"block_count 33 non multiplo di interval 4" — che e' il guard giusto che urla
+per la ragione giusta. Corretto alla radice: i layer del modello sono
+`block_count - nextn_predict_layers`, e il controllo sull'interval vale su
+quelli. Sui file base `mtpLayers` e' 0 e l'aritmetica torna identica a prima.
+
+Se avessi scritto un fixture a mano invece di leggere il file vero, avrei
+codificato la mia assunzione e il test l'avrebbe confermata.
+
+**Gate** (`tests/engine-q35-mtp-head.test.ts`, sul GGUF pinnato): il file MTP si
+valida, `mtpLayers` 1, `eh_proj` [2*dModel, dModel] — se il formato passasse da
+concatenazione a somma quella riga fallirebbe invece di far girare il draft su
+pesi mal interpretati — la testa e' full-attention benche' `32 % 4 !== 3`, e
+441 tensori = 426 + 15. **E il file BASE resta invariato**: `mtpLayers` 0, 426
+tensori, nessun `blk.32`. Suite **442|9** (era 440|9), tsc pulito.
+
+Prossimo: il ciclo draft/verify. Tutte le primitive esistono (it.47), quindi e'
+orchestrazione; il primo numero utile sara' l'accept-rate sul 4B.

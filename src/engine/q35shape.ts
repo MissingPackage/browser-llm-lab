@@ -51,6 +51,12 @@ export interface Q35Shape {
   nExpertUsed: number | null;
   dFfnExpert: number | null;
   tiedEmbeddings: boolean;
+  /**
+   * Teste MTP (NextN) presenti nel file: `qwen35.nextn_predict_layers`, 0 se
+   * assente. I GGUF base non ce l'hanno; i repo `*-MTP-GGUF` sì, e la testa sta
+   * nei blocchi `blk.<nLayer + i>` (sul 4B: blk.32, con blk.0..31 il modello).
+   */
+  mtpLayers: number;
 }
 
 const num = (f: GgufFile, k: string): number => {
@@ -66,9 +72,15 @@ export function q35ShapeFromGguf(f: GgufFile): Q35Shape {
     throw new Error(`q35shape: architettura ${String(arch)} non è qwen35/qwen35moe`);
   }
   const p = arch;
-  const nLayer = num(f, `${p}.block_count`);
+  // `block_count` CONTA la testa MTP quando c'e' (4B-MTP: 33 = 32 layer + 1
+  // testa), quindi i layer del MODELLO sono block_count - nextn_predict_layers.
+  // Trovato dal test sul file vero, non dedotto: avevo assunto 32 leggendo i
+  // nomi dei tensori, e il file dice 33.
+  const mtpLayers = typeof f.metadata[`${p}.nextn_predict_layers`] === "number"
+    ? (f.metadata[`${p}.nextn_predict_layers`] as number) : 0;
+  const nLayer = num(f, `${p}.block_count`) - mtpLayers;
   const fullInterval = num(f, `${p}.full_attention_interval`);
-  if (nLayer % fullInterval !== 0) throw new Error(`q35shape: block_count ${nLayer} non multiplo di interval ${fullInterval}`);
+  if (nLayer % fullInterval !== 0) throw new Error(`q35shape: layer del modello ${nLayer} (block_count ${num(f, `${p}.block_count`)} - ${mtpLayers} MTP) non multiplo di interval ${fullInterval}`);
   const headDim = num(f, `${p}.attention.key_length`);
   if (num(f, `${p}.attention.value_length`) !== headDim) throw new Error("q35shape: key_length ≠ value_length");
   const linKHead = num(f, `${p}.ssm.group_count`);
@@ -104,6 +116,7 @@ export function q35ShapeFromGguf(f: GgufFile): Q35Shape {
     nExpertUsed: moe ? num(f, `${p}.expert_used_count`) : null,
     dFfnExpert: moe ? num(f, `${p}.expert_feed_forward_length`) : null,
     tiedEmbeddings: !f.tensors.some((t) => t.name === "output.weight"),
+    mtpLayers,
   };
 }
 
@@ -140,11 +153,13 @@ export function validateQwen35(f: GgufFile): { shape: Q35Shape; byName: Map<stri
   expect("output_norm.weight", { dims: [d], types: F32_ONLY });
   if (!S.tiedEmbeddings) expect("output.weight", { dims: [d, S.vocab], types: W_QUANT });
 
-  for (let l = 0; l < S.nLayer; l++) {
-    const b = `blk.${l}.`;
+  // Un blocco = attn (full o deltanet) + ffn (denso o MoE). Estratto in una
+  // funzione perche' lo usano DUE chiamanti: i layer del modello e la testa MTP,
+  // che e' un blocco identico. Duplicarlo sarebbe una seconda verita'.
+  const expectBlock = (b: string, full: boolean): void => {
     expect(`${b}attn_norm.weight`, { dims: [d], types: F32_ONLY });
     expect(`${b}post_attention_norm.weight`, { dims: [d], types: F32_ONLY });
-    if (q35IsFullAttn(S, l)) {
+    if (full) {
       expect(`${b}attn_q.weight`, { dims: [d, 2 * S.nHead * S.headDim], types: W_QUANT }); // q + output gate fusi
       expect(`${b}attn_k.weight`, { dims: [d, S.nKvHead * S.headDim], types: W_QUANT });
       expect(`${b}attn_v.weight`, { dims: [d, S.nKvHead * S.headDim], types: W_QUANT });
@@ -179,6 +194,25 @@ export function validateQwen35(f: GgufFile): { shape: Q35Shape; byName: Map<stri
       expect(`${b}ffn_up_shexp.weight`, { dims: [d, dE], types: W_QUANT });
       expect(`${b}ffn_down_shexp.weight`, { dims: [dE, d], types: W_QUANT });
     }
+  };
+
+  for (let l = 0; l < S.nLayer; l++) expectBlock(`blk.${l}.`, q35IsFullAttn(S, l));
+
+  // TESTA MTP (fase D fase 7). Il blocco e' identico a un layer del modello, ma
+  // e' FULL-attention SEMPRE e non per la regola dell'interval: sul 4B sta a
+  // blk.32 e 32 % 4 = 0, che `q35IsFullAttn` direbbe deltanet — mentre il GGUF
+  // pinnato porta attn_q/k/v. Verificato sull'header di
+  // unsloth/Qwen3.5-4B-MTP-GGUF (it.47), non dedotto.
+  // I 4 tensori suoi: eh_proj proietta [emb(token); hidden] concatenati (2*d) su
+  // d, enorm/hnorm normalizzano i due ingressi separatamente, e
+  // shared_head_norm precede la lm_head CONDIVISA col modello.
+  for (let i = 0; i < S.mtpLayers; i++) {
+    const b = `blk.${S.nLayer + i}.`;
+    expectBlock(b, true);
+    expect(`${b}nextn.eh_proj.weight`, { dims: [2 * d, d], types: W_QUANT });
+    expect(`${b}nextn.enorm.weight`, { dims: [d], types: F32_ONLY });
+    expect(`${b}nextn.hnorm.weight`, { dims: [d], types: F32_ONLY });
+    expect(`${b}nextn.shared_head_norm.weight`, { dims: [d], types: F32_ONLY });
   }
 
   if (seen.size !== f.tensors.length) {
