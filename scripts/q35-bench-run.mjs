@@ -45,6 +45,10 @@ if (!existsSync(golden)) {
 }
 copyFileSync(golden, join(ROOT, "public/models/q35/golden-full.json"));
 
+// Il CONTESTO in cui il decode gira e' l'asse che domina il ms/token su questa
+// architettura (it.59: ~10,4 us per posizione, cioe' 65,8 ms su 100,5 a
+// contesto 6333) — e due sensori che non lo dichiarano SEMBRANO contraddirsi.
+// Il JSON lo porta esplicito accanto al numero, non solo dedotto dal prompt.
 const hostBefore = hostState(declared);
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
 const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args });
@@ -70,7 +74,19 @@ for (;;) {
     }
     // hostState() restituisce già {declared, before, after}: niente doppio
     // annidamento (nota verifier it.10) — before campionato all'avvio, after qui
-    const full = { ...report, arenaGiB: arenaGiB ? Number(arenaGiB) : null, vramTierGiB: vramGiB ? Number(vramGiB) : null, gpuErrors: gpu.errors, hostState: { declared, before: hostBefore.state?.before ?? hostBefore, after: hostState(declared).state?.before ?? null } };
+    // `decodeContext`: il punto di lavoro del decode, ESPLICITO. Il ms/token di
+    // questa architettura cresce di ~10,4 us per posizione di contesto (it.59:
+    // 38,72 ms a ctx 388 contro 100,52 a ctx 6333, stesso host e stessa
+    // configurazione), quindi un tok/s senza il suo contesto non e' una misura
+    // confrontabile — ed e' il modo in cui il ktest e questo bench sembravano
+    // contraddirsi (34,6 contro 38,6) mentre dicevano la stessa cosa.
+    const ctxStart = report.prompt?.tokens ?? null;
+    const decodeContext = ctxStart === null ? null : {
+      startPositions: ctxStart,
+      endPositions: ctxStart + (report.decode?.n ?? 0),
+      note: "ms/token cresce ~10,4 us per posizione (it.59): confrontare solo a contesto dichiarato",
+    };
+    const full = { ...report, decodeContext, arenaGiB: arenaGiB ? Number(arenaGiB) : null, vramTierGiB: vramGiB ? Number(vramGiB) : null, gpuErrors: gpu.errors, hostState: { declared, before: hostBefore.state?.before ?? hostBefore, after: hostState(declared).state?.before ?? null } };
     // RUN CONTAMINATA (docket item 24): i numeri sono la velocita' di NON fare
     // il lavoro. Il report si scrive lo stesso — l'evidenza serve — ma MAI al
     // percorso nominale, o un glob su results/engine lo raccoglie come
@@ -83,7 +99,7 @@ for (;;) {
       process.exit(5);
     }
     writeFileSync(out, JSON.stringify(full, null, 1));
-    console.log(`[q35bench] done: decode ${report.decode.tokS.toFixed(2)} tok/s (p50 ${report.decode.msPerTokenP50.toFixed(1)} ms), prefill ${report.prefill.tokS.toFixed(1)} tok/s, TTFT ${(report.ttftMs / 1000).toFixed(1)} s -> ${out}`);
+    console.log(`[q35bench] done: decode ${report.decode.tokS.toFixed(2)} tok/s (p50 ${report.decode.msPerTokenP50.toFixed(1)} ms) a contesto ${decodeContext ? `${decodeContext.startPositions}-${decodeContext.endPositions}` : "?"}, prefill ${report.prefill.tokS.toFixed(1)} tok/s, TTFT ${(report.ttftMs / 1000).toFixed(1)} s -> ${out}`);
     process.exit(0);
   }
   await new Promise((res) => setTimeout(res, 1500));
