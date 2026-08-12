@@ -7,7 +7,8 @@ Qwen porta con sé una testa ausiliaria (MTP) che, guardando lo stato interno,
 tira a indovinare il token successivo-successivo: se indovina spesso, ogni
 passata ne produce due.
 
-**Indovina il 50%** delle volte sul testo umano e il **74%** nel regime in cui
+**Il ciclo funziona ed è dimostrato corretto; quello che manca è la
+convenienza.** Indovina il 50% delle volte sul testo umano e il **74%** nel regime in cui
 il decode gira davvero — sul testo che il modello sta producendo lui. Il valore
 sulla GPU coincide col riferimento CPU nel conteggio esatto (31 su 62), e un
 draft costa **5,5 ms** contro i 34,5 di un token: il 16%. (Il 31,8% di due
@@ -20,15 +21,21 @@ normale, uno per uno — con 5 proposte rifiutate e disfatte per davvero (il
 pezzo difficile: 24 layer su 32 hanno una memoria interna che una proposta
 sbagliata corrompe in modo plausibile).
 
-**Ma oggi il meccanismo è più lento, non più veloce**: 48,8 ms per token contro
-34,5. Non è la testa (costa il 16%): è che la passata di verifica esegue le due
-posizioni una dopo l'altra, quindi rilegge tutti i pesi due volte — e in un
-decode che è limitato dalla memoria, due letture costano il doppio.
+**Ma oggi il meccanismo è più lento, non più veloce.** Tre misure sullo stesso
+host, a parità di token prodotti: generazione normale **34,6 ms/token**,
+speculativa una posizione alla volta **48,8**, speculativa a due posizioni in
+un colpo **41,2**. Far leggere i pesi una volta sola ha recuperato il 16%, e
+non basta.
 
-**Prossimo passo, non serve una tua decisione**: far verificare le due
-posizioni in un colpo solo, con i pesi letti una volta. Il meccanismo esiste
-già (è quello che accelera la lettura del prompt) e va cablato per due righe
-con l'argmax di entrambe. Proiezione: ~28 ms/token, cioè ~36 token/s.
+**E il conto non torna**, che è la cosa importante: verificare due posizioni
+insieme costa 60,4 ms contro i 34,6 di una sola, cioè 1,75 volte per il doppio
+del lavoro — ma se i pesi si leggessero davvero una volta dovrebbe fermarsi
+intorno a 1,15. Qualcosa nella passata costa più di quanto dovrebbe.
+
+**Prossimo passo, non serve una tua decisione**: *misurare* invece di
+ottimizzare a naso. Il progetto ha già una sonda che attribuisce il tempo ai
+singoli segmenti sulla scheda; va puntata sulla passata di verifica. I tre
+sospetti sono nel docket, nessuno dei tre è ancora escluso.
 Riferimenti rieseguibili: `Q35_MTP=1 npx vitest run
 tests/engine-q35-mtp-accept.test.ts` (~5 min, CPU) e `node
 .harness/tools/engine-ktest.mjs` con `npx vite` acceso (~3 min, GPU).
