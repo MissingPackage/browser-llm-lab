@@ -126,6 +126,20 @@ export interface Q35GpuModel {
    * draft e' stato rifiutato, prima di proseguire.
    */
   specRollback: (() => void) | null;
+  /**
+   * VERIFICA SPECULATIVA A PESI LETTI UNA VOLTA (fase 7, it.55). Come
+   * `specVerify`, ma sul piano a 2 righe: i kernel batch leggono ogni peso una
+   * volta sola per entrambe le posizioni, che e' l'unico modo in cui la
+   * speculazione puo' pagare in un decode memory-bound (docket item 29).
+   *
+   * Richiede il modello costruito con `mtp: true` e `prefillM: 2`. Dopo la
+   * chiamata si DEVE invocare `specCommit(accettato)`: e' li' che il residuo
+   * giusto torna in `x` e, se il draft e' stato rifiutato, che lo stato
+   * ricorrente torna a dopo la riga certa.
+   */
+  specVerifyBatched: ((certain: number, draft: number, pos: number) => Promise<[number, number]>) | null;
+  /** Chiude la passata speculativa: residuo della riga giusta in `x`, e stato ricorrente riparato se rifiutata. */
+  specCommit: ((accepted: boolean) => void) | null;
   /** azzera gli stati ricorrenti (conv + S) di tutti i layer linear: nuovo prompt. */
   resetState(): void;
   /**
@@ -620,6 +634,22 @@ export async function createQ35GpuModel(
     pushB(gemvQuantWgsl({ kind: kk, K: w.k, N: w.n, hasBias: false, batch: true }), [w.qs, w.scales, src, dst], [gx, gy, M_MAX]);
   };
 
+  /**
+   * SNAPSHOT DELLO STATO RICORRENTE DENTRO IL PIANO BATCH (fase 7, it.55).
+   *
+   * La verifica speculativa a 2 righe vuole poter tornare allo stato "dopo la
+   * riga certa". Nel piano a M righe quel momento NON e' un punto solo della
+   * sequenza di dispatch — ogni layer aggiorna il proprio stato prima di
+   * passare al successivo — quindi lo snapshot si prende PER LAYER, subito dopo
+   * la riga 0, con un kernel di copia (le `copyBufferToBuffer` non possono
+   * stare dentro un compute pass, un dispatch si').
+   *
+   * Vive solo se il modello e' costruito per lo spec-dec (`mtp`) con M=2: il
+   * prefill a chunk vero gira con M piu' grandi e non paga niente.
+   */
+  const specSnap: { src: GPUBuffer; dst: GPUBuffer; n: number }[] | null =
+    (opts.mtp && prefillOn && M_MAX === 2) ? [] : null;
+
   for (let l = 0; l < S.nLayer; l++) {
     const b = `blk.${l}.`;
     const attnNorm = await f32buf(`${b}attn_norm.weight`);
@@ -704,6 +734,17 @@ export async function createQ35GpuModel(
         for (let m = 0; m < M_MAX; m++) {
           pushBRows1(deltaNetConvWgsl(qkvDim, S.linConvK, true), [convSt, PB.qkv, convW, PB.convOut], Math.ceil(qkvDim / 64), m);
           pushBRows1(deltaNetCoreWgsl({ hd: S.linHeadDim, nK: S.linKHead, nV: S.linVHead, eps: S.rmsEps }, true), [PB.convOut, stateS, PB.bSig, PB.gVal, PB.z, nrmBuf, PB.gated], S.linVHead, m);
+          // subito dopo la riga CERTA: lo stato di questo layer finisce in ombra
+          if (m === 0 && specSnap) {
+            for (const [buf, n] of [
+              [convSt, (S.linConvK - 1) * qkvDim],
+              [stateS, S.linVHead * S.linHeadDim * S.linHeadDim],
+            ] as [GPUBuffer, number][]) {
+              const dst = empty(n * 4);
+              specSnap.push({ src: buf, dst, n });
+              pushB(stridedCopyWgsl({ nVec: 1, len: n, srcStride: n, srcOffset: 0, dstStride: n, dstOffset: 0 }), [buf, dst], [Math.ceil(n / 64), 1, 1]);
+            }
+          }
         }
       }
       // Da qui la RICORRENZA: conv shifta lo stato e core aggiorna S. E' la
@@ -2042,6 +2083,64 @@ export async function createQ35GpuModel(
     mtpDraft: mtpDraftFn,
     specVerify: specVerifyFn,
     specRollback: specRollbackFn,
+    specVerifyBatched: (PB && specSnap && specStaging) ? async (certain: number, draft: number, pos: number): Promise<[number, number]> => {
+      if (pos + 2 > ctxMax) throw new Error("q35 specVerifyBatched: contesto pieno");
+      const t0 = performance.now();
+      const rows = new Float32Array(2 * d), rp = new Uint32Array(2);
+      dequantRow(certain, rows, 0);
+      dequantRow(draft, rows, d);
+      rp[0] = pos; rp[1] = pos + 1;
+      device.queue.writeBuffer(PB.x, 0, rows as unknown as BufferSource);
+      device.queue.writeBuffer(PB.rowPos, 0, rp as unknown as BufferSource);
+      device.pushErrorScope("validation");
+      const enc = device.createCommandEncoder();
+      const pz = enc.beginComputePass();
+      for (const st of PB.steps) {
+        pz.setPipeline(st.pipe);
+        pz.setBindGroup(0, st.bind);
+        pz.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+      }
+      pz.end();
+      // La head sulle DUE righe: si copia l'hidden della riga nel buffer per
+      // riga e si riusano gli step di coda del decode, invariati (stesso
+      // schema di `prefillChunk`, che pero' ne serve una sola). Due letture
+      // della lm_head restano — batcharle e' la prossima leva, non questa.
+      for (let m = 0; m < 2; m++) {
+        enc.copyBufferToBuffer(PB.x, m * d * 4, x, 0, d * 4);
+        const p2 = enc.beginComputePass();
+        for (let i = headCut; i < steps.length; i++) {
+          const st = steps[i];
+          p2.setPipeline(st.pipe);
+          p2.setBindGroup(0, st.bind);
+          p2.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+        }
+        p2.setPipeline(pAmax1); p2.setBindGroup(0, bgAmax1); p2.dispatchWorkgroups(N_PARTIALS);
+        p2.setPipeline(pAmax2); p2.setBindGroup(0, bgAmax2); p2.dispatchWorkgroups(1);
+        p2.end();
+        enc.copyBufferToBuffer(amaxOut, 0, idsBatch, m * 4, 4);
+      }
+      enc.copyBufferToBuffer(idsBatch, 0, specStaging, 0, 8);
+      device.queue.submit([enc.finish()]);
+      perfAcc.submits++;
+      const err = await device.popErrorScope();
+      if (err) throw new Error(`q35 specVerifyBatched error scope: ${err.message.slice(0, 300)}`);
+      await specStaging.mapAsync(GPUMapMode.READ);
+      const ids = new Uint32Array(specStaging.getMappedRange());
+      const pair: [number, number] = [ids[0], ids[1]];
+      specStaging.unmap();
+      perfAcc.specMs += performance.now() - t0;
+      perfAcc.specPasses++;
+      return pair;
+    } : null,
+    specCommit: (PB && specSnap) ? (accepted: boolean): void => {
+      const enc = device.createCommandEncoder();
+      // il residuo della riga GIUSTA torna in `x`: e' quello che la testa MTP
+      // legge al giro dopo. Su rifiuto e' la riga 0 (la posizione certa).
+      enc.copyBufferToBuffer(PB.x, (accepted ? 1 : 0) * d * 4, x, 0, d * 4);
+      if (!accepted) for (const sn of specSnap) enc.copyBufferToBuffer(sn.dst, 0, sn.src, 0, sn.n * 4);
+      device.queue.submit([enc.finish()]);
+      if (!accepted) perfAcc.specRejects++;
+    } : null,
     decodeBatch: moe ? null : async (tokens: ArrayLike<number>, posStart: number): Promise<number[]> => {
       const k = tokens.length;
       if (k < 1 || k > BATCH_MAX) throw new Error(`q35 decodeBatch: k=${k} fuori da [1, ${BATCH_MAX}]`);

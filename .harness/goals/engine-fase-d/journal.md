@@ -3044,3 +3044,48 @@ il checkpoint B misura il solo 4B e lo dichiara.
 
 Gate: tsc pulito, suite **442|10**, ktest **99 PASS / 0 FAIL**, riga 7 di
 PHASES aggiornata voce per voce con le evidenze.
+
+## it.55 (2026-08-12, fase 7) — verifica a 2 righe: 41,2 ms/token, ancora sopra il sequenziale
+
+Iterazione 9 di 2-4 sulla fase 7. Quarta fetta: la verifica speculativa sul
+piano a righe multiple, quello che legge ogni peso una volta sola.
+
+**Il problema strutturale e la sua soluzione.** Nel piano a M righe il momento
+"dopo la riga certa" NON e' un punto solo della sequenza di dispatch: ogni layer
+aggiorna il proprio stato ricorrente prima di passare al successivo. Quindi lo
+snapshot si prende **per layer**, subito dopo la riga 0 — e con un KERNEL di
+copia, non con `copyBufferToBuffer`, perche' dentro un compute pass le copie di
+encoder non entrano. `stridedCopyWgsl` fa gia' esattamente quel lavoro.
+
+Lo snapshot vive solo se il modello e' costruito per lo spec-dec (`mtp`) con
+M=2: il prefill a chunk vero gira con M piu' grandi e non paga niente. E `x`
+non si salva piu': dopo la passata il residuo giusto e' una RIGA di `PB.x` —
+riga 1 se il draft e' accettato, riga 0 se rifiutato — quindi `specCommit`
+copia quella e basta.
+
+**IL GATE SECCO REGGE SU ENTRAMBI I PATH**: 16/16 token identici al
+sequenziale, per-riga e batch.
+
+**E IL NUMERO: 41,2 ms/token contro 48,8 del per-riga e 34,6 del sequenziale.**
+Il piano batch guadagna il 16% e resta **1,19x piu' lento**. Il conto non torna:
+per passata la verifica batch costa 60,4 ms contro i 34,6 di UNA riga, cioe'
+1,75x per due righe, mentre a pesi letti una volta dovrebbe stare su 1,1-1,2x.
+Tre candidati (ricorrenza DeltaNet per riga anche nel batch; lm_head eseguita
+due volte; gemv batch che non amortizza) e **nessuno discriminato**: la prossima
+misura e' la sonda `--gpu-time` della fase 4-bis, non un'altra ottimizzazione a
+naso. Docket item 31.
+
+**E una discrepanza che non mi aspettavo**: i due path danno gli stessi 16
+token ma con conteggi diversi (11 passate / 6 accettate contro 10 / 7), il che
+significa che almeno un draft differisce — cioe' che i due piani producono
+hidden diversi. La fase 4 aveva chiuso con "logits BIT-IDENTICI" fra batch e
+sequenziale: o quella proprieta' non vale a M=2, o e' il mio cablaggio. Docket
+item 32. L'uscita non e' sbagliata (il gate secco passa), ma due sensori che
+dovrebbero coincidere non coincidono.
+
+**Onesta' sulla traiettoria**: tre iterazioni di fila (53, 54, 55) hanno
+prodotto codice corretto e verificato senza muovere l'obiettivo di un token al
+secondo. Il meccanismo c'e', il gate c'e', la velocita' no — e la causa non e'
+piu' un'ipotesi da sviluppare ma una misura da prendere.
+
+Gate: tsc pulito, suite **442|10**, ktest **99 PASS / 0 FAIL**.

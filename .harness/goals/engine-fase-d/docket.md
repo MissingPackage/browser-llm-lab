@@ -862,3 +862,42 @@ proprio il modello dove la testa costa di meno in proporzione.
 Lavoro mio, non un ruling. Ma va deciso PRIMA della fase 8: o si cabla la
 verifica speculativa sul path ottimistico, o il checkpoint B misura lo speedup
 sul solo 4B e lo dichiara.
+
+## item 31 — il piano batch a 2 righe non spiega il suo costo, e serve la sonda (io, fase 7/8)
+
+MISURATO in it.55, stesso host, dopo prefill e fuori dal cronometro:
+
+| | ms/token |
+|---|---|
+| sequenziale | 34,6 |
+| spec-dec, verifica riga per riga (it.54) | 48,8 |
+| spec-dec, verifica a 2 righe batch (it.55) | **41,2** |
+
+Il piano batch guadagna il 16% ma resta **1,19x piu' LENTO** del sequenziale.
+E il conto non torna: per passata la verifica batch costa 60,4 ms contro i 34,6
+di UNA riga sequenziale, cioe' 1,75x per due righe. Se i pesi si leggessero
+davvero una volta sola dovrebbe stare intorno a 1,1-1,2x.
+
+Candidati, NON discriminati: (a) la ricorrenza DeltaNet e' per riga anche nel
+piano batch (24 layer x 2 dispatch), e sul 4B pesa; (b) la lm_head gira DUE
+volte (una per riga) e vale ~636 M pesi a giro; (c) i gemv batch potrebbero non
+amortizzare la lettura come si assume.
+
+Non si tira a indovinare: la sonda `--gpu-time` della fase 4-bis attribuisce i
+segmenti. E' la prossima misura, prima di qualunque altra ottimizzazione.
+
+## item 32 — per-riga e batch producono draft DIVERSI, e la fase 4 dice che non dovrebbero (io, fase 7)
+
+it.55: i due path generano gli **stessi 16 token** (il gate secco passa su
+entrambi), ma con conteggi diversi — per-riga 11 passate / 6 accettate, batch
+10 passate / 7 accettate. Stesso prefill, stesso stato iniziale: significa che
+almeno un DRAFT e' diverso, cioe' che i due piani producono hidden diversi.
+
+La fase 4 (it.32-34) ha chiuso con "logits BIT-IDENTICI" fra piano batch e
+sequenziale (31.784.960/31.784.960 sul 4B), quindi o quella bit-identita' non
+vale a M=2, o la differenza sta nel mio cablaggio della verifica (la copia di
+`x`, lo snapshot per layer, l'ordine dei dispatch di coda).
+
+L'uscita non e' sbagliata — entrambi i path danno i token del greedy — ma due
+sensori che dovrebbero coincidere non coincidono, e in questo progetto quella e'
+sempre stata una cosa da chiudere prima di fidarsi dei numeri (item 12).

@@ -687,7 +687,9 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult[]> {
   const W = 64;
   const model = await createQ35GpuModel(g.device, {
     shape, info, read: (name) => range(f.dataOffset + info(name).offset, q35TensorBytes(info(name))),
-  }, W + 8, 12 * (1 << 30), { mtp: true });
+    // `prefillM: 2` non e' il prefill: e' il piano a 2 righe che la verifica
+    // speculativa usa per leggere i pesi UNA volta sola (it.55).
+  }, W + 8, 12 * (1 << 30), { mtp: true, prefillM: 2 });
   if (!model.mtpDraft) {
     model.destroy();
     return [{ kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN, note: "il modello non ha costruito la testa (mtpLayers 0?)" }];
@@ -759,20 +761,42 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult[]> {
   }
   seqSpec.length = N;
   const specMs = (performance.now() - t3) / N;
+
+  // --- stesso ciclo, ma sul piano a 2 righe: i pesi si leggono una volta ---
+  nx = await prefill();
+  const t4 = performance.now();
+  const seqSpecB: number[] = [];
+  let qB = P, passesB = 0, acceptedB = 0;
+  while (seqSpecB.length < N) {
+    const dr = await model.mtpDraft!(nx);
+    const [b0, b1] = await model.specVerifyBatched!(nx, dr, qB);
+    passesB++;
+    seqSpecB.push(nx);
+    const ok = dr === b0;
+    model.specCommit!(ok);
+    if (ok) { acceptedB++; seqSpecB.push(b0); nx = b1; qB += 2; }
+    else { nx = b0; qB += 1; }
+  }
+  seqSpecB.length = N;
+  const specBMs = (performance.now() - t4) / N;
   const pf = model.perf();
   model.destroy();
 
-  let firstDiff = -1;
-  for (let i = 0; i < N; i++) if (seqSpec[i] !== seqRef[i]) { firstDiff = i; break; }
+  const diffAt = (a: number[]): number => {
+    for (let i = 0; i < N; i++) if (a[i] !== seqRef[i]) return i;
+    return -1;
+  };
+  const firstDiff = diffAt(seqSpec), firstDiffB = diffAt(seqSpecB);
   const accPass = (100 * acceptedPasses) / Math.max(1, passes);
+  const accPassB = (100 * acceptedB) / Math.max(1, passesB);
   const rInv: KResult = {
     kernel: "q35-mtp-specdec-invariance",
-    pass: firstDiff < 0,
+    pass: firstDiff < 0 && firstDiffB < 0,
     maxAbs: NaN, maxRel: NaN,
-    note: firstDiff >= 0
-      ? `DIVERGE al token ${firstDiff}: spec ${seqSpec[firstDiff]} vs sequenziale ${seqRef[firstDiff]}`
-      : `${N}/${N} token IDENTICI alla generazione sequenziale · ${passes} passate, ${acceptedPasses} accettate (${accPass.toFixed(0)}%), ${pf.specRejects} rollback · ${specMs.toFixed(1)} ms/token contro ${seqMs.toFixed(1)} sequenziale (la passata a 2 righe rilegge i pesi: serve il piano batch, docket)`,
-    metrics: { acceptedPct: accPass, msPerTokenSpec: specMs, msPerTokenSeq: seqMs },
+    note: firstDiff >= 0 || firstDiffB >= 0
+      ? `DIVERGE: per-riga al token ${firstDiff}, batch al token ${firstDiffB} (riferimento sequenziale)`
+      : `${N}/${N} token IDENTICI al sequenziale su ENTRAMBI i path · per-riga ${passes} passate ${acceptedPasses} accettate (${accPass.toFixed(0)}%) · batch ${passesB} passate ${acceptedB} accettate (${accPassB.toFixed(0)}%), ${pf.specRejects} rollback · ms/token: sequenziale ${seqMs.toFixed(1)} · spec per-riga ${specMs.toFixed(1)} · spec batch ${specBMs.toFixed(1)}`,
+    metrics: { acceptedPct: accPassB, msPerTokenSpec: specMs, msPerTokenSpecBatched: specBMs, msPerTokenSeq: seqMs },
   };
   return [rAccept, rInv];
 }
