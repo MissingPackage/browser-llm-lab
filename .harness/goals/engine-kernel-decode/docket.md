@@ -34,3 +34,23 @@ Non è una domanda: è lavoro della fase 1, che quel `scores` lo toglie del tutt
 (softmax in streaming). Registrato perché il difetto è nel MODULO DEI LIMITI —
 il posto che esiste apposta per non avere sorprese — e perché il commento che
 dichiara l'indipendenza dal contesto va corretto anche se il kernel cambia.
+
+
+### it.1 — CORREZIONE all'item 2: è una TRAPPOLA, non un bug vivo
+
+Verificato prima di scrivere il fix, e la mia formulazione era più grave del
+vero. Il path q35 di produzione (`chat.worker.ts`, `q35conf.worker.ts`) NON
+passa `mlaAttention: false`, quindi cade nel ramo che chiede
+`max(30_848, 4·ctxMax+256)`: il limite giusto lo otteneva già — **attraverso un
+campo che porta il nome dell'attenzione di GLM**, mentre il proprio consumatore
+restava non dichiarato.
+
+Il difetto vero è l'INVITO: il commento diceva che passare `false` "evita di
+chiedere un limite per un consumatore che quel modello non ha", e non era vero.
+Chi avesse seguito quel consiglio su un modello q35 avrebbe sotto-dichiarato, e
+il motore sarebbe morto alla creazione della pipeline sopra ctxMax 7648.
+
+CHIUSO in it.1: `attnDecodeWorkgroupStorageBytes(ctxMax)` esportata dal file del
+KERNEL (una formula sola, dove sta il consumatore), contata SEMPRE dal modulo
+dei limiti, commento corretto, e un test che rende la trappola non richiudibile:
+spegnere l'MLA non può più far sparire il fabbisogno di Qwen.

@@ -264,6 +264,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Attention decode (GQA): un workgroup da 64 per head. Score seriali per thread,
 // softmax con riduzioni in shared, poi accumulo di V. ctxMax baked (scores in
 // workgroup storage).
+/**
+ * Workgroup storage di `attnDecodeWgsl`: `scores[ctxMax]` + `red[64]`.
+ *
+ * Vive QUI, accanto al kernel che la consuma, e non nel modulo dei limiti: il
+ * difetto che ha reso necessaria questa funzione e' che i due posti erano
+ * separati e uno dei due credeva che il path Qwen non dipendesse dal contesto
+ * (goal engine-kernel-decode, docket item 2). Una formula sola, dove sta il
+ * consumatore.
+ */
+export const attnDecodeWorkgroupStorageBytes = (ctxMax: number): number => 4 * ctxMax + 256;
+
 export function attnDecodeWgsl(opts: {
   nHead: number; nKvHead: number; headDim: number; ctxMax: number;
   /**

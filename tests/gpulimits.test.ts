@@ -6,6 +6,7 @@
 // motore ha già sbagliato due volte proprio perché i due vivevano in file
 // diversi senza niente in mezzo (prima costanti difensive inventate, poi il
 // massimo dell'adapter chiesto senza consumatore).
+import { attnDecodeWorkgroupStorageBytes } from "../src/engine/kernels/wgsl";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -141,6 +142,26 @@ describe("requisiti derivati", () => {
     // il vecchio cap a mano di 32768 tagliava il contesto a 8128 senza dirlo
     expect(mlaWorkgroupStorageBytes(8128)).toBeLessThanOrEqual(32768);
     expect(mlaWorkgroupStorageBytes(8129)).toBeGreaterThan(32768);
+  });
+
+  // goal engine-kernel-decode, docket item 2. Il difetto NON era un limite
+  // sbagliato in produzione — il path q35 otteneva il valore giusto perche'
+  // nessuno passava `mlaAttention: false`. Era una TRAPPOLA: il commento
+  // invitava a passarlo "per un consumatore che quel modello non ha", mentre
+  // `attnDecodeWgsl` ha lo stesso `scores[ctxMax]`. Questo test la chiude:
+  // spegnere l'MLA non deve poter far sparire il fabbisogno di Qwen.
+  it("spegnere mlaAttention NON toglie il fabbisogno dell'attenzione Qwen", () => {
+    for (const ctxMax of [525, 4096, 8192, 16384]) {
+      const off = engineNeeds({ ctxMax, mlaAttention: false }).find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
+      expect(off.value).toBeGreaterThanOrEqual(attnDecodeWorkgroupStorageBytes(ctxMax));
+      expect(off.value).toBeGreaterThanOrEqual(QWEN_WORKGROUP_STORAGE_BYTES);
+      expect(off.consumer).toContain("attnDecode");
+    }
+    // e a contesto lungo il valore cresce col contesto anche con MLA spenta:
+    // la dichiarazione "path Qwen indipendente dal contesto" era falsa
+    const a = engineNeeds({ ctxMax: 8192, mlaAttention: false }).find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
+    const b = engineNeeds({ ctxMax: 16384, mlaAttention: false }).find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
+    expect(b.value).toBeGreaterThan(a.value);
   });
 
   it("l'arena alza binding size e storage per stage, col suo consumatore", () => {

@@ -21,6 +21,7 @@
 // limite e il codice che lo consuma — finora vivevano in file diversi senza
 // niente in mezzo, ed è per questo che nessuno dei due si accorgeva dell'altro.
 
+import { attnDecodeWorkgroupStorageBytes } from "./kernels/wgsl";
 import { mlaPartialsLen } from "./mlasplit";
 import { GLM47_FLASH } from "./shape";
 
@@ -113,8 +114,11 @@ export interface EngineNeedsOpts {
   slabClassBytes?: number;
   /**
    * L'attention MLA (solo GLM) tiene `scores[ctxMax]` in workgroup memory.
-   * Qwen usa un'attention diversa: passare `false` evita di chiedere un limite
-   * per un consumatore che quel modello non ha.
+   * `false` toglie QUELLA voce — non toglie il fabbisogno dell'attenzione di
+   * Qwen, che ha lo stesso `scores[ctxMax]` in `attnDecodeWgsl` ed e' contata
+   * SEMPRE (goal engine-kernel-decode, docket item 2: il commento di prima
+   * diceva "un consumatore che quel modello non ha", e non era vero — il path
+   * q35 otteneva il limite giusto solo perche' nessuno passava `false`).
    */
   mlaAttention?: boolean;
   /** Byte della KV cache di UN layer, se bindata intera. Default: formula GLM. */
@@ -158,13 +162,16 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
     },
     {
       limit: "maxComputeWorkgroupStorageSize",
-      value: o.mlaAttention === false
-        ? QWEN_WORKGROUP_STORAGE_BYTES
-        : Math.max(QWEN_WORKGROUP_STORAGE_BYTES, mlaWorkgroupStorageBytes(o.ctxMax)),
+      // TRE consumatori, e il terzo mancava: `attnDecodeWgsl` (Qwen) tiene
+      // `scores[ctxMax]` esattamente come l'MLA di GLM. La formula arriva dal
+      // file del kernel, non e' ricopiata qui.
+      value: Math.max(
+        QWEN_WORKGROUP_STORAGE_BYTES,
+        attnDecodeWorkgroupStorageBytes(o.ctxMax),
+        o.mlaAttention === false ? 0 : mlaWorkgroupStorageBytes(o.ctxMax),
+      ),
       hard: true,
-      consumer: o.mlaAttention === false
-        ? `rmsPairGemmSiluChunkFast (${QWEN_WORKGROUP_STORAGE_BYTES} B)`
-        : `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, mlaAttnDecode 4·ctxMax+256 = ${mlaWorkgroupStorageBytes(o.ctxMax)} B a ctxMax ${o.ctxMax} — glmforward/ktest)`,
+      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, attnDecode 4·ctxMax+256 = ${attnDecodeWorkgroupStorageBytes(o.ctxMax)} B${o.mlaAttention === false ? "" : `, mlaAttnDecode ${mlaWorkgroupStorageBytes(o.ctxMax)} B`} a ctxMax ${o.ctxMax})`,
     },
   ];
   if (o.arenaBuffers !== undefined) {
