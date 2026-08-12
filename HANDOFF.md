@@ -7,19 +7,12 @@ Qwen porta con sé una testa ausiliaria (MTP) che, guardando lo stato interno,
 tira a indovinare il token successivo-successivo: se indovina spesso, ogni
 passata ne produce due.
 
-L'ho fatta girare in CPU: indovina il **74%** delle volte nel regime che conta,
-quello in cui il decode gira davvero — sul testo che il modello sta producendo
-lui. Sul testo umano (più difficile, e non è il caso d'uso) fa il 50%.
-
-(Il 31,8% di ieri era rumore, non un difetto: 22 posizioni, dove un solo colpo
-vale 4,5 punti. E l'anomalia che sembrava un bug non lo era — spostare di uno le
-posizioni non può cambiare niente, quella rotazione guarda solo le *distanze*
-fra posizioni. Dettagli in journal it.51, insieme al confronto con
-l'implementazione di riferimento di vLLM: combacia voce per voce.)
-
-**La testa è già dentro il motore vero.** Sulla GPU indovina **31 volte su 62**
-— lo stesso identico conteggio del riferimento CPU — e costa **5,5 ms** contro
-i 34,5 ms di un token, cioè il 16%.
+**Indovina il 50%** delle volte sul testo umano e il **74%** nel regime in cui
+il decode gira davvero — sul testo che il modello sta producendo lui. Il valore
+sulla GPU coincide col riferimento CPU nel conteggio esatto (31 su 62), e un
+draft costa **5,5 ms** contro i 34,5 di un token: il 16%. (Il 31,8% di due
+iterazioni fa era rumore di campionamento, e l'anomalia che sembrava un bug non
+lo era: journal it.51.)
 
 **Il ciclo è chiuso e il gate secco è passato**: generando 16 token con la
 proposta della testa si ottengono gli **stessi 16 token** della generazione
@@ -46,10 +39,10 @@ tests/engine-q35-mtp-accept.test.ts` (~5 min, CPU) e `node
 restando usabile: almeno **30 token/secondo** e **primo token entro 4 secondi**.
 
 **Distanza adesso**, e nessuna configurazione ci arriva: GLM-4.7-Flash **13,4
-tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. Col
-50% e il costo del draft ora MISURATI sullo stesso host (16% di un token), il
-4B proietta **33,4 tok/s**; nel regime in cui il decode gira davvero (74%)
-sale a ~39. Il 35B a ~29-34, ma lì il draft non è ancora misurato.
+tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. La
+predizione doppia funziona ma va ancora resa conveniente (§1): col 50% e la
+verifica a pesi letti una volta il 4B proietta **~36 tok/s**. Il 35B non è
+coperto: il meccanismo non esiste sui modelli a esperti.
 
 **Decisioni prese** (indice: il contenuto vive nel posto indicato, non qui)
 
