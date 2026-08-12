@@ -2940,3 +2940,56 @@ numerica del cpuref verificata contro it.51.
 **Prossima fetta**: la testa dentro `q35gpumodel` — caricamento dei pesi nel
 modello vero, cache KV della testa nel piano di decode, e il draft prodotto
 dalla lm_head condivisa. Poi il ciclo draft+verify col gate di bit-invarianza.
+
+## it.53 (2026-08-12, fase 7) — la testa dentro il modello vero: accept-rate GPU 31/62, LO STESSO conteggio della CPU
+
+Iterazione 7 di 2-4 sulla fase 7. Seconda fetta di codice: la testa non e' piu'
+un fixture, e' un pezzo di `q35gpumodel`.
+
+**Cosa e' stato aggiunto.** `opts.mtp` costruisce il blocco `blk.<nLayer>` come
+un SECONDO piano di dispatch — non un pezzo del token: legge `x` (il residuo
+finale del modello, prima di `output_norm`) e l'embedding grezzo del token
+appena predetto, e produce il draft con la lm_head CONDIVISA. Cache KV sua
+(la testa attende la sequenza degli h', non quella del modello), argmax su GPU
+con le pipeline gia' esistenti e un bind group suo, un solo submit.
+
+**Un dettaglio di meccanica che valeva un commento nel codice**: `loadW` e
+`gemv` scrivono in `steps`, il piano del token. Invece di duplicarli ho reso il
+bersaglio degli step una variabile (`stepTarget`), spostata per il tempo della
+costruzione della testa e rimessa subito. Il piano del modello non cambia di un
+dispatch — `dispatchesPerToken` si misura prima.
+
+**VINCOLO D'USO scritto nell'interfaccia**: `mtpDraft` va chiamata SUBITO dopo
+lo `step` che ha prodotto il token, perche' legge `x` e il token successivo lo
+sovrascrive. Non e' documentazione difensiva: e' l'unico modo in cui il
+contratto puo' essere sbagliato senza che nulla fallisca.
+
+**IL NUMERO, e non era scontato**: `q35-mtp-draft-4b` accept-rate GPU
+**31/62 = 50,0%** sui primi 64 token del prompt 0 — **lo stesso conteggio
+esatto** del riferimento CPU f64 di it.51 (31/62). Non "in banda": identico. Fra
+i due percorsi cambiano precisione (f32 contro f64) e hidden (il full-model
+diverge dall'oracolo su ~1% delle posizioni), quindi l'uguaglianza del conteggio
+e' piu' di quanto il gate chiedesse (soglia a 40%).
+
+**E IL COSTO, che serve alla fase 8**: **5,57 ms per draft**, contro 34,6 ms per
+token (sync) misurati sullo stesso host dal micro-bench del ktest. Cioe' il
+**16,1%** di un token — conferma la stima del 15% di it.51 e smentisce il 3% di
+it.49. Ed e' un TETTO: quei 5,57 ms includono un submit a parte e la sua
+attesa, che il ciclo vero puo' fondere.
+
+Proiezione con questi due numeri misurati sullo stesso host:
+(1+0,50)/(1+0,161) = **1,29x** → il 4B da 25,9 a **33,4 tok/s**, sopra i 30.
+
+**Il primo golden non era confrontabile e il test lo diceva**: alla prima
+esecuzione ho puntato `golden-smoke.json`, che ha 40 token in tutto, e l'accept
+e' uscito 13/38 = 34,2% — un numero giusto su una finestra sbagliata. Il
+confronto col riferimento CPU vuole gli STESSI token: `golden-full.json`, primi
+64 del prompt 0 (identici nei due golden, e' lo stesso corpus).
+
+Gate: tsc pulito, suite **442|10**, ktest **98 PASS / 0 FAIL** (adapter nvidia
+lovelace), `q35-mtp-head-real-blk32` invariato a L2rel 2,63e-7.
+
+**Prossima fetta**: il ciclo draft+verify — verificare il draft nella stessa
+passata del token successivo (2 posizioni in un submit) e tenere il token solo
+se coincide col greedy. E' li' che il 50% diventa tok/s, ed e' li' che vive il
+gate di bit-invarianza della riga 7.

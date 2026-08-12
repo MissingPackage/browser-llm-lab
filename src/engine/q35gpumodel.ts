@@ -94,6 +94,22 @@ export interface Q35GpuModel {
    * layer, quindi il batch non è possibile finché il routing non è su GPU.
    */
   decodeBatch: ((tokens: ArrayLike<number>, posStart: number) => Promise<number[]>) | null;
+  /**
+   * DRAFT della testa MTP per la posizione appena eseguita (fase 7, it.53).
+   * `null` se il file non porta la testa o se il modello non e' stato costruito
+   * con `opts.mtp`.
+   *
+   * VINCOLO D'USO, e non e' negoziabile: va chiamata SUBITO dopo lo `step` che
+   * ha prodotto `nextToken`, perche' legge `x` — il residuo finale di QUELLA
+   * posizione — che il token successivo sovrascrive. `nextToken` e' il token
+   * che il modello ha appena predetto (t_{i+1}); il draft e' la sua ipotesi su
+   * t_{i+2}, cioe' un token gratis per ogni token vero.
+   *
+   * Tiene una cache KV SUA: la testa e' un layer in piu', non un layer del
+   * modello, e la sua attenzione guarda la sequenza degli h' — non quella del
+   * modello.
+   */
+  mtpDraft: ((nextToken: number) => Promise<number>) | null;
   /** azzera gli stati ricorrenti (conv + S) di tutti i layer linear: nuovo prompt. */
   resetState(): void;
   /**
@@ -150,6 +166,13 @@ export interface Q35GpuModel {
      * invece di essere assunto zero.
      */
     encodeMs: number; tokenMs: number; tailCpuMs: number;
+    /**
+     * TESTA MTP (it.53): tempo di parete e conteggio dei draft, FUORI da
+     * `tokenMs`. Il draft e' un submit a parte con un'attesa sua, e sommarlo al
+     * token mescolerebbe il costo del modello con quello della speculazione —
+     * che e' esattamente il rapporto che la fase 8 deve pesare.
+     */
+    mtpMs: number; mtpDrafts: number;
   };
   /**
    * Accende/spegne il path a submit unico a caldo (solo se il modello e' stato
@@ -210,6 +233,14 @@ export interface Q35GpuModelOpts {
    * per layer, e si spegne di default.
    */
   routerShadow?: boolean;
+  /**
+   * Costruisce la TESTA MTP (NextN) accanto al modello (fase 7, it.53): pesi
+   * di `blk.<nLayer>`, cache KV sua, e un secondo piano di dispatch che si
+   * lancia a parte. Spenta di default perche' costa VRAM (120,6 M parametri +
+   * due cache KV) a chi non fa spec-dec, e perche' i GGUF senza testa non
+   * hanno quei tensori.
+   */
+  mtp?: boolean;
   /**
    * Path di selezione degli expert (fase 3b, fetta 3c). PORT del `select` di
    * `glmmodel`, con gli stessi nomi:
@@ -515,12 +546,20 @@ export async function createQ35GpuModel(
    * non si rigiocano e il loro stato è già quello giusto.
    */
   const stateBufs: { buf: GPUBuffer; bytes: number; layer: number }[] = [];
+  /**
+   * DOVE finiscono gli step accodati. Esiste per la testa MTP (it.53): la testa
+   * riusa `loadW`/`gemv`, che chiamano `push`, ma i suoi dispatch NON vanno nel
+   * piano del token — si lanciano a parte, dopo. Si sposta il bersaglio per il
+   * tempo della costruzione e lo si rimette; il piano del modello non cambia di
+   * un dispatch (`dispatchesPerToken` si misura prima).
+   */
+  let stepTarget: Step[] = steps;
   const push = (code: string, bufs: GPUBuffer[], wgs: number | [number, number], withUni = false): void => {
     const p = pipe(code);
     const entries: GPUBindGroupEntry[] = bufs.map((b, i) => ({ binding: i, resource: { buffer: b } }));
     if (withUni) entries.push({ binding: bufs.length, resource: { buffer: uni } });
     const bind = device.createBindGroup({ layout: p.getBindGroupLayout(0), entries });
-    steps.push({ pipe: p, bind, wgs: typeof wgs === "number" ? [wgs, 1, 1] : [wgs[0], wgs[1], 1] });
+    stepTarget.push({ pipe: p, bind, wgs: typeof wgs === "number" ? [wgs, 1, 1] : [wgs[0], wgs[1], 1] });
   };
   const gemv = (w: { qs: GPUBuffer; scales: GPUBuffer; k: number; n: number; kind?: "q4_0" | "q4_1" | "q8_0" }, src: GPUBuffer, dst: GPUBuffer, kind?: "q4_0" | "q4_1" | "q8_0"): void => {
     const kk = kind ?? w.kind ?? "q4_0";
@@ -1666,6 +1705,9 @@ export async function createQ35GpuModel(
     tokens: 0, embedMs: 0, readbackMs: 0, argmaxMs: 0, submits: 0, readbacks: 0,
     dirtyTokens: 0, replays: 0, replayLayers: 0, repairMs: 0,
     encodeMs: 0, tokenMs: 0, tailCpuMs: 0,
+    // testa MTP (it.53): tenuti FUORI da `tokenMs`, perche' il draft e' un
+    // submit a parte e sommarlo al token confonderebbe due costi diversi.
+    mtpMs: 0, mtpDrafts: 0,
   };
   /**
    * Path attivo: `true` se costruito con `select: "optimistic"`.
@@ -1722,6 +1764,124 @@ export async function createQ35GpuModel(
     layout: pAmax2.getBindGroupLayout(0),
     entries: [amaxPartMax, amaxPartIdx, amaxOut].map((b, i) => ({ binding: i, resource: { buffer: b } })),
   });
+  // ====== TESTA MTP (NextN) — fase 7, it.53 ======
+  // Un SECONDO piano di dispatch, non un pezzo del token. Legge `x` (il residuo
+  // finale del modello, PRIMA di `output_norm`) e l'embedding grezzo del token
+  // appena predetto, e produce il draft per la posizione dopo. Vive qui in
+  // fondo perche' gli servono `headStep` (la lm_head CONDIVISA) e le pipeline
+  // di argmax, che nascono sopra.
+  const mtpSteps: Step[] = [];
+  let mtpDraftFn: ((nextToken: number) => Promise<number>) | null = null;
+  if (opts.mtp && S.mtpLayers >= 1) {
+    const bm = `blk.${S.nLayer}.`;
+    const enormW = await f32buf(`${bm}nextn.enorm.weight`);
+    const hnormW = await f32buf(`${bm}nextn.hnorm.weight`);
+    const shNormW = await f32buf(`${bm}nextn.shared_head_norm.weight`);
+    const attnNormM = await f32buf(`${bm}attn_norm.weight`);
+    const postNormM = await f32buf(`${bm}post_attention_norm.weight`);
+    const qNormM = await f32buf(`${bm}attn_q_norm.weight`);
+    const kNormM = await f32buf(`${bm}attn_k_norm.weight`);
+    // `loadW` type-driven: `eh_proj` e' q8_0 mentre il resto del blocco e'
+    // q4_0 — letto dal file, non dedotto (it.52).
+    const ehW = await loadW(`${bm}nextn.eh_proj.weight`);
+    const wqM = await loadW(`${bm}attn_q.weight`);
+    const wkM = await loadW(`${bm}attn_k.weight`);
+    const wvM = await loadW(`${bm}attn_v.weight`);
+    const woM = await loadW(`${bm}attn_output.weight`);
+    const wgM = await loadW(`${bm}ffn_gate.weight`);
+    const wuM = await loadW(`${bm}ffn_up.weight`);
+    const wdM = await loadW(`${bm}ffn_down.weight`);
+    const dFfnM = S.dFfn as number;
+
+    const mEmb = empty(d * 4), mEn = empty(d * 4), mHn = empty(d * 4), mCat = empty(2 * d * 4);
+    const mHp = empty(d * 4), mXn = empty(d * 4), mY = empty(d * 4), mOut = empty(d * 4);
+    const mQFull = empty(2 * qDim * 4), mKCur = empty(kvDim * 4), mVCur = empty(kvDim * 4);
+    const mQB = empty(qDim * 4), mGateB = empty(qDim * 4), mQN = empty(qDim * 4), mKN = empty(kvDim * 4);
+    const mAttnO = empty(qDim * 4), mGateF = empty(dFfnM * 4), mUpF = empty(dFfnM * 4);
+    const mKCache = empty(ctxMax * kvDim * 4), mVCache = empty(ctxMax * kvDim * 4);
+    const mLogits = empty(S.vocab * 4);
+
+    stepTarget = mtpSteps;
+    // h' = eh_proj([norm_e(emb(t_{i+1})) ; norm_h(x_i)]) — embedding PRIMO
+    // (ordine deciso per misura in it.49, confermato su vLLM in it.51).
+    push(rmsnormWgsl(d, S.rmsEps), [mEmb, enormW, mEn], 1);
+    push(rmsnormWgsl(d, S.rmsEps), [x, hnormW, mHn], 1);
+    push(stridedCopyWgsl({ nVec: 1, len: d, srcStride: d, srcOffset: 0, dstStride: 2 * d, dstOffset: 0 }), [mEn, mCat], Math.ceil(d / 64));
+    push(stridedCopyWgsl({ nVec: 1, len: d, srcStride: d, srcOffset: 0, dstStride: 2 * d, dstOffset: d }), [mHn, mCat], Math.ceil(d / 64));
+    ehW.push(mCat, mHp);
+    // da qui e' un layer full identico a quelli del modello, con cache KV SUA
+    push(rmsnormWgsl(d, S.rmsEps), [mHp, attnNormM, mXn], 1);
+    wqM.push(mXn, mQFull);
+    wkM.push(mXn, mKCur);
+    wvM.push(mXn, mVCur);
+    push(stridedCopyWgsl({ nVec: S.nHead, len: hd, srcStride: 2 * hd, srcOffset: 0, dstStride: hd, dstOffset: 0 }), [mQFull, mQB], Math.ceil(qDim / 64));
+    push(stridedCopyWgsl({ nVec: S.nHead, len: hd, srcStride: 2 * hd, srcOffset: hd, dstStride: hd, dstOffset: 0 }), [mQFull, mGateB], Math.ceil(qDim / 64));
+    push(rmsnormWgsl(hd, S.rmsEps, true), [mQB, qNormM, mQN], S.nHead);
+    push(rmsnormWgsl(hd, S.rmsEps, true), [mKCur, kNormM, mKN], S.nKvHead);
+    push(ropeNeoxWgsl(S.nHead, hd, S.ropeFreqBase, S.ropeDims), [mQN], Math.ceil((S.nHead * S.ropeDims / 2) / 64), true);
+    push(ropeNeoxWgsl(S.nKvHead, hd, S.ropeFreqBase, S.ropeDims), [mKN], Math.ceil((S.nKvHead * S.ropeDims / 2) / 64), true);
+    push(kvAppendWgsl(kvDim), [mKN, mKCache], Math.ceil(kvDim / 64), true);
+    push(kvAppendWgsl(kvDim), [mVCur, mVCache], Math.ceil(kvDim / 64), true);
+    push(attnDecodeWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: hd, ctxMax }), [mQN, mKCache, mVCache, mAttnO], S.nHead, true);
+    push(sigmoidMulWgsl(qDim), [mAttnO, mGateB], Math.ceil(qDim / 64));
+    woM.push(mAttnO, mY);
+    push(addInPlaceWgsl(d), [mHp, mY], Math.ceil(d / 64));
+    push(rmsnormWgsl(d, S.rmsEps), [mHp, postNormM, mXn], 1);
+    wgM.push(mXn, mGateF);
+    wuM.push(mXn, mUpF);
+    push(siluMulWgsl(dFfnM), [mGateF, mUpF], Math.ceil(dFfnM / 64));
+    wdM.push(mGateF, mY);
+    push(addInPlaceWgsl(d), [mHp, mY], Math.ceil(d / 64));
+    push(rmsnormWgsl(d, S.rmsEps), [mHp, shNormW, mOut], 1);
+    headStep(mOut, mLogits);
+    stepTarget = steps;
+
+    // argmax del draft su GPU: stesse pipeline del modello, bind group suoi.
+    // I buffer parziali si riusano — il draft gira in un submit a parte, dopo
+    // che l'argmax del token e' gia' stato letto.
+    const mAmaxOut = empty(16);
+    const bgAmax1M = device.createBindGroup({
+      layout: pAmax1.getBindGroupLayout(0),
+      entries: [mLogits, amaxPartMax, amaxPartIdx].map((b, i) => ({ binding: i, resource: { buffer: b } })),
+    });
+    const bgAmax2M = device.createBindGroup({
+      layout: pAmax2.getBindGroupLayout(0),
+      entries: [amaxPartMax, amaxPartIdx, mAmaxOut].map((b, i) => ({ binding: i, resource: { buffer: b } })),
+    });
+    const mStagingId = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const mEmbRow = new Float32Array(d);
+
+    mtpDraftFn = async (nextToken: number): Promise<number> => {
+      const t0 = performance.now();
+      dequantRow(nextToken, mEmbRow, 0);
+      device.queue.writeBuffer(mEmb, 0, mEmbRow);
+      // `uni` porta ancora (pos, pos) dello step appena eseguito: la testa sta
+      // alla stessa posizione. Non e' un'approssimazione — il rope e' relativo
+      // e uno shift uniforme non cambia un bit (it.51).
+      device.pushErrorScope("validation");
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      for (const st of mtpSteps) {
+        pass.setPipeline(st.pipe);
+        pass.setBindGroup(0, st.bind);
+        pass.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+      }
+      pass.setPipeline(pAmax1); pass.setBindGroup(0, bgAmax1M); pass.dispatchWorkgroups(N_PARTIALS);
+      pass.setPipeline(pAmax2); pass.setBindGroup(0, bgAmax2M); pass.dispatchWorkgroups(1);
+      pass.end();
+      enc.copyBufferToBuffer(mAmaxOut, 0, mStagingId, 0, 4);
+      device.queue.submit([enc.finish()]);
+      const err = await device.popErrorScope();
+      if (err) throw new Error(`q35 mtpDraft error scope: ${err.message.slice(0, 300)}`);
+      await mStagingId.mapAsync(GPUMapMode.READ);
+      const id = new Uint32Array(mStagingId.getMappedRange())[0];
+      mStagingId.unmap();
+      perfAcc.mtpMs += performance.now() - t0;
+      perfAcc.mtpDrafts++;
+      return id;
+    };
+  }
+
   const BATCH_MAX = 32;
   // Le righe di embedding e gli uniform dei K step NON si possono scrivere con
   // writeBuffer dentro l'encoder: `queue.writeBuffer` e' ordinata PRIMA del
@@ -1773,6 +1933,7 @@ export async function createQ35GpuModel(
       get total(): number { return this.static + this.dynamic; },
     },
     perf: () => ({ ...perfAcc }),
+    mtpDraft: mtpDraftFn,
     decodeBatch: moe ? null : async (tokens: ArrayLike<number>, posStart: number): Promise<number[]> => {
       const k = tokens.length;
       if (k < 1 || k > BATCH_MAX) throw new Error(`q35 decodeBatch: k=${k} fuori da [1, ${BATCH_MAX}]`);

@@ -39,7 +39,7 @@ import { axpyWgsl, gemvQ4KWgsl, sigmoidMulWgsl } from "../kernels/wgsl";
 import { q35MoeFfnRefF64, type Q35MoeLayerWeights } from "../q35cpurefmodel";
 import { createQ35GpuModel, q35TensorBytes } from "../q35gpumodel";
 import { validateQwen35 } from "../q35shape";
-import { parseGguf } from "../gguf";
+import { parseGguf, type GgufTensorInfo } from "../gguf";
 import { deltaNetStepCore, softplusGgml, Q35DeltaNetRef } from "../q35cpuref";
 import { SAMPLE_DIMS, SAMPLE_T, sampleWeights, sampleInputs } from "../q35sample";
 
@@ -639,6 +639,89 @@ async function testQ35MtpHeadReal(g: Gpu): Promise<KResult> {
     maxAbs, maxRel,
     note: `pesi reali 4B-MTP, T=${meta.T}, L2rel=${l2.toExponential(2)}`,
     metrics: { l2rel: l2 },
+  };
+}
+
+/**
+ * ACCEPT-RATE della testa MTP sul path VERO (fase-D fase 7, it.53).
+ *
+ * it.52 ha pinnato la matematica del blocco contro il cpuref (L2rel 2,6e-7) su
+ * pesi caricati a mano da un fixture. Questo test copre cio' che il fixture NON
+ * puo' coprire: i pesi caricati dal loader del modello, la cache KV della testa
+ * che attraversa le posizioni, e il draft che esce dalla lm_head CONDIVISA col
+ * modello. Il numero che produce e' quello che la riga 7 chiede — accept-rate
+ * per modello su micro-campione — misurato dove servira' davvero.
+ *
+ * BERSAGLIO: il greedy del MODELLO, non il corpus. In spec-dec il draft si
+ * accetta se coincide con cio' che il target avrebbe prodotto, e confonderlo
+ * col testo vero sottostima la testa di quanto il modello stesso sbaglia
+ * (it.49). Riferimento CPU sulla stessa finestra: 31/62 = 50,0% (it.51).
+ */
+async function testQ35MtpDraft4B(g: Gpu): Promise<KResult> {
+  // golden-FULL e non lo smoke: lo smoke ha 40 token in tutto, e il confronto
+  // col riferimento CPU vuole la STESSA finestra (i primi 64 token del prompt 0
+  // — identici nei due golden, e' lo stesso corpus).
+  const goldenRes = await fetch("/models/q35/golden-full.json");
+  const headRes = await fetch("/models/Qwen3.5-4B-MTP-Q4_0.gguf", { headers: { Range: "bytes=0-15" } });
+  if (!goldenRes.ok || headRes.status !== 206) {
+    return { kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN, note: "manca golden-full.json o il symlink del GGUF MTP in public/models" };
+  }
+  const golden = (await goldenRes.json()) as { prompts: { promptTokens: number[]; generated: number[] }[] };
+  const URL_GGUF = "/models/Qwen3.5-4B-MTP-Q4_0.gguf";
+  const range = async (off: number, len: number): Promise<Uint8Array> => {
+    const rr = await fetch(URL_GGUF, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
+    if (rr.status !== 206) throw new Error(`q35-mtp-draft: Range non onorato (${rr.status})`);
+    const ab = await rr.arrayBuffer();
+    if (ab.byteLength !== len) throw new Error(`q35-mtp-draft: Range corto ${ab.byteLength}/${len}`);
+    return new Uint8Array(ab);
+  };
+  const t0 = performance.now();
+  const header = await range(0, 64 * 1024 * 1024);
+  const f = parseGguf(header.buffer.slice(header.byteOffset, header.byteOffset + header.byteLength) as ArrayBuffer);
+  const { shape, byName } = validateQwen35(f);
+  const info = (name: string): GgufTensorInfo => {
+    const t = byName.get(name);
+    if (!t) throw new Error(`q35-mtp-draft: tensore ${name} assente`);
+    return t;
+  };
+  const W = 64;
+  const model = await createQ35GpuModel(g.device, {
+    shape, info, read: (name) => range(f.dataOffset + info(name).offset, q35TensorBytes(info(name))),
+  }, W + 8, 12 * (1 << 30), { mtp: true });
+  if (!model.mtpDraft) {
+    model.destroy();
+    return { kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN, note: "il modello non ha costruito la testa (mtpLayers 0?)" };
+  }
+  const loadS = ((performance.now() - t0) / 1000).toFixed(1);
+  const p = golden.prompts[0];
+  const tokens = [...p.promptTokens, ...p.generated].slice(0, W);
+  const t1 = performance.now();
+  const am: number[] = [], draft: number[] = [];
+  for (let t = 0; t + 1 < tokens.length; t++) {
+    am.push(await model.step(tokens[t], t));
+    // SUBITO dopo lo step: la testa legge `x`, che il token dopo sovrascrive.
+    draft.push(await model.mtpDraft(tokens[t + 1]));
+  }
+  am.push(await model.step(tokens[tokens.length - 1], tokens.length - 1));
+  const perf = model.perf();
+  const drafts = perf.mtpDrafts, msPerDraft = perf.mtpMs / Math.max(1, drafts);
+  model.destroy();
+  const runS = ((performance.now() - t1) / 1000).toFixed(1);
+
+  let hit = 0, tot = 0;
+  for (let i = 0; i + 2 < tokens.length; i++) { tot++; if (draft[i] === am[i + 1]) hit++; }
+  const acc = (100 * hit) / tot;
+  // Il riferimento CPU f64 sulla STESSA finestra e' 50,0% (it.51). La soglia a
+  // 40 e' larga di proposito: fra CPU e GPU cambiano precisione (f64 vs f32) e
+  // hidden (il full-model diverge dall'oracolo su ~1% delle posizioni), quindi
+  // pretendere l'uguaglianza sarebbe pretendere il rumore. Sotto 40 non c'e'
+  // rumore che tenga: e' cablaggio rotto.
+  return {
+    kernel: "q35-mtp-draft-4b",
+    pass: acc >= 40,
+    maxAbs: NaN, maxRel: NaN,
+    note: `accept-rate GPU ${hit}/${tot} = ${acc.toFixed(1)}% (cpuref f64 stessa finestra: 50,0%) — ${drafts} draft a ${msPerDraft.toFixed(2)} ms (load ${loadS}s, run ${runS}s)`,
+    metrics: { acceptPct: acc, msPerDraft },
   };
 }
 
@@ -3529,6 +3612,7 @@ async function main(): Promise<void> {
     results.push(await testSigmoidMul(g));
     results.push(...await testQ35AttnLayersReal(g));
     results.push(await testQ35MtpHeadReal(g)); // testa MTP: blocco su GPU == cpuref (fase 7 it.52)
+    results.push(await testQ35MtpDraft4B(g)); // testa MTP nel modello vero: accept-rate (fase 7 it.53)
     results.push(await testQ35Model4B(g)); // full-model: argmax GPU == oracolo (slice 3)
     results.push(...await testQ35MoeBlockReal(g)); // MoE 35B block reale (fase 7 slice 3a)
 
