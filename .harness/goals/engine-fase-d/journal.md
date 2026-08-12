@@ -3193,3 +3193,41 @@ kernel a piu' righe esistono.
 
 Gate: nessun codice toccato, ktest e suite invariati da it.56 (100 PASS / 0
 FAIL, 442|10).
+
+## it.58 (2026-08-12, fase 8) — CHECKPOINT B: l'esclusione diventa un artefatto
+
+Iterazione 1 di 1 sulla riga 8. Il ramo esercitato e' quello che il done-when
+prevede: "esclusione motivata coi numeri se sotto soglia utile".
+
+**Un numero che vive solo in un log non e' un artefatto.** `scripts/q35-specdec-run.mjs`
+guida il ktest (che le misure le fa gia', it.53-56), estrae le tre righe MTP dal
+`window.__report` con i loro `metrics`, e ci mette accanto lo stato dell'host
+DICHIARATO — piu' la sentinella GPU e la quarantena `.INVALID` di it.45, perche'
+questo JSON e' esattamente il genere di file che finisce in un glob e diventa un
+numero pubblicato.
+
+`results/engine/specdec-4090-2026-08-12T21-49-18-513Z.json`, hostState
+`quiescent`, adapter nvidia lovelace, `gates.allPass` true:
+
+| | ms/token |
+|---|---|
+| sequenziale | **35,31** |
+| spec, riga per riga | 48,32 |
+| spec, piano a 2 righe | **41,69** (1,18x piu' lento) |
+
+corpo 27,08 · coda 7,94 · passata di verifica 66,70 = corpo2 45,82 (**1,69x**) +
+2 code + draft 5,01. Accept-rate 50% sulla finestra del corpus (identico al
+riferimento CPU f64) e **70% in generazione libera**, che e' il regime vero.
+
+**La ri-misura conferma entro il rumore dichiarato**: 1,18x contro 1,19x di
+it.55, corpo2/corpo 1,69 contro 1,70 — la banda di variazione fra due run
+identiche su questo host e' ~2,4% (landmine §4).
+
+Il JSON porta anche il VERDETTO in chiaro, non solo i numeri: un file di
+misure senza la frase che le lega si rilegge fra un mese come "dati" invece che
+come "decisione presa".
+
+**RIGA 8 CHIUSA.** Resta la 9: checklist del contratto voce per voce, non-reg
+GLM fresca, direction/ledger/HANDOFF, triage del docket, e il q1 item 14.
+
+Gate: runner exit 0, tre righe MTP PASS, ktest `done`, JSON committato.

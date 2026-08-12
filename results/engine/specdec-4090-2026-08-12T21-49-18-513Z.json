@@ -1,0 +1,75 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-specdec-mtp-checkpoint-b",
+ "decision": "excluded-by-numbers",
+ "verdict": "Lo speculative decoding con la testa MTP e' COSTRUITO, CORRETTO E VERIFICATO (gate secco: i token generati col draft sono identici a quelli sequenziali), ma NON PAGA su questo motore: i kernel batch mettono la riga su wid.z e ogni riga RILEGGE i pesi, quindi verificare due posizioni costa 1,7-1,9 volte una invece di ~1. Il codice resta in albero, gated e testato, e torna utile se/quando esistera' un GEMM a piu' righe con riuso vero (premio proiettato: ~23,5 ms/token = ~42 tok/s).",
+ "model": "Qwen3.5-4B-MTP-Q4_0.gguf",
+ "msPerToken": {
+  "sequential": 35.31312499940395,
+  "specPerRow": 48.32468750048429,
+  "specBatched": 41.68781249970198,
+  "ratioSpecBatchedOverSequential": 1.180518928880002
+ },
+ "acceptRate": {
+  "corpusWindow64Pct": 50,
+  "cpuRefWindow64Pct": 50,
+  "freeGenerationPct": 70,
+  "msPerDraft": 5.010476190419424
+ },
+ "costBreakdownMs": {
+  "tokenBody": 27.07666666681568,
+  "tokenTail": 7.9358333324392625,
+  "verifyPass": 66.70049999952316,
+  "verifyBody2Rows": 45.81835714422521,
+  "body2OverBody": 1.692171259779874
+ },
+ "gates": {
+  "allPass": true,
+  "missing": [],
+  "ktestStatus": "done"
+ },
+ "notes": [
+  {
+   "kernel": "q35-mtp-draft-4b",
+   "pass": true,
+   "note": "accept-rate GPU 31/62 = 50.0% (cpuref f64 stessa finestra: 50,0%) — 63 draft a 5.01 ms (load 9.7s, run 2.9s)"
+  },
+  {
+   "kernel": "q35-mtp-specdec-invariance",
+   "pass": true,
+   "note": "16/16 token IDENTICI al sequenziale su ENTRAMBI i path · per-riga 11 passate 6 accettate (55%) · batch 10 passate 7 accettate (70%), 8 rollback · ms/token: sequenziale 35.3 · spec per-riga 48.3 · spec batch 41.7"
+  },
+  {
+   "kernel": "q35-mtp-costo-verifica",
+   "pass": true,
+   "note": "token intero 35.0 = corpo 27.1 + coda 7.9 (norma+lm_head+argmax+readback) · passata di verifica 66.7 = corpo2 45.8 + 2 code 15.9 + draft 5.0 · corpo2/corpo = 1.69x"
+  }
+ ],
+ "repro": [
+  "npx vite  # porta 5173",
+  "node scripts/q35-specdec-run.mjs --host-state quiescent",
+  "riferimento CPU f64: Q35_MTP=1 npx vitest run tests/engine-q35-mtp-accept.test.ts"
+ ],
+ "deviceLabel": "4090",
+ "adapter": "{\"webgpu\":true,\"adapter\":\"nvidia lovelace\"}",
+ "ts": "2026-08-12T21:49:18.513Z",
+ "hostState": {
+  "declared": "quiescent",
+  "before": {
+   "temperatureC": 30,
+   "smClockMHz": 210,
+   "powerW": 588.21,
+   "memUsedMiB": 628,
+   "utilizationPct": 0,
+   "throttleReasons": "0x0000000000000001"
+  },
+  "after": {
+   "temperatureC": 39,
+   "smClockMHz": 945,
+   "powerW": 20.13,
+   "memUsedMiB": 636,
+   "utilizationPct": 7,
+   "throttleReasons": "0x0000000000000001"
+  }
+ }
+}
