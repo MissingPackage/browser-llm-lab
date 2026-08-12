@@ -30,16 +30,10 @@ tests/engine-q35-mtp-accept.test.ts` (~2 min, niente GPU).
 **Destinazione.** Far girare in browser il modello più capace possibile
 restando usabile: almeno **30 token/secondo** e **primo token entro 4 secondi**.
 
-**Distanza adesso** — nessuna configurazione ci arriva:
-
-| modello | token/s | primo token |
-|---|---|---|
-| GLM-4.7-Flash | 13,4 | 14,5 s |
-| Qwen 35B (MoE) | 22,6 | — |
-| Qwen 4B | 25,9 | — |
-
-Se il 31,8% della testa MTP regge, il 4B arriva a ~34 tok/s — il primo
-superamento dell'obiettivo — e il 35B a ~29,8.
+**Distanza adesso**, e nessuna configurazione ci arriva: GLM-4.7-Flash **13,4
+tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. Se il
+31,8% della testa MTP regge, il 4B arriva a ~34 — il primo superamento — e il
+35B a ~29,8.
 
 **Decisioni prese** (indice: il contenuto vive nel posto indicato, non qui)
 
