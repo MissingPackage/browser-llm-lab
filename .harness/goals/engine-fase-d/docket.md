@@ -767,3 +767,43 @@ Restano come voci di LAVORO, non come domande:
 **ITEM 24 — chiuso male, e lo scrivo.** Ho scritto 35 righe di docket per
 chiedere il permesso di una cosa che ho poi fatto io stesso nella stessa
 sessione. Il difetto era vero e il fix e' buono; l'escalation era rumore.
+
+---
+
+## Triage di chiusura (2026-08-12) — cosa i FATTI hanno gia' chiuso
+
+Il docket da oggi e' il VERBALE, non il mezzo: le decisioni si chiedono in chat.
+Non serve un ruling per dichiarare chiuso cio' che e' gia' successo.
+
+**CHIUSE dai fatti, non da una decisione:**
+- *item 6* (telemetria read/pack/upload assente su GLM) — **REGISTRAZIONE**: il
+  testo stesso dice "NON e' una decisione da PI: e' mio". Non e' mai stata una
+  domanda.
+- *item 7* (costo di I/O per miss non misurato) — **SUPERATO**: serviva a
+  decidere il prefetch nella fase 5, e la fase 5 ha escluso il prefetch per
+  STRUTTURA (la finestra che riempiva non esiste piu'), senza aver bisogno di
+  quel numero.
+- *item 10* (il primo passaggio non si misura) e *item 19* (il batch fonde i
+  dispatch, non il traffico) — **REGISTRAZIONI**: sono regole e fatti misurati,
+  non domande aperte.
+- *item 22* (la firma routing scoperta) — **CHIUSA da it.46**: la firma e' stata
+  eseguita e il risultato e' identico al riferimento cifra per cifra. La
+  domanda non esiste piu'.
+- *item 24* (i runner scrivevano report con la GPU in errore) — **FATTA in
+  it.45**: sentinella `scripts/lib/gpuerrors.mjs` cablata su tutti e quattro i
+  runner, quarantena `.INVALID` ed exit 5.
+
+**RESTANO APERTE, e sono lavoro mio — non ruling:**
+- *item 21* (l'exit code del runner non distingue regressione da soglia) →
+  `--nonreg <json>` in `glm-bench-run.mjs`
+- *item 23* (due parametri governano lo stesso budget di memoria) → far derivare
+  anche `arenaNeeds` dal tetto
+- *item 25* (i riferimenti misurano il percorso vecchio) → `--optimistic` nel
+  runner e riferimenti rifatti
+- *item 26* (il gap nativo non e' a parita' per via della page cache) →
+  declassato a backlog: aggiungere la residenza `mincore` all'artefatto e' mio;
+  l'unica parte che resta tua e' se svuotare la cache richieda `root`.
+
+**Genuinamente tecniche e non decise:** *item 14* (il dispatch del router costa
+3,5 volte un GEMV expert) e *item 18* (~11 ms di GPU che nessun pass contiene,
+attaccabili solo col pipelining). Nessuna delle due blocca niente.

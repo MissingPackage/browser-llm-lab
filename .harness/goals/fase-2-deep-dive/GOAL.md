@@ -1,3 +1,10 @@
+STATUS: PAUSED (2026-08-09, ruling PI in chat: il benchmark va in standby
+deliberato per dedicarsi al motore, "verranno ripresi più avanti"). Gli item
+aperti di questo goal NON sono debito da triage: sono lavoro congelato per
+scelta di priorità. Scritto qui il 2026-08-12 perché finora la decisione viveva
+solo in chat e in una memoria di sessione — e una decisione che non sta su
+disco, fra un mese, è indistinguibile dall'abbandono.
+
 GOAL: Produce the Fase-2 deep-dive of the WebLLM/MLC WebGPU path — six documents under
 docs/deep-dive/, a reusable bottleneck-brainstorm skill, and a cross-device matmul
 micro-bench with real 4090 numbers — so that the public benchmark page has its explanatory
