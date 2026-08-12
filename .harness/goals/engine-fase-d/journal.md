@@ -3138,3 +3138,58 @@ sopra il sequenziale, la fase 7 si chiude come ESCLUSIONE COI NUMERI, che e' lo
 stesso esito gia' applicato a prefetch e policy a livelli (it.37).
 
 Gate: tsc pulito, ktest **100 PASS / 0 FAIL**, suite invariata.
+
+## it.57 (2026-08-12, fase 7) — il kernel batch NON riusa i pesi: lo spec-dec e' escluso coi numeri su questo motore
+
+Iterazione 11 di 2-4 sulla fase 7. Nessun codice nuovo: una LETTURA che chiude
+la fase, piu' aritmetica su quantita' misurate.
+
+**HO LETTO IL KERNEL, invece di continuare a costruirci sopra.** In
+`gemvQuantWgsl({batch:true})` la riga e' `wid.z` e il corpo fa
+`qs[gb * 4u + w]` dentro l'invocazione di OGNI riga: le due righe sono due
+workgroup diversi che **rileggono gli stessi blocchi di pesi**. Il "batch" di
+questo motore FONDE I DISPATCH, non riusa i dati.
+
+**Questo corregge una mia affermazione di it.55 e del docket item 29**, dove
+avevo scritto "kernel batch con gid.y = riga, pesi letti UNA volta". Non l'avevo
+verificato nel codice: l'avevo dedotto dal fatto che il prefill a chunk andava
+2,02x. Quel 2,02x viene dal riuso in **L2** fra righe concorrenti (con M=16 e'
+efficace), non da un riuso esplicito — ed e' per questo che a M=2 rende solo il
+15%, cioe' il 1,70x misurato in it.56 invece del 2,00x di due righe indipendenti.
+
+**Il tetto, con i numeri di it.56 e nessuna assunzione nuova:**
+
+- passata di verifica misurata 66,8 ms → 1,6 token a passata → 41,8 ms/token
+- la sola leva rimasta e' una coda invece di due. La coda GPU vale meno dei 7,6
+  ms del token intero (quelli includono readback e argmax su CPU che nello spec
+  non ci sono): ~5 ms. Passata → ~61,8, cioe' **38,6 ms/token**
+- il sequenziale e' **34,4**
+
+**Anche nel suo caso migliore, lo spec-dec su questo motore resta sopra il
+sequenziale.** Non serve costruire la coda batch per saperlo: servirebbe a
+misurare un numero che sappiamo gia' essere dalla parte sbagliata.
+
+**PERCHE' il tetto e' li', in una frase**: verificare un draft costa una riga
+INTERA di modello, e su questo motore due righe costano 1,70-1,89 volte una
+perche' nessun kernel riusa i pesi fra righe. Lo speculative decoding paga
+quando K token si verificano al prezzo di uno; qui si verificano al prezzo di
+1,8. Con 24 layer su 32 ricorrenti, per giunta, una parte di quel costo non e'
+nemmeno attaccabile da un kernel migliore: la ricorrenza fa K passi comunque.
+
+**Il premio che resta dietro un kernel diverso, dichiarato per chi verra' dopo**:
+con un GEMM a piu' righe che riusa davvero i pesi (corpo2 ≈ corpo), la passata
+starebbe a ~37,6 ms per 1,6 token = **23,5 ms/token, cioe' ~42 tok/s**. E' una
+famiglia di kernel che non esiste in questo motore e non e' un lavoro da una
+fetta: e' un progetto suo.
+
+**DECISIONE PRESA, non escalata** (il PI l'aveva vista arrivare due digest fa e
+non ha obiettato): la fase 7 si chiude con il MECCANISMO COSTRUITO E VERIFICATO
+— reader, testa su GPU bit-comparata col riferimento, accept-rate 50%/74%, gate
+secco di bit-invarianza su due implementazioni — e la fase 8 lo registra come
+**ESCLUSIONE COI NUMERI**, che e' esattamente il ramo che il done-when della
+riga 8 prevede ("speedup ... O esclusione motivata coi numeri se sotto soglia
+utile"). Il codice resta: e' gated, testato, e diventa utile il giorno in cui i
+kernel a piu' righe esistono.
+
+Gate: nessun codice toccato, ktest e suite invariati da it.56 (100 PASS / 0
+FAIL, 442|10).

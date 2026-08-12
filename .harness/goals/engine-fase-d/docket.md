@@ -916,3 +916,24 @@ ricorrenti e la ricorrenza fa K passi qualunque sia il piano.
 
 Resta non attribuito lo snapshot per layer (~50 MB a passata) che sta dentro
 corpo2.
+
+### it.57 — CORREZIONE all'item 29 e all'item 31: il kernel batch NON riusa i pesi
+
+Avevo scritto (it.55, item 29) che `PB`/`prefillM` legge i pesi "UNA volta".
+FALSO, e non l'avevo verificato nel codice: in `gemvQuantWgsl({batch:true})` la
+riga sta su `wid.z` e il corpo rilegge `qs[...]` dentro l'invocazione di ogni
+riga. Il batch di questo motore **fonde i dispatch**, non riusa i dati; il 2,02x
+del prefill a chunk viene dal riuso in L2 fra righe concorrenti, efficace a
+M=16 e degno del 15% a M=2 (il 1,70x misurato).
+
+Conseguenza: ITEM 31 CHIUSO — il candidato (c) era quello giusto, non (a). La
+ricorrenza DeltaNet resta un vincolo reale ma non e' la causa principale del
+1,70x.
+
+ITEM 29 CHIUSO come esclusione: lo spec-dec non paga su questo motore (PHASES
+riga 8). Il premio dietro un GEMM a piu' righe con riuso vero e' ~42 tok/s, ed
+e' un progetto suo — registrato, non aperto.
+
+ITEM 32 (per-riga e batch danno draft diversi) RESTA APERTO: con la fase 7
+chiusa non blocca niente, ma e' una discrepanza fra due sensori che dovrebbero
+coincidere. Va guardata se e quando i kernel a piu' righe tornano in scena.
