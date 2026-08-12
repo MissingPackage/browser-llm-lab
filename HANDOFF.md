@@ -7,15 +7,22 @@ Qwen porta con sé una testa ausiliaria (MTP) che, guardando lo stato interno,
 tira a indovinare il token successivo-successivo. Se indovina spesso, ogni
 passata del modello produce due token invece di uno.
 
-L'ho fatta girare in CPU e indovina il **31,8%** delle volte. È un numero utile
-ma sotto le attese per questa architettura, e ho un sospetto preciso: il blocco
-della testa potrebbe ricevere le **posizioni sbagliate** (sfasate di uno), il
-che degrada l'attenzione senza distruggerla — esattamente la forma del
-risultato.
+L'ho fatta girare in CPU e indovina il **31,8%** delle volte — utile, ma sotto
+le attese per questa architettura.
 
-**Prossimo passo, e non serve una tua decisione**: rimisurare con lo sfasamento
-corretto e su un campione più lungo delle 22 posizioni di adesso. I due numeri
-dicono se il 31,8% è vero o se è un bug. Comando: `Q35_MTP=1 npx vitest run
+**C'è un'anomalia da spiegare prima di andare avanti.** Sospettavo che il blocco
+della testa ricevesse le posizioni sfasate di uno; ho aggiunto lo sfasamento e
+misurato: stesso 31,8%, e soprattutto **le predizioni sono identiche una per
+una** (0 diverse su 23). Non può essere: spostare di una posizione cambia
+l'angolo di rotazione di circa un radiante, e 23 scelte su 248.320 possibilità
+non restano tutte uguali per caso. O il parametro non arriva al calcolo, o
+l'attenzione dentro quel blocco non sta facendo nulla — e quale delle due non
+l'ho stabilito.
+
+**Prossimo passo, non serve una tua decisione**: azzerare il contributo
+dell'attenzione nel blocco della testa e rimisurare. Se il numero non cambia,
+l'attenzione è inerte (e allora il problema è lì); se cambia, il bug è nel
+parametro che ho appena aggiunto. Comando di partenza: `Q35_MTP=1 npx vitest run
 tests/engine-q35-mtp-accept.test.ts` (~2 min, niente GPU).
 
 ## 2. Mappa
