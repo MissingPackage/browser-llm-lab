@@ -2643,3 +2643,25 @@ dal nativo e' PIU' GRANDE di quello pubblicato — il decode del browser (13,44)
 non e' "appena sopra il floor", e' sotto di un terzo. Non lo affermo: il
 confronto onesto pretende i due lati allo stesso stato di cache, e oggi non li
 ho.
+
+## it.46 (2026-08-12, fase 6) — firma routing IDENTICA: CHECKPOINT A CHIUSO
+
+Ultima voce della riga 6 dopo il taglio. Config, corpusHash, gguf e oracle
+confrontati col riferimento 2026-08-09: identici. 93,8 min contro 94,8.
+
+| | riferimento | oggi |
+|---|---|---|
+| setMatch prefill | 1.047.485/1.203.084 = 87,06666% | **le stesse cifre** |
+| setMatch decode | 208.441/235.520 = 88,50246% | **le stesse cifre** |
+| residency hits/miss/evict | 5.614.247 / 140.169 / 137.750 | **identici** |
+| bytesUploaded | 752.952.213.504 | **identico al byte** |
+| router GPU set/order match | 1.438.591 / 1.438.572 | **identici** |
+
+Non "entro soglia": numeratore E denominatore uguali su 31.274 posizioni.
+`gpuErrors: []` — la sentinella di it.45 al primo impiego vero, pulita.
+
+Exit 4 come previsto e come il riferimento: la soglia del gate e' 99% e il
+riferimento stesso fa `pass: false`. La non-regressione si legge dal confronto.
+
+**RIGA 6 COMPLETA**: b12 in banda (it.41) · golden al pin (it.42) · cpuref
+(it.42) · firma routing (it.46). CHECKPOINT A chiuso. Prossimo: fase 7.
