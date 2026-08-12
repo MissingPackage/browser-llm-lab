@@ -807,3 +807,25 @@ Non serve un ruling per dichiarare chiuso cio' che e' gia' successo.
 **Genuinamente tecniche e non decise:** *item 14* (il dispatch del router costa
 3,5 volte un GEMV expert) e *item 18* (~11 ms di GPU che nessun pass contiene,
 attaccabili solo col pipelining). Nessuna delle due blocca niente.
+
+---
+
+## item 27 — il numero della fase 7 non e' un artefatto: vive in /tmp (io, fase 7)
+
+L'accept-rate della testa MTP (50,0% / 73,9% in traiettoria, it.51) e' scritto
+dal test in `/tmp/mtp-probe.json`, non in `results/engine/**` come ogni altro
+numero del goal. Motivo contingente: `console.log` di vitest non arriva nello
+stdout rediretto, e il JSON in /tmp era il modo piu' rapido di vederlo.
+
+Non e' una domanda: quando la fase 7 misura l'accept-rate sul path GPU (che e'
+il numero del done-when, questo e' solo il riferimento CPU), il runner scrive in
+`results/engine/` con la sentinella GPU come gli altri. Registrato perche' il
+CPU-ref resti rieseguibile e non sembri un numero perso.
+
+## item 28 — `digests.md` e' fermo a it.37, il journal e' a it.51 (io, igiene)
+
+14 iterazioni senza digest. Il journal e' denso per contratto (memoria di
+lavoro), il digest e' quello che si legge per ricostruire il goal senza
+rileggerlo tutto: se resta indietro, l'unico riassunto disponibile e' HANDOFF,
+che pero' tiene solo il presente. Lavoro mio, non un ruling: si recupera in
+blocco alla chiusura della fase 7.
