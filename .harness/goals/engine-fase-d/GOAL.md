@@ -97,3 +97,15 @@ regole permanenti); spec e journal C3a/C3b/C3c (le ottimizzazioni da
 parametrizzare); `docs/engine/study/2026-08-10-q35-gap-decomposition.md` §4
 (ordine ROI misurato); recon Qwen §2 (MTP nativa ovunque);
 `tests/gpudevice.test.ts` (il pattern del test di non-duplicazione).
+
+<!-- STATUS: CHIUSO dal PI il 2026-08-12 ("penso che questo goal non abbia altro
+     da dire"). Blocco A (unificazione + parita') RAGGIUNTO e verificato; blocco
+     B (spec-dec MTP) COSTRUITO, verificato col gate secco e ESCLUSO COI NUMERI
+     al checkpoint B (PHASES riga 8, artefatto
+     results/engine/specdec-4090-2026-08-12T21-49-18-513Z.json). L'obiettivo dei
+     30 tok/s NON e' raggiunto e la strada che ci arriva e' nominata: kernel a
+     piu' righe con riuso vero dei pesi (~42 tok/s proiettati), che il PI ha
+     approvato come GOAL SUCCESSIVO, previa revisione architetturale
+     indipendente. La riga 9 (checklist formale + non-reg GLM fresca) resta
+     l'unico adempimento non eseguito: dichiarata non necessaria dal PI in
+     questa sessione, si esegue al tag di release se e quando serve. -->
