@@ -17,17 +17,19 @@ posizioni non può cambiare niente, quella rotazione guarda solo le *distanze*
 fra posizioni. Dettagli in journal it.51, insieme al confronto con
 l'implementazione di riferimento di vLLM: combacia voce per voce.)
 
-**La testa gira già sulla GPU** e dà gli stessi numeri del riferimento CPU
-(scarto relativo 2,6 su 10 milioni): il blocco è cablato e testato, e non è
-servito scrivere un solo kernel nuovo.
+**La testa è già dentro il motore vero.** Sulla GPU indovina **31 volte su 62**
+— lo stesso identico conteggio del riferimento CPU — e costa **5,57 ms** contro
+i 34,6 ms di un token, cioè il 16%. Con questi due numeri misurati sulla stessa
+macchina il 4B passerebbe da 25,9 a **33,4 token/s**: sopra l'obiettivo.
 
-**Prossimo passo, non serve una tua decisione**: infilare la testa nel modello
-vero — caricarne i pesi accanto agli altri, darle la sua memoria di contesto — e
-poi chiudere il ciclo: la testa propone un token, il modello lo verifica nella
-stessa passata, si tiene solo se coincide. Gate secco: i token accettati
-identici a quelli di oggi. Riferimenti rieseguibili: `Q35_MTP=1 npx vitest run
+**Prossimo passo, non serve una tua decisione**: chiudere il ciclo. Oggi la
+testa propone e nessuno raccoglie; serve che il modello verifichi la proposta
+nella stessa passata del token dopo (due posizioni in un colpo) e la tenga solo
+se coincide. È lì che il 50% diventa velocità, ed è lì che vive il gate secco
+della fase: i token prodotti devono restare identici a quelli di oggi.
+Riferimenti rieseguibili: `Q35_MTP=1 npx vitest run
 tests/engine-q35-mtp-accept.test.ts` (~5 min, CPU) e `node
-.harness/tools/engine-ktest.mjs` con `npx vite` acceso (~2 min, GPU).
+.harness/tools/engine-ktest.mjs` con `npx vite` acceso (~3 min, GPU).
 
 ## 2. Mappa
 
@@ -35,10 +37,10 @@ tests/engine-q35-mtp-accept.test.ts` (~5 min, CPU) e `node
 restando usabile: almeno **30 token/secondo** e **primo token entro 4 secondi**.
 
 **Distanza adesso**, e nessuna configurazione ci arriva: GLM-4.7-Flash **13,4
-tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. Con
-la testa MTP al 74% il 4B arriva a ~39 e il 35B a ~34; anche allo scenario
-prudente (50%) sono ~34 e ~29,4. Il costo del draft è ~15% di una passata, non
-il 3% che avevo scritto ieri: rifà anche la proiezione sul vocabolario.
+tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. Col
+50% e il costo del draft ora MISURATI sullo stesso host (16% di un token), il
+4B proietta **33,4 tok/s**; nel regime in cui il decode gira davvero (74%)
+sale a ~39. Il 35B a ~29-34, ma lì il draft non è ancora misurato.
 
 **Decisioni prese** (indice: il contenuto vive nel posto indicato, non qui)
 
