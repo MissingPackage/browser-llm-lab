@@ -18,15 +18,24 @@ fra posizioni. Dettagli in journal it.51, insieme al confronto con
 l'implementazione di riferimento di vLLM: combacia voce per voce.)
 
 **La testa è già dentro il motore vero.** Sulla GPU indovina **31 volte su 62**
-— lo stesso identico conteggio del riferimento CPU — e costa **5,57 ms** contro
-i 34,6 ms di un token, cioè il 16%. Con questi due numeri misurati sulla stessa
-macchina il 4B passerebbe da 25,9 a **33,4 token/s**: sopra l'obiettivo.
+— lo stesso identico conteggio del riferimento CPU — e costa **5,5 ms** contro
+i 34,5 ms di un token, cioè il 16%.
 
-**Prossimo passo, non serve una tua decisione**: chiudere il ciclo. Oggi la
-testa propone e nessuno raccoglie; serve che il modello verifichi la proposta
-nella stessa passata del token dopo (due posizioni in un colpo) e la tenga solo
-se coincide. È lì che il 50% diventa velocità, ed è lì che vive il gate secco
-della fase: i token prodotti devono restare identici a quelli di oggi.
+**Il ciclo è chiuso e il gate secco è passato**: generando 16 token con la
+proposta della testa si ottengono gli **stessi 16 token** della generazione
+normale, uno per uno — con 5 proposte rifiutate e disfatte per davvero (il
+pezzo difficile: 24 layer su 32 hanno una memoria interna che una proposta
+sbagliata corrompe in modo plausibile).
+
+**Ma oggi il meccanismo è più lento, non più veloce**: 48,8 ms per token contro
+34,5. Non è la testa (costa il 16%): è che la passata di verifica esegue le due
+posizioni una dopo l'altra, quindi rilegge tutti i pesi due volte — e in un
+decode che è limitato dalla memoria, due letture costano il doppio.
+
+**Prossimo passo, non serve una tua decisione**: far verificare le due
+posizioni in un colpo solo, con i pesi letti una volta. Il meccanismo esiste
+già (è quello che accelera la lettura del prompt) e va cablato per due righe
+con l'argmax di entrambe. Proiezione: ~28 ms/token, cioè ~36 token/s.
 Riferimenti rieseguibili: `Q35_MTP=1 npx vitest run
 tests/engine-q35-mtp-accept.test.ts` (~5 min, CPU) e `node
 .harness/tools/engine-ktest.mjs` con `npx vite` acceso (~3 min, GPU).

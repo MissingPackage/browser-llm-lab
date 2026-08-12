@@ -829,3 +829,36 @@ lavoro), il digest e' quello che si legge per ricostruire il goal senza
 rileggerlo tutto: se resta indietro, l'unico riassunto disponibile e' HANDOFF,
 che pero' tiene solo il presente. Lavoro mio, non un ruling: si recupera in
 blocco alla chiusura della fase 7.
+
+## item 29 — la passata di verifica rilegge i pesi: lo spec-dec e' corretto ma piu' lento (io, fase 7/8)
+
+MISURATO in it.54 sullo stesso host, dopo il prefill e fuori dal cronometro:
+generazione con draft+verify **48,8 ms/token** contro **34,5 sequenziale** —
+1,41x piu' LENTA, con il 55% di draft accettati.
+
+Il motivo non e' la testa (5,51 ms, il 16%): e' che la passata di verifica
+esegue le due righe **in sequenza sullo stesso piano di dispatch**
+(`specVerify` rigioca `steps` per riga, come `decodeBatch`), quindi rilegge
+TUTTI i pesi due volte. In un decode memory-bound le due righe costano il
+doppio, e 1,5 token per due righe e' peggio di 1 token per riga.
+
+Il piano che serve esiste gia' ed e' `PB`/`prefillM` (kernel batch con gid.y =
+riga, pesi letti UNA volta), usato dal prefill a chunk della fase 4. Manca il
+cablaggio per M=2 con l'argmax di ENTRAMBE le righe — il prefill ritorna i
+logits della sola ultima.
+
+Non e' una domanda: e' la prossima fetta. Registrato qui perche' il numero
+"spec-dec = 1,41x piu' lento" non resti orfano se qualcuno legge il ktest.
+Proiezione con la verifica batch: ~28 ms/token (1,23x), cioe' ~36 tok/s.
+
+## item 30 — lo spec-dec sul 35B non esiste: `specVerify` e' null sui MoE (io, fase 7)
+
+`specVerify` e `decodeBatch` sono `null` sui modelli MoE, perche' la selezione
+degli expert passa dalla CPU a ogni layer — tranne che nel path ottimistico
+(fetta 3c), dove il token intero e' un submit e la selezione la fa la GPU.
+Quindi la riga 7 e' soddisfatta sui DENSI (4B/9B) e scoperta sul 35B, che e'
+proprio il modello dove la testa costa di meno in proporzione.
+
+Lavoro mio, non un ruling. Ma va deciso PRIMA della fase 8: o si cabla la
+verifica speculativa sul path ottimistico, o il checkpoint B misura lo speedup
+sul solo 4B e lo dichiara.

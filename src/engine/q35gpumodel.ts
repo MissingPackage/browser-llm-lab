@@ -110,6 +110,22 @@ export interface Q35GpuModel {
    * modello.
    */
   mtpDraft: ((nextToken: number) => Promise<number>) | null;
+  /**
+   * VERIFICA SPECULATIVA (fase 7, it.54): esegue in UN submit la posizione
+   * `pos` col token CERTO e la posizione `pos+1` col token PROPOSTO dalla
+   * testa, e ritorna i due argmax. Il secondo vale SOLO se il draft coincide
+   * col primo — altrimenti la riga speculativa e' spazzatura e va disfatta con
+   * `specRollback`.
+   *
+   * `null` sui MoE: la selezione degli expert passa dalla CPU a ogni layer.
+   */
+  specVerify: ((certain: number, draft: number, pos: number) => Promise<[number, number]>) | null;
+  /**
+   * Disfa la riga speculativa: rimette lo stato ricorrente dei layer DeltaNet e
+   * il residuo `x` a com'erano DOPO la posizione certa. Da chiamare quando il
+   * draft e' stato rifiutato, prima di proseguire.
+   */
+  specRollback: (() => void) | null;
   /** azzera gli stati ricorrenti (conv + S) di tutti i layer linear: nuovo prompt. */
   resetState(): void;
   /**
@@ -173,6 +189,12 @@ export interface Q35GpuModel {
      * che e' esattamente il rapporto che la fase 8 deve pesare.
      */
     mtpMs: number; mtpDrafts: number;
+    /**
+     * VERIFICA SPECULATIVA (it.54): passate a due righe, tempo di parete, e
+     * quante sono finite in rifiuto (`specRejects` = rollback dello stato
+     * ricorrente). `specPasses - specRejects` sono i token guadagnati.
+     */
+    specMs: number; specPasses: number; specRejects: number;
   };
   /**
    * Accende/spegne il path a submit unico a caldo (solo se il modello e' stato
@@ -1707,7 +1729,7 @@ export async function createQ35GpuModel(
     encodeMs: 0, tokenMs: 0, tailCpuMs: 0,
     // testa MTP (it.53): tenuti FUORI da `tokenMs`, perche' il draft e' un
     // submit a parte e sommarlo al token confonderebbe due costi diversi.
-    mtpMs: 0, mtpDrafts: 0,
+    mtpMs: 0, mtpDrafts: 0, specMs: 0, specPasses: 0, specRejects: 0,
   };
   /**
    * Path attivo: `true` se costruito con `select: "optimistic"`.
@@ -1901,6 +1923,90 @@ export async function createQ35GpuModel(
     else dequantQ4_0(embdRaw, token * rowBytes, rowBlocks, sub);
   };
 
+  // ====== VERIFICA SPECULATIVA (fase 7, it.54) ======
+  // Due posizioni in UN submit: quella CERTA (il token che il modello ha
+  // predetto) e quella PROPOSTA dalla testa MTP. Se la proposta coincide con
+  // cio' che il modello produce alla posizione certa, il token e' guadagnato;
+  // se no, si torna indietro.
+  //
+  // TORNARE INDIETRO NON E' GRATIS, ed e' il motivo per cui questo codice
+  // esiste invece di due `step`: 24 layer su 32 del 4B sono DeltaNet e
+  // aggiornano `convSt`/`stateS` IN PLACE. Una riga speculativa sbagliata non
+  // lascia un errore che si sovrascrive — lascia uno stato ricorrente sbagliato
+  // e numeri plausibili (stessa lezione del replay ottimistico, it.18). Quindi
+  // lo snapshot si prende DENTRO l'encoder, fra la riga certa e quella
+  // speculativa: nessun round-trip, e lo stato salvato e' esattamente quello
+  // "dopo il token certo".
+  //
+  // Anche `x` va salvato: la testa MTP legge il residuo finale, e dopo la riga
+  // speculativa `x` contiene quello della posizione SBAGLIATA. Sono d float, il
+  // costo e' rumore accanto allo stato ricorrente.
+  //
+  // La cache KV NON si ripara: `kvAppend` scrive all'indice della posizione e
+  // l'attenzione legge solo fino a `pos`, quindi la riga rifiutata viene
+  // riscritta dalla posizione vera prima che qualcuno la legga.
+  const specShadow = (opts.mtp && !isMoe)
+    ? stateBufs.map((s) => ({
+      src: s.buf, bytes: s.bytes,
+      dst: track(device.createBuffer({ size: Math.max(16, s.bytes), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC }), s.bytes),
+    }))
+    : null;
+  const specXShadow = specShadow ? empty(d * 4) : null;
+  const specStaging = specShadow
+    ? device.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ })
+    : null;
+  const specVerifyFn = specShadow && specXShadow && specStaging
+    ? async (certain: number, draft: number, pos: number): Promise<[number, number]> => {
+      const t0 = performance.now();
+      dequantRow(certain, embRowsCpu, 0);
+      dequantRow(draft, embRowsCpu, d);
+      uniCpu[0] = pos; uniCpu[1] = pos;
+      uniCpu[4] = pos + 1; uniCpu[5] = pos + 1;
+      device.queue.writeBuffer(embBatch, 0, embRowsCpu, 0, 2 * d);
+      device.queue.writeBuffer(uniBatch, 0, uniCpu, 0, 8);
+      device.pushErrorScope("validation");
+      const enc = device.createCommandEncoder();
+      for (let i = 0; i < 2; i++) {
+        enc.copyBufferToBuffer(embBatch, i * d * 4, x, 0, d * 4);
+        enc.copyBufferToBuffer(uniBatch, i * 16, uni, 0, 16);
+        const pass = enc.beginComputePass();
+        for (const st of steps) {
+          pass.setPipeline(st.pipe);
+          pass.setBindGroup(0, st.bind);
+          pass.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+        }
+        pass.setPipeline(pAmax1); pass.setBindGroup(0, bgAmax1); pass.dispatchWorkgroups(N_PARTIALS);
+        pass.setPipeline(pAmax2); pass.setBindGroup(0, bgAmax2); pass.dispatchWorkgroups(1);
+        pass.end();
+        enc.copyBufferToBuffer(amaxOut, 0, idsBatch, i * 4, 4);
+        if (i === 0) {
+          enc.copyBufferToBuffer(x, 0, specXShadow, 0, d * 4);
+          for (const s of specShadow) enc.copyBufferToBuffer(s.src, 0, s.dst, 0, s.bytes);
+        }
+      }
+      enc.copyBufferToBuffer(idsBatch, 0, specStaging, 0, 8);
+      device.queue.submit([enc.finish()]);
+      const err = await device.popErrorScope();
+      if (err) throw new Error(`q35 specVerify error scope: ${err.message.slice(0, 300)}`);
+      await specStaging.mapAsync(GPUMapMode.READ);
+      const ids = new Uint32Array(specStaging.getMappedRange());
+      const pair: [number, number] = [ids[0], ids[1]];
+      specStaging.unmap();
+      perfAcc.specMs += performance.now() - t0;
+      perfAcc.specPasses++;
+      return pair;
+    }
+    : null;
+  const specRollbackFn = specShadow && specXShadow
+    ? (): void => {
+      const enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(specXShadow, 0, x, 0, d * 4);
+      for (const s of specShadow) enc.copyBufferToBuffer(s.dst, 0, s.src, 0, s.bytes);
+      device.queue.submit([enc.finish()]);
+      perfAcc.specRejects++;
+    }
+    : null;
+
   const runSeg = (from: number, to: number, tail?: (enc: GPUCommandEncoder) => void): void => {
     const enc = device.createCommandEncoder();
     const pass = enc.beginComputePass();
@@ -1934,6 +2040,8 @@ export async function createQ35GpuModel(
     },
     perf: () => ({ ...perfAcc }),
     mtpDraft: mtpDraftFn,
+    specVerify: specVerifyFn,
+    specRollback: specRollbackFn,
     decodeBatch: moe ? null : async (tokens: ArrayLike<number>, posStart: number): Promise<number[]> => {
       const k = tokens.length;
       if (k < 1 || k > BATCH_MAX) throw new Error(`q35 decodeBatch: k=${k} fuori da [1, ${BATCH_MAX}]`);

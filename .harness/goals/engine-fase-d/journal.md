@@ -2993,3 +2993,54 @@ lovelace), `q35-mtp-head-real-blk32` invariato a L2rel 2,63e-7.
 passata del token successivo (2 posizioni in un submit) e tenere il token solo
 se coincide col greedy. E' li' che il 50% diventa tok/s, ed e' li' che vive il
 gate di bit-invarianza della riga 7.
+
+## it.54 (2026-08-12, fase 7) — draft+verify: 16/16 token identici al sequenziale, e il meccanismo e' PIU' LENTO
+
+Iterazione 8 di 2-4 sulla fase 7 (oltre la stima, sotto il 3x di ruling C9).
+Terza fetta di codice: il ciclo si chiude, e il gate secco della riga 7 passa.
+
+**Il pezzo difficile non era la speculazione: era disfarla.** 24 layer su 32 del
+4B sono DeltaNet e aggiornano `convSt`/`stateS` IN PLACE. Una riga speculativa
+rifiutata non lascia un errore che si sovrascrive — lascia uno stato ricorrente
+sbagliato e numeri PLAUSIBILI (la stessa lezione del replay ottimistico,
+it.18). `specVerify` prende lo snapshot **dentro l'encoder**, fra la riga certa
+e quella speculativa: nessun round-trip, e lo stato salvato e' esattamente
+quello "dopo il token certo". Salva anche `x`, perche' la testa legge il residuo
+finale e dopo la riga speculativa `x` e' quello della posizione sbagliata.
+
+**La cache KV invece NON si ripara**, e vale la pena averlo scritto: `kvAppend`
+scrive all'indice della posizione e l'attenzione legge solo fino a `pos`, quindi
+la riga rifiutata viene riscritta dalla posizione vera prima che qualcuno la
+legga. Ripararla sarebbe stato lavoro inutile.
+
+**IL GATE SECCO DELLA RIGA 7 E' PASSATO**: `q35-mtp-specdec-invariance` genera
+16 token con draft+verify e li confronta uno per uno con la generazione
+sequenziale — **16/16 IDENTICI**, con **11 passate, 6 accettate (55%) e 5
+rollback ESERCITATI**. I 5 rollback contano quanto i 16 token: se lo stato
+ricorrente non fosse riparato, il test produrrebbe testo plausibile e diverso, e
+questo e' l'unico gate che se ne accorge.
+
+**E ADESSO IL NUMERO SCOMODO: 48,8 ms/token contro 34,5 sequenziale.** Lo
+spec-dec, cosi' com'e', e' **1,41x PIU' LENTO**. Non e' la testa (5,51 ms, il
+16%): e' che `specVerify` esegue le due righe IN SEQUENZA sullo stesso piano di
+dispatch, quindi rilegge tutti i pesi due volte. In un decode memory-bound due
+righe costano il doppio, e 1,5 token per due righe e' peggio di 1 token per
+riga. **Il calcolo si poteva fare prima di scrivere il codice, e non l'ho
+fatto** — l'ho scoperto misurando. Il piano che serve esiste gia': `PB`/
+`prefillM`, kernel batch con `gid.y` = riga, pesi letti UNA volta (fase 4).
+Manca il cablaggio per M=2 con l'argmax di ENTRAMBE le righe. Docket item 29,
+proiezione ~28 ms/token = ~36 tok/s.
+
+**Errore di misura corretto sul posto**: il primo giro riportava 102,4 contro
+88,9 ms/token perche' il cronometro includeva 24 posizioni di prefill divise per
+16 token generati (~50 ms a token di zavorra su ENTRAMBI i bracci). Spostato il
+via dopo il prefill: 48,8 contro 34,5, e il secondo numero combacia col 34,6 del
+micro-bench del ktest — che e' il controllo che la correzione era quella giusta.
+
+**Il 35B resta scoperto**: `specVerify` e `decodeBatch` sono null sui MoE (la
+selezione degli expert passa dalla CPU a ogni layer), tranne nel path
+ottimistico dove il token e' un submit solo. Docket item 30: o si cabla li', o
+il checkpoint B misura il solo 4B e lo dichiara.
+
+Gate: tsc pulito, suite **442|10**, ktest **99 PASS / 0 FAIL**, riga 7 di
+PHASES aggiornata voce per voce con le evidenze.

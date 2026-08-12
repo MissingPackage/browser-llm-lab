@@ -657,14 +657,14 @@ async function testQ35MtpHeadReal(g: Gpu): Promise<KResult> {
  * col testo vero sottostima la testa di quanto il modello stesso sbaglia
  * (it.49). Riferimento CPU sulla stessa finestra: 31/62 = 50,0% (it.51).
  */
-async function testQ35MtpDraft4B(g: Gpu): Promise<KResult> {
+async function testQ35MtpDraft4B(g: Gpu): Promise<KResult[]> {
   // golden-FULL e non lo smoke: lo smoke ha 40 token in tutto, e il confronto
   // col riferimento CPU vuole la STESSA finestra (i primi 64 token del prompt 0
   // — identici nei due golden, e' lo stesso corpus).
   const goldenRes = await fetch("/models/q35/golden-full.json");
   const headRes = await fetch("/models/Qwen3.5-4B-MTP-Q4_0.gguf", { headers: { Range: "bytes=0-15" } });
   if (!goldenRes.ok || headRes.status !== 206) {
-    return { kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN, note: "manca golden-full.json o il symlink del GGUF MTP in public/models" };
+    return [{ kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN, note: "manca golden-full.json o il symlink del GGUF MTP in public/models" }];
   }
   const golden = (await goldenRes.json()) as { prompts: { promptTokens: number[]; generated: number[] }[] };
   const URL_GGUF = "/models/Qwen3.5-4B-MTP-Q4_0.gguf";
@@ -690,7 +690,7 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult> {
   }, W + 8, 12 * (1 << 30), { mtp: true });
   if (!model.mtpDraft) {
     model.destroy();
-    return { kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN, note: "il modello non ha costruito la testa (mtpLayers 0?)" };
+    return [{ kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN, note: "il modello non ha costruito la testa (mtpLayers 0?)" }];
   }
   const loadS = ((performance.now() - t0) / 1000).toFixed(1);
   const p = golden.prompts[0];
@@ -705,7 +705,6 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult> {
   am.push(await model.step(tokens[tokens.length - 1], tokens.length - 1));
   const perf = model.perf();
   const drafts = perf.mtpDrafts, msPerDraft = perf.mtpMs / Math.max(1, drafts);
-  model.destroy();
   const runS = ((performance.now() - t1) / 1000).toFixed(1);
 
   let hit = 0, tot = 0;
@@ -716,13 +715,66 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult> {
   // hidden (il full-model diverge dall'oracolo su ~1% delle posizioni), quindi
   // pretendere l'uguaglianza sarebbe pretendere il rumore. Sotto 40 non c'e'
   // rumore che tenga: e' cablaggio rotto.
-  return {
+  const rAccept: KResult = {
     kernel: "q35-mtp-draft-4b",
     pass: acc >= 40,
     maxAbs: NaN, maxRel: NaN,
     note: `accept-rate GPU ${hit}/${tot} = ${acc.toFixed(1)}% (cpuref f64 stessa finestra: 50,0%) — ${drafts} draft a ${msPerDraft.toFixed(2)} ms (load ${loadS}s, run ${runS}s)`,
     metrics: { acceptPct: acc, msPerDraft },
   };
+
+  // ---- GATE SECCO della riga 7: generare con draft+verify deve dare gli
+  // STESSI token della generazione sequenziale. Non "quasi": identici, uno per
+  // uno. E' l'unico gate che distingue una speculazione corretta da una che
+  // accetta draft sbagliati — e l'unico che si accorge di uno stato ricorrente
+  // non riparato, che altrimenti produce testo plausibile e diverso.
+  const P = 24, N = 16;
+  const prefill = async (): Promise<number> => {
+    model.resetState();
+    let a = -1;
+    for (let i = 0; i < P; i++) a = await model.step(tokens[i], i);
+    return a;
+  };
+  // Il cronometro parte DOPO il prefill in entrambi i bracci: 24 posizioni di
+  // prefill dentro un ms/token su 16 token valgono ~50 ms a token e
+  // renderebbero i due numeri incomparabili con qualunque altra misura.
+  let nx = await prefill();
+  const t2 = performance.now();
+  const seqRef: number[] = [];
+  for (let k = 0, q = P; k < N; k++, q++) { seqRef.push(nx); nx = await model.step(nx, q); }
+  const seqMs = (performance.now() - t2) / N;
+
+  nx = await prefill();
+  const t3 = performance.now();
+  const seqSpec: number[] = [];
+  let q = P, passes = 0, acceptedPasses = 0;
+  while (seqSpec.length < N) {
+    // h_{q-1} e' in `x`; il draft e' l'ipotesi su t_{q+1}
+    const dr = await model.mtpDraft!(nx);
+    const [b0, b1] = await model.specVerify!(nx, dr, q);
+    passes++;
+    seqSpec.push(nx);
+    if (dr === b0) { acceptedPasses++; seqSpec.push(b0); nx = b1; q += 2; }
+    else { model.specRollback!(); nx = b0; q += 1; }
+  }
+  seqSpec.length = N;
+  const specMs = (performance.now() - t3) / N;
+  const pf = model.perf();
+  model.destroy();
+
+  let firstDiff = -1;
+  for (let i = 0; i < N; i++) if (seqSpec[i] !== seqRef[i]) { firstDiff = i; break; }
+  const accPass = (100 * acceptedPasses) / Math.max(1, passes);
+  const rInv: KResult = {
+    kernel: "q35-mtp-specdec-invariance",
+    pass: firstDiff < 0,
+    maxAbs: NaN, maxRel: NaN,
+    note: firstDiff >= 0
+      ? `DIVERGE al token ${firstDiff}: spec ${seqSpec[firstDiff]} vs sequenziale ${seqRef[firstDiff]}`
+      : `${N}/${N} token IDENTICI alla generazione sequenziale · ${passes} passate, ${acceptedPasses} accettate (${accPass.toFixed(0)}%), ${pf.specRejects} rollback · ${specMs.toFixed(1)} ms/token contro ${seqMs.toFixed(1)} sequenziale (la passata a 2 righe rilegge i pesi: serve il piano batch, docket)`,
+    metrics: { acceptedPct: accPass, msPerTokenSpec: specMs, msPerTokenSeq: seqMs },
+  };
+  return [rAccept, rInv];
 }
 
 /** Full-model GPU 4B teacher-forced: argmax GPU == ORACOLO sul golden smoke (fase 4 slice 3). */
@@ -3612,7 +3664,7 @@ async function main(): Promise<void> {
     results.push(await testSigmoidMul(g));
     results.push(...await testQ35AttnLayersReal(g));
     results.push(await testQ35MtpHeadReal(g)); // testa MTP: blocco su GPU == cpuref (fase 7 it.52)
-    results.push(await testQ35MtpDraft4B(g)); // testa MTP nel modello vero: accept-rate (fase 7 it.53)
+    results.push(...await testQ35MtpDraft4B(g)); // testa MTP nel modello vero: accept-rate + gate secco (fase 7 it.53-54)
     results.push(await testQ35Model4B(g)); // full-model: argmax GPU == oracolo (slice 3)
     results.push(...await testQ35MoeBlockReal(g)); // MoE 35B block reale (fase 7 slice 3a)
 
