@@ -24,11 +24,16 @@ che riusa davvero i pesi, la stessa passata starebbe a ~23,5 ms per token, cioè
 **~42 token/s** — sopra l'obiettivo. È una famiglia di kernel che qui non
 esiste, ed è un progetto suo, non una fetta.
 
-**Prossimo passo, non serve una tua decisione**: chiudere il checkpoint di
-misura scrivendo l'artefatto che manca (il JSON con lo stato dell'host
-dichiarato) e poi la fase 9, la chiusura del goal. Il codice della testa resta
-in albero: è gated e testato, e torna utile il giorno in cui quei kernel
-esistono.
+**Il checkpoint di misura è chiuso**: l'esclusione è ora un artefatto committato
+(`results/engine/specdec-4090-2026-08-12T21-49-18-513Z.json`) con lo stato
+dell'host dichiarato, il verdetto scritto accanto ai numeri e un runner che lo
+rigenera. La ri-misura conferma entro il rumore: 1,18 volte più lento contro
+1,19 della prima.
+
+**Prossimo passo, non serve una tua decisione**: la fase 9, chiusura del goal —
+checklist del contratto voce per voce, non-regressione GLM fresca, e il triage
+finale del docket. Il codice della testa resta in albero: è gated e testato, e
+torna utile il giorno in cui quei kernel esistono.
 
 **Da sapere**: il goal si chiuderà **senza aver raggiunto i 30 token/s**. La
 parità fra i due modelli — che era il contratto principale — è raggiunta e
