@@ -2736,3 +2736,61 @@ tensori, nessun `blk.32`. Suite **442|9** (era 440|9), tsc pulito.
 
 Prossimo: il ciclo draft/verify. Tutte le primitive esistono (it.47), quindi e'
 orchestrazione; il primo numero utile sara' l'accept-rate sul 4B.
+
+## it.49 (2026-08-12, fase 7) — la testa MTP misurata in CPU: ordine deciso, accept-rate 31,8% (e sotto le attese)
+
+Iterazione 3 di 2-4 (fuori stima di 1). Distanza dall'obiettivo: 13,4 / 22,6
+contro 30 tok/s.
+
+**Perche' un riferimento CPU prima della GPU.** Il gate della riga 7 ("token
+accettati == token del greedy") e' INSENSIBILE alla qualita' della testa: la
+verifica scarta i draft sbagliati, quindi una testa scritta male passa il gate e
+si manifesta come accept-rate basso — cioe' come un risultato negativo SULL'MTP
+invece che come un bug nostro. Questo numero e' la prova indipendente che al
+gate manca, e costa zero GPU.
+
+`Q35CpuRefModel.mtpDraftRef` in f64: h'_i = eh_proj([norm(emb(t_{i+1})) ;
+norm(hidden_i)]) → blocco della testa (attn full forzata + ffn) →
+shared_head_norm → lm_head condivisa. Due aggiunte minime al cpuref: un hook
+sull'hidden finale e un `forceFull` su `attnLayerRef` (assente = comportamento
+di prima, bit per bit).
+
+**ORDINE DI `eh_proj` DECISO PER MISURA, non indovinato.** Non e' documentato nei
+metadata; provati entrambi sullo STESSO hidden:
+
+| concatenazione | accordo col modello | col corpus |
+|---|---|---|
+| **[emb ; hidden]** | **31,8%** (7/22) | 22,7% |
+| [hidden ; emb] | **0,0%** | 0,0% |
+
+Lo zero secco dell'ordine sbagliato e' la firma che cercavo: non e' "un po'
+peggio", e' rumore puro. **L'embedding va per primo.**
+
+**E HO MISURATO LA COSA SBAGLIATA AL PRIMO GIRO.** Il primo test confrontava la
+predizione col token VERO del corpus (22,7%) e falliva la soglia. Ma
+l'accept-rate non e' quello: in spec-dec il draft si accetta se coincide col
+**greedy del modello**, non col testo — e il modello stesso indovina il corpus
+circa a meta'. Bersaglio corretto: `argmax[i+1]` del forward, che avevo gia'.
+31,8% contro 22,7%: confondere i due sottostima la testa di quanto sbaglia il
+modello.
+
+**IL NUMERO E' BASSO, E LO DICO.** Per l'architettura NextH/MTP a una testa la
+letteratura riporta accettazioni molto piu' alte. 31,8% su 22 posizioni ha un
+intervallo largo (~15-55%) ed e' misurato sui PRIMI 24 token di un prompt, cioe'
+nel contesto piu' povero che esista. Ma potrebbe anche essere un residuo di
+implementazione, e ho un candidato concreto: **le posizioni RoPE del blocco
+della testa**. `attnLayerRef` usa l'indice dell'array come posizione, mentre h'_i
+predice il token i+2 e dovrebbe stare alla posizione i+1. Un off-by-one del
+genere degrada l'attenzione senza distruggerla — che e' esattamente la forma di
+questo risultato.
+
+Non lo correggo a naso: la prossima iterazione misura con l'offset e su un
+campione piu' lungo, e i due numeri lo dicono.
+
+**Se 31,8% regge**, un draft per token da' ~1,3x sul decode al netto della testa
+(120,6 M parametri = ~3% del 4B): il 4B passerebbe da 25,9 a ~34 tok/s, cioe'
+**sopra i 30 dell'obiettivo**, e il 35B da 22,6 a ~29,8. E' la prima proiezione
+di questa sessione che parla all'obiettivo invece che al contratto.
+
+Test gated su `Q35_MTP=1` (116 s: forward f64 + due passate sul vocabolario da
+248.320), fuori dalla suite di default. Suite **442|10**, tsc pulito.

@@ -231,7 +231,7 @@ export class Q35CpuRefModel {
    * l'argmax dei logits (predizione del token successivo). Streaming
    * per-layer: attivazioni [T][d] in RAM, pesi un layer alla volta.
    */
-  forward(tokens: number[], onLayer?: (l: number) => void): { argmax: Int32Array; lastLogits: Float32Array } {
+  forward(tokens: number[], onLayer?: (l: number) => void, onFinalHidden?: (h: Float64Array[]) => void): { argmax: Int32Array; lastLogits: Float32Array } {
     const S = this.shape;
     const T = tokens.length;
     const d = S.dModel;
@@ -296,6 +296,7 @@ export class Q35CpuRefModel {
       }
     }
 
+    onFinalHidden?.(hidden);
     const outNorm = this.dequant("output_norm.weight");
     const head = this.head();
     const argmax = new Int32Array(T);
@@ -318,12 +319,95 @@ export class Q35CpuRefModel {
   }
 
   /**
+   * TESTA MTP (NextN) in f64 — riferimento della fase 7.
+   *
+   * Data la posizione i, la testa vede l'hidden FINALE del modello a i (prima
+   * di `output_norm`) e l'embedding del token i+1 — cioe' quello che il modello
+   * ha appena predetto — e predice il token **i+2**. E' un token di draft
+   * gratuito per ogni token vero.
+   *
+   * ORDINE DELLA CONCATENAZIONE: `eh_proj` e' [2*d, d] e i due ingressi sono
+   * l'embedding e l'hidden, ma QUALE dei due venga prima nel file non e'
+   * documentato nei metadata e NON lo indovino. `embFirst` lo rende un
+   * parametro, e il test lo risolve per misura: l'ordine giusto predice il
+   * token i+2 molto sopra il caso, quello sbagliato no. La misura che serve
+   * comunque (accept-rate) e' anche il discriminante.
+   *
+   * PERCHE' ESISTE QUESTO RIFERIMENTO, e non si va diritti alla GPU: il gate
+   * dello spec-dec ("token accettati == token del greedy") e' INSENSIBILE alla
+   * qualita' della testa, perche' la verifica scarta i draft sbagliati. Una
+   * testa implementata male passerebbe il gate e si manifesterebbe come
+   * accept-rate basso, cioe' come un risultato negativo SULL'MTP invece che
+   * come un bug nostro. Questo numero, misurato prima di scrivere una riga di
+   * WGSL, e' la prova indipendente che manca al gate.
+   */
+  mtpDraftRef(tokens: number[], embFirst: boolean, hiddenIn?: Float64Array[]): Int32Array {
+    const S = this.shape;
+    if (S.mtpLayers < 1) throw new Error("q35cpuref: il file non porta la testa MTP (mtpLayers 0)");
+    const d = S.dModel;
+    const T = tokens.length;
+    // `hiddenIn` evita di rifare il forward quando si provano i due ordini di
+    // concatenazione sullo STESSO campione: il modello e' la parte cara.
+    let hidden: Float64Array[] = hiddenIn ?? [];
+    if (!hiddenIn) this.forward(tokens, undefined, (h) => { hidden = h.map((v) => Float64Array.from(v)); });
+
+    const b = `blk.${S.nLayer}.`;
+    const enorm = this.dequant(`${b}nextn.enorm.weight`);
+    const hnorm = this.dequant(`${b}nextn.hnorm.weight`);
+    const ehProj = this.dequant(`${b}nextn.eh_proj.weight`);
+    const shNorm = this.dequant(`${b}nextn.shared_head_norm.weight`);
+
+    // h'_i = eh_proj([norm(emb(t_{i+1})) ; norm(hidden_i)]) — l'ultima posizione
+    // non ha un t_{i+1} noto, quindi la testa produce T-1 draft.
+    const hp: Float64Array[] = [];
+    for (let i = 0; i + 1 < T; i++) {
+      const e = rmsnormF64(this.embedRow(tokens[i + 1]), enorm, S.rmsEps);
+      const hh = rmsnormF64(hidden[i], hnorm, S.rmsEps);
+      const cat = new Float64Array(2 * d);
+      cat.set(embFirst ? e : hh, 0);
+      cat.set(embFirst ? hh : e, d);
+      hp.push(matVecF64(ehProj, cat, d));
+    }
+
+    // Il blocco della testa e' un layer normale: attn (FULL, forzato) + ffn.
+    const attnOut = this.attnLayerRef(S.nLayer, hp, true);
+    const postNorm = this.dequant(`${b}post_attention_norm.weight`);
+    const wg = this.dequant(`${b}ffn_gate.weight`);
+    const wu = this.dequant(`${b}ffn_up.weight`);
+    const wd = this.dequant(`${b}ffn_down.weight`);
+    const dFfn = S.dFfn as number;
+    const head = this.head();
+    const pred = new Int32Array(hp.length);
+    for (let t = 0; t < hp.length; t++) {
+      const x = new Float64Array(d);
+      for (let i = 0; i < d; i++) x[i] = hp[t][i] + attnOut[t][i];
+      const xn = rmsnormF64(x, postNorm, S.rmsEps);
+      const gt = matVecF64(wg, xn, dFfn);
+      const up = matVecF64(wu, xn, dFfn);
+      for (let i = 0; i < dFfn; i++) gt[i] = silu(gt[i]) * up[i];
+      const dn = matVecF64(wd, gt, d);
+      for (let i = 0; i < d; i++) x[i] += dn[i];
+      // lm_head CONDIVISA col modello, preceduta dalla norma della testa
+      const hn = rmsnormF64(x, shNorm, S.rmsEps);
+      let best = -Infinity, bi = -1;
+      for (let r = 0; r < S.vocab; r++) {
+        let acc = 0;
+        const base = r * d;
+        for (let i = 0; i < d; i++) acc += head[base + i] * hn[i];
+        if (acc > best) { best = acc; bi = r; }
+      }
+      pred[t] = bi;
+    }
+    return pred;
+  }
+
+  /**
    * Ramo ATTENTION del layer l (pre-residual), teacher-forced su tutte le
    * posizioni: attn_norm + (full-attn | DeltaNet). Fonte unica anche per i
    * fixture del ktest GPU (fase 4 slice 2): il riferimento del layer è
    * QUESTO, non una copia.
    */
-  attnLayerRef(l: number, hidden: Float64Array[]): Float64Array[] {
+  attnLayerRef(l: number, hidden: Float64Array[], forceFull?: boolean): Float64Array[] {
     const S = this.shape;
     const T = hidden.length;
     const d = S.dModel;
@@ -331,7 +415,10 @@ export class Q35CpuRefModel {
     const attnNorm = this.dequant(`${b}attn_norm.weight`);
     const attnOut: Float64Array[] = [];
 
-    if (q35IsFullAttn(S, l)) {
+    // `forceFull` esiste per la TESTA MTP: sta a blk.<nLayer> e la regola
+    // dell'interval la direbbe deltanet (sul 4B 32 % 4 === 0), mentre il file
+    // porta attn_q/k/v. Assente = comportamento di prima, bit per bit.
+    if (forceFull ?? q35IsFullAttn(S, l)) {
         const wq = this.dequant(`${b}attn_q.weight`);
         const wk = this.dequant(`${b}attn_k.weight`);
         const wv = this.dequant(`${b}attn_v.weight`);
