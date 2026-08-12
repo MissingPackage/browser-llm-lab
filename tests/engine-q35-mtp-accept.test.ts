@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { existsSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Q35CpuRefModel, type Q35ByteSource } from "../src/engine/q35cpurefmodel";
+import { Q35CpuRefModel, type Q35ByteSource, type Q35MtpProbe } from "../src/engine/q35cpurefmodel";
 
 // ACCEPT-RATE INTRINSECO della testa MTP, misurato in f64 PRIMA di scrivere una
 // riga di WGSL (fase 7, it.49).
@@ -41,8 +41,13 @@ describe.skipIf(!run)("accept-rate intrinseco della testa MTP (4B, f64)", () => 
   it("predice il token i+2 molto sopra il caso, e l'ordine di eh_proj si decide qui", () => {
     const golden = JSON.parse(readFileSync(GOLDEN, "utf8"));
     const p0 = golden.prompts[0];
-    // Un campione corto: ogni posizione costa un giro sul vocabolario in f64.
-    const tokens: number[] = [...p0.promptTokens, ...p0.generated].slice(0, 24);
+    // Ogni posizione costa un giro sul vocabolario in f64, quindi la finestra e'
+    // corta per forza — ma 24 token (22 posizioni) NON discriminano: ±1 hit vale
+    // ±4,5 punti, e it.51 ha visto l'ablazione dell'attenzione cambiare 17
+    // predizioni su 23 lasciando il conteggio identico. 64 e' il compromesso
+    // (~6 min); `Q35_MTP_WINDOW` la muove senza toccare il file.
+    const WINDOW = Number(process.env.Q35_MTP_WINDOW ?? 64);
+    const tokens: number[] = [...p0.promptTokens, ...p0.generated].slice(0, WINDOW);
 
     const m = new Q35CpuRefModel(fileSource(MODEL));
     let hidden: Float64Array[] = [];
@@ -56,31 +61,69 @@ describe.skipIf(!run)("accept-rate intrinseco della testa MTP (4B, f64)", () => 
     //    QUESTO e' l'accept-rate: in spec-dec il draft si accetta se coincide
     //    col greedy del target, non col testo vero. Confonderli sottostima la
     //    testa di quanto il modello stesso sbaglia sul corpus (circa meta').
-    const score = (embFirst: boolean, posOffset = 0): { corpus: number; model: number; hitM: number; tot: number } => {
-      const pred = m.mtpDraftRef(tokens, embFirst, hidden, posOffset);
-      let hitC = 0, hitM = 0, tot = 0;
+    //
+    // RANGO E LOG-PROB, non solo il top-1 (it.51). Il conteggio degli hit
+    // quantizza: su poche decine di posizioni non distingue una testa che lavora
+    // da una menomata. Il rango del bersaglio nei logits della testa (0 = top-1)
+    // e la sua log-prob misurano la stessa cosa in continuo e costano zero — i
+    // logits li stiamo gia' calcolando tutti per fare l'argmax.
+    const score = (embFirst: boolean, dbg?: Q35MtpProbe) => {
+      const ranks: number[] = [], lps: number[] = [], onTraj: boolean[] = [];
+      const probe: Q35MtpProbe = {
+        ...dbg,
+        onLogits: (t, lg) => {
+          if (t + 2 >= tokens.length) return; // l'ultima posizione non ha bersaglio
+          const target = argmax[t + 1];
+          let max = -Infinity;
+          for (let r = 0; r < lg.length; r++) if (lg[r] > max) max = lg[r];
+          let sum = 0, rank = 0;
+          for (let r = 0; r < lg.length; r++) { sum += Math.exp(lg[r] - max); if (lg[r] > lg[target]) rank++; }
+          ranks.push(rank);
+          lps.push(lg[target] - max - Math.log(sum));
+          // "on-trajectory": il greedy del modello coincide col corpus, cioe' la
+          // sequenza somiglia a quella che il modello genererebbe da solo — che
+          // e' l'UNICO regime in cui lo spec-dec gira davvero.
+          onTraj.push(argmax[t + 1] === tokens[t + 2]);
+        },
+      };
+      const pred = m.mtpDraftRef(tokens, embFirst, hidden, probe);
+      let hitC = 0, hitM = 0, tot = 0, hitOn = 0, totOn = 0;
       for (let i = 0; i + 2 < tokens.length; i++) {
         tot++;
         if (pred[i] === tokens[i + 2]) hitC++;
         if (pred[i] === argmax[i + 1]) hitM++;
+        if (argmax[i + 1] === tokens[i + 2]) { totOn++; if (pred[i] === argmax[i + 1]) hitOn++; }
       }
-      return { corpus: (100 * hitC) / tot, model: (100 * hitM) / tot, hitM, tot };
+      const med = (a: number[]) => (a.length ? [...a].sort((x, y) => x - y)[a.length >> 1] : NaN);
+      const mean = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN);
+      return {
+        corpus: (100 * hitC) / tot, model: (100 * hitM) / tot, hitM, tot, pred,
+        onTraj: { pct: (100 * hitOn) / (totOn || 1), hit: hitOn, tot: totOn },
+        rankMean: mean(ranks), rankMed: med(ranks), rankTop1: ranks.filter((r) => r === 0).length,
+        rankTop8: ranks.filter((r) => r < 8).length, lpMean: mean(lps),
+      };
     };
 
-    const embFirst = score(true);
+    // ABLAZIONE DELL'ATTENZIONE (it.51). Il blocco della testa e' l'unico pezzo
+    // del modello che nessun golden copre: e' il controllo che il gate dello
+    // spec-dec non da'. it.51 con finestra 24: accept-rate IDENTICO (7/22) ma 17
+    // predizioni su 23 diverse e ‖attn‖ ≈ 0,97·‖h'‖ — l'attenzione lavora, il
+    // conteggio non se ne accorge. Con rango e log-prob si vede il segno.
+    let stats = { attnRel: 0, ffnRel: 0 };
+    const embFirst = score(true, { onStats: (s) => { stats = s; } });
     const hidFirst = score(false);
-    // SFASAMENTO DEL ROPE (it.50): h'_i predice il token i+2 ed e' costruito su
-    // emb(t_{i+1}), quindi la sua posizione dovrebbe essere i+1 e non i. Un
-    // off-by-one qui degrada l'attenzione senza distruggerla — la forma esatta
-    // di un accept-rate "funziona ma sotto le attese". Si misura, non si
-    // corregge a naso: se +1 non muove il numero, l'ipotesi cade.
-    const off1 = score(true, 1);
-    // eslint-disable-next-line no-console
-    console.log(`[mtp] rope pos i   -> ${embFirst.model.toFixed(1)}%  |  rope pos i+1 -> ${off1.model.toFixed(1)}%  ` +
-      `(${off1.hitM}/${off1.tot})`);
-    // eslint-disable-next-line no-console
-    console.log(`[mtp] [emb;hidden]: accept-rate vs modello ${embFirst.hitM}/${embFirst.tot} = ${embFirst.model.toFixed(1)}% ` +
-      `(vs corpus ${embFirst.corpus.toFixed(1)}%)  |  [hidden;emb]: ${hidFirst.model.toFixed(1)}% (corpus ${hidFirst.corpus.toFixed(1)}%)`);
+    const noAttn = score(true, { ablateAttn: true });
+    let diffAbl = 0;
+    for (let i = 0; i < embFirst.pred.length; i++) if (embFirst.pred[i] !== noAttn.pred[i]) diffAbl++;
+    const dump = (s: ReturnType<typeof score>) => ({
+      accept: s.model, corpus: s.corpus, hit: `${s.hitM}/${s.tot}`, onTraj: s.onTraj,
+      rankMean: s.rankMean, rankMed: s.rankMed, top1: s.rankTop1, top8: s.rankTop8, lpMean: s.lpMean,
+    });
+    writeFileSync("/tmp/mtp-probe.json", JSON.stringify({
+      window: tokens.length, embFirst: dump(embFirst), hidFirst: dump(hidFirst),
+      ablateAttn: { ...dump(noAttn), predDiverse: diffAbl, su: embFirst.pred.length },
+      magnitudini: stats,
+    }, null, 2));
 
     const best = Math.max(embFirst.model, hidFirst.model);
     // Il caso e' 1/248 320 ≈ 0%. Una testa CORRETTA su testo reale sta molto

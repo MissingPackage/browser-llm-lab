@@ -50,6 +50,12 @@ function matVecF64(w: Float32Array, x: Float64Array, rows: number): Float64Array
   return out;
 }
 
+function norm2(v: Float64Array): number {
+  let s = 0;
+  for (let i = 0; i < v.length; i++) s += v[i] * v[i];
+  return Math.sqrt(s);
+}
+
 /** rope text-only (mrope collassato): in place su vec[?·stride], primi 64 canali. */
 function ropeText(vec: Float64Array, nVec: number, stride: number, nDims: number, pos: number, freqBase: number): void {
   const half = nDims / 2;
@@ -136,6 +142,27 @@ export function q35MoeFfnRefF64(
 export interface Q35ByteSource {
   size: number;
   slice(off: number, len: number): Uint8Array;
+}
+
+/**
+ * Sonda diagnostica della testa MTP (fase 7, it.51). Esiste perche' il blocco
+ * della testa e' l'unico pezzo del modello senza un riferimento esterno contro
+ * cui misurarsi: il golden copre i 32 layer, la testa no. `ablateAttn` da' il
+ * controllo che manca — se l'accept-rate non cambia azzerando l'attenzione,
+ * l'attenzione non sta partecipando.
+ */
+export interface Q35MtpProbe {
+  /** azzera il contributo dell'attenzione nel blocco della testa (ablazione) */
+  ablateAttn?: boolean;
+  /** magnitudini medie dei due rami rispetto al residuo h' */
+  onStats?: (s: { attnRel: number; ffnRel: number }) => void;
+  /**
+   * Logits della testa alla posizione t. Il BUFFER E' RIUSATO fra le posizioni:
+   * chi serve tenerlo se lo copia. Esiste perche' il top-1 e' una statistica
+   * pessima su poche decine di posizioni (±1 hit = ±4,5 punti), mentre rango e
+   * log-prob del token bersaglio misurano la stessa cosa senza quantizzarla.
+   */
+  onLogits?: (t: number, logits: Float32Array) => void;
 }
 
 export class Q35CpuRefModel {
@@ -341,7 +368,7 @@ export class Q35CpuRefModel {
    * come un bug nostro. Questo numero, misurato prima di scrivere una riga di
    * WGSL, e' la prova indipendente che manca al gate.
    */
-  mtpDraftRef(tokens: number[], embFirst: boolean, hiddenIn?: Float64Array[], posOffset = 0): Int32Array {
+  mtpDraftRef(tokens: number[], embFirst: boolean, hiddenIn?: Float64Array[], dbg?: Q35MtpProbe): Int32Array {
     const S = this.shape;
     if (S.mtpLayers < 1) throw new Error("q35cpuref: il file non porta la testa MTP (mtpLayers 0)");
     const d = S.dModel;
@@ -370,7 +397,7 @@ export class Q35CpuRefModel {
     }
 
     // Il blocco della testa e' un layer normale: attn (FULL, forzato) + ffn.
-    const attnOut = this.attnLayerRef(S.nLayer, hp, true, posOffset);
+    const attnOut = this.attnLayerRef(S.nLayer, hp, true);
     const postNorm = this.dequant(`${b}post_attention_norm.weight`);
     const wg = this.dequant(`${b}ffn_gate.weight`);
     const wu = this.dequant(`${b}ffn_up.weight`);
@@ -378,14 +405,20 @@ export class Q35CpuRefModel {
     const dFfn = S.dFfn as number;
     const head = this.head();
     const pred = new Int32Array(hp.length);
+    const lg = dbg?.onLogits ? new Float32Array(S.vocab) : null;
+    let sumAttnRel = 0, sumFfnRel = 0;
     for (let t = 0; t < hp.length; t++) {
       const x = new Float64Array(d);
-      for (let i = 0; i < d; i++) x[i] = hp[t][i] + attnOut[t][i];
+      for (let i = 0; i < d; i++) x[i] = hp[t][i] + (dbg?.ablateAttn ? 0 : attnOut[t][i]);
       const xn = rmsnormF64(x, postNorm, S.rmsEps);
       const gt = matVecF64(wg, xn, dFfn);
       const up = matVecF64(wu, xn, dFfn);
       for (let i = 0; i < dFfn; i++) gt[i] = silu(gt[i]) * up[i];
       const dn = matVecF64(wd, gt, d);
+      if (dbg?.onStats) {
+        sumAttnRel += norm2(attnOut[t]) / norm2(hp[t]);
+        sumFfnRel += norm2(dn) / norm2(hp[t]);
+      }
       for (let i = 0; i < d; i++) x[i] += dn[i];
       // lm_head CONDIVISA col modello, preceduta dalla norma della testa
       const hn = rmsnormF64(x, shNorm, S.rmsEps);
@@ -394,10 +427,13 @@ export class Q35CpuRefModel {
         let acc = 0;
         const base = r * d;
         for (let i = 0; i < d; i++) acc += head[base + i] * hn[i];
+        if (lg) lg[r] = acc;
         if (acc > best) { best = acc; bi = r; }
       }
       pred[t] = bi;
+      if (lg) dbg?.onLogits?.(t, lg);
     }
+    dbg?.onStats?.({ attnRel: sumAttnRel / hp.length, ffnRel: sumFfnRel / hp.length });
     return pred;
   }
 
@@ -407,7 +443,7 @@ export class Q35CpuRefModel {
    * fixture del ktest GPU (fase 4 slice 2): il riferimento del layer è
    * QUESTO, non una copia.
    */
-  attnLayerRef(l: number, hidden: Float64Array[], forceFull?: boolean, posOffset = 0): Float64Array[] {
+  attnLayerRef(l: number, hidden: Float64Array[], forceFull?: boolean): Float64Array[] {
     const S = this.shape;
     const T = hidden.length;
     const d = S.dModel;
@@ -451,12 +487,15 @@ export class Q35CpuRefModel {
             const kh = k.subarray(h * hd, (h + 1) * hd);
             kh.set(rmsnormF64(kh as Float64Array, kNormW, S.rmsEps));
           }
-          // `posOffset` esiste per la testa MTP: h'_i predice il token i+2 ed
-          // e' costruito su emb(t_{i+1}), quindi la sua posizione nel rope e'
-          // i+1, non i. La causalita' NON si sposta (resta sull'indice): qui
-          // cambia solo l'angolo del rope. Default 0 = comportamento di prima.
-          ropeText(q, S.nHead, hd, S.ropeDims, t + posOffset, S.ropeFreqBase);
-          ropeText(k, S.nKvHead, hd, S.ropeDims, t + posOffset, S.ropeFreqBase);
+          // NIENTE offset di posizione qui, e non e' una svista (it.51): il rope
+          // e' RELATIVO. Ruotando q_t e k_p con lo stesso shift, il punteggio
+          // dipende solo da (t-p) e uno shift uniforme e' un no-op esatto —
+          // vale anche per la testa MTP, dove h'_i "sta" a i+1 ma TUTTE le sue
+          // posizioni scalano insieme. Un `posOffset` cablato qui (it.50) non
+          // puo' che misurare zero: rimosso perche' non e' un knob, e' un
+          // invariante.
+          ropeText(q, S.nHead, hd, S.ropeDims, t, S.ropeFreqBase);
+          ropeText(k, S.nKvHead, hd, S.ropeDims, t, S.ropeFreqBase);
           qs.push(q); gates.push(gate); ks.push(k); vs.push(v);
         }
         for (let t = 0; t < T; t++) {

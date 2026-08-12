@@ -7,23 +7,28 @@ Qwen porta con sé una testa ausiliaria (MTP) che, guardando lo stato interno,
 tira a indovinare il token successivo-successivo. Se indovina spesso, ogni
 passata del modello produce due token invece di uno.
 
-L'ho fatta girare in CPU e indovina il **31,8%** delle volte — utile, ma sotto
-le attese per questa architettura.
+L'ho fatta girare in CPU: indovina il **74%** delle volte nel regime che conta —
+quello in cui il decode gira davvero, cioè sul testo che il modello sta
+producendo lui. Sul testo umano (più difficile, e non è il caso d'uso) fa il 50%.
 
-**C'è un'anomalia da spiegare prima di andare avanti.** Sospettavo che il blocco
-della testa ricevesse le posizioni sfasate di uno; ho aggiunto lo sfasamento e
-misurato: stesso 31,8%, e soprattutto **le predizioni sono identiche una per
-una** (0 diverse su 23). Non può essere: spostare di una posizione cambia
-l'angolo di rotazione di circa un radiante, e 23 scelte su 248.320 possibilità
-non restano tutte uguali per caso. O il parametro non arriva al calcolo, o
-l'attenzione dentro quel blocco non sta facendo nulla — e quale delle due non
-l'ho stabilito.
+**Il 31,8% di ieri era rumore di campionamento, non un difetto**: 22 posizioni
+di campione, dove un solo colpo vale 4,5 punti. Su 62 posizioni i numeri sopra.
 
-**Prossimo passo, non serve una tua decisione**: azzerare il contributo
-dell'attenzione nel blocco della testa e rimisurare. Se il numero non cambia,
-l'attenzione è inerte (e allora il problema è lì); se cambia, il bug è nel
-parametro che ho appena aggiunto. Comando di partenza: `Q35_MTP=1 npx vitest run
-tests/engine-q35-mtp-accept.test.ts` (~2 min, niente GPU).
+**L'anomalia di ieri è chiusa e non era un bug.** Spostare di uno le posizioni
+non poteva cambiare niente: quel meccanismo di rotazione guarda solo le
+*distanze* fra posizioni, mai i loro valori assoluti, e nella testa scalano
+tutte insieme. Il parametro inutile è stato rimosso. L'attenzione dentro la
+testa funziona — azzerandola l'accuratezza scende da 50 a 31 — e la nostra
+implementazione combacia voce per voce con quella di riferimento di vLLM, letta
+oggi.
+
+**Prossimo passo, non serve una tua decisione**: portare la testa sulla GPU e
+chiudere il ciclo vero — la testa propone un token, il modello lo verifica nella
+stessa passata, si tiene solo se coincide. Il gate della fase è secco: i token
+accettati devono essere identici a quelli prodotti oggi. Se il 74% regge, il 4B
+passa da 25,9 a ~39 token/s (col 50%, ~34): il primo superamento
+dell'obiettivo. Riferimento CPU rieseguibile: `Q35_MTP=1 npx vitest run
+tests/engine-q35-mtp-accept.test.ts` (~5 min, niente GPU).
 
 ## 2. Mappa
 
@@ -31,9 +36,10 @@ tests/engine-q35-mtp-accept.test.ts` (~2 min, niente GPU).
 restando usabile: almeno **30 token/secondo** e **primo token entro 4 secondi**.
 
 **Distanza adesso**, e nessuna configurazione ci arriva: GLM-4.7-Flash **13,4
-tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. Se il
-31,8% della testa MTP regge, il 4B arriva a ~34 — il primo superamento — e il
-35B a ~29,8.
+tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. Con
+la testa MTP al 74% il 4B arriva a ~39 e il 35B a ~34; anche allo scenario
+prudente (50%) sono ~34 e ~29,4. Il costo del draft è ~15% di una passata, non
+il 3% che avevo scritto ieri: rifà anche la proiezione sul vocabolario.
 
 **Decisioni prese** (indice: il contenuto vive nel posto indicato, non qui)
 
@@ -46,9 +52,10 @@ tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. Se i
 
 **Nebbia** (non ancora deciso né specificato)
 
-- Se il 31,8% sia reale o un errore di posizioni
-- Quale accept-rate serva perché la predizione doppia paghi sul 35B, dove la
-  testa costa di più
+- Quanto valga davvero il 74%: 23 posizioni danno un intervallo 52-90%, e il
+  campione è un prompt solo
+- Se il 35B abbia lo stesso accept-rate: mai misurato (il riferimento CPU sul
+  35B costerebbe ore; si misurerà sulla GPU)
 - Se GLM possa avere una testa equivalente: mai valutato
 - Cosa debbano misurare i "riferimenti" — il percorso storico (confrontabile) o
   quello di oggi (vero). Nessuno dei due da solo basta

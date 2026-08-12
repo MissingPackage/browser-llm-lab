@@ -2826,3 +2826,70 @@ e' la (2) e l'attenzione della testa non sta facendo niente. Se cambia, e' la
 
 Il 31,8% resta il numero da spiegare, e l'ordine di `eh_proj` resta deciso
 (it.49): quello non e' in discussione.
+
+## it.51 (2026-08-12, fase 7) — l'anomalia era il misuratore: accept-rate 50,0% (73,9% in traiettoria)
+
+Iterazione 5 di 2-4 sulla fase 7 (fuori stima, sotto il 3x di ruling C9).
+
+**Le due ipotesi di it.50 sono ENTRAMBE false, e la terza non l'avevo scritta.**
+
+Ablazione dell'attenzione nel blocco della testa (`Q35MtpProbe.ablateAttn`),
+finestra 24, stesso hidden: accept-rate identico (7/22) ma **17 predizioni su 23
+diverse**, e ‖attn‖/‖h'‖ = 0,97. L'attenzione non e' inerte: pesa quanto il
+residuo e riscrive il 74% delle predizioni. Quindi non e' la (2). E non e'
+nemmeno la (1): il parametro arrivava.
+
+**Il rope e' RELATIVO, e questo chiude l'anomalia senza codice.** Ruotando q_t e
+k_p con lo stesso scarto, il punteggio dipende solo da (t−p): uno shift uniforme
+di tutte le posizioni e' un no-op ESATTO, e nella testa MTP tutte le posizioni
+scalano insieme per costruzione. I 23 argmax identici di it.50 erano il
+risultato atteso. Il ragionamento di it.50 ("~1 radiante non puo' lasciare tutto
+invariato") guardava l'angolo ASSOLUTO, che nel punteggio non entra mai.
+`posOffset` RIMOSSO da `attnLayerRef`/`mtpDraftRef`: non era un knob, era un
+invariante travestito da knob — e il suo zero e' costato un'iterazione.
+
+**Conferma esterna (vLLM `qwen3_5_mtp.py`, letto oggi)**, che it.49 aveva deciso
+per misura senza riferimento: concat `[inputs_embeds ; hidden_states]` —
+embedding PRIMO, come misurato — due RMSNorm separate sui due ingressi,
+`positions` passate **non modificate** al layer della testa, norma finale prima
+della lm_head condivisa. La nostra `mtpDraftRef` corrisponde voce per voce.
+
+**IL VERO BUG ERA LO STRUMENTO.** 22 posizioni: ±1 hit = ±4,5 punti, e infatti
+la testa e la sua ablazione davano lo STESSO 31,8% predicendo cose diverse nel
+74% dei casi. Sostituito il conteggio top-1 con **rango e log-prob del bersaglio
+nei logit della testa** (varianza molto piu' bassa, costo zero: i logit li
+calcolavamo gia' tutti per l'argmax) e finestra portata a 64 (`Q35_MTP_WINDOW`).
+
+Finestra 64, 62 posizioni, prompt 0 del golden 4B:
+
+| | accept vs modello | rango medio | mediana | top-8 | log-prob |
+|---|---|---|---|---|---|
+| **testa completa** | **50,0%** (31/62) | 12,6 | **1** | 44/62 | −2,90 |
+| attenzione azzerata | 30,6% (19/62) | 2536,9 | 3 | 40/62 | −4,09 |
+| ordine [hidden;emb] | 0,0% (0/62) | 37.526,3 | 5538 | 0/62 | −15,31 |
+
+Il 31,8% di it.49 era **rumore di campionamento**, non un difetto: su 62
+posizioni la testa fa 50,0%. E l'attenzione si vede finalmente: 50,0 contro
+30,6, rango medio 12,6 contro 2537, log-prob −2,90 contro −4,09. Lavora, e nella
+direzione giusta.
+
+**IL NUMERO CHE CONTA E' 73,9%.** Lo spec-dec gira sulla traiettoria del modello
+stesso, non su testo umano: il draft si accetta se coincide col greedy del
+target, e durante il decode la sequenza E' l'output greedy. Sulle 23 posizioni
+in cui il greedy del modello coincide col corpus — l'unico regime confrontabile
+col decode vero — la testa fa **17/23 = 73,9%**, in linea con la letteratura
+MTP. Il 50,0% mescola i due regimi e sottostima.
+
+**Intervalli, perche' 62 non sono 6200**: 31/62 = 50% ha un 95% CI ~38-62%;
+17/23 = 74% ha ~52-90%. Il segno e' solido (l'ablazione e' fuori intervallo),
+la cifra no.
+
+**Proiezione corretta, e it.49 sbagliava il COSTO.** it.49 contava la testa al 3%
+(120,6 M parametri su 4B) e dimenticava che il draft rifa' anche la **lm_head**:
+248.320x2560 = 636 M pesi, che a Q4_0 sono ~318 MB di traffico contro i ~2,6 GB
+del token. Costo reale del draft ~15%, non 3%. Con la verifica del draft nella
+STESSA passata (2 posizioni, regime memory-bound): (1+a)/1,15 → **1,30x a
+a=0,50** e **1,51x a a=0,74**. Il 4B da 25,9 tok/s passa a **33,7-39,1**: sopra i
+30 dell'obiettivo in entrambi gli scenari. Il 35B da 22,6 a 29,4-34,1.
+
+Suite **442|10**, tsc pulito. Test gated `Q35_MTP=1` (310 s a finestra 64).
