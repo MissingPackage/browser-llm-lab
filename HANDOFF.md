@@ -2,47 +2,37 @@
 
 ## 1. Next decidable
 
-**Fase 7 in corso: far predire due token per volta invece di uno.** Il modello
-Qwen porta con sé una testa ausiliaria (MTP) che, guardando lo stato interno,
-tira a indovinare il token successivo-successivo: se indovina spesso, ogni
-passata ne produce due.
+**Fase 7 chiusa, e la predizione doppia è esclusa dai numeri.** L'idea era: una
+testa ausiliaria propone il token successivo-successivo, il modello lo verifica
+insieme al prossimo, e ogni passata ne produce due. Il meccanismo è **costruito
+e dimostrato corretto** — 16 token generati con la proposta sono identici, uno
+per uno, ai 16 generati normalmente, con le proposte sbagliate disfatte per
+davvero. La testa indovina il 50% delle volte sul testo umano e il 70-74% su
+quello che il modello produce da sé.
 
-**Il ciclo funziona ed è dimostrato corretto; quello che manca è la
-convenienza.** La testa indovina il 50% delle volte sul testo umano e il **74%**
-nel regime in cui il decode gira davvero; sulla GPU il conteggio coincide col
-riferimento CPU (31 su 62) e un draft costa 5,5 ms. Il gate secco della fase è
-passato: 16 token generati con la proposta della testa sono **gli stessi 16**
-della generazione normale, con 5 proposte rifiutate e disfatte per davvero — il
-pezzo difficile, perché 24 layer su 32 hanno una memoria interna che una
-proposta sbagliata corrompe in modo plausibile. (Storia: journal it.51-55.)
+**Non paga lo stesso**: 41,8 ms per token contro 34,4 della generazione
+normale. E la causa l'ho **letta nel codice**, non dedotta: i nostri kernel
+"batch" mettono la riga su una dimensione del dispatch e **ogni riga rilegge i
+pesi**. Fondono le chiamate, non riusano i dati. Verificare due posizioni costa
+1,7-1,9 volte una, mentre la predizione doppia paga solo se costa ~1. L'unica
+leva rimasta (fare la proiezione finale una volta invece di due) vale ~5 ms e
+arriva a 38,6: sopra il sequenziale anche nel caso migliore, quindi non l'ho
+costruita.
 
-**Ma oggi il meccanismo è più lento, non più veloce.** Tre misure sullo stesso
-host, a parità di token prodotti: generazione normale **34,6 ms/token**,
-speculativa una posizione alla volta **48,8**, speculativa a due posizioni in
-un colpo **41,2**. Far leggere i pesi una volta sola ha recuperato il 16%, e
-non basta.
+**Il premio, per chi riprende**: con un moltiplicatore matriciale a più righe
+che riusa davvero i pesi, la stessa passata starebbe a ~23,5 ms per token, cioè
+**~42 token/s** — sopra l'obiettivo. È una famiglia di kernel che qui non
+esiste, ed è un progetto suo, non una fetta.
 
-**Misurato dove va il tempo** (questo era il passo di stasera): un token intero
-è 34,7 ms = **27,1 di corpo + 7,6 di coda** (la proiezione finale sul
-vocabolario). Una passata di verifica è 66,8 = **46,2 di corpo a due righe** +
-15,2 di due code + 5,5 del draft. Il corpo a due righe costa **1,70 volte**
-quello a una: a pesi letti una volta dovrebbe fermarsi a ~1,1.
+**Prossimo passo, non serve una tua decisione**: chiudere il checkpoint di
+misura scrivendo l'artefatto che manca (il JSON con lo stato dell'host
+dichiarato) e poi la fase 9, la chiusura del goal. Il codice della testa resta
+in albero: è gated e testato, e torna utile il giorno in cui quei kernel
+esistono.
 
-**L'ipotesi principale non è un difetto ma un tetto**: 24 layer su 32 di questo
-modello hanno una memoria che scorre da un token al successivo, e una ricorrenza
-non si può eseguire "in parallelo su due token" — i due passi vanno fatti in
-ordine comunque. La predizione doppia è nata sui modelli senza memoria interna,
-dove verificare due token costa quanto verificarne uno.
-
-**Prossimo passo, non serve una tua decisione**: resta una sola leva a costo
-basso — fare la proiezione finale una volta per entrambe le righe invece di due
-(vale 7,6 ms). Porta la passata a ~59 ms: sopra la soglia di convenienza col
-50% di accettazione, appena sotto col 74% del regime vero. **Se dopo quella
-misura resta sopra, chiudo la fase come esclusione motivata dai numeri**, come
-è già stato fatto per altre due ottimizzazioni di questo goal.
-Riferimenti rieseguibili: `Q35_MTP=1 npx vitest run
-tests/engine-q35-mtp-accept.test.ts` (~5 min, CPU) e `node
-.harness/tools/engine-ktest.mjs` con `npx vite` acceso (~3 min, GPU).
+**Da sapere**: il goal si chiuderà **senza aver raggiunto i 30 token/s**. La
+parità fra i due modelli — che era il contratto principale — è raggiunta e
+verificata; il moltiplicatore che doveva superare la soglia non c'è.
 
 ## 2. Mappa
 
@@ -51,9 +41,9 @@ restando usabile: almeno **30 token/secondo** e **primo token entro 4 secondi**.
 
 **Distanza adesso**, e nessuna configurazione ci arriva: GLM-4.7-Flash **13,4
 tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. La
-predizione doppia funziona ma va ancora resa conveniente (§1): col 50% e la
-verifica a pesi letti una volta il 4B proietta **~36 tok/s**. Il 35B non è
-coperto: il meccanismo non esiste sui modelli a esperti.
+predizione doppia era l'ultimo moltiplicatore previsto ed è esclusa dai numeri
+(§1): con i kernel di oggi nessuna configurazione arriva a 30, e la strada che
+ci arriverebbe (~42 tok/s) passa da una famiglia di kernel che non esiste.
 
 **Decisioni prese** (indice: il contenuto vive nel posto indicato, non qui)
 
