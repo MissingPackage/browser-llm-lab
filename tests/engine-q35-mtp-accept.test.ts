@@ -56,8 +56,8 @@ describe.skipIf(!run)("accept-rate intrinseco della testa MTP (4B, f64)", () => 
     //    QUESTO e' l'accept-rate: in spec-dec il draft si accetta se coincide
     //    col greedy del target, non col testo vero. Confonderli sottostima la
     //    testa di quanto il modello stesso sbaglia sul corpus (circa meta').
-    const score = (embFirst: boolean): { corpus: number; model: number; hitM: number; tot: number } => {
-      const pred = m.mtpDraftRef(tokens, embFirst, hidden);
+    const score = (embFirst: boolean, posOffset = 0): { corpus: number; model: number; hitM: number; tot: number } => {
+      const pred = m.mtpDraftRef(tokens, embFirst, hidden, posOffset);
       let hitC = 0, hitM = 0, tot = 0;
       for (let i = 0; i + 2 < tokens.length; i++) {
         tot++;
@@ -69,6 +69,15 @@ describe.skipIf(!run)("accept-rate intrinseco della testa MTP (4B, f64)", () => 
 
     const embFirst = score(true);
     const hidFirst = score(false);
+    // SFASAMENTO DEL ROPE (it.50): h'_i predice il token i+2 ed e' costruito su
+    // emb(t_{i+1}), quindi la sua posizione dovrebbe essere i+1 e non i. Un
+    // off-by-one qui degrada l'attenzione senza distruggerla — la forma esatta
+    // di un accept-rate "funziona ma sotto le attese". Si misura, non si
+    // corregge a naso: se +1 non muove il numero, l'ipotesi cade.
+    const off1 = score(true, 1);
+    // eslint-disable-next-line no-console
+    console.log(`[mtp] rope pos i   -> ${embFirst.model.toFixed(1)}%  |  rope pos i+1 -> ${off1.model.toFixed(1)}%  ` +
+      `(${off1.hitM}/${off1.tot})`);
     // eslint-disable-next-line no-console
     console.log(`[mtp] [emb;hidden]: accept-rate vs modello ${embFirst.hitM}/${embFirst.tot} = ${embFirst.model.toFixed(1)}% ` +
       `(vs corpus ${embFirst.corpus.toFixed(1)}%)  |  [hidden;emb]: ${hidFirst.model.toFixed(1)}% (corpus ${hidFirst.corpus.toFixed(1)}%)`);

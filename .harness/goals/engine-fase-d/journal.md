@@ -2794,3 +2794,35 @@ di questa sessione che parla all'obiettivo invece che al contratto.
 
 Test gated su `Q35_MTP=1` (116 s: forward f64 + due passate sul vocabolario da
 248.320), fuori dalla suite di default. Suite **442|10**, tsc pulito.
+
+## it.50 (2026-08-12, fase 7) — lo sfasamento del rope: il test non discrimina, e questa e' l'informazione
+
+Ipotesi di it.49: la testa MTP riceve posizioni sfasate di uno (h'_i predice il
+token i+2 ed e' costruito su emb(t_{i+1}), quindi il rope dovrebbe stare a i+1).
+Cablato `posOffset` su `attnLayerRef` e `mtpDraftRef` (default 0 = comportamento
+di prima) e misurato.
+
+**Accept-rate: 31,8% con offset 0, 31,8% con offset 1** — 7/22 in entrambi.
+
+Prima di dichiarare l'ipotesi refutata ho controllato se le PREDIZIONI cambiano,
+perche' uno stesso conteggio puo' nascondere token diversi: **0 su 23 diversi,
+identici uno per uno**.
+
+**E questo NON e' una refutazione: e' un'anomalia.** Sul canale 0 il rope ha
+theta = pos, quindi spostare di una posizione vale ~1 radiante — non puo'
+lasciare invariati 23 argmax su 248.320 classi. Le spiegazioni possibili sono
+due e NON le ho distinte:
+1. il parametro non arriva davvero al calcolo (il ramo full si prende
+   `forceFull`, il rope legge `t + posOffset`: sembra cablato, ma "sembra" non
+   e' una prova);
+2. il contributo dell'attenzione in quel blocco e' trascurabile rispetto al
+   residuo — che sarebbe di per se' un fatto sospetto sulla testa, non una
+   rassicurazione.
+
+Chi riprende parta da qui, e la prova che discrimina e' a costo quasi zero:
+azzerare `attnOut` nel blocco della testa e rimisurare. Se il numero non cambia,
+e' la (2) e l'attenzione della testa non sta facendo niente. Se cambia, e' la
+(1) e il bug e' nel cablaggio del parametro.
+
+Il 31,8% resta il numero da spiegare, e l'ordine di `eh_proj` resta deciso
+(it.49): quello non e' in discussione.

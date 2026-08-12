@@ -341,7 +341,7 @@ export class Q35CpuRefModel {
    * come un bug nostro. Questo numero, misurato prima di scrivere una riga di
    * WGSL, e' la prova indipendente che manca al gate.
    */
-  mtpDraftRef(tokens: number[], embFirst: boolean, hiddenIn?: Float64Array[]): Int32Array {
+  mtpDraftRef(tokens: number[], embFirst: boolean, hiddenIn?: Float64Array[], posOffset = 0): Int32Array {
     const S = this.shape;
     if (S.mtpLayers < 1) throw new Error("q35cpuref: il file non porta la testa MTP (mtpLayers 0)");
     const d = S.dModel;
@@ -370,7 +370,7 @@ export class Q35CpuRefModel {
     }
 
     // Il blocco della testa e' un layer normale: attn (FULL, forzato) + ffn.
-    const attnOut = this.attnLayerRef(S.nLayer, hp, true);
+    const attnOut = this.attnLayerRef(S.nLayer, hp, true, posOffset);
     const postNorm = this.dequant(`${b}post_attention_norm.weight`);
     const wg = this.dequant(`${b}ffn_gate.weight`);
     const wu = this.dequant(`${b}ffn_up.weight`);
@@ -407,7 +407,7 @@ export class Q35CpuRefModel {
    * fixture del ktest GPU (fase 4 slice 2): il riferimento del layer è
    * QUESTO, non una copia.
    */
-  attnLayerRef(l: number, hidden: Float64Array[], forceFull?: boolean): Float64Array[] {
+  attnLayerRef(l: number, hidden: Float64Array[], forceFull?: boolean, posOffset = 0): Float64Array[] {
     const S = this.shape;
     const T = hidden.length;
     const d = S.dModel;
@@ -451,8 +451,12 @@ export class Q35CpuRefModel {
             const kh = k.subarray(h * hd, (h + 1) * hd);
             kh.set(rmsnormF64(kh as Float64Array, kNormW, S.rmsEps));
           }
-          ropeText(q, S.nHead, hd, S.ropeDims, t, S.ropeFreqBase);
-          ropeText(k, S.nKvHead, hd, S.ropeDims, t, S.ropeFreqBase);
+          // `posOffset` esiste per la testa MTP: h'_i predice il token i+2 ed
+          // e' costruito su emb(t_{i+1}), quindi la sua posizione nel rope e'
+          // i+1, non i. La causalita' NON si sposta (resta sull'indice): qui
+          // cambia solo l'angolo del rope. Default 0 = comportamento di prima.
+          ropeText(q, S.nHead, hd, S.ropeDims, t + posOffset, S.ropeFreqBase);
+          ropeText(k, S.nKvHead, hd, S.ropeDims, t + posOffset, S.ropeFreqBase);
           qs.push(q); gates.push(gate); ks.push(k); vs.push(v);
         }
         for (let t = 0; t < T; t++) {
