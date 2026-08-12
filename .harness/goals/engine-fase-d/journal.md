@@ -2893,3 +2893,50 @@ a=0,50** e **1,51x a a=0,74**. Il 4B da 25,9 tok/s passa a **33,7-39,1**: sopra 
 30 dell'obiettivo in entrambi gli scenari. Il 35B da 22,6 a 29,4-34,1.
 
 Suite **442|10**, tsc pulito. Test gated `Q35_MTP=1` (310 s a finestra 64).
+
+## it.52 (2026-08-12, fase 7) — la testa MTP gira su GPU e coincide col riferimento: L2rel 2,63e-7
+
+Iterazione 6 di 2-4 sulla fase 7. Prima fetta di CODICE dopo tre iterazioni di
+misura: il blocco della testa in WGSL, gated contro il cpuref f64.
+
+**Nessun kernel nuovo, come previsto da it.47** — e il test copre esattamente
+cio' che resta: il CABLAGGIO. Due RMSNorm su ingressi di scala diversa
+(embedding grezzo vs hidden finale), la concatenazione in un buffer [2d], una
+GEMV **q8_0** (`eh_proj` e' l'unico peso del blocco non q4_0: type 8 contro
+type 2 di tutti gli altri, letto dal file, non dedotto), poi un layer full
+identico a quelli del modello con la SUA cache KV, ffn denso,
+`shared_head_norm`.
+
+**Perche' un ktest e non aspettare lo spec-dec**: se enorm e hnorm finissero
+scambiate, o le due meta' della concatenazione invertite, il modello pieno non
+se ne accorgerebbe — la testa non e' sul suo percorso — e lo spec-dec lo
+mostrerebbe come accept-rate basso, cioe' come un risultato negativo sull'MTP
+invece che come un bug nostro. E' lo stesso argomento di it.49, applicato al
+pezzo GPU.
+
+**FONTE UNICA.** Estratto `mtpHeadRef(emb, hidden, embFirst, dbg)` da
+`mtpDraftRef`: il blocco senza lm_head, su ingressi grezzi. Il fixture chiama
+QUESTA funzione, non una copia — stessa regola che `attnLayerRef` ha per i
+layer del modello. Verifica di identita' del refactor: `Q35_MTP_WINDOW=24`
+riproduce it.51 cifra per cifra (7/22, ablate 7/22, predDiverse 17, attnRel
+0,9701625134991295).
+
+**La lm_head resta FUORI dal fixture**: e' condivisa col modello e gia' coperta
+dal ktest full-model, e includerla avrebbe portato il fixture da 74,5 MB a
+oltre 1,3 GB di `token_embd`.
+
+Input sintetici seeded con SCALE DIVERSE per i due ingressi (0,05 contro 2,0):
+l'embedding grezzo e l'hidden finale vivono su ordini di grandezza diversi, ed
+e' il motivo per cui la testa ha due norme separate. Dare loro la stessa scala
+avrebbe reso invisibile uno scambio fra enorm e hnorm.
+
+**Risultato, primo colpo**: `q35-mtp-head-real-blk32` **PASS**, L2rel
+**2,63e-7**, maxAbs 4,77e-6 su T=3 posizioni, pesi reali del 4B-MTP, adapter
+nvidia lovelace. ktest **97 PASS / 0 FAIL** (era 96 + la riga nuova).
+
+Gate: `npx tsc --noEmit` pulito, suite **442|10**, ktest 97/0, identita'
+numerica del cpuref verificata contro it.51.
+
+**Prossima fetta**: la testa dentro `q35gpumodel` — caricamento dei pesi nel
+modello vero, cache KV della testa nel piano di decode, e il draft prodotto
+dalla lm_head condivisa. Poi il ciclo draft+verify col gate di bit-invarianza.

@@ -378,17 +378,57 @@ export class Q35CpuRefModel {
     let hidden: Float64Array[] = hiddenIn ?? [];
     if (!hiddenIn) this.forward(tokens, undefined, (h) => { hidden = h.map((v) => Float64Array.from(v)); });
 
+    // emb(t_{i+1}) e hidden_i — l'ultima posizione non ha un t_{i+1} noto,
+    // quindi la testa produce T-1 draft.
+    const emb: Float64Array[] = [], hid: Float64Array[] = [];
+    for (let i = 0; i + 1 < T; i++) { emb.push(this.embedRow(tokens[i + 1])); hid.push(hidden[i]); }
+    const hns = this.mtpHeadRef(emb, hid, embFirst, dbg);
+
+    const head = this.head();
+    const pred = new Int32Array(hns.length);
+    const lg = dbg?.onLogits ? new Float32Array(S.vocab) : null;
+    for (let t = 0; t < hns.length; t++) {
+      // lm_head CONDIVISA col modello (la norma della testa l'ha gia' applicata
+      // `mtpHeadRef`)
+      const hn = hns[t];
+      let best = -Infinity, bi = -1;
+      for (let r = 0; r < S.vocab; r++) {
+        let acc = 0;
+        const base = r * d;
+        for (let i = 0; i < d; i++) acc += head[base + i] * hn[i];
+        if (lg) lg[r] = acc;
+        if (acc > best) { best = acc; bi = r; }
+      }
+      pred[t] = bi;
+      if (lg) dbg?.onLogits?.(t, lg);
+    }
+    return pred;
+  }
+
+  /**
+   * BLOCCO della testa MTP su ingressi gia' pronti, lm_head ESCLUSA:
+   * h'_i = eh_proj([norm(e_i) ; norm(h_i)]) → attn (full, forzata) + ffn →
+   * `shared_head_norm`. Ritorna il vettore che entra nella lm_head condivisa.
+   *
+   * Separato da `mtpDraftRef` perche' e' la FONTE UNICA del fixture del ktest
+   * GPU (fase 7, it.52): il riferimento del blocco e' QUESTO, mai una copia —
+   * stessa regola che `attnLayerRef` ha per i layer del modello. `e_i` e `h_i`
+   * arrivano GREZZI: le due norme le applica questa funzione.
+   */
+  mtpHeadRef(emb: Float64Array[], hidden: Float64Array[], embFirst = true, dbg?: Q35MtpProbe): Float64Array[] {
+    const S = this.shape;
+    if (S.mtpLayers < 1) throw new Error("q35cpuref: il file non porta la testa MTP (mtpLayers 0)");
+    if (emb.length !== hidden.length) throw new Error("q35cpuref: mtpHeadRef vuole emb e hidden allineati");
+    const d = S.dModel;
     const b = `blk.${S.nLayer}.`;
     const enorm = this.dequant(`${b}nextn.enorm.weight`);
     const hnorm = this.dequant(`${b}nextn.hnorm.weight`);
     const ehProj = this.dequant(`${b}nextn.eh_proj.weight`);
     const shNorm = this.dequant(`${b}nextn.shared_head_norm.weight`);
 
-    // h'_i = eh_proj([norm(emb(t_{i+1})) ; norm(hidden_i)]) — l'ultima posizione
-    // non ha un t_{i+1} noto, quindi la testa produce T-1 draft.
     const hp: Float64Array[] = [];
-    for (let i = 0; i + 1 < T; i++) {
-      const e = rmsnormF64(this.embedRow(tokens[i + 1]), enorm, S.rmsEps);
+    for (let i = 0; i < emb.length; i++) {
+      const e = rmsnormF64(emb[i], enorm, S.rmsEps);
       const hh = rmsnormF64(hidden[i], hnorm, S.rmsEps);
       const cat = new Float64Array(2 * d);
       cat.set(embFirst ? e : hh, 0);
@@ -403,9 +443,7 @@ export class Q35CpuRefModel {
     const wu = this.dequant(`${b}ffn_up.weight`);
     const wd = this.dequant(`${b}ffn_down.weight`);
     const dFfn = S.dFfn as number;
-    const head = this.head();
-    const pred = new Int32Array(hp.length);
-    const lg = dbg?.onLogits ? new Float32Array(S.vocab) : null;
+    const out: Float64Array[] = [];
     let sumAttnRel = 0, sumFfnRel = 0;
     for (let t = 0; t < hp.length; t++) {
       const x = new Float64Array(d);
@@ -420,21 +458,10 @@ export class Q35CpuRefModel {
         sumFfnRel += norm2(dn) / norm2(hp[t]);
       }
       for (let i = 0; i < d; i++) x[i] += dn[i];
-      // lm_head CONDIVISA col modello, preceduta dalla norma della testa
-      const hn = rmsnormF64(x, shNorm, S.rmsEps);
-      let best = -Infinity, bi = -1;
-      for (let r = 0; r < S.vocab; r++) {
-        let acc = 0;
-        const base = r * d;
-        for (let i = 0; i < d; i++) acc += head[base + i] * hn[i];
-        if (lg) lg[r] = acc;
-        if (acc > best) { best = acc; bi = r; }
-      }
-      pred[t] = bi;
-      if (lg) dbg?.onLogits?.(t, lg);
+      out.push(rmsnormF64(x, shNorm, S.rmsEps));
     }
     dbg?.onStats?.({ attnRel: sumAttnRel / hp.length, ffnRel: sumFfnRel / hp.length });
-    return pred;
+    return out;
   }
 
   /**

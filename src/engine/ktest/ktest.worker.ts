@@ -521,6 +521,127 @@ async function testQ35AttnLayersReal(g: Gpu): Promise<KResult[]> {
   return results;
 }
 
+/**
+ * TESTA MTP (NextN) su GPU contro il cpuref f64 (fase-D fase 7, it.52).
+ *
+ * Il blocco e' un layer full-attention normale preceduto da `eh_proj`, quindi
+ * NON introduce un solo kernel nuovo: introduce solo CABLAGGIO — due norme su
+ * ingressi di scala diversa, una concatenazione [2d] e una GEMV q8_0 al posto
+ * della q4_0 di tutti gli altri pesi. Ed e' esattamente il cablaggio che qui si
+ * copre: se enorm e hnorm finissero scambiate, o le due meta' della
+ * concatenazione invertite, il modello pieno non se ne accorgerebbe (la testa
+ * non e' sul suo percorso) e lo spec-dec lo mostrerebbe solo come accept-rate
+ * basso — cioe' come un risultato negativo sull'MTP invece che come un bug
+ * nostro. La lm_head resta FUORI: e' condivisa e gia' coperta dal full-model.
+ */
+async function testQ35MtpHeadReal(g: Gpu): Promise<KResult> {
+  const metaRes = await fetch("/models/q35-mtp/meta.json");
+  if (!metaRes.ok) {
+    return { kernel: "q35-mtp-head-real", pass: false, maxAbs: NaN, maxRel: NaN, note: "fixture assente: npx vite-node scripts/q35-mtp-fixture-gen.mjs" };
+  }
+  interface TensorEntry { suffix: string; type: number; dims: number[]; offset: number; bytes: number }
+  const meta = (await metaRes.json()) as {
+    dims: { d: number; nHead: number; nKvHead: number; headDim: number; ropeDims: number; freqBase: number; rmsEps: number; dFfn: number };
+    T: number; blk: number; tensors: TensorEntry[];
+    emb: { offset: number; bytes: number };
+    hidden: { offset: number; bytes: number };
+    expected: { offset: number; bytes: number };
+  };
+  const bin = new Uint8Array(await (await fetch("/models/q35-mtp/fixture.bin")).arrayBuffer());
+  const D = meta.dims;
+  const d = D.d, hd = D.headDim, qDim = D.nHead * hd, kvDim = D.nKvHead * hd, dFfn = D.dFfn;
+  const f32c = (off: number, bytes: number): Float32Array => new Float32Array(bin.slice(off, off + bytes).buffer);
+  const tn = new Map(meta.tensors.map((t) => [t.suffix, t]));
+  const raw = (s: string): TensorEntry => {
+    const t = tn.get(s);
+    if (!t) throw new Error(`fixture mtp: ${s} assente`);
+    return t;
+  };
+  const f32w = (s: string): GPUBuffer => g.buf(f32c(raw(s).offset, raw(s).bytes));
+  const q40 = (s: string): { qs: GPUBuffer; scales: GPUBuffer; n: number; k: number } => {
+    const t = raw(s);
+    const { qs, scales } = repackQ4_0(bin, t.offset, (t.dims[0] / 32) * t.dims[1]);
+    return { qs: g.buf(qs), scales: g.buf(scales), n: t.dims[1], k: t.dims[0] };
+  };
+  const q80 = (s: string): { qs: GPUBuffer; scales: GPUBuffer; n: number; k: number } => {
+    const t = raw(s);
+    const { qs, scales } = repackQ8_0(bin, t.offset, (t.dims[0] / 32) * t.dims[1]);
+    return { qs: g.buf(qs), scales: g.buf(scales), n: t.dims[1], k: t.dims[0] };
+  };
+
+  const enorm = f32w("nextn.enorm.weight"), hnorm = f32w("nextn.hnorm.weight");
+  const shNorm = f32w("nextn.shared_head_norm.weight"), attnNorm = f32w("attn_norm.weight");
+  const postNorm = f32w("post_attention_norm.weight");
+  const qNormW = f32w("attn_q_norm.weight"), kNormW = f32w("attn_k_norm.weight");
+  const eh = q80("nextn.eh_proj.weight");
+  const wq = q40("attn_q.weight"), wk = q40("attn_k.weight"), wv = q40("attn_v.weight"), wo = q40("attn_output.weight");
+  const wg = q40("ffn_gate.weight"), wu = q40("ffn_up.weight"), wd = q40("ffn_down.weight");
+
+  const kCache = g.buf(new Float32Array(meta.T * kvDim)), vCache = g.buf(new Float32Array(meta.T * kvDim));
+  const eN = g.empty(d * 4), hN = g.empty(d * 4), cat = g.empty(2 * d * 4), hp = g.empty(d * 4);
+  const xn = g.empty(d * 4), qFull = g.empty(2 * qDim * 4), kBuf = g.empty(kvDim * 4), vBuf = g.empty(kvDim * 4);
+  const qB = g.empty(qDim * 4), gateB = g.empty(qDim * 4), qN = g.empty(qDim * 4), kN = g.empty(kvDim * 4);
+  const attnO = g.empty(qDim * 4), y = g.empty(d * 4), gateF = g.empty(dFfn * 4), upF = g.empty(dFfn * 4);
+  const out = g.empty(d * 4);
+  const expected = f32c(meta.expected.offset, meta.expected.bytes);
+  const gq = (w: { qs: GPUBuffer; scales: GPUBuffer; n: number; k: number }, kind: "q4_0" | "q8_0", x: GPUBuffer, o: GPUBuffer): Promise<void> =>
+    g.run(gemvQuantWgsl({ kind, K: w.k, N: w.n, hasBias: false }), [w.qs, w.scales, x, o], w.n);
+
+  let l2n = 0, l2d = 0, maxAbs = 0, maxRel = 0;
+  for (let t = 0; t < meta.T; t++) {
+    const u = g.uniform(t, t);
+    const embT = g.buf(f32c(meta.emb.offset + t * d * 4, d * 4));
+    const hidT = g.buf(f32c(meta.hidden.offset + t * d * 4, d * 4));
+    // h' = eh_proj([norm_e(emb) ; norm_h(hidden)]) — l'ordine e' quello deciso
+    // per misura in it.49 e confermato su vLLM in it.51: embedding PRIMO.
+    await g.run(rmsnormWgsl(d, D.rmsEps), [embT, enorm, eN], 1);
+    await g.run(rmsnormWgsl(d, D.rmsEps), [hidT, hnorm, hN], 1);
+    await g.run(stridedCopyWgsl({ nVec: 1, len: d, srcStride: d, srcOffset: 0, dstStride: 2 * d, dstOffset: 0 }), [eN, cat], Math.ceil(d / 64));
+    await g.run(stridedCopyWgsl({ nVec: 1, len: d, srcStride: d, srcOffset: 0, dstStride: 2 * d, dstOffset: d }), [hN, cat], Math.ceil(d / 64));
+    await gq(eh, "q8_0", cat, hp);
+    // ramo attention: identico a un layer full del modello, KV cache SUA
+    await g.run(rmsnormWgsl(d, D.rmsEps), [hp, attnNorm, xn], 1);
+    await gq(wq, "q4_0", xn, qFull);
+    await gq(wk, "q4_0", xn, kBuf);
+    await gq(wv, "q4_0", xn, vBuf);
+    await g.run(stridedCopyWgsl({ nVec: D.nHead, len: hd, srcStride: 2 * hd, srcOffset: 0, dstStride: hd, dstOffset: 0 }), [qFull, qB], Math.ceil(qDim / 64));
+    await g.run(stridedCopyWgsl({ nVec: D.nHead, len: hd, srcStride: 2 * hd, srcOffset: hd, dstStride: hd, dstOffset: 0 }), [qFull, gateB], Math.ceil(qDim / 64));
+    await g.run(rmsnormWgsl(hd, D.rmsEps, true), [qB, qNormW, qN], D.nHead);
+    await g.run(rmsnormWgsl(hd, D.rmsEps, true), [kBuf, kNormW, kN], D.nKvHead);
+    await g.run(ropeNeoxWgsl(D.nHead, hd, D.freqBase, D.ropeDims), [qN], Math.ceil((D.nHead * D.ropeDims / 2) / 64), u);
+    await g.run(ropeNeoxWgsl(D.nKvHead, hd, D.freqBase, D.ropeDims), [kN], Math.ceil((D.nKvHead * D.ropeDims / 2) / 64), u);
+    await g.run(kvAppendWgsl(kvDim), [kN, kCache], Math.ceil(kvDim / 64), u);
+    await g.run(kvAppendWgsl(kvDim), [vBuf, vCache], Math.ceil(kvDim / 64), u);
+    await g.run(attnDecodeWgsl({ nHead: D.nHead, nKvHead: D.nKvHead, headDim: hd, ctxMax: meta.T }), [qN, kCache, vCache, attnO], D.nHead, u);
+    await g.run(sigmoidMulWgsl(qDim), [attnO, gateB], Math.ceil(qDim / 64));
+    await gq(wo, "q4_0", attnO, y);
+    await g.run(addInPlaceWgsl(d), [hp, y], Math.ceil(d / 64));
+    // ffn denso + norma della testa (la lm_head condivisa resta fuori)
+    await g.run(rmsnormWgsl(d, D.rmsEps), [hp, postNorm, xn], 1);
+    await gq(wg, "q4_0", xn, gateF);
+    await gq(wu, "q4_0", xn, upF);
+    await g.run(siluMulWgsl(dFfn), [gateF, upF], Math.ceil(dFfn / 64));
+    await gq(wd, "q4_0", gateF, y);
+    await g.run(addInPlaceWgsl(d), [hp, y], Math.ceil(d / 64));
+    await g.run(rmsnormWgsl(d, D.rmsEps), [hp, shNorm, out], 1);
+    const got = new Float32Array(await g.read(out, d * 4));
+    for (let i = 0; i < d; i++) {
+      const e = expected[t * d + i], dif = Math.abs(got[i] - e);
+      l2n += dif * dif; l2d += e * e;
+      if (dif > maxAbs) maxAbs = dif;
+      if (Math.abs(e) > 1e-4) maxRel = Math.max(maxRel, dif / Math.abs(e));
+    }
+  }
+  const l2 = Math.sqrt(l2n / Math.max(l2d, 1e-12));
+  return {
+    kernel: `q35-mtp-head-real-blk${meta.blk}`,
+    pass: l2 <= 1e-3 && maxAbs <= 5e-2,
+    maxAbs, maxRel,
+    note: `pesi reali 4B-MTP, T=${meta.T}, L2rel=${l2.toExponential(2)}`,
+    metrics: { l2rel: l2 },
+  };
+}
+
 /** Full-model GPU 4B teacher-forced: argmax GPU == ORACOLO sul golden smoke (fase 4 slice 3). */
 async function testQ35Model4B(g: Gpu): Promise<KResult> {
   const goldenRes = await fetch("/models/q35/golden-smoke.json");
@@ -3407,6 +3528,7 @@ async function main(): Promise<void> {
     results.push(await testRopePartial(g));
     results.push(await testSigmoidMul(g));
     results.push(...await testQ35AttnLayersReal(g));
+    results.push(await testQ35MtpHeadReal(g)); // testa MTP: blocco su GPU == cpuref (fase 7 it.52)
     results.push(await testQ35Model4B(g)); // full-model: argmax GPU == oracolo (slice 3)
     results.push(...await testQ35MoeBlockReal(g)); // MoE 35B block reale (fase 7 slice 3a)
 
