@@ -1,5 +1,5 @@
 {
-  "note": "GGUF pinnati del goal engine-fase-q1 (spec 2026-08-10 §1). SHA = oid LFS verificati sui pointer raw HF 2026-08-10. path relativo a ~/.cache/blab-models/.",
+  "note": "GGUF pinnati del goal engine-fase-q1 (spec 2026-08-10 §1). SHA = oid LFS verificati sui pointer raw HF 2026-08-10. path relativo a ~/.cache/blab-models/. Le voci -MTP (fase D fase 7) portano la testa NextN: blk.<nLayer> = un layer full-attention normale + eh_proj/enorm/hnorm/shared_head_norm.",
   "files": [
     {
       "model": "Qwen3.5-4B",
@@ -24,6 +24,24 @@
       "path": "q35/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
       "bytes": 20893015008,
       "sha256": "a8138f183e3993f12cdc23afd2babb8cdb084e64088ce4a256d49101d47b949c"
+    },
+    {
+      "model": "Qwen3.5-4B-MTP",
+      "repo": "unsloth/Qwen3.5-4B-MTP-GGUF",
+      "file": "Qwen3.5-4B-Q4_0.gguf",
+      "path": "q35/Qwen3.5-4B-MTP-Q4_0.gguf",
+      "bytes": 2669209920,
+      "sha256": "14e6ef39302330c63c2c1a1ab548c7f6f1b7e36b3150ca8b42cab7193b0c3669",
+      "note": "441 tensori (base 426): testa MTP = blk.32, 15 tensori, 120,6 M parametri. Stesso quant e publisher del base pinnato."
+    },
+    {
+      "model": "Qwen3.6-35B-A3B-MTP",
+      "repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+      "file": "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+      "path": "q35/Qwen3.6-35B-A3B-MTP-UD-Q4_K_S.gguf",
+      "bytes": 21388319008,
+      "sha256": "2bee952b218e4a481430c59d8d3bdc7bae20bed0eb501326340c5fca7ae95d42",
+      "note": "NON scaricato in it.47: si scarica quando il reader passa sul 4B."
     }
   ]
 }

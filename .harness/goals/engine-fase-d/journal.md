@@ -2665,3 +2665,41 @@ riferimento stesso fa `pass: false`. La non-regressione si legge dal confronto.
 
 **RIGA 6 COMPLETA**: b12 in banda (it.41) · golden al pin (it.42) · cpuref
 (it.42) · firma routing (it.46). CHECKPOINT A chiuso. Prossimo: fase 7.
+
+## it.47 (2026-08-12, fase 7) — la testa MTP: cos'e', dove sta, e perche' non serve un kernel nuovo
+
+Iterazione 1 di 2-4 previste. Distanza dall'obiettivo: 13,4 tok/s (GLM) e 22,6
+(35B) contro i 30 di direction §2.
+
+**La riga 7 dice "`*-MTP-GGUF` pinnati" ma non lo erano**: `q35-manifest.json`
+non aveva voci MTP e su disco non c'era niente. Prima di scaricare GB ho
+verificato due cose gratis: (a) i tre GGUF locali hanno **zero** tensori e zero
+metadata MTP — la testa non e' nei modelli che gia' abbiamo; (b) i repo
+`unsloth/*-MTP-GGUF` esistono, stesso publisher e stesso quant dei pin base.
+
+**Poi l'ho letta senza scaricarla**: 42 MB via Range dall'URL di HF bastano per
+l'intestazione GGUF. Il 4B-MTP ha **441 tensori contro i 426 del base**, e
+`qwen35.nextn_predict_layers: 1`.
+
+**LA TESTA E' `blk.32`, cioe' 15 tensori** (il base ha blk.0..31):
+
+| | |
+|---|---|
+| 11 tensori | IDENTICI per nome, forma e tipo a `blk.31` — attn_q/k/v/output, ffn_gate/up/down, le norme |
+| `nextn.eh_proj` | **[5120, 2560] Q8_0** — 5120 = 2x2560: concatena embedding e hidden |
+| `nextn.enorm` / `nextn.hnorm` | [2560] F32 — una norma per ciascuno dei due ingressi |
+| `nextn.shared_head_norm` | [2560] F32 — prima della lm_head CONDIVISA col modello |
+| totale | **120,6 M parametri** su un modello da 4B |
+
+**CONSEGUENZA CHE CAMBIA LA FASE**: `blk.31` e' un layer FULL-attention (31%4=3
+con `full_attention_interval` 4) e `blk.32` ne ha gli stessi 11 tensori, quindi
+la testa e' un layer full normale — **non un deltanet**, e non dipende dalla sua
+posizione. Tutte le primitive esistono gia': `rmsnorm`, `gemvQuant` Q8_0 (che e'
+il kernel di tutto lo statico del 35B), attenzione e FFN. **La fase 7 e'
+orchestrazione, non kernel nuovi** — la stessa conclusione della fase 4, e per
+la stessa ragione.
+
+**Pinnati in `q35-manifest.json`** 4B-MTP (2.669.209.920 B) e 35B-MTP
+(21.388.319.008 B) con le sha LFS. Scaricato **solo il 4B**, sha256 verificata
+contro il pin. Il 35B si scarica quando il reader passa sul piccolo: 21 GB per
+un reader non ancora scritto sono spesi male.
