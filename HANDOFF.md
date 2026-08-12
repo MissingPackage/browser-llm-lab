@@ -2,42 +2,32 @@
 
 ## 1. Next decidable
 
-**Fase 7 chiusa, e la predizione doppia è esclusa dai numeri.** L'idea era: una
-testa ausiliaria propone il token successivo-successivo, il modello lo verifica
-insieme al prossimo, e ogni passata ne produce due. Il meccanismo è **costruito
-e dimostrato corretto** — 16 token generati con la proposta sono identici, uno
-per uno, ai 16 generati normalmente, con le proposte sbagliate disfatte per
-davvero. La testa indovina il 50% delle volte sul testo umano e il 70-74% su
-quello che il modello produce da sé.
+**Goal nuovo: `engine-kernel-decode`** (contratto e fasi in
+`.harness/goals/engine-kernel-decode/`). Obiettivo: **30 token/s a contesto
+realistico** (≥ 6000 posizioni) sul modello 4B, dove oggi ne fa **9,95**.
 
-**Non paga lo stesso**: 41,8 ms per token contro 34,4 della generazione
-normale. E la causa l'ho **letta nel codice**, non dedotta: i nostri kernel
-"batch" mettono la riga su una dimensione del dispatch e **ogni riga rilegge i
-pesi**. Fondono le chiamate, non riusano i dati. Verificare due posizioni costa
-1,7-1,9 volte una, mentre la predizione doppia paga solo se costa ~1. L'unica
-leva rimasta (fare la proiezione finale una volta invece di due) vale ~5 ms e
-arriva a 38,6: sopra il sequenziale anche nel caso migliore, quindi non l'ho
-costruita.
+**Perché quel numero e non 25,9.** La misura di it.59 ha scoperto che il
+riferimento storico era preso a contesto corto: 38,72 ms/token a 388 posizioni
+contro **100,52 a 6333**, cioè 10,4 µs per ogni posizione di contesto. A
+contesto vero il token è per il **65% scansione della cache delle chiavi**, che
+gira a 6,3 GB/s — l'1,4% di quanto la scheda sa fare.
 
-**Il premio, per chi riprende**: con un moltiplicatore matriciale a più righe
-che riusa davvero i pesi, la stessa passata starebbe a ~23,5 ms per token, cioè
-**~42 token/s** — sopra l'obiettivo. È una famiglia di kernel che qui non
-esiste, ed è un progetto suo, non una fetta.
+**Le tre leve, in ordine di peso a contesto vero**: l'attenzione (65,8 ms su
+100,5), i moltiplicatori quantizzati (27,1 ms, a un quarto della velocità che
+llama.cpp ottiene sulla stessa scheda e sullo stesso file), e il multi-riga —
+che però è la leva del *tempo al primo token*, quindi sta nel goal dopo.
 
-**Il checkpoint di misura è chiuso**: l'esclusione è ora un artefatto committato
-(`results/engine/specdec-4090-2026-08-12T21-49-18-513Z.json`) con lo stato
-dell'host dichiarato, il verdetto scritto accanto ai numeri e un runner che lo
-rigenera. La ri-misura conferma entro il rumore: 1,18 volte più lento contro
-1,19 della prima.
+**Prossimo passo, e questo richiede un tuo sì**: `PHASES.md` è scritto e in
+attesa di `plan-check` (docket item 1). Cinque righe: fase 0 di sole sonde
+prediction-gated che può chiudere il goal se le leve non esistono, poi
+attenzione, poi moltiplicatori, poi il checkpoint dei 30 tok/s o l'esclusione
+coi numeri, poi la chiusura.
 
-**Prossimo passo, non serve una tua decisione**: la fase 9, chiusura del goal —
-checklist del contratto voce per voce, non-regressione GLM fresca, e il triage
-finale del docket. Il codice della testa resta in albero: è gated e testato, e
-torna utile il giorno in cui quei kernel esistono.
-
-**Da sapere**: il goal si chiuderà **senza aver raggiunto i 30 token/s**. La
-parità fra i due modelli — che era il contratto principale — è raggiunta e
-verificata; il moltiplicatore che doveva superare la soglia non c'è.
+**Già trovato scrivendo il piano** (docket item 2): `gpulimits.ts` crede che il
+path Qwen non dipenda dal contesto e chiede 30.848 byte fissi di memoria di
+gruppo, mentre il kernel di attenzione ne usa `4·ctxMax + 256`. Combaciano fino
+a **ctxMax 7648**; sopra, la pipeline non si crea. Il motore ha un tetto di
+contesto che il modulo dei limiti non dichiara.
 
 ## 2. Mappa
 
@@ -71,6 +61,11 @@ ci arriverebbe (~42 tok/s) passa da una famiglia di kernel che non esiste.
 
 - I benchmark comparativi fra stack: un goal chiuso, l'altro in pausa dichiarata
 - Il raggruppamento degli expert e il pipelining del decode: registrati, non aperti
+- **L'attenzione a chunk del prefill** (`attnDecodeWgsl` con `batch`) ha gli
+  STESSI tre difetti di quella del decode — ridondanza GQA 4x, letture scalari,
+  `scores` in memoria di gruppo — e la stessa riscrittura li toglie. Va al goal
+  sul TEMPO AL PRIMO TOKEN, non a quello sul decode: stesso kernel, obiettivo
+  diverso (it.59, 2026-08-13)
 - Tutti i numeri destinati alla pubblicazione: si rimisurano al tag di release
 
 ## 3. Landmines
