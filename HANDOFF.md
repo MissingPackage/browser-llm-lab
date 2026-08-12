@@ -8,18 +8,13 @@ tira a indovinare il token successivo-successivo: se indovina spesso, ogni
 passata ne produce due.
 
 **Il ciclo funziona ed è dimostrato corretto; quello che manca è la
-convenienza.** Indovina il 50% delle volte sul testo umano e il **74%** nel regime in cui
-il decode gira davvero — sul testo che il modello sta producendo lui. Il valore
-sulla GPU coincide col riferimento CPU nel conteggio esatto (31 su 62), e un
-draft costa **5,5 ms** contro i 34,5 di un token: il 16%. (Il 31,8% di due
-iterazioni fa era rumore di campionamento, e l'anomalia che sembrava un bug non
-lo era: journal it.51.)
-
-**Il ciclo è chiuso e il gate secco è passato**: generando 16 token con la
-proposta della testa si ottengono gli **stessi 16 token** della generazione
-normale, uno per uno — con 5 proposte rifiutate e disfatte per davvero (il
-pezzo difficile: 24 layer su 32 hanno una memoria interna che una proposta
-sbagliata corrompe in modo plausibile).
+convenienza.** La testa indovina il 50% delle volte sul testo umano e il **74%**
+nel regime in cui il decode gira davvero; sulla GPU il conteggio coincide col
+riferimento CPU (31 su 62) e un draft costa 5,5 ms. Il gate secco della fase è
+passato: 16 token generati con la proposta della testa sono **gli stessi 16**
+della generazione normale, con 5 proposte rifiutate e disfatte per davvero — il
+pezzo difficile, perché 24 layer su 32 hanno una memoria interna che una
+proposta sbagliata corrompe in modo plausibile. (Storia: journal it.51-55.)
 
 **Ma oggi il meccanismo è più lento, non più veloce.** Tre misure sullo stesso
 host, a parità di token prodotti: generazione normale **34,6 ms/token**,
