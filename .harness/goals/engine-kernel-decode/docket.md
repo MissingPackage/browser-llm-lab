@@ -54,3 +54,29 @@ CHIUSO in it.1: `attnDecodeWorkgroupStorageBytes(ctxMax)` esportata dal file del
 KERNEL (una formula sola, dove sta il consumatore), contata SEMPRE dal modulo
 dei limiti, commento corretto, e un test che rende la trappola non richiudibile:
 spegnere l'MLA non può più far sparire il fabbisogno di Qwen.
+
+## item 3 — il confronto `split` vs `split-gqa` è confuso (io, fase 1)
+
+TROVATO misurando (fase 0). Le due varianti non differiscono solo per la fusione
+GQA: differiscono anche per il numero di workgroup (256 contro 64), perché con
+un workgroup per gruppo GQA le teste sono 4 invece di 16. `split` vince
+(0,296 contro 0,325 ms) **leggendo quattro volte più byte**: il kernel è limitato
+dal parallelismo, non dalla banda.
+
+Non è una domanda: è lavoro della fase 1, che deve rifare il confronto **a parità
+di occupancy** (`split-gqa` con 64 chunk invece di 16) prima di scegliere. Se a
+parità di workgroup la fusione GQA vince, la fase 1 la adotta; se non vince, la
+ridondanza GQA si lascia stare e si dichiara coi numeri.
+
+Registrato perché la conclusione "la dedup GQA non serve" sarebbe **non
+supportata** dai dati di fase 0 presi da soli.
+
+## item 4 — dopo le fasi 1 e 2 la pendenza diventa la CODA (io, fuori scope)
+
+Proiezione di fase 0 sulla scomposizione it.59: con le due leve applicate, i 7,6
+ms di coda (lm_head + argmax + readback) passano dal 7,6% del token al 33-46%.
+
+Fuori dallo scope di questo goal (che ha per bersaglio i due kernel caldi), ma
+va davanti al PI **prima** della fase 3, non dopo: se la fase 3 arriva a 40-60
+tok/s la soglia è presa e la coda non serve, se arriva a 28 la coda è l'unica
+cosa rimasta e nessuno l'ha guardata.

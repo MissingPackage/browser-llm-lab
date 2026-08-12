@@ -69,7 +69,7 @@ describe("microbench runner (parti pure)", () => {
     expect(Array.from(seededData(64, 43))).not.toEqual(Array.from(a));
   });
 
-  it("schema version = 1", () => {
-    expect(MICROBENCH_SCHEMA_VERSION).toBe(1);
+  it("schema version = 2 (kind microbench-kernel-decode, fase 0 engine-kernel-decode)", () => {
+    expect(MICROBENCH_SCHEMA_VERSION).toBe(2);
   });
 });

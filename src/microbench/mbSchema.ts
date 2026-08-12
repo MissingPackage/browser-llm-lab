@@ -3,7 +3,11 @@ import type { MetricAggregate } from "../metrics";
 
 // Schema dei run micro-bench: versionato a parte rispetto ai RunFile di bench
 // (results/microbench/ vs results/), stesso stile: label manuale, niente fingerprinting.
-export const MICROBENCH_SCHEMA_VERSION = 1 as const;
+// v2 (goal engine-kernel-decode, fase 0): si aggiunge il kind
+// "microbench-kernel-decode" — celle per (kernel, variante, forma) con p50/IQR e
+// blocco sonda delle feature. Il kind "microbench-matmul" resta invariato: i
+// JSON gia' committati a v1 restano leggibili come dati.
+export const MICROBENCH_SCHEMA_VERSION = 2 as const;
 
 export type MicrobenchKernelId = "gemv-q4f32" | "gemv-f32" | "gemv-f16";
 
@@ -39,4 +43,91 @@ export interface MicrobenchRunFile {
   probe: DeviceProbe;
   cells: MicrobenchCell[];
   skipped: SkippedCell[];
+}
+
+// ===========================================================================
+// kind "microbench-kernel-decode" (goal engine-kernel-decode, fase 0)
+// ===========================================================================
+
+/** Dispersione di un campione: p50 e' la statistica di confronto pre-registrata. */
+export interface SampleStats {
+  p50: number;
+  min: number;
+  max: number;
+  iqr: number;
+  n: number;
+  samples: number[];
+}
+
+/** Esito della sonda di una feature: dichiarata presente/assente per MISURA. */
+export interface FeatureProbeResult {
+  /** esposta dall'adapter (o dalla lista wgslLanguageFeatures per le feature di linguaggio) */
+  exposed: boolean;
+  /** concessa sul device richiedendola (null = non richiesta perche' non esposta) */
+  granted: boolean | null;
+  /** uno shader che la USA compila? (null = non provato) */
+  compiles: boolean | null;
+  /** ...e produce il risultato atteso? (null = non eseguito) */
+  correct: boolean | null;
+  note: string;
+}
+
+export interface KernelDecodeProbe {
+  adapterFeatures: string[];
+  deviceFeatures: string[];
+  wgslLanguageFeatures: string[];
+  adapterInfo: Record<string, unknown>;
+  grantedLimits: Record<string, number>;
+  subgroupSizeObserved: number | null;
+  features: Record<string, FeatureProbeResult>;
+}
+
+export interface KernelDecodeCell {
+  kernel: "attn-decode" | "gemv-q4_0";
+  variant: string;
+  /** forma dichiarata: la cella non si legge senza il suo contesto */
+  shape: Record<string, number>;
+  /** descrizione a parole di cosa fa la variante — nessuna cella senza contesto */
+  context: string;
+  dispatchesPerOp: number;
+  opsPerSample: number;
+  warmupDiscarded: number;
+  timingSource: TimingSource;
+  /** ms per OP (un token di attenzione / un GEMV), dalla sorgente di timing dichiarata */
+  msPerOp: SampleStats;
+  /** stessa misura via CPU fence: sempre presente, per confronto */
+  cpuMsPerOp: SampleStats;
+  /** solo attenzione: la stessa cella misurata in batch da 16 (riportata, non usata dal grade) */
+  msPerOpBatched: SampleStats | null;
+  bytesUnique: number;
+  bytesEmitted: number;
+  effectiveGBps: number;
+  emittedGBps: number;
+  weightsPerSecond: number | null;
+  checksum: number;
+  checksumAbs: number;
+  /** scarto relativo del checksum rispetto alla cella "base" della stessa forma */
+  checksumRelDiff: number | null;
+  notes: string;
+}
+
+export interface KernelDecodeSkipped {
+  kernel: string;
+  variant: string;
+  shape: Record<string, number>;
+  reason: string;
+}
+
+export interface KernelDecodeRunFile {
+  schemaVersion: typeof MICROBENCH_SCHEMA_VERSION;
+  kind: "microbench-kernel-decode";
+  goal: string;
+  prereg: string;
+  deviceLabel: string;
+  hostState: { declared: string };
+  ts: string;
+  probe: DeviceProbe;
+  kdProbe: KernelDecodeProbe;
+  cells: KernelDecodeCell[];
+  skipped: KernelDecodeSkipped[];
 }

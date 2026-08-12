@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>browser-llm-lab — micro-bench kernel decode (fase 0)</title>
+  </head>
+  <body>
+    <h1>micro-bench kernel decode — engine-kernel-decode fase 0</h1>
+    <p>
+      Varianti isolate di <code>attnDecodeWgsl</code> e <code>gemvQuantWgsl</code> (q4_0)
+      sulle forme reali del 4B. Zero run di modello. Parte da sola; il run file finisce
+      su <code>window.__report</code>.
+    </p>
+    <p>Status: <span id="status">starting…</span></p>
+    <pre id="log"></pre>
+    <pre id="results"></pre>
+    <script type="module" src="/src/microbench/kdPage.ts"></script>
+  </body>
+</html>

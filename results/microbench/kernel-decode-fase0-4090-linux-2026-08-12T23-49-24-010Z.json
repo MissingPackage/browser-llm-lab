@@ -1,0 +1,2357 @@
+{
+  "schemaVersion": 2,
+  "kind": "microbench-kernel-decode",
+  "goal": "engine-kernel-decode fase 0",
+  "prereg": "docs/deep-dive/kernel-decode-fase0-prereg-2026-08-13.md",
+  "deviceLabel": "4090-linux",
+  "hostState": {
+    "declared": "quiescent"
+  },
+  "ts": "2026-08-12T23:49:24.010Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "nvidia",
+      "architecture": "lovelace",
+      "device": "",
+      "description": ""
+    },
+    "limits": {
+      "maxBufferSize": 4294967292,
+      "maxStorageBufferBindingSize": 2147483644,
+      "maxComputeWorkgroupStorageSize": 49152,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 16
+    },
+    "features": [
+      "depth32float-stencil8",
+      "chromium-experimental-subgroup-matrix",
+      "rg11b10ufloat-renderable",
+      "bgra8unorm-storage",
+      "texture-formats-tier1",
+      "chromium-experimental-multi-draw-indirect",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "chromium-experimental-timestamp-query-inside-passes",
+      "float32-filterable",
+      "indirect-first-instance",
+      "float32-blendable",
+      "subgroup-size-control",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "timestamp-query",
+      "clip-distances",
+      "texture-formats-tier2",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ],
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "deviceMemoryGB": 32,
+    "browser": {
+      "name": "chrome",
+      "version": "151.0.0.0"
+    },
+    "anomalies": []
+  },
+  "kdProbe": {
+    "adapterFeatures": [
+      "bgra8unorm-storage",
+      "chromium-experimental-multi-draw-indirect",
+      "chromium-experimental-subgroup-matrix",
+      "chromium-experimental-timestamp-query-inside-passes",
+      "clip-distances",
+      "core-features-and-limits",
+      "depth-clip-control",
+      "depth32float-stencil8",
+      "dual-source-blending",
+      "float32-blendable",
+      "float32-filterable",
+      "indirect-first-instance",
+      "primitive-index",
+      "rg11b10ufloat-renderable",
+      "subgroup-size-control",
+      "subgroups",
+      "texture-component-swizzle",
+      "texture-compression-bc",
+      "texture-compression-bc-sliced-3d",
+      "texture-formats-tier1",
+      "texture-formats-tier2",
+      "timestamp-query"
+    ],
+    "deviceFeatures": [
+      "chromium-experimental-subgroup-matrix",
+      "core-features-and-limits",
+      "subgroups",
+      "timestamp-query"
+    ],
+    "wgslLanguageFeatures": [
+      "immediate_address_space",
+      "linear_indexing",
+      "packed_4x8_integer_dot_product",
+      "pointer_composite_access",
+      "readonly_and_readwrite_storage_textures",
+      "subgroup_id",
+      "subgroup_uniformity",
+      "swizzle_assignment",
+      "texture_and_sampler_let",
+      "uniform_buffer_standard_layout",
+      "unrestricted_pointer_parameters"
+    ],
+    "adapterInfo": {
+      "vendor": "nvidia",
+      "architecture": "lovelace",
+      "device": "",
+      "description": ""
+    },
+    "grantedLimits": {
+      "maxBufferSize": 317849600,
+      "maxStorageBufferBindingSize": 317849600,
+      "maxStorageBuffersPerShaderStage": 8,
+      "maxComputeWorkgroupStorageSize": 30848,
+      "maxComputeInvocationsPerWorkgroup": 256,
+      "maxComputeWorkgroupSizeX": 256,
+      "maxComputeWorkgroupsPerDimension": 65535
+    },
+    "subgroupSizeObserved": 32,
+    "features": {
+      "subgroups": {
+        "exposed": true,
+        "granted": true,
+        "compiles": true,
+        "correct": true,
+        "note": "subgroupAdd(0..63) atteso 2016 — out=[2016, 32, 0, 0]"
+      },
+      "packed_4x8_integer_dot_product": {
+        "exposed": true,
+        "granted": null,
+        "compiles": true,
+        "correct": true,
+        "note": "dot4I8Packed((1,2,3,4),(5,6,7,8)) atteso 70 — out=[70]"
+      },
+      "shader-f16": {
+        "exposed": false,
+        "granted": false,
+        "compiles": false,
+        "correct": null,
+        "note": "1.5h*2.0h atteso 3 — 1: extension 'f16' is not allowed in the current environment"
+      },
+      "chromium-experimental-subgroup-matrix": {
+        "exposed": true,
+        "granted": true,
+        "compiles": null,
+        "correct": null,
+        "note": "subgroupMatrixConfigs: [{\"component\":\"u8\",\"result\":\"u32\",\"M\":16,\"N\":16,\"K\":32},{\"component\":\"i8\",\"result\":\"i32\",\"M\":16,\"N\":16,\"K\":32},{\"component\":\"u8\",\"result\":\"u32\",\"M\":16,\"N\":8,\"K\":32},{\"component\":\"i8\",\"result\":\"i32\",\"M\":16,\"N\":8,\"K\":32}]"
+      }
+    }
+  },
+  "cells": [
+    {
+      "kernel": "attn-decode",
+      "variant": "base",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "forma attuale importata da src/engine/kernels/wgsl.ts: 1 workgroup (64 thread) per head, scores[ctxMax] in workgroup memory, ciclo scalare su headDim, kvHead = h/4",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 9.979904,
+        "min": 9.744384,
+        "max": 10.0352,
+        "iqr": 0.21913600000000066,
+        "n": 10,
+        "samples": [
+          9.955328,
+          10.0352,
+          9.756672,
+          9.764864,
+          9.744384,
+          9.984,
+          9.979904,
+          9.986048,
+          9.961472,
+          9.979904
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 11.370000004768372,
+        "min": 11.004999995231628,
+        "max": 22.20499999821186,
+        "iqr": 5.430000007152557,
+        "n": 10,
+        "samples": [
+          11.004999995231628,
+          11.129999995231628,
+          22.20499999821186,
+          20.265000000596046,
+          16.560000002384186,
+          11.269999995827675,
+          11.370000004768372,
+          11.870000004768372,
+          11.304999992251396,
+          11.075000002980232
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 4.771584,
+        "min": 4.765184,
+        "max": 4.898176,
+        "iqr": 0.006911999999999807,
+        "n": 10,
+        "samples": [
+          4.765184,
+          4.773248,
+          4.892992,
+          4.898176,
+          4.766336,
+          4.767424,
+          4.766272,
+          4.772096,
+          4.771584,
+          4.7664
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 207519744,
+      "effectiveGBps": 5.1984403857993025,
+      "emittedGBps": 20.79376154319721,
+      "weightsPerSecond": null,
+      "checksum": -0.2060093517088717,
+      "checksumAbs": 24.089629097806665,
+      "checksumRelDiff": 0,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "base-coldkv",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "forma attuale importata da src/engine/kernels/wgsl.ts: 1 workgroup (64 thread) per head, scores[ctxMax] in workgroup memory, ciclo scalare su headDim, kvHead = h/4 — KV su 8 layer a rotazione (working set 400 MiB, fuori dalla L2): AGGIUNTA POST-HOC, non pre-registrata",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 9.752576,
+        "min": 4.774912,
+        "max": 9.780224,
+        "iqr": 0.015359999999999374,
+        "n": 10,
+        "samples": [
+          9.780224,
+          9.756672,
+          9.749504,
+          9.751552,
+          9.771008,
+          4.774912,
+          9.750528,
+          9.764864,
+          9.752576,
+          9.737216
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 11.550000011920929,
+        "min": 6.739999994635582,
+        "max": 12.105000004172325,
+        "iqr": 0.26999999582767487,
+        "n": 10,
+        "samples": [
+          11.229999989271164,
+          11.550000011920929,
+          12.105000004172325,
+          12.07999999821186,
+          11.504999995231628,
+          6.739999994635582,
+          11.574999988079071,
+          11.310000002384186,
+          11.430000007152557,
+          11.57999999821186
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 9.750144,
+        "min": 9.44544,
+        "max": 9.754368,
+        "iqr": 0.004415999999999087,
+        "n": 10,
+        "samples": [
+          9.750144,
+          9.748416,
+          9.750592,
+          9.748992,
+          9.754368,
+          9.44544,
+          9.753472,
+          9.751104,
+          9.746688,
+          9.7456
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 207519744,
+      "effectiveGBps": 5.319613607727846,
+      "emittedGBps": 21.278454430911385,
+      "weightsPerSecond": null,
+      "checksum": -0.2060093517088717,
+      "checksumAbs": 24.089629097806665,
+      "checksumRelDiff": 0,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "vec4",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "forma attuale + letture vec4<f32> su headDim; scores[ctxMax] e 1 wg/head invariati",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 2.638848,
+        "min": 2.634752,
+        "max": 2.642944,
+        "iqr": 0.0040960000000000996,
+        "n": 10,
+        "samples": [
+          2.637824,
+          2.64192,
+          2.635776,
+          2.635776,
+          2.638848,
+          2.637824,
+          2.642944,
+          2.634752,
+          2.639872,
+          2.638848
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 4.165000006556511,
+        "min": 3.655000001192093,
+        "max": 4.679999992251396,
+        "iqr": 0.4650000184774399,
+        "n": 10,
+        "samples": [
+          4.679999992251396,
+          4.205000013113022,
+          3.739999994635582,
+          4.295000001788139,
+          4.165000006556511,
+          3.7150000035762787,
+          4.120000004768372,
+          3.655000001192093,
+          3.8099999874830246,
+          4.189999997615814
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 1.307328,
+        "min": 1.307008,
+        "max": 1.372416,
+        "iqr": 0.00044800000000000395,
+        "n": 10,
+        "samples": [
+          1.3072,
+          1.372416,
+          1.307328,
+          1.307456,
+          1.307712,
+          1.307264,
+          1.307072,
+          1.307008,
+          1.307328,
+          1.307648
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 207519744,
+      "effectiveGBps": 19.660069848661234,
+      "emittedGBps": 78.64027939464493,
+      "weightsPerSecond": null,
+      "checksum": -0.20600968916619422,
+      "checksumAbs": 24.089629101889614,
+      "checksumRelDiff": 0.0000016380679795885537,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "vec4-coldkv",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "forma attuale + letture vec4<f32> su headDim; scores[ctxMax] e 1 wg/head invariati — KV su 8 layer a rotazione (working set 400 MiB, fuori dalla L2): AGGIUNTA POST-HOC, non pre-registrata",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 2.634752,
+        "min": 1.309696,
+        "max": 2.642944,
+        "iqr": 0.0040960000000000996,
+        "n": 10,
+        "samples": [
+          2.632704,
+          2.642944,
+          2.634752,
+          2.6368,
+          2.6368,
+          1.309696,
+          2.633728,
+          2.635776,
+          2.63168,
+          2.633728
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 3.9750000089406967,
+        "min": 2.709999993443489,
+        "max": 4.290000006556511,
+        "iqr": 0.27000001072883606,
+        "n": 10,
+        "samples": [
+          3.814999997615814,
+          4.075000002980232,
+          3.9750000089406967,
+          4.0899999886751175,
+          4.290000006556511,
+          2.709999993443489,
+          3.8299999982118607,
+          3.810000002384186,
+          4.08500000834465,
+          3.925000011920929
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 2.632576,
+        "min": 2.548736,
+        "max": 2.633536,
+        "iqr": 0.001024000000000136,
+        "n": 10,
+        "samples": [
+          2.630848,
+          2.633536,
+          2.632576,
+          2.632704,
+          2.63168,
+          2.548736,
+          2.633408,
+          2.632576,
+          2.632256,
+          2.632
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 207519744,
+      "effectiveGBps": 19.69063350174893,
+      "emittedGBps": 78.76253400699572,
+      "weightsPerSecond": null,
+      "checksum": -0.20600968916619422,
+      "checksumAbs": 24.089629101889614,
+      "checksumRelDiff": 0.0000016380679795885537,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "stream",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "softmax in streaming a tile di 64 posizioni (niente scores[ctxMax]) + vec4; 1 wg per head, nessuna fusione GQA, nessuno split",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 3.477504,
+        "min": 3.474432,
+        "max": 3.482624,
+        "iqr": 0.0030719999999999636,
+        "n": 10,
+        "samples": [
+          3.477504,
+          3.47648,
+          3.477504,
+          3.482624,
+          3.475456,
+          3.478528,
+          3.480576,
+          3.475456,
+          3.474432,
+          3.47648
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 5.1099999994039536,
+        "min": 4.820000007748604,
+        "max": 5.560000002384186,
+        "iqr": 0.23999999463558197,
+        "n": 10,
+        "samples": [
+          5.125,
+          5.219999998807907,
+          4.820000007748604,
+          5.0999999940395355,
+          5.560000002384186,
+          4.980000004172325,
+          4.935000002384186,
+          5.070000007748604,
+          5.1099999994039536,
+          5.5150000005960464
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 1.628032,
+        "min": 1.627264,
+        "max": 1.628544,
+        "iqr": 0.0007040000000000379,
+        "n": 10,
+        "samples": [
+          1.627392,
+          1.62816,
+          1.628032,
+          1.627904,
+          1.628544,
+          1.628544,
+          1.627904,
+          1.627456,
+          1.627264,
+          1.628096
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 207519744,
+      "effectiveGBps": 14.918727915194346,
+      "emittedGBps": 59.67491166077738,
+      "weightsPerSecond": null,
+      "checksum": -0.20600954947940409,
+      "checksumAbs": 24.089629949242862,
+      "checksumRelDiff": 9.600075470103434e-7,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "stream-coldkv",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "softmax in streaming a tile di 64 posizioni (niente scores[ctxMax]) + vec4; 1 wg per head, nessuna fusione GQA, nessuno split — KV su 8 layer a rotazione (working set 400 MiB, fuori dalla L2): AGGIUNTA POST-HOC, non pre-registrata",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 3.478528,
+        "min": 1.646592,
+        "max": 3.480576,
+        "iqr": 0.0030719999999999636,
+        "n": 10,
+        "samples": [
+          3.478528,
+          3.477504,
+          3.480576,
+          3.477504,
+          3.478528,
+          1.646592,
+          3.480576,
+          3.479552,
+          3.47648,
+          3.480576
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 5.219999998807907,
+        "min": 2.9449999928474426,
+        "max": 5.620000004768372,
+        "iqr": 0.3400000184774399,
+        "n": 10,
+        "samples": [
+          5.375,
+          5.355000004172325,
+          5.060000002384186,
+          5.219999998807907,
+          5.620000004768372,
+          2.9449999928474426,
+          4.96000000834465,
+          5.309999987483025,
+          5.014999985694885,
+          5.055000007152557
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 3.475264,
+        "min": 3.360512,
+        "max": 3.476608,
+        "iqr": 0.0007039999999998159,
+        "n": 10,
+        "samples": [
+          3.475008,
+          3.475712,
+          3.475328,
+          3.475456,
+          3.476608,
+          3.360512,
+          3.475008,
+          3.474752,
+          3.473984,
+          3.475264
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 207519744,
+      "effectiveGBps": 14.914336178981456,
+      "emittedGBps": 59.657344715925824,
+      "weightsPerSecond": null,
+      "checksum": -0.20600954947940409,
+      "checksumAbs": 24.089629949242862,
+      "checksumRelDiff": 9.600075470103434e-7,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "gqa-stream",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "streaming + vec4 + un workgroup per gruppo GQA: la riga KV si legge UNA volta per le 4 head invece di 4",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 4.127744,
+        "min": 4.1216,
+        "max": 4.132864,
+        "iqr": 0.005119999999999791,
+        "n": 10,
+        "samples": [
+          4.129792,
+          4.132864,
+          4.1216,
+          4.127744,
+          4.1216,
+          4.125696,
+          4.130816,
+          4.128768,
+          4.124672,
+          4.125696
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 5.409999996423721,
+        "min": 4.810000002384186,
+        "max": 6.154999986290932,
+        "iqr": 0.6600000113248825,
+        "n": 10,
+        "samples": [
+          5.079999998211861,
+          5.645000010728836,
+          6.154999986290932,
+          5.489999994635582,
+          4.810000002384186,
+          4.99499998986721,
+          4.894999995827675,
+          5.409999996423721,
+          4.9849999994039536,
+          5.96000000834465
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 2.087488,
+        "min": 2.080512,
+        "max": 2.089984,
+        "iqr": 0.006975999999999871,
+        "n": 10,
+        "samples": [
+          2.080512,
+          2.087488,
+          2.08736,
+          2.087488,
+          2.087552,
+          2.08704,
+          2.089984,
+          2.080576,
+          2.080512,
+          2.088192
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 51879936,
+      "effectiveGBps": 12.568593401141158,
+      "emittedGBps": 12.568593401141158,
+      "weightsPerSecond": null,
+      "checksum": -0.20600954947940409,
+      "checksumAbs": 24.089629949242862,
+      "checksumRelDiff": 9.600075470103434e-7,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "gqa-stream-coldkv",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "streaming + vec4 + un workgroup per gruppo GQA: la riga KV si legge UNA volta per le 4 head invece di 4 — KV su 8 layer a rotazione (working set 400 MiB, fuori dalla L2): AGGIUNTA POST-HOC, non pre-registrata",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 4.134912,
+        "min": 2.188288,
+        "max": 4.143104,
+        "iqr": 0.006143999999999927,
+        "n": 10,
+        "samples": [
+          4.132864,
+          4.133888,
+          4.140032,
+          4.134912,
+          4.125696,
+          2.188288,
+          4.139008,
+          4.134912,
+          4.135936,
+          4.143104
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 5.36999998986721,
+        "min": 4.135000005364418,
+        "max": 6.480000004172325,
+        "iqr": 0.8250000029802322,
+        "n": 10,
+        "samples": [
+          4.605000004172325,
+          5.36999998986721,
+          5.495000004768372,
+          5.620000004768372,
+          5.030000001192093,
+          4.135000005364418,
+          6.480000004172325,
+          5.314999997615814,
+          4.795000001788139,
+          6.434999987483025
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 4.12768,
+        "min": 4.005312,
+        "max": 4.128832,
+        "iqr": 0.001024000000000136,
+        "n": 10,
+        "samples": [
+          4.128256,
+          4.128128,
+          4.12736,
+          4.127104,
+          4.12768,
+          4.005312,
+          4.128832,
+          4.127168,
+          4.127488,
+          4.128192
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 51879936,
+      "effectiveGBps": 12.546805349182764,
+      "emittedGBps": 12.546805349182764,
+      "weightsPerSecond": null,
+      "checksum": -0.20600954947940409,
+      "checksumAbs": 24.089629949242862,
+      "checksumRelDiff": 9.600075470103434e-7,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "split",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "streaming + vec4 + split del contesto su 16 workgroup per head (chunk 448) + kernel di combinazione log-sum-exp",
+      "dispatchesPerOp": 2,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.295936,
+        "min": 0.292864,
+        "max": 0.295936,
+        "iqr": 0.0010239999999999694,
+        "n": 10,
+        "samples": [
+          0.292864,
+          0.294912,
+          0.294912,
+          0.295936,
+          0.294912,
+          0.295936,
+          0.295936,
+          0.294912,
+          0.295936,
+          0.295936
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 3.064999997615814,
+        "min": 2.5850000083446503,
+        "max": 3.260000005364418,
+        "iqr": 0.3399999886751175,
+        "n": 10,
+        "samples": [
+          3.064999997615814,
+          2.8050000071525574,
+          2.625,
+          2.820000007748604,
+          3.144999995827675,
+          3.260000005364418,
+          2.5850000083446503,
+          3.104999989271164,
+          3.219999998807907,
+          2.9249999970197678
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 0.13152,
+        "min": 0.130816,
+        "max": 0.131648,
+        "iqr": 0.0007679999999999909,
+        "n": 10,
+        "samples": [
+          0.13088,
+          0.131648,
+          0.131648,
+          0.131648,
+          0.131328,
+          0.13152,
+          0.131456,
+          0.130816,
+          0.13088,
+          0.13152
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 207519744,
+      "effectiveGBps": 175.30795847750866,
+      "emittedGBps": 701.2318339100347,
+      "weightsPerSecond": null,
+      "checksum": -0.20600996782559378,
+      "checksumAbs": 24.08962973785401,
+      "checksumRelDiff": 0.000002990722105450651,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "split-coldkv",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "streaming + vec4 + split del contesto su 16 workgroup per head (chunk 448) + kernel di combinazione log-sum-exp — KV su 8 layer a rotazione (working set 400 MiB, fuori dalla L2): AGGIUNTA POST-HOC, non pre-registrata",
+      "dispatchesPerOp": 2,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.294912,
+        "min": 0.145408,
+        "max": 0.299008,
+        "iqr": 0.008192000000000033,
+        "n": 10,
+        "samples": [
+          0.294912,
+          0.299008,
+          0.297984,
+          0.289792,
+          0.2816,
+          0.145408,
+          0.289792,
+          0.297984,
+          0.294912,
+          0.29696
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 2.864999994635582,
+        "min": 2.4650000035762787,
+        "max": 3.165000006556511,
+        "iqr": 0.375,
+        "n": 10,
+        "samples": [
+          2.939999997615814,
+          2.780000001192093,
+          2.6400000005960464,
+          2.6600000113248825,
+          2.864999994635582,
+          3.165000006556511,
+          2.4650000035762787,
+          3.0249999910593033,
+          3.0150000005960464,
+          2.635000005364418
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 0.290432,
+        "min": 0.281024,
+        "max": 0.290624,
+        "iqr": 0.00044800000000000395,
+        "n": 10,
+        "samples": [
+          0.289984,
+          0.290304,
+          0.290496,
+          0.290496,
+          0.290624,
+          0.281024,
+          0.290432,
+          0.290048,
+          0.290176,
+          0.29056
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 207519744,
+      "effectiveGBps": 175.91666666666666,
+      "emittedGBps": 703.6666666666666,
+      "weightsPerSecond": null,
+      "checksum": -0.20600996782559378,
+      "checksumAbs": 24.08962973785401,
+      "checksumRelDiff": 0.000002990722105450651,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "split-gqa",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "streaming + vec4 + fusione GQA + split del contesto su 16 workgroup per gruppo + combinazione log-sum-exp",
+      "dispatchesPerOp": 2,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.324608,
+        "min": 0.323584,
+        "max": 0.325632,
+        "iqr": 0.0010240000000000249,
+        "n": 10,
+        "samples": [
+          0.324608,
+          0.323584,
+          0.324608,
+          0.323584,
+          0.325632,
+          0.323584,
+          0.323584,
+          0.324608,
+          0.324608,
+          0.324608
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 2.9249999970197678,
+        "min": 2.435000002384186,
+        "max": 3.0599999874830246,
+        "iqr": 0.14999999105930328,
+        "n": 10,
+        "samples": [
+          2.9249999970197678,
+          2.435000002384186,
+          2.935000002384186,
+          2.8050000071525574,
+          2.8400000035762787,
+          3.0599999874830246,
+          2.9549999982118607,
+          2.8900000005960464,
+          3.050000011920929,
+          2.75
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 0.155968,
+        "min": 0.15488,
+        "max": 0.156416,
+        "iqr": 0.0011520000000000141,
+        "n": 10,
+        "samples": [
+          0.15488,
+          0.156032,
+          0.156416,
+          0.156096,
+          0.156096,
+          0.155968,
+          0.155904,
+          0.15488,
+          0.154944,
+          0.155968
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 51879936,
+      "effectiveGBps": 159.82334384858044,
+      "emittedGBps": 159.82334384858044,
+      "weightsPerSecond": null,
+      "checksum": -0.20600996782559378,
+      "checksumAbs": 24.08962973785401,
+      "checksumRelDiff": 0.000002990722105450651,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "attn-decode",
+      "variant": "split-gqa-coldkv",
+      "shape": {
+        "nHead": 16,
+        "nKvHead": 4,
+        "headDim": 256,
+        "n": 6333,
+        "ctxMax": 6400
+      },
+      "context": "streaming + vec4 + fusione GQA + split del contesto su 16 workgroup per gruppo + combinazione log-sum-exp — KV su 8 layer a rotazione (working set 400 MiB, fuori dalla L2): AGGIUNTA POST-HOC, non pre-registrata",
+      "dispatchesPerOp": 2,
+      "opsPerSample": 1,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.324608,
+        "min": 0.175104,
+        "max": 0.32768,
+        "iqr": 0.0030719999999999636,
+        "n": 10,
+        "samples": [
+          0.324608,
+          0.324608,
+          0.324608,
+          0.32256,
+          0.326656,
+          0.175104,
+          0.319488,
+          0.32768,
+          0.325632,
+          0.324608
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 2.7049999982118607,
+        "min": 2.5799999982118607,
+        "max": 3.2150000035762787,
+        "iqr": 0.41499997675418854,
+        "n": 10,
+        "samples": [
+          2.7049999982118607,
+          2.5799999982118607,
+          3.2150000035762787,
+          2.645000010728836,
+          2.695000007748604,
+          2.844999998807907,
+          2.6299999952316284,
+          3.1400000005960464,
+          3.0599999874830246,
+          2.6499999910593033
+        ]
+      },
+      "msPerOpBatched": {
+        "p50": 0.32032,
+        "min": 0.311232,
+        "max": 0.32288,
+        "iqr": 0.0007040000000000379,
+        "n": 10,
+        "samples": [
+          0.32032,
+          0.320576,
+          0.32288,
+          0.320256,
+          0.320832,
+          0.311232,
+          0.320512,
+          0.319872,
+          0.319872,
+          0.320064
+        ]
+      },
+      "bytesUnique": 51879936,
+      "bytesEmitted": 51879936,
+      "effectiveGBps": 159.82334384858044,
+      "emittedGBps": 159.82334384858044,
+      "weightsPerSecond": null,
+      "checksum": -0.20600996782559378,
+      "checksumAbs": 24.08962973785401,
+      "checksumRelDiff": 0.000002990722105450651,
+      "notes": "un layer per dispatch; nPast=6332. p50 su 10 campioni interleavati."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "base",
+      "shape": {
+        "K": 2560,
+        "N": 2560
+      },
+      "context": "qkv/o-proj — forma attuale importata da src/engine/kernels/wgsl.ts: 64 thread per riga, load u32 scalari, nibble byte per byte, riduzione ad albero",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.04896,
+        "min": 0.048896,
+        "max": 0.049024,
+        "iqr": 0.00006399999999999462,
+        "n": 10,
+        "samples": [
+          0.04896,
+          0.048896,
+          0.048896,
+          0.04896,
+          0.049024,
+          0.04896,
+          0.049024,
+          0.048896,
+          0.048896,
+          0.048896
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.18499999959021807,
+        "min": 0.15843750070780516,
+        "max": 0.22593749966472387,
+        "iqr": 0.036250000819563866,
+        "n": 10,
+        "samples": [
+          0.16249999962747097,
+          0.16375000029802322,
+          0.19406249932944775,
+          0.1678125001490116,
+          0.19875000044703484,
+          0.15843750070780516,
+          0.15874999947845936,
+          0.18499999959021807,
+          0.22093749977648258,
+          0.22593749966472387
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 4106240,
+      "bytesEmitted": 4106240,
+      "effectiveGBps": 83.86928104575163,
+      "emittedGBps": 75.50326797385621,
+      "weightsPerSecond": 133856209150.3268,
+      "checksum": 2719.9830743819475,
+      "checksumAbs": 6033.948267892003,
+      "checksumRelDiff": 0,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (3696640 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4",
+      "shape": {
+        "K": 2560,
+        "N": 2560
+      },
+      "context": "qkv/o-proj — una load vec4<u32> (16 B) per blocco + dot() su vec4<f32> di x; 1 riga per workgroup, riduzione ad albero",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.016128,
+        "min": 0.016,
+        "max": 0.016256,
+        "iqr": 0.00006400000000000156,
+        "n": 10,
+        "samples": [
+          0.016192,
+          0.016128,
+          0.016128,
+          0.016128,
+          0.016128,
+          0.016064,
+          0.016,
+          0.016256,
+          0.016192,
+          0.016128
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.16843749955296516,
+        "min": 0.14281249977648258,
+        "max": 0.45656250044703484,
+        "iqr": 0.014999999664723873,
+        "n": 10,
+        "samples": [
+          0.1603124998509884,
+          0.16343749966472387,
+          0.19062499981373549,
+          0.1612499998882413,
+          0.45656250044703484,
+          0.14281249977648258,
+          0.16750000044703484,
+          0.16843749955296516,
+          0.17624999955296516,
+          0.17406249977648258
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 4106240,
+      "bytesEmitted": 4106240,
+      "effectiveGBps": 254.60317460317458,
+      "emittedGBps": 229.20634920634922,
+      "weightsPerSecond": 406349206349.20636,
+      "checksum": 2719.9830644875765,
+      "checksumAbs": 6033.948234662414,
+      "checksumRelDiff": 3.6376590449788397e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (3696640 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-sg",
+      "shape": {
+        "K": 2560,
+        "N": 2560
+      },
+      "context": "qkv/o-proj — come vec4, riduzione via subgroupAdd",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.014336,
+        "min": 0.014272,
+        "max": 0.0144,
+        "iqr": 0.00006399999999999982,
+        "n": 10,
+        "samples": [
+          0.014336,
+          0.014336,
+          0.014336,
+          0.014272,
+          0.0144,
+          0.0144,
+          0.014272,
+          0.014336,
+          0.0144,
+          0.014336
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.1690624998882413,
+        "min": 0.13843750022351742,
+        "max": 0.18812499940395355,
+        "iqr": 0.029062500223517418,
+        "n": 10,
+        "samples": [
+          0.17812500055879354,
+          0.18812499940395355,
+          0.1834375001490116,
+          0.15281250048428774,
+          0.14906250033527613,
+          0.13843750022351742,
+          0.15968750044703484,
+          0.1690624998882413,
+          0.17312499973922968,
+          0.14312500040978193
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 4106240,
+      "bytesEmitted": 4106240,
+      "effectiveGBps": 286.4285714285714,
+      "emittedGBps": 257.85714285714283,
+      "weightsPerSecond": 457142857142.8572,
+      "checksum": 2719.9830621778965,
+      "checksumAbs": 6033.948238402605,
+      "checksumRelDiff": 4.486811382285647e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (3696640 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-rows4",
+      "shape": {
+        "K": 2560,
+        "N": 2560
+      },
+      "context": "qkv/o-proj — vec4 + 4 righe per workgroup (16 lane per riga): x riletta una volta per 4 righe invece di 4",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.013184,
+        "min": 0.01312,
+        "max": 0.013184,
+        "iqr": 0,
+        "n": 10,
+        "samples": [
+          0.013184,
+          0.013184,
+          0.01312,
+          0.013184,
+          0.013184,
+          0.013184,
+          0.013184,
+          0.013184,
+          0.013184,
+          0.013184
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.1681249998509884,
+        "min": 0.13999999966472387,
+        "max": 0.2196875000372529,
+        "iqr": 0.029999999329447746,
+        "n": 10,
+        "samples": [
+          0.1690624998882413,
+          0.19093750044703484,
+          0.2196875000372529,
+          0.1631249999627471,
+          0.14593750052154064,
+          0.13999999966472387,
+          0.1681249998509884,
+          0.16750000044703484,
+          0.1759374998509884,
+          0.14406249951571226
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 4106240,
+      "bytesEmitted": 4106240,
+      "effectiveGBps": 311.45631067961165,
+      "emittedGBps": 280.3883495145631,
+      "weightsPerSecond": 497087378640.77673,
+      "checksum": 2719.9830515533686,
+      "checksumAbs": 6033.948230430484,
+      "checksumRelDiff": 8.392912133896961e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (3696640 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-rows2-sg",
+      "shape": {
+        "K": 2560,
+        "N": 2560
+      },
+      "context": "qkv/o-proj — vec4 + 2 righe per workgroup, una riga per subgroup: la riduzione di riga e' un solo subgroupAdd",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.012032,
+        "min": 0.011968,
+        "max": 0.01216,
+        "iqr": 0,
+        "n": 10,
+        "samples": [
+          0.01216,
+          0.012032,
+          0.012096,
+          0.012032,
+          0.012032,
+          0.011968,
+          0.012032,
+          0.012032,
+          0.012032,
+          0.012032
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.17031249962747097,
+        "min": 0.14000000059604645,
+        "max": 0.18593749962747097,
+        "iqr": 0.03375000040978193,
+        "n": 10,
+        "samples": [
+          0.16562499944120646,
+          0.18593749962747097,
+          0.17031249962747097,
+          0.1512500001117587,
+          0.14000000059604645,
+          0.14218749944120646,
+          0.17249999940395355,
+          0.17750000022351742,
+          0.17718749959021807,
+          0.14343749918043613
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 4106240,
+      "bytesEmitted": 4106240,
+      "effectiveGBps": 341.27659574468083,
+      "emittedGBps": 307.2340425531915,
+      "weightsPerSecond": 544680851063.82983,
+      "checksum": 2719.983065724373,
+      "checksumAbs": 6033.948240458965,
+      "checksumRelDiff": 3.182951664356485e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (3696640 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "base",
+      "shape": {
+        "K": 2560,
+        "N": 9216
+      },
+      "context": "gate/up-proj — forma attuale importata da src/engine/kernels/wgsl.ts: 64 thread per riga, load u32 scalari, nibble byte per byte, riduzione ad albero",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.164224,
+        "min": 0.164096,
+        "max": 0.164352,
+        "iqr": 0.0000640000000000085,
+        "n": 10,
+        "samples": [
+          0.164224,
+          0.164224,
+          0.16416,
+          0.164352,
+          0.164288,
+          0.164224,
+          0.164096,
+          0.16416,
+          0.16416,
+          0.164224
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.2571874996647239,
+        "min": 0.22500000055879354,
+        "max": 0.2646874999627471,
+        "iqr": 0.011874998919665813,
+        "n": 10,
+        "samples": [
+          0.25031250063329935,
+          0.2646874999627471,
+          0.2384374998509884,
+          0.2571874996647239,
+          0.2559374999254942,
+          0.2540624998509884,
+          0.26406250055879354,
+          0.22500000055879354,
+          0.26031249947845936,
+          0.26218749955296516
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14755840,
+      "bytesEmitted": 14755840,
+      "effectiveGBps": 89.85190958690568,
+      "emittedGBps": 80.87295401402962,
+      "weightsPerSecond": 143663289166.01715,
+      "checksum": 9163.507785446942,
+      "checksumAbs": 21715.457105897367,
+      "checksumRelDiff": 0,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13281280 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4",
+      "shape": {
+        "K": 2560,
+        "N": 9216
+      },
+      "context": "gate/up-proj — una load vec4<u32> (16 B) per blocco + dot() su vec4<f32> di x; 1 riga per workgroup, riduzione ad albero",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.052864,
+        "min": 0.0528,
+        "max": 0.052992,
+        "iqr": 0,
+        "n": 10,
+        "samples": [
+          0.052992,
+          0.052864,
+          0.052864,
+          0.0528,
+          0.0528,
+          0.052864,
+          0.052864,
+          0.052864,
+          0.052864,
+          0.052928
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.18406250048428774,
+        "min": 0.15937499981373549,
+        "max": 0.26093750074505806,
+        "iqr": 0.04874999914318323,
+        "n": 10,
+        "samples": [
+          0.17406249977648258,
+          0.18812500033527613,
+          0.26093750074505806,
+          0.18406250048428774,
+          0.22812500037252903,
+          0.1768749998882413,
+          0.17656250018626451,
+          0.15937499981373549,
+          0.1756250001490116,
+          0.22437499929219484
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14755840,
+      "bytesEmitted": 14755840,
+      "effectiveGBps": 279.1283292978208,
+      "emittedGBps": 251.23486682808718,
+      "weightsPerSecond": 446295399515.73846,
+      "checksum": 9163.507773689926,
+      "checksumAbs": 21715.45702766627,
+      "checksumRelDiff": 1.2830257208508895e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13281280 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-sg",
+      "shape": {
+        "K": 2560,
+        "N": 9216
+      },
+      "context": "gate/up-proj — come vec4, riduzione via subgroupAdd",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.0432,
+        "min": 0.043136,
+        "max": 0.043264,
+        "iqr": 0.00006399999999999462,
+        "n": 10,
+        "samples": [
+          0.043136,
+          0.0432,
+          0.0432,
+          0.0432,
+          0.0432,
+          0.043264,
+          0.0432,
+          0.043264,
+          0.0432,
+          0.043264
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.1846874998882413,
+        "min": 0.16187500022351742,
+        "max": 0.2334374999627471,
+        "iqr": 0.034374999813735485,
+        "n": 10,
+        "samples": [
+          0.16187500022351742,
+          0.2334374999627471,
+          0.16343749966472387,
+          0.1796875,
+          0.1990625001490116,
+          0.1846874998882413,
+          0.16468750033527613,
+          0.19906249921768904,
+          0.17812499962747097,
+          0.20656249951571226
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14755840,
+      "bytesEmitted": 14755840,
+      "effectiveGBps": 341.5703703703703,
+      "emittedGBps": 307.43703703703704,
+      "weightsPerSecond": 546133333333.3333,
+      "checksum": 9163.50776450336,
+      "checksumAbs": 21715.457053497434,
+      "checksumRelDiff": 2.285542016040463e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13281280 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-rows4",
+      "shape": {
+        "K": 2560,
+        "N": 9216
+      },
+      "context": "gate/up-proj — vec4 + 4 righe per workgroup (16 lane per riga): x riletta una volta per 4 righe invece di 4",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.044672,
+        "min": 0.044608,
+        "max": 0.0448,
+        "iqr": 0.00012799999999999617,
+        "n": 10,
+        "samples": [
+          0.044672,
+          0.044672,
+          0.044672,
+          0.044672,
+          0.0448,
+          0.0448,
+          0.044672,
+          0.044608,
+          0.0448,
+          0.044736
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.18093750067055225,
+        "min": 0.16437499970197678,
+        "max": 0.1893750000745058,
+        "iqr": 0.012812500819563866,
+        "n": 10,
+        "samples": [
+          0.17312499973922968,
+          0.1806250000372529,
+          0.17312500067055225,
+          0.18187499977648258,
+          0.18593750055879354,
+          0.18093750067055225,
+          0.1650000000372529,
+          0.16437499970197678,
+          0.1893750000745058,
+          0.1875
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14755840,
+      "bytesEmitted": 14755840,
+      "effectiveGBps": 330.3151862464183,
+      "emittedGBps": 297.30659025787963,
+      "weightsPerSecond": 528137535816.6189,
+      "checksum": 9163.507709816098,
+      "checksumAbs": 21715.45699557662,
+      "checksumRelDiff": 8.253481680834842e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13281280 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-rows2-sg",
+      "shape": {
+        "K": 2560,
+        "N": 9216
+      },
+      "context": "gate/up-proj — vec4 + 2 righe per workgroup, una riga per subgroup: la riduzione di riga e' un solo subgroupAdd",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.038464,
+        "min": 0.038464,
+        "max": 0.038528,
+        "iqr": 0.00006400000000000156,
+        "n": 10,
+        "samples": [
+          0.038528,
+          0.038464,
+          0.038464,
+          0.038464,
+          0.038464,
+          0.038464,
+          0.038528,
+          0.038528,
+          0.038528,
+          0.038464
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.18093749973922968,
+        "min": 0.16437499970197678,
+        "max": 0.2712500002235174,
+        "iqr": 0.010625001043081284,
+        "n": 10,
+        "samples": [
+          0.1668750001117587,
+          0.17937500029802322,
+          0.18093749973922968,
+          0.18656250089406967,
+          0.18124999944120646,
+          0.1759374998509884,
+          0.16437499970197678,
+          0.2712500002235174,
+          0.1903125001117587,
+          0.18031249940395355
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14755840,
+      "bytesEmitted": 14755840,
+      "effectiveGBps": 383.62728785357734,
+      "emittedGBps": 345.2911813643927,
+      "weightsPerSecond": 613377703826.9551,
+      "checksum": 9163.507763534784,
+      "checksumAbs": 21715.457050800323,
+      "checksumRelDiff": 2.391241219912843e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13281280 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "base",
+      "shape": {
+        "K": 9216,
+        "N": 2560
+      },
+      "context": "down-proj — forma attuale importata da src/engine/kernels/wgsl.ts: 64 thread per riga, load u32 scalari, nibble byte per byte, riduzione ad albero",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.150208,
+        "min": 0.150144,
+        "max": 0.164864,
+        "iqr": 0.0000640000000000085,
+        "n": 10,
+        "samples": [
+          0.150144,
+          0.150144,
+          0.150208,
+          0.164864,
+          0.16448,
+          0.150208,
+          0.150208,
+          0.150144,
+          0.150208,
+          0.150144
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.2403124999254942,
+        "min": 0.19999999925494194,
+        "max": 0.26531249936670065,
+        "iqr": 0.022812500596046448,
+        "n": 10,
+        "samples": [
+          0.24156250059604645,
+          0.24156249966472387,
+          0.26531249936670065,
+          0.2571874996647239,
+          0.2403124999254942,
+          0.19999999925494194,
+          0.21875,
+          0.2149999998509884,
+          0.2215625001117587,
+          0.2265625
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14782464,
+      "bytesEmitted": 14782464,
+      "effectiveGBps": 98.41329356625478,
+      "emittedGBps": 88.5965061780997,
+      "weightsPerSecond": 157068598210.48145,
+      "checksum": 6010.959739506245,
+      "checksumAbs": 11836.196149289608,
+      "checksumRelDiff": 0,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13307904 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4",
+      "shape": {
+        "K": 9216,
+        "N": 2560
+      },
+      "context": "down-proj — una load vec4<u32> (16 B) per blocco + dot() su vec4<f32> di x; 1 riga per workgroup, riduzione ad albero",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.04544,
+        "min": 0.045312,
+        "max": 0.045568,
+        "iqr": 0.0001280000000000031,
+        "n": 10,
+        "samples": [
+          0.04544,
+          0.04544,
+          0.04544,
+          0.045376,
+          0.045568,
+          0.045312,
+          0.04544,
+          0.045376,
+          0.045504,
+          0.045504
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.16250000055879354,
+        "min": 0.1493750000372529,
+        "max": 0.1981250001117587,
+        "iqr": 0.030312499962747097,
+        "n": 10,
+        "samples": [
+          0.1846874998882413,
+          0.1981250001117587,
+          0.1953125,
+          0.16968750022351742,
+          0.16250000055879354,
+          0.1621874999254942,
+          0.1493750000372529,
+          0.16062499955296516,
+          0.1543749999254942,
+          0.1534374998882413
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14782464,
+      "bytesEmitted": 14782464,
+      "effectiveGBps": 325.3183098591549,
+      "emittedGBps": 292.86760563380284,
+      "weightsPerSecond": 519211267605.6338,
+      "checksum": 6010.959775924683,
+      "checksumAbs": 11836.196146726608,
+      "checksumRelDiff": 6.058672747116948e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13307904 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-sg",
+      "shape": {
+        "K": 9216,
+        "N": 2560
+      },
+      "context": "down-proj — come vec4, riduzione via subgroupAdd",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.041536,
+        "min": 0.041472,
+        "max": 0.0416,
+        "iqr": 0.00012799999999999617,
+        "n": 10,
+        "samples": [
+          0.041472,
+          0.041472,
+          0.041472,
+          0.041536,
+          0.0416,
+          0.041536,
+          0.041472,
+          0.041536,
+          0.0416,
+          0.0416
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.16156250052154064,
+        "min": 0.15468749962747097,
+        "max": 0.1993749998509884,
+        "iqr": 0.014375000260770321,
+        "n": 10,
+        "samples": [
+          0.1993749998509884,
+          0.19593749940395355,
+          0.171875,
+          0.16156250052154064,
+          0.16093750018626451,
+          0.15500000026077032,
+          0.15749999973922968,
+          0.16343750059604645,
+          0.1603124998509884,
+          0.15468749962747097
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14782464,
+      "bytesEmitted": 14782464,
+      "effectiveGBps": 355.89522342064714,
+      "emittedGBps": 320.39445300462256,
+      "weightsPerSecond": 568012326656.3945,
+      "checksum": 6010.95977550745,
+      "checksumAbs": 11836.196179747581,
+      "checksumRelDiff": 5.989260784384021e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13307904 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-rows4",
+      "shape": {
+        "K": 9216,
+        "N": 2560
+      },
+      "context": "down-proj — vec4 + 4 righe per workgroup (16 lane per riga): x riletta una volta per 4 righe invece di 4",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.041344,
+        "min": 0.04128,
+        "max": 0.041408,
+        "iqr": 0.00006400000000000156,
+        "n": 10,
+        "samples": [
+          0.04128,
+          0.041344,
+          0.041408,
+          0.041408,
+          0.04128,
+          0.04128,
+          0.041344,
+          0.04128,
+          0.041344,
+          0.041344
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.16437499970197678,
+        "min": 0.14812500029802322,
+        "max": 0.18531250022351742,
+        "iqr": 0.026562499813735485,
+        "n": 10,
+        "samples": [
+          0.18531250022351742,
+          0.1825000001117587,
+          0.18531250022351742,
+          0.1603124998509884,
+          0.16437499970197678,
+          0.15593750029802322,
+          0.14812500029802322,
+          0.17718749959021807,
+          0.15968750044703484,
+          0.15562500059604645
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14782464,
+      "bytesEmitted": 14782464,
+      "effectiveGBps": 357.5479876160991,
+      "emittedGBps": 321.8823529411765,
+      "weightsPerSecond": 570650154798.7617,
+      "checksum": 6010.959787994623,
+      "checksumAbs": 11836.196147471666,
+      "checksumRelDiff": 8.066661669033776e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13307904 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-rows2-sg",
+      "shape": {
+        "K": 9216,
+        "N": 2560
+      },
+      "context": "down-proj — vec4 + 2 righe per workgroup, una riga per subgroup: la riduzione di riga e' un solo subgroupAdd",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 0.037952,
+        "min": 0.037952,
+        "max": 0.038016,
+        "iqr": 0,
+        "n": 10,
+        "samples": [
+          0.037952,
+          0.037952,
+          0.038016,
+          0.037952,
+          0.037952,
+          0.037952,
+          0.037952,
+          0.037952,
+          0.037952,
+          0.037952
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 0.1690624998882413,
+        "min": 0.14593749959021807,
+        "max": 0.20000000018626451,
+        "iqr": 0.024062499403953552,
+        "n": 10,
+        "samples": [
+          0.1837499998509884,
+          0.1903125001117587,
+          0.16624999977648258,
+          0.20000000018626451,
+          0.16656249947845936,
+          0.15749999973922968,
+          0.14593749959021807,
+          0.15968750044703484,
+          0.1768749998882413,
+          0.1690624998882413
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 14782464,
+      "bytesEmitted": 14782464,
+      "effectiveGBps": 389.504215851602,
+      "emittedGBps": 350.6509274873525,
+      "weightsPerSecond": 621652613827.9933,
+      "checksum": 6010.959763139486,
+      "checksumAbs": 11836.19618460536,
+      "checksumRelDiff": 3.93169188908653e-9,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (13307904 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "base",
+      "shape": {
+        "K": 2560,
+        "N": 248320
+      },
+      "context": "lm_head — forma attuale importata da src/engine/kernels/wgsl.ts: 64 thread per riga, load u32 scalari, nibble byte per byte, riduzione ad albero",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 5.851712,
+        "min": 5.272128,
+        "max": 6.107328,
+        "iqr": 0.36108799999999963,
+        "n": 10,
+        "samples": [
+          5.384704,
+          5.272128,
+          5.770432,
+          6.09696,
+          6.107328,
+          5.851776,
+          5.851712,
+          5.883392,
+          5.522304,
+          5.708672
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 5.920937499962747,
+        "min": 5.3390624998137355,
+        "max": 6.2259375005960464,
+        "iqr": 0.38812500052154064,
+        "n": 10,
+        "samples": [
+          5.463437499478459,
+          5.3390624998137355,
+          5.89968749973923,
+          6.2109375,
+          6.2259375005960464,
+          5.943437499925494,
+          5.920937499962747,
+          5.984375,
+          5.596249999478459,
+          5.818749999627471
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 397322240,
+      "bytesEmitted": 397322240,
+      "effectiveGBps": 67.89846116828717,
+      "emittedGBps": 61.1087900429823,
+      "weightsPerSecond": 108634738004.87788,
+      "checksum": 245831.58080257475,
+      "checksumAbs": 585908.247086823,
+      "checksumRelDiff": 0,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (357591040 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4",
+      "shape": {
+        "K": 2560,
+        "N": 248320
+      },
+      "context": "lm_head — una load vec4<u32> (16 B) per blocco + dot() su vec4<f32> di x; 1 riga per workgroup, riduzione ad albero",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 1.504,
+        "min": 1.419712,
+        "max": 1.56032,
+        "iqr": 0.04703999999999997,
+        "n": 10,
+        "samples": [
+          1.419712,
+          1.489984,
+          1.489536,
+          1.542272,
+          1.56032,
+          1.53312,
+          1.52096,
+          1.504,
+          1.437632,
+          1.48608
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 1.626562500372529,
+        "min": 1.514687499962747,
+        "max": 1.6590625001117587,
+        "iqr": 0.043750000186264515,
+        "n": 10,
+        "samples": [
+          1.5268749995157123,
+          1.626562500372529,
+          1.5912500005215406,
+          1.6399999996647239,
+          1.6590625001117587,
+          1.6284375004470348,
+          1.6350000007078052,
+          1.609375,
+          1.514687499962747,
+          1.5971875004470348
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 397322240,
+      "bytesEmitted": 397322240,
+      "effectiveGBps": 264.1770212765958,
+      "emittedGBps": 237.76000000000002,
+      "weightsPerSecond": 422672340425.5319,
+      "checksum": 245831.5810240656,
+      "checksumAbs": 585908.2474546134,
+      "checksumRelDiff": 9.009861925072556e-10,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (357591040 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-sg",
+      "shape": {
+        "K": 2560,
+        "N": 248320
+      },
+      "context": "lm_head — come vec4, riduzione via subgroupAdd",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 1.47808,
+        "min": 1.268736,
+        "max": 1.544256,
+        "iqr": 0.12326399999999982,
+        "n": 10,
+        "samples": [
+          1.283456,
+          1.454912,
+          1.47808,
+          1.516992,
+          1.473536,
+          1.491328,
+          1.5216,
+          1.544256,
+          1.393728,
+          1.268736
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 1.5824999995529652,
+        "min": 1.3868749998509884,
+        "max": 1.6609375001862645,
+        "iqr": 0.14812500029802322,
+        "n": 10,
+        "samples": [
+          1.3875000001862645,
+          1.5324999997392297,
+          1.5403124997392297,
+          1.5965625001117587,
+          1.59375,
+          1.5824999995529652,
+          1.633750000037253,
+          1.6609375001862645,
+          1.4484374998137355,
+          1.3868749998509884
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 397322240,
+      "bytesEmitted": 397322240,
+      "effectiveGBps": 268.80969906906256,
+      "emittedGBps": 241.92942195280364,
+      "weightsPerSecond": 430084433860.1429,
+      "checksum": 245831.580798842,
+      "checksumAbs": 585908.2472916469,
+      "checksumRelDiff": 1.5184138941272035e-11,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (357591040 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-rows4",
+      "shape": {
+        "K": 2560,
+        "N": 248320
+      },
+      "context": "lm_head — vec4 + 4 righe per workgroup (16 lane per riga): x riletta una volta per 4 righe invece di 4",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 1.554048,
+        "min": 1.269952,
+        "max": 1.572864,
+        "iqr": 0.13446400000000014,
+        "n": 10,
+        "samples": [
+          1.269952,
+          1.473792,
+          1.554048,
+          1.572864,
+          1.5664,
+          1.56,
+          1.545792,
+          1.554944,
+          1.425536,
+          1.375808
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 1.6134374998509884,
+        "min": 1.3787500001490116,
+        "max": 1.6618750002235174,
+        "iqr": 0.13062500022351742,
+        "n": 10,
+        "samples": [
+          1.3787500001490116,
+          1.5271875001490116,
+          1.6618750002235174,
+          1.6484375,
+          1.6543749999254942,
+          1.6081249993294477,
+          1.6503125000745058,
+          1.6134374998509884,
+          1.5196874998509884,
+          1.4487499995157123
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 397322240,
+      "bytesEmitted": 397322240,
+      "effectiveGBps": 255.6692199983527,
+      "emittedGBps": 230.1029569228235,
+      "weightsPerSecond": 409060209208.46716,
+      "checksum": 245831.58070064336,
+      "checksumAbs": 585908.2471930459,
+      "checksumRelDiff": 4.14639131448189e-10,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (357591040 B)."
+    },
+    {
+      "kernel": "gemv-q4_0",
+      "variant": "vec4-rows2-sg",
+      "shape": {
+        "K": 2560,
+        "N": 248320
+      },
+      "context": "lm_head — vec4 + 2 righe per workgroup, una riga per subgroup: la riduzione di riga e' un solo subgroupAdd",
+      "dispatchesPerOp": 1,
+      "opsPerSample": 16,
+      "warmupDiscarded": 3,
+      "timingSource": "timestamp-query",
+      "msPerOp": {
+        "p50": 1.464,
+        "min": 1.22368,
+        "max": 1.622016,
+        "iqr": 0.0968960000000001,
+        "n": 10,
+        "samples": [
+          1.22368,
+          1.464,
+          1.500416,
+          1.622016,
+          1.446784,
+          1.491328,
+          1.463168,
+          1.485056,
+          1.394432,
+          1.391936
+        ]
+      },
+      "cpuMsPerOp": {
+        "p50": 1.518125000409782,
+        "min": 1.3275000005960464,
+        "max": 1.7159374998882413,
+        "iqr": 0.13156249932944775,
+        "n": 10,
+        "samples": [
+          1.3275000005960464,
+          1.5053125005215406,
+          1.584374999627471,
+          1.7159374998882413,
+          1.518125000409782,
+          1.6068750005215406,
+          1.5162500003352761,
+          1.5874999994412065,
+          1.4559375001117587,
+          1.442812499590218
+        ]
+      },
+      "msPerOpBatched": null,
+      "bytesUnique": 397322240,
+      "bytesEmitted": 397322240,
+      "effectiveGBps": 271.39497267759566,
+      "emittedGBps": 244.256174863388,
+      "weightsPerSecond": 434220765027.3224,
+      "checksum": 245831.58079773188,
+      "checksumAbs": 585908.2473168224,
+      "checksumRelDiff": 1.9699980662328985e-11,
+      "notes": "16 dispatch identici per campione (hazard WAW su y), tempo per dispatch = delta/16. bytesUnique = formula pre-registrata; emittedGBps usa la formula senza doppio conteggio delle scale (357591040 B)."
+    }
+  ],
+  "skipped": []
+}
