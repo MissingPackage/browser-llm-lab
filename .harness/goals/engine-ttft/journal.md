@@ -328,3 +328,67 @@ riscrivendo i sorgenti sotto di me (item 13); e ktest che crasha riporta 0 PASS 
 
 **Gate** (rieseguiti col comando giusto, exit code guardato): ktest exit 0, 100
 PASS / 0 FAIL · vitest 545 passed | 10 skipped · `tsc --noEmit` pulito.
+
+## it.5 (2026-08-13, riga 2 cella a0) — la via intera vince, e due difetti del banco trovati per strada
+
+**P8 CONFERMATA.** `checksumRelDiff` = 2,97e-03 (gate/up) e 2,47e-03 (down),
+contro la tolleranza pre-registrata di 2e-2 e vicinissimi all'ordine 4e-3 che il
+conto sull'errore di quantizzazione prevedeva. Zero celle saltate.
+
+**P9: la failCondition non scatta, ma la banda è superata** — stessa forma di P0
+in it.2. Predetto 1,15-1,8× (punto 1,35), fallisce sotto 1,15. Misurato:
+
+| shape | `splitk` | `splitk-idot` | |
+|---|---|---|---|
+| gate/up K2560×N9216 | 0,0609 ms | **0,0333** | **1,83×** |
+| down K9216×N2560 | 0,1362 | **0,0767** | **1,78×** |
+
+E la memoria di gruppo **scende 4×** (4.096 → 1.152 B a M=16): gli i8 in shared
+occupano un quarto degli f32. La forma vincente diventa ancora più portabile.
+
+**22,69 TFLOP/s** di aritmetica utile a M=16 — contro gli 8,92 della sonda del
+picco su GEMM densa fp32. Conferma quanto già notato in it.2: **quella sonda è
+un pavimento del raggiungibile, non il tetto della macchina.**
+
+**Proiezione**: il blocco FFN per layer passa da 0,2579 a **0,1432 ms** (1,80×),
+quindi i 5.776 ms di moltiplicazioni scendono a ~3.208 e la somma col termine di
+attenzione a **~6.096 ms** (era 8.665 con `splitk`, 9.409 coi tempi freddi).
+
+**IL LIMITE DI QUESTO NUMERO, ed è quello che la pre-registrazione chiedeva di
+misurare: `dispatchesPerOp = 2` per ENTRAMBE le forme.** La cella `splitk-idot`
+misura [gemm, combine] con le attivazioni già quantizzate fuori dal ciclo: **la
+passata di quantizzazione NON è dentro la misura**. Il prereg diceva testualmente
+«il costo della quantizzazione va misurato SEPARATO e pubblicato, non dedotto», e
+non è stato fatto. L'1,83× è quindi un limite SUPERIORE. Stima d'ordine, non
+misura: 164 KB letti e ~41 KB scritti per chunk contro 13,3 MB di pesi, più
+l'overhead di lancio di un dispatch — probabilmente 5-15%, che lascerebbe
+~1,6×. **Va misurato prima di portare la forma in produzione.**
+
+### Due difetti del banco, trovati mentre verificavo
+
+**(1) Il kernel `splitk-idot` era già in albero e non compilava.** Scritto in un
+ciclo precedente, emetteva `enable packed_4x8_integer_dot_product;` — ma quella è
+una LANGUAGE FEATURE del WGSL (`navigator.gpu.wgslLanguageFeatures`), non
+un'estensione da abilitare: Tint risponde «expected extension» e **tutte e
+cinque le celle erano finite in `skipped`**. Il fix era già in albero anche lui,
+con il commento che documenta la causa; l'artefatto delle 17:42 è la run rotta,
+precedente al fix, e non va usato. Io ci ho appeso sopra un duplicato del kernel
+per non aver letto il file prima di scrivere: rimosso.
+
+**(2) Il gate del checksum era fisso a 1e-3 per tutte le varianti**, quindi
+avrebbe scartato `splitk-idot` anche dopo la compilazione. Reso **per variante**:
+1e-3 a chi cambia solo l'ordine delle somme, 2e-2 a chi cambia l'aritmetica, col
+valore preso dalla pre-registrazione e non da ciò che è uscito. Resta un gate.
+
+### E un difetto del GATE, che è la cosa più grave della giornata
+
+**`.harness/tools/engine-ktest.mjs` punta a `localhost:5173` e ESCE CON 0 anche
+quando non ha girato affatto.** Con il server su 5199 il runner è morto su
+`ERR_CONNECTION_REFUSED` e ha restituito **exit 0**: un gate che dichiara
+successo senza aver eseguito. Ci sono cascata dentro in questo ciclo — l'ho preso
+solo perché il conteggio dava `0 PASS / 0 FAIL`, che non è un esito plausibile.
+È la stessa classe della sentinella sui JSON di `results/`, e va chiusa allo
+stesso modo (docket).
+
+**Gate, eseguiti sul BASE_URL giusto e con `STATUS: done` verificato**:
+ktest **100 PASS / 0 FAIL** · vitest **545 passed | 10 skipped** · tsc pulito.

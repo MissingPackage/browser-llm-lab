@@ -1,11 +1,9 @@
 {
  "status": "active",
  "session_id": "0348f2c0-1d0a-4913-93cf-ede7de3e30af",
- "next_wake_epoch": 1786633984,
- "next_wake": "2026-08-13T17:13:04+0200",
- "prompt": "/loop-iteration engine-ttft riga 2 cella (a0) seconda met\u00e0: implementa e misura splitk-idot \u2014 q4_0 x q8_0 con dot4I8Packed. Serve un binding nuovo (attivazioni i8 impacchettate + scale per blocco) e una passata di quantizzazione; disegno completo nel docket item 11. Dichiara la tolleranza del checksum PRIMA di misurare (non \u00e8 bit-identica: cambia l'aritmetica). Poi la build della riga 2 con sdd-conductor.",
- "updated_epoch": 1786633864,
- "updated": "2026-08-13T17:11:04+0200",
- "watchdog_attempt_epoch": 1786635247,
- "watchdog_attempts": 1
+ "next_wake_epoch": 1786636532,
+ "next_wake": "2026-08-13T17:55:32+0200",
+ "prompt": "/loop-iteration engine-ttft riga 2: la build in produzione con sdd-conductor \u2014 portare splitk-idot nel prefill del 4B (src/engine/kernels/wgsl.ts + q35gpumodel.ts + gate di conformit\u00e0 con tolleranza dichiarata). PRIMA misurare il costo della passata di quantizzazione delle attivazioni, oggi fuori misura. Comando ktest corretto: BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs, e guardare l'exit code (docket item 14).",
+ "updated_epoch": 1786636352,
+ "updated": "2026-08-13T17:52:32+0200"
 }

@@ -327,3 +327,49 @@ PASS >= N atteso E FAIL == 0», mai come «FAIL == 0» da solo. Da fare quando s
 tocca il gate per altro; nel frattempo il comando corretto è
 `BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs` e si
 guarda l'exit code.
+
+## item 13 — `engine-ktest.mjs` esce con 0 quando NON ha girato (io, it.5) — il difetto più grave trovato oggi
+
+`.harness/tools/engine-ktest.mjs:6` usa `BASE_URL ?? "http://localhost:5173"`,
+mentre il resto del lavoro di questo goal gira su 5199. Con il server sulla porta
+sbagliata il runner muore su `ERR_CONNECTION_REFUSED` — e **restituisce exit 0**
+(riga 27: `process.exit(status === "done" ? 0 : 1)`, ma l'eccezione di `page.goto`
+esce prima e il processo termina 0).
+
+**Perché è grave e non è un'inezia**: è un GATE DI CORRETTEZZA. Un gate che
+dichiara successo senza aver eseguito è peggio di nessun gate — chi lo invoca in
+un loop autonomo registra «ktest tutti PASS» su un run che non è avvenuto. È la
+stessa classe della sentinella sugli errori GPU che questo progetto si è già dato
+per i JSON di `results/`, e la lezione era già scritta: «i runner uscivano con
+successo anche quando la GPU falliva, scrivendo numeri plausibili».
+
+Ci sono cascata dentro in it.5. L'ho preso solo perché il conteggio dava
+**0 PASS / 0 FAIL**, che non è un esito plausibile — non perché l'exit code me lo
+dicesse.
+
+**Lavoro mio, due pezzi, e li faccio prima della build della riga 2** perché tutti
+i suoi merge gate passano di qui:
+- `try/catch` attorno alla navigazione con `process.exit(2)` e il motivo;
+- un'asserzione di PLAUSIBILITÀ: zero kernel eseguiti ⇒ uscita non-zero. Un gate
+  deve saper dire «non ho misurato niente», che è diverso da «va tutto bene».
+
+Da valutare nello stesso passaggio: allineare il default a quello degli altri
+runner, o togliere il default e pretendere `BASE_URL` esplicito. La seconda è più
+noiosa e più onesta.
+
+## item 14 — il costo della quantizzazione delle attivazioni non è nella misura di `splitk-idot` (io, it.5)
+
+`dispatchesPerOp = 2` per ENTRAMBE le forme: la cella `splitk-idot` misura
+[gemm, combine] con le attivazioni già quantizzate FUORI dal ciclo. La
+pre-registrazione (addendum it.5, «rischio dichiarato») diceva testualmente che
+«il costo della quantizzazione va misurato SEPARATO e pubblicato, non dedotto», e
+non è stato fatto.
+
+Quindi **l'1,83× è un limite SUPERIORE**, e la proiezione dei ~6.096 ms con lui.
+Stima d'ordine (NON misura): 164 KB letti e ~41 KB scritti per chunk contro
+13,3 MB di pesi, più l'overhead di lancio — 5-15%, che lascerebbe ~1,6×.
+
+**Lavoro mio, da fare prima di portare la forma in produzione**: una cella
+`quantx-q8` col solo dispatch di quantizzazione, e la cella `splitk-idot-full`
+con [quant, gemm, combine], così che il rapporto onesto e il termine aggiunto
+siano entrambi leggibili nell'artefatto senza doverli dedurre.
