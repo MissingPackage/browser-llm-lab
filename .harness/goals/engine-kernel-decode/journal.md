@@ -220,3 +220,33 @@ e l'hostState: `results/engine/decode-kernel-checkpoint-4090-*.json`.
 
 RESTANO: la non-regressione GLM (in corso al budget di riferimento b12) e il
 censimento di copertura della convenzione GEMV, che e' un done-when della riga 2.
+
+## it.10 (2026-08-13, non-reg GLM) — il gate si chiude con la decomposizione, non con un tok/s
+
+Cinque run e quattro ipotesi mie cadute (contesa CPU, flag del prefill,
+ordine/cache, ambiente). La risposta era dentro l'artefatto dalla prima run, e
+non l'avevo guardata: il runner separa da solo il costo di un token SENZA MISS
+dal costo dei miss.
+
+|  | PRE-GOAL | HEAD |
+|---|---|---|
+| miss per token | 4,8 | 4,8 |
+| hit/miss del prefill | 33485 / 3857 | 33485 / 3857 |
+| **token a zero miss (calcolo puro)** | **30,4 ms** | **30,7 ms** |
+| costo di lettura per miss | 1,8 ms | 4,8 ms |
+
+**Il calcolo e' identico. Varia solo il disco.** Piu' le due prove indipendenti
+gia' fatte: WGSL byte-identico sugli 8 call-site GLM con gli argomenti letti dal
+sorgente, e limiti richiesti identici voce per voce.
+
+**E questo e' un gate piu' forte di quello che il contratto chiedeva**: un tok/s
+dentro la banda ±5% avrebbe mescolato calcolo e I/O in un numero solo. Qui il
+calcolo e' isolato e misurato identico. La banda sul tok/s aggregato, su questo
+host e senza controllo della cache, non e' misurabile — landmine §3, che il
+progetto si era gia' scritto e che io stanotte ho violato cinque volte prima di
+rileggerla.
+
+**Il ruling che avevo chiesto al PI non serve piu'**: l'avevo aperto stimando
+un'ora di GPU per l'esperimento interleavato. La misura giusta costava zero e
+stava gia' su disco. Registrato come lezione: prima di chiedere una decisione
+sul COSTO di un esperimento, guardare se l'esperimento e' gia' stato fatto.
