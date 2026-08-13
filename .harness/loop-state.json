@@ -1,11 +1,11 @@
 {
  "status": "active",
  "session_id": "0348f2c0-1d0a-4913-93cf-ede7de3e30af",
- "next_wake_epoch": 1786626356,
- "next_wake": "2026-08-13T15:05:56+0200",
- "prompt": "/loop-iteration engine-ttft riga 1 \u2014 sonde e varianti: raccogli l'esito della research-campaign wf_e4a8ea87-b3f, ri-esegui i gate a mano (non fidarti del riassunto degli agenti), poi prosegui col piano",
- "updated_epoch": 1786624556,
- "updated": "2026-08-13T14:35:56+0200",
- "watchdog_attempt_epoch": 1786627350,
- "watchdog_attempts": 1
+ "next_wake_epoch": 1786628031,
+ "next_wake": "2026-08-13T15:33:51+0200",
+ "prompt": "/loop-iteration engine-ttft riga 2 \u2014 GEMM multi-riga con riuso vero in produzione: prima la cella coldw mancante su splitk (docket item 12c), poi sdd-conductor sulla build",
+ "updated_epoch": 1786627911,
+ "updated": "2026-08-13T15:31:51+0200",
+ "watchdog_attempt_epoch": 1786631310,
+ "watchdog_attempts": 2
 }
