@@ -739,3 +739,39 @@ streaming **6,76×** sul segmento attenzione (riga 3, `attnDecodeWgsl` con
 scope del goal K-quant. Il divario 43,1× → 3,24× dice che dopo il cablaggio il
 moltiplicatore non è più il termine dominante: **l'attenzione lo è**, ed è la
 riga 3.
+
+## it.15 (2026-08-14) — la via intera cablata: 1,70× totale, e la causa del buco
+
+Il riavvio ha risolto: `ktest` **100 PASS / 0 FAIL** sullo stesso codice che ieri
+faceva morire la pagina. Era infrastruttura, non cablaggio.
+
+**Misura indipendente che corrobora**: it.14 (altra iterazione) ha misurato TTFT
+a caldo 56.984 ms, io 57.485 sulla stessa forma. **0,9% di scarto su due run
+separate**, dentro il rumore di ~2,4% di questa macchina.
+
+| | prefill | TTFT a caldo | decode |
+|---|---|---|---|
+| baseline sequenziale | 72,30 tok/s | 87.618 ms | 47,79 |
+| split-K f32 | 110,19 | 57.485 | 49,59 |
+| **via INTERA** | **123,26** | **51.392** | 48,00 |
+
+**Totale 1,70× sulla baseline.** Barra del contratto < 21.905: manca 2,35×.
+
+**LA CAUSA DEL BUCO VALE PIÙ DEL GUADAGNO.** `prefillgemmplan.ts` esisteva già —
+completo, con `planPrefillGemm`, `prefillGemmCapsFor`, `prefillGemmScratchFor` e
+i suoi test — e `q35gpumodel.ts` **non lo importava: zero riferimenti**. Il sito
+ri-derivava la condizione a mano (`if (kk === "q4_0" && w.k % 64 === 0)`) e
+finiva sempre sulla via f32, che il kernel stesso documenta come fallback.
+
+È la stessa forma del difetto trovato in it.7 del goal precedente — «un terzo
+posto che decide le righe-per-workgroup» — e il commento che la nomina era
+**tre righe sotto** il codice che la ripeteva. Un piano non collegato non è un
+piano: è documentazione.
+
+**Il guadagno end-to-end della sola via intera è 1,119×, contro l'1,745× del
+micro-bench.** Non è una delusione ed era prevedibile: i moltiplicatori sono
+solo una parte del prefill, e l'attenzione — 6,76× misurata — non è ancora
+cablata. È la riga 3.
+
+**Gate**: tsc pulito · vitest 645 passed | 10 skipped · ktest 100 PASS / 0 FAIL ·
+non-reg decode 48,00 ≥ 45,53 · guardia prefill > decode 123,3 > 48,0.
