@@ -69,29 +69,63 @@ il conflitto mMax-vs-shared del docket item 1 **non esiste** per la forma che
 vince, e la portabilità della riga 4 si ottiene gratis. Il legacy dell'attenzione
 invece non crea nemmeno la pipeline sotto i 32.768 B.
 
-**Fase di misura CHIUSA, tutte e tre le leve misurate e nessuna esclusa**:
-moltiplicatore multi-riga `splitk` **38,0×** a pesi freddi (il vantaggio è
-occupancy, non cache: degrada solo del 12,9% quando i pesi streammano davvero) ·
-via intera q4_0×q8_0 **1,745×** sopra di lui, contando anche la quantizzazione
-delle attivazioni che costa il 5,6% · attenzione del prefill in streaming
-**6,76×** a contesto 6333. Proiezione con tutte e tre: **~6.214 ms**, ed è un
-pavimento (non conta 24 layer su 32, norm, RoPE, dispatch).
+**RIPRESA DOPO IL RIAVVIO — la prima cosa da fare, in una riga.**
+Il ramo `wip/riga2-cablaggio-non-verificato` (`8042c7b`) contiene il cablaggio
+dell'assemblatore del 4B. Ha `tsc` pulito e vitest 645 verde, ma il **ktest non
+è verificato**: passava 100/0 PRIMA del cablaggio e dopo va in timeout con la
+pagina morta. Non si è potuto discriminare fra cablaggio e infrastruttura perché
+nella stessa finestra anche i comandi lunghi venivano uccisi (segnale 144, la
+stessa causa che ha ucciso 5 workflow e 3 server di sviluppo).
 
-**Riga 2 IN CORSO e a metà.** I kernel sono **in produzione e testati**
-(`0c66fbd`, verificato a mano: tsc pulito, vitest 611 passed contro i 545 di
-prima, ktest 100 PASS / 0 FAIL), e `PREFILL_M` è passato a 16 con
-un'**eccezione pinnata** per il path denso 0.5B, la cui ragione numerica vive
-come aritmetica eseguibile in un test.
+**Il riavvio È l'esperimento discriminante.** Avviare il server staccato, poi:
 
-**MA `q35gpumodel.ts` — l'assemblatore del 4B — non è toccato: nessuno chiama i
-kernel nuovi, e la metrica obiettivo è ferma a 87.618 ms.** È questo il prossimo
-passo, e non ha gate: cablare il prefill del 4B sulla forma vincente.
+    setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
+    git checkout wip/riga2-cablaggio-non-verificato
+    BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs
 
-**Il veicolo `sdd-conductor` è morto DUE VOLTE sulla riga 2** (docket item 15),
-entrambe perché il processo che lo ospita è uscito mentre il workflow era in
-volo. Deciso e registrato (non escalato): si prosegue a mano, un task per volta,
-committando appena verificato — così ogni passo sopravvive al processo. In
-questa sessione la stessa causa ha ucciso due build e tre server di sviluppo.
+- **verde** ⇒ la causa era l'infrastruttura, il cablaggio è sano: mergiare e
+  misurare il prefill sul prompt-idx 0 con `--prefill-m 16`;
+- **ancora morto** ⇒ la causa è il cablaggio. Prima di cercarla, fare lo
+  streaming incrementale della tabella del ktest (docket item 20): oggi la
+  stampa solo alla fine, quindi su un timeout non si sa nemmeno a quale kernel
+  muore.
+
+**Stato della metrica: TTFT a caldo 87.618 ms, invariato.** Baseline misurata su
+prompt da 6333 token; barra del contratto **< 21.905 ms** (un quarto della
+baseline: il bersaglio dei 4 s è stato tolto dal PI perché proiettato
+irraggiungibile su questa macchina). Proiezione a leve montate **~6.214 ms**.
+
+**Le tre leve sono tutte MISURATE e nessuna esclusa**: moltiplicatore multi-riga
+`splitk` **38,0×** a pesi freddi (il vantaggio è occupancy, non cache: degrada
+solo del 12,9% quando i pesi streammano davvero) · via intera q4_0×q8_0
+**1,745×** sopra di lui, quantizzazione delle attivazioni compresa (costa il
+5,6%) · attenzione del prefill in streaming **6,76×** a contesto 6333.
+I kernel sono **in produzione e testati** (`0c66fbd`); manca solo che qualcuno
+li chiami.
+
+**Ruling del PI del 2026-08-13 sulla barra del riuso**: da ≥ 8× a **≥ 5,5×
+sull'inventario per-layer INTERO**. Il ≥ 8× era irraggiungibile a qualunque M
+praticabile (tetto 8,67×, servirebbe M ≥ 92) perché la forma nuova è q4_0-only e
+l'11,54% dei byte del 4B — 24 `ssm_out` Q5_K + 4 `ffn_down` Q4_1 — resta sul
+percorso vecchio. **Il residuo è scope del goal K-quant** e va nominato nel
+consuntivo di questo, non lasciato implicito.
+
+**Il modello mentale del goal era sbagliato, ed è la scoperta che vale più dei
+rapporti**: il piano diceva «il prefill è limitato dalla banda sui pesi». Vero
+sulla forma attuale, falso su tutte le candidate — appena il riuso c'è, il collo
+si sposta sull'**occupancy** e la banda misurata crolla a 108 GB/s su un device
+che ne fa 300+. Due conferme indipendenti: `splitk` batte `regs` di 2,13× a
+parità di corpo e di memoria condivisa, solo con 576 gruppi di lavoro invece di
+144; e la fusione GQA taglia il traffico KV di 4× ed è **più lenta**, perché
+scende da 256 a 64 gruppi su 76 processori. **La riga 3 non deve adottare la
+fusione GQA "perché sul decode ha funzionato": sul prefill la misura dice il
+contrario.**
+
+**Il veicolo `sdd-conductor` non chiude un task di questa classe qui**: 5 lanci,
+5 morti, tutte al confine del turno. Tutto ciò che si esegue DENTRO un turno
+regge (6 misure GPU, tutti i gate, tutti i merge). Il lavoro va fatto sincrono.
+Se il riavvio risolve anche questo, la conclusione va rivista — ed è un'altra
+cosa che il riavvio discrimina.
 
 **Il 35B non ha ricevuto nulla da questo goal, ed e' misurato**: non ha un solo
 tensore Q4_0 (Q8_0 251 · Q4_K 117 · Q6_K 4), e la forma nuova dei
