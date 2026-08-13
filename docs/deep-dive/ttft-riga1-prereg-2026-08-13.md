@@ -313,3 +313,52 @@ L2 favorisce (rilegge i pesi M volte), e infatti la sua cella fredda è
 identica alla calda (2,6157 contro 2,6225 — è già limitata da altro). Quindi il
 rapporto 43,1× misurato a caldo è, se mai, un **limite inferiore** di quello nel
 motore, non superiore. P7 verifica che non ci sia una sorpresa nell'altro verso.
+
+---
+
+## ADDENDUM it.5 (2026-08-13) — `splitk-idot`, e la tolleranza dichiarata PRIMA
+
+Docket item 11, autorizzato dal PI. `dot4I8Packed` fa il prodotto scalare di 4
+interi con segno a 8 bit **su entrambi i lati**: la via è quella q4_0 × q8_0 di
+llama.cpp — pesi già a 4 bit, **attivazioni quantizzate a i8 per blocco da 32**,
+accumulo in i32, `sc_w · sc_x` applicata una volta per blocco invece che per
+elemento.
+
+**NON È BIT-IDENTICA, e non lo sarà mai**: cambia l'aritmetica, non l'ordine
+delle somme. Il gate di lavoro delle altre celle (checksum entro 1e-3 relativo
+dalla forma attuale) la boccerebbe per costruzione. Quindi la tolleranza va
+fissata ORA, dal conto sull'errore di quantizzazione, non dopo aver visto il
+numero.
+
+**Il conto.** Attivazioni ~N(0,1); su un blocco da 32 il massimo è ~2,5σ, quindi
+la scala i8 è `2,5σ/127` e il passo di quantizzazione vale 0,0197σ. L'errore per
+elemento è uniforme su ±½ LSB, cioè rms `0,0197/√12 = 0,00568σ`. Sul prodotto
+scalare a K=2560 i termini `w·ε` si sommano in quadratura e crescono come √K
+esattamente come il segnale: **l'errore relativo rms resta ~0,57%**, e non
+migliora con K.
+
+**P8 — enunciato**: `checksumRelDiff` di `splitk-idot` contro la forma attuale
+è **≤ 2,0e-2** (3σ del conto è 1,7e-2; il margine copre il fatto che le
+attivazioni del banco sono uniformi e non gaussiane). Sotto 1e-3 sarebbe
+sospetto — vorrebbe dire che il kernel non sta davvero quantizzando.
+
+**P9 — enunciato**: `splitk-idot` è **più veloce di `splitk`** a M=16 su
+K2560×N9216, cioè < 0,0608 ms a caldo. Sparisce il dequant dal ciclo interno
+(oggi 8 `vec4<f32>` costruite per blocco con shift, mask e sottrazione) e restano
+8 `dot4I8Packed`.
+
+**failCondition di P9**: refutata se `splitk-idot` ≥ 0,0608 ms. In quel caso la
+leva è **esclusa coi numeri** e il done-when «esaurimento delle leve» è
+soddisfatto lo stesso — è un esito legittimo, non un fallimento.
+
+**Rischio dichiarato, ed è quello che mi aspetto morda**: la riga 1 ha mostrato
+che su questo kernel il collo è l'**occupancy**, non il lavoro per elemento.
+`splitk-idot` non cambia il numero di workgroup né il traffico: cambia solo il
+costo aritmetico dentro il ciclo. Se il kernel è davvero latency-bound sui
+workgroup in volo, **P9 cade** — e sarebbe la terza conferma indipendente della
+stessa causa, quindi informativa quanto una vittoria.
+
+**Fuori misura in questa cella**: il costo della passata che quantizza le
+attivazioni. Nel banco le do già quantizzate. Su un prefill a M=16 le attivazioni
+sono ~0,16 MB contro 13,3 MB di pesi, quindi il termine è piccolo — ma è
+**dichiarato non misurato**, e va misurato prima di portare la leva in produzione.
