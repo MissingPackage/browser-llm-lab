@@ -137,3 +137,21 @@ gia' soddisfatta e sotto test; (e2) «il TOTALE del motore sta sotto i 16 KB» �
 spostata al goal TTFT insieme al kernel fuso del prefill. Se non arriva
 risposta, procedo con (e1) come soddisfatta e (e2) registrata come debito
 dichiarato, senza toccare il testo del contratto.
+
+## item 5 — `glm-bench-run.mjs`: un `--out` ASSOLUTO diventa relativo alla root, e la run si perde (io, ergonomia dei runner)
+
+Costato una run GPU da ~20 minuti a mezzanotte passata. `--out /tmp/x.json`
+finisce in `<root>/tmp/x.json`: il runner fa `join(ROOT, out)` senza distinguere
+i path assoluti. Il bench GIRA per intero, poi muore in scrittura con ENOENT — e
+il lavoro e' perso, non solo il file.
+
+Non e' una domanda: sono due righe (`isAbsolute(out) ? out : join(ROOT, out)`).
+Registrato e non fatto perche' e' fuori dal brief di questo goal e il runner e'
+di GLM; da fare quando si tocca quel path per altro. Nel frattempo: passare
+sempre `--out results/engine/...` RELATIVO.
+
+Vale anche per gli altri runner: `q35-bench-run.mjs` ha lo stesso schema
+(`arg("out", join(ROOT, ...))`) e stanotte gli ho passato path /tmp — hanno
+funzionato perche' li' l'`out` di default e' gia' assoluto e il mio veniva usato
+tale e quale. Due runner della stessa famiglia che trattano lo stesso flag in
+modo diverso: e' quello il difetto, piu' del path.
