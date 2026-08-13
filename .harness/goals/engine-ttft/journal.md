@@ -189,3 +189,45 @@ forma attuale contro una tolleranza di 10⁻³), memo
 
 **Gate**: ktest 100 PASS / 0 FAIL · vitest 545 passed | 10 skipped ·
 `tsc --noEmit` pulito. Zero run di modello, come da vincolo.
+
+## it.3 (2026-08-13) — i tre ruling del PI, e il contratto riscritto attorno a «il più in basso possibile»
+
+Il PI, dopo aver letto l'esito della riga 1: (1) via il bersaglio dei 4 secondi,
+«scendiamo il più possibile»; (2) va bene non sfruttare tutti i 49.152 B, «il 4B
+evidentemente non li sfrutta, ma modelli più grossi lo farebbero»; (3)
+`packed_4x8_integer_dot_product` autorizzato.
+
+**Il problema di forma, e come l'ho risolto.** «Il più in basso possibile» non è
+graduabile da un verificatore: un goal senza soglia si chiude quando qualcuno si
+stanca. L'ho reso meccanico in tre clausole invece che in una soglia:
+
+- **TTFT a caldo < 21.905 ms**, un quarto della baseline. Non è il bersaglio: è
+  la barra che dice «c'è stato un salto d'ordine di grandezza». Sta comodamente
+  sopra il pavimento proiettato (8.665 ms), quindi fallirla significherebbe che
+  qualcosa è andato storto, non che la macchina non ce la fa.
+- **ESAURIMENTO DELLE LEVE**: ogni leva nominata dalla riga 1 in produzione e
+  misurata prima/dopo, oppure esclusa coi numeri. Una leva lasciata cadere in
+  silenzio è un done-when mancato. È questa la clausola che sostituisce davvero
+  il bersaglio.
+- **CONTABILITÀ DEL TETTO RESIDUO** per segmento, coi workgroup in volo per
+  dispatch. È ciò che rende «il più in basso possibile» un'affermazione
+  verificabile invece che una resa.
+
+Conseguenza sulla riga 5: non sceglie più fra «raggiunto» ed «escluso»,
+contabilizza. E il ramo `excluded-by-numbers` non serve più — l'esclusione era
+relativa a una soglia che non c'è più.
+
+**Sul dot product intero ho verificato una cosa prima di lasciarla al prossimo
+ciclo: NON è un drop-in** (docket item 11, esteso). `dot4I8Packed` vuole interi
+su ENTRAMBI i lati, mentre oggi dequantizziamo i nibble a f32 e moltiplichiamo
+contro attivazioni f32. La via intera è quella q4_0 × q8_0 di llama.cpp e
+richiede di quantizzare le ATTIVAZIONI a i8 per blocco, accumulare in i32, e
+applicare `sc_w · sc_x` una volta per blocco. Il risultato non è bit-identico:
+cambia l'aritmetica, non l'ordine delle somme, e la tolleranza va dichiarata
+prima di misurare. Due termini di segno opposto da misurare separati: sparisce
+il dequant dal ciclo interno, ma si aggiunge una passata sulle attivazioni.
+
+**Stato**: righe 0 e 1 chiuse e verificate. La riga 2 apre con due celle di fase
+0 residua — `splitk-coldw` (la vincitrice a pesi freddi, che discrimina se il
+suo vantaggio è traffico o occupancy: mai girata, docket item 12c) e
+`splitk-idot`. Nessuna riscrittura del motore prima di quelle due misure.
