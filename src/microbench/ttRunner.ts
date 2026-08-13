@@ -361,6 +361,20 @@ export async function runTtftProbeBench(
           id: "base-batch-z-coldw", code: baseCode, grid: [bgx, bgy, M], weightEmitFactor: M, xEmitFactor: N, coldw: true,
           ctx: `forma attuale con i pesi ruotati su ${WEIGHT_COPIES} copie a ogni dispatch — la lettura fredda della stessa cella, pubblicata accanto a quella L2-resident.`,
         });
+        // it.4: la cella fredda della VINCITRICE, che la riga 1 non ha girato.
+        // Era pre-registrata come discriminante della CAUSA (traffico o
+        // occupancy?) ed è stata data a `regs` e alla forma attuale, non a
+        // `splitk` che ha poi vinto: senza di lei il 43,1x resta senza causa
+        // accertata e la riga 2 costruirebbe su un rapporto non discriminato.
+        // Enunciato P7 nel prereg (addendum it.4): atteso <= 0,0700 ms.
+        if ((K / 32) % (SPLIT_K * 2) === 0) {
+          srcs.push({
+            id: "splitk-coldw", code: gemmQ4MultiRowSplitKWgsl({ K, N, M, splits: SPLIT_K }),
+            grid: [Math.ceil(N / 64), SPLIT_K, 1], combine: splitKCombineWgsl({ K, N, M, splits: SPLIT_K }),
+            weightEmitFactor: 1, xEmitFactor: Math.ceil(N / 64), coldw: true,
+            ctx: `'splitk' con i pesi ruotati su ${WEIGHT_COPIES} copie a ogni dispatch (working set ${((qsBytes + scBytes) * WEIGHT_COPIES / 2 ** 20).toFixed(0)} MiB, oltre la L2). Discrimina la CAUSA del vantaggio della forma vincente: se regge a pesi freddi è occupancy, se crolla era L2-residenza del banco.`,
+          });
+        }
       }
 
       const variants: VariantSpec[] = [];

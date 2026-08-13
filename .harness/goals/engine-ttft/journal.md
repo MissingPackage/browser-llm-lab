@@ -231,3 +231,51 @@ il dequant dal ciclo interno, ma si aggiunge una passata sulle attivazioni.
 0 residua — `splitk-coldw` (la vincitrice a pesi freddi, che discrimina se il
 suo vantaggio è traffico o occupancy: mai girata, docket item 12c) e
 `splitk-idot`. Nessuna riscrittura del motore prima di quelle due misure.
+
+## it.4 (2026-08-13, riga 2 cella a0) — P7 CONFERMATA: il 43× non era la cache
+
+La cella che la riga 1 aveva pre-registrato come discriminante della CAUSA e poi
+girato su tutte le forme tranne quella che ha vinto (docket item 12c). P7
+scritta e committata PRIMA di misurare: `splitk` a pesi freddi ≤ 0,0700 ms.
+
+| | caldo | freddo (8 copie, 106 MiB) | degrado |
+|---|---|---|---|
+| `splitk` | 0,0608 ms | **0,0687 ms** | **+12,9%** |
+| forma attuale | 2,6230 | 2,6083 | −0,6% |
+
+**P7 CONFERMATA** (0,0687 ≤ 0,0700), soglia d'allarme dei 2× non sfiorata. Il
+vantaggio della vincitrice **non è L2-residenza del banco**: è occupancy, e
+sopravvive quando i pesi streammano davvero. Coerente col precedente misurato
+sulla stessa sessione (`regs`: +8,2%) e con la causa scritta nel docket item 10.
+
+**Il numero che conta per il motore è 38,0×, non 43,1×** — il rapporto va preso
+fra le due celle FREDDE (2,6083 / 0,0687), perché nel motore i pesi sono 2,25 GB
+e streammano dalla VRAM. La forma attuale è indifferente alla cache (rilegge
+tutto M volte: è già limitata da altro), quindi tutto il degrado sta dalla parte
+della vincitrice. Riproducibilità: `splitk` caldo 0,0609 in it.2, 0,0608 qui.
+
+**Proiezione aggiornata coi tempi FREDDI**: il blocco FFN per layer passa da
+0,2581 a ~0,2913 ms [gate e up misurati freddi, il down scalato del +12,9%
+perché la sua cella fredda non è stata girata], quindi i 5.776 ms di
+moltiplicazioni diventano ~6.521 e la somma col termine di attenzione ~**9.409
+ms** invece di 8.665. Non cambia nessuna conclusione: resta un pavimento e resta
+sotto la barra dei 21.905.
+
+**UN'OSSERVAZIONE CHE INDEBOLISCE P6, e la registro perché va nell'altro verso
+rispetto a ciò che fa comodo.** Rigirando lo sweep sui tetti concessi, lo spread
+è **7,6% su `regs` e 8,6% su `splitk`**, non «entro ±5%» come la riga 1 aveva
+concluso confermando P6. Solo `shared` sta a 1,1%. E il verso è che con PIÙ
+memoria concessa il kernel va lievemente più VELOCE (splitk 0,0930 a 16.384
+contro 0,0870 a 32.768), non più lento come la tesi dell'occupancy suggerirebbe.
+Non cambia il ruling del PI — non sfruttare i 49K resta accettabile, e i numeri
+dello sweep (0,087-0,093) vivono in un contesto di misura diverso da quello
+della cella principale (0,0608) — ma **«piatto entro ±5%» è una conclusione più
+debole di come la riga 1 l'ha scritta**, e chi la citerà deve saperlo.
+
+**Cosa NON ho fatto in questo ciclo**: la cella `splitk-idot`. Richiede un
+binding nuovo (attivazioni quantizzate a i8 impacchettate + le loro scale per
+blocco) e una passata di quantizzazione, cioè più codice del semplice riuso di
+una variante esistente. Il disegno è scritto per intero nel docket item 11 e la
+tolleranza va dichiarata prima di misurare: non è bit-identica per costruzione.
+
+**Gate**: ktest 100 PASS / 0 FAIL · vitest 545 passed | 10 skipped · tsc pulito.

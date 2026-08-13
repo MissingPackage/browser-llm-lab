@@ -56,9 +56,17 @@ il conflitto mMax-vs-shared del docket item 1 **non esiste** per la forma che
 vince, e la portabilità della riga 4 si ottiene gratis. Il legacy dell'attenzione
 invece non crea nemmeno la pipeline sotto i 32.768 B.
 
-**Prossimo passo, senza gate**: riga 2, il moltiplicatore multi-riga in
-produzione (`sdd-conductor`), partendo dalla cella `coldw` mancante sulla
-vincitrice (docket item 12c).
+**La cella mancante è stata girata (it.4) e la causa è accertata**: `splitk` a
+pesi freddi rende 0,0687 ms contro 0,0608 a caldo, **+12,9%** — sotto la soglia
+pre-registrata del 15% e lontanissimo dall'allarme dei 2×. Il vantaggio **non
+era L2-residenza del banco**: è occupancy, e sopravvive allo streaming vero.
+**Il rapporto che conta per il motore è 38,0×** (2,6083 / 0,0687, entrambe
+fredde), non i 43,1× a caldo; la proiezione sale da 8.665 a ~9.409 ms e nessuna
+conclusione cambia.
+
+**Prossimo passo, senza gate**: la cella `splitk-idot` (dot product intero,
+disegno per intero nel docket item 11 — non è bit-identica, tolleranza da
+dichiarare prima), poi la build della riga 2 con `sdd-conductor`.
 
 **Aperto e non deciso, in ordine di peso**: se le celle lente della fase 0 del
 goal PRECEDENTE siano sottostimate dallo stesso difetto di warm-up trovato qui —
