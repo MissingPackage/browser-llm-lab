@@ -59,8 +59,11 @@ perché scende da 256 a 64 workgroup su 76 SM. **La riga 3 non deve adottare la
 fusione GQA "perché sul decode ha funzionato": sul prefill la misura dice il
 contrario.**
 
-**Il tetto negoziabile non è una leva** (P6 confermato): spazzando il limite
-concesso su {16.384, 24.576, 32.768, 49.152} il throughput è piatto entro ±5%.
+**Il tetto negoziabile non è una leva**: spazzando il limite concesso su
+{16.384, 24.576, 32.768, 49.152} il throughput non si muove in modo utile. La
+riga 1 aveva concluso «piatto entro ±5%»; **rigirando lo sweep in it.4 lo spread
+è 7,6% e 8,6% su due forme su tre** — la conclusione regge nella sostanza ma è
+più debole di come è stata scritta, e chi la cita deve saperlo.
 La forma vincente chiede **4.096 B a M=16**, sotto il pavimento di spec — quindi
 il conflitto mMax-vs-shared del docket item 1 **non esiste** per la forma che
 vince, e la portabilità della riga 4 si ottiene gratis. Il legacy dell'attenzione
@@ -116,8 +119,9 @@ ha riscritto l'obiettivo del goal in «il più in basso possibile» (2026-08-13)
 
 **Distanza adesso**: Qwen 4B **47,93 tok/s a contesto 6333** (era 9,95) —
 **sopra i 30 dell'obiettivo**. Il TTFT a caldo sul prompt da 6333 token è
-**87,6 s MISURATO** (it.1) contro i 4 richiesti: serve 21,9×. È la metà
-dell'obiettivo di prodotto ancora aperta, ed è il goal `engine-ttft`.
+**87,6 s MISURATO** (it.1) contro una barra di 21,9 s: serve 4,0×, e il
+pavimento misurabile della macchina è ~9,4 s. È la metà dell'obiettivo di
+prodotto ancora aperta, ed è il goal `engine-ttft`.
 GLM-4.7-Flash resta residency-bound
 (~13 tok/s, TTFT 14,7): nessuna delle leve di questo goal lo tocca. Il 35B non
 è stato rimisurato dopo i kernel nuovi.
