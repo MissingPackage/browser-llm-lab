@@ -163,6 +163,12 @@ async function load(cfg: LoadCfg): Promise<void> {
   progress(`device (ctxMax ${cfg.ctxMax}${isMoe ? `, arena ${(arenaBudgetBytes / 2 ** 30).toFixed(1)} GiB` : ""})…`);
   const dev = await createEngineDevice({
     label: "chat",
+    // Feature chieste solo se l'adapter le espone (`createEngineDevice` filtra):
+    // `subgroups` accende il gemv a riduzione per subgroup, `timestamp-query` è
+    // quella che il `ready` qui sotto già DICHIARA con `dev.has(...)` — finché
+    // non compariva in questa lista quel flag era falso per costruzione.
+    // Il cast: `GPUFeatureName` di @webgpu/types non elenca subgroups.
+    optionalFeatures: ["timestamp-query", "subgroups" as GPUFeatureName],
     needs: (adapter) => ({
       ctxMax: cfg.ctxMax,
       head: { vocab: shape!.vocab, dModel: shape!.dModel },

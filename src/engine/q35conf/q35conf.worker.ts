@@ -148,7 +148,12 @@ async function main(cfg: Cfg): Promise<void> {
     label: "q35conf",
     // `timestamp-query` si chiede solo se l'adapter la espone; il modello
     // controlla `device.features.has` e degrada dichiarando (gpuTimeStats null).
-    optionalFeatures: ["timestamp-query"],
+    // `subgroups` idem, e con la stessa logica di degrado: senza di lei il
+    // gemv resta sul kernel a riduzione in shared memory. Va CHIESTA qui
+    // perche' `createEngineDevice` concede solo cio' che il chiamante elenca —
+    // un adapter che la espone non basta. Il cast: il tipo `GPUFeatureName` di
+    // @webgpu/types non la elenca ancora (stessa forma di kdRunner.ts).
+    optionalFeatures: ["timestamp-query", "subgroups" as GPUFeatureName],
     needs: (adapter) => ({
       ctxMax,
       head: { vocab: shape.vocab, dModel: shape.dModel },
