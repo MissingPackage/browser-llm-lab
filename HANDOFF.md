@@ -171,9 +171,10 @@ GLM-4.7-Flash resta residency-bound
 - **Il server di sviluppo muore da solo: TRE volte in una sessione**
   (2026-08-13, tutte exit 144 = ucciso da segnale, non crash). Evidenza: il log
   si ferma su «ready» senza una riga di errore, nessun OOM in `dmesg`, 19 GB
-  liberi. L'ipotesi è che il supervisore dei comandi in background lo reap al
-  confine di turno; NON è provata — la prova è se sopravvive alla prossima.
-  **Mitigazione applicata**, avvio staccato in una sessione propria:
+  liberi. L'ipotesi — il supervisore dei comandi in background lo reap al confine
+  di turno — è **CONFERMATA dal test discriminante**: i tre morti erano tutti a
+  confine di turno; avviato staccato in una sessione propria, ha superato il
+  confine successivo ed è ancora vivo. **Avviarlo sempre così:**
 
       setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
 
