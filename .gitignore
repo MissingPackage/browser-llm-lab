@@ -5,3 +5,9 @@ dist/
 public/models/
 tools/oracle-moe/golden
 tools/oracle-moe/kqref
+
+# Stato di RUNTIME del loop, non stato del progetto. Versionarlo significa che
+# un `git checkout` di un ramo vecchio RESUSCITA uno stato "active" scaduto e il
+# watchdog (harness-loop-watchdog.timer, poll ogni 2 min) rianima un loop chiuso
+# apposta: successo il 2026-08-14T00:01:34, 43 s dopo un checkout (v. HANDOFF).
+.harness/loop-state.json
