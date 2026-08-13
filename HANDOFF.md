@@ -16,38 +16,57 @@ teste GQA: misurata più lenta.
 
 **Goal `engine-ttft` APERTO e IN CORSO** (2026-08-13, ruling A del PI): il primo
 token entro 4 secondi **a modello caldo** — `prefill.ms + decode.firstMs` — sul
-prompt da 6333 token. Il caricamento del modello (10,9 s) ha una soglia sua e
-non appartiene a questo goal. Piano approvato; **riga 0 CHIUSA (it.1)**.
+prompt da 6333 token. Righe 0 e 1 CHIUSE.
 
-**LA BASELINE ORA ESISTE, ed è la prima misura end-to-end del 4B sul codice di
-oggi**: TTFT a caldo **87.618 ms** contro un bersaglio di 4.000 ⇒ **serve
-21,9×**. Scomposto: caricamento 10.892 ms · lettura del prompt 87.582 ms
-(6332 token a 72,30 tok/s) · primo token 36 ms. Decode 47,79 tok/s a contesto
-6333, che conferma il 47,93 del checkpoint e passa il gate di non-regressione.
-Artefatto: `results/engine/ttft-baseline-4b-prompt0-2026-08-13.json`.
+**Baseline (it.1)**: TTFT a caldo **87.618 ms** contro un bersaglio di 4.000 ⇒
+serve 21,9×. Scomposto: caricamento 10.892 · lettura del prompt 87.582 (6332
+token a 72,30 tok/s) · primo token 36 ms. Decode 47,79 tok/s a contesto 6333.
 
-**Il percorso "a blocchi" è 2,10× PIÙ LENTO, misurato.** L'ipotesi della riga 0
-— instradare il bench su `prefillChunk`, già in albero e già bit-esatto,
-potrebbe muovere la metrica senza scrivere kernel — è **refutata**: 34,36 contro
-72,30 tok/s. Il motivo conferma la diagnosi invece di smentirla: `prefillChunk`
-instrada su `gemvQuantWgsl` con `batch: true` (M GEMV replicate sull'asse z,
-riuso dei pesi ZERO) e il GEMV veloce del goal precedente **rifiuta `batch` per
-costruzione** (`wgsl.ts:216-249`), mentre `step()` quei kernel veloci li ha.
-Conseguenza per la riga 2: non basta "usare il chunking" — il riuso va portato
-AL kernel veloce.
+**LE DUE RISPOSTE DELLA FASE DI SONDE (it.2), verificate a mano contro
+l'artefatto**:
 
-**Prossimo passo, senza gate**: riga 1, le sonde. Decide se le leve esistono
-(GEMM multi-riga con riuso vero, attenzione a chunk del prefill) e **se il
-bersaglio esiste**: 6333 token su 4e9 parametri sono 50,7 TFLOP, cioè 12,8
-TFLOP/s sostenuti in 3,96 s, e il picco fp32 di questo device in WebGPU non è
-mai stato misurato. È l'unica riga con potere di chiudere il goal.
+1. **Le leve esistono, e sono grosse.** La regola di stop NON scatta: a M=16 il
+   moltiplicatore multi-riga passa da 2,6225 a **0,0609 ms = 43,1×** sulla forma
+   attuale; l'attenzione del prefill da 12,2993 a **1,8207 ms = 6,76×** a
+   contesto 6333. I byte di peso per token prefillato scendono da 13,27 MB a
+   0,83 = **16×**, cioè il massimo teorico a M=16 e il doppio di quanto il
+   done-when della riga 2 chiede.
+2. **Il bersaglio dei 4 secondi NON è raggiungibile su questa macchina.**
+   Proiezione dalla formula fissata prima di misurare, coi tempi misurati:
+   5.776 ms di moltiplicazioni + 2.888 di attenzione = **8.665 ms**, ed è un
+   PAVIMENTO — non conta i 24 layer DeltaNet, le norm, il RoPE, i dispatch. È
+   10,1× sulla baseline e 2,2× SOPRA il bersaglio. La riga 5 chiuderà con
+   `decision: "excluded-by-numbers"`, che è un ramo previsto dal contratto.
 
-**Tre decisioni aperte nel docket di `engine-ttft`**: dove vive lo spec-dec MTP
-ora che accelera una metrica già raggiunta · se una dichiarazione `hostState`
-smentita debba far fallire la run o solo annotarla · se la clausola di
-portabilità passi da «sotto 16.384 B sempre» a «dichiarare, negoziare,
-degradare», ora che si è verificato che il tetto di WebGPU **è negoziabile** via
-`requiredLimits` (puro JavaScript, nessun permesso: Chrome Android compreso).
+**IL MODELLO MENTALE DEL GOAL ERA SBAGLIATO, ed è la scoperta che conta** (docket
+item 10). Il piano diceva «il prefill è limitato dalla banda sui pesi, il riuso è
+la leva». Vero sulla forma attuale, **falso su tutte le forme candidate**: appena
+il riuso c'è, il collo si sposta sull'**occupancy** e la banda misurata crolla a
+108 GB/s su un device che ne fa 300+. Due conferme indipendenti: `splitk` batte
+`regs` di 2,13× a parità di corpo e di workgroup storage, solo con 576 workgroup
+invece di 144; e la fusione GQA taglia il traffico KV di 4× ed è **più lenta**,
+perché scende da 256 a 64 workgroup su 76 SM. **La riga 3 non deve adottare la
+fusione GQA "perché sul decode ha funzionato": sul prefill la misura dice il
+contrario.**
+
+**Il tetto negoziabile non è una leva** (P6 confermato): spazzando il limite
+concesso su {16.384, 24.576, 32.768, 49.152} il throughput è piatto entro ±5%.
+La forma vincente chiede **4.096 B a M=16**, sotto il pavimento di spec — quindi
+il conflitto mMax-vs-shared del docket item 1 **non esiste** per la forma che
+vince, e la portabilità della riga 4 si ottiene gratis. Il legacy dell'attenzione
+invece non crea nemmeno la pipeline sotto i 32.768 B.
+
+**Prossimo passo, senza gate**: riga 2, il moltiplicatore multi-riga in
+produzione (`sdd-conductor`), partendo dalla cella `coldw` mancante sulla
+vincitrice (docket item 12c).
+
+**Aperto e non deciso, in ordine di peso**: se le celle lente della fase 0 del
+goal PRECEDENTE siano sottostimate dallo stesso difetto di warm-up trovato qui —
+sarebbero rapporti pubblicati sovrastimati (item 9, raccomando: correzione solo
+da qui in avanti) · dove vive lo spec-dec MTP · la severità del controllo su
+`hostState` · una leva intera mai provata, `packed_4x8_integer_dot_product`,
+presente e corretta su questo stack e usata da nessun kernel (item 11) — ed è
+compute-side, cioè attacca esattamente il collo appena identificato.
 
 **Il 35B non ha ricevuto nulla da questo goal, ed e' misurato**: non ha un solo
 tensore Q4_0 (Q8_0 251 · Q4_K 117 · Q6_K 4), e la forma nuova dei

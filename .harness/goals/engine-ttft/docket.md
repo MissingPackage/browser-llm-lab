@@ -225,3 +225,46 @@ via intera farebbe il prodotto scalare sui nibble impacchettati e applicherebbe
 la scala una volta sola per blocco. Non è nello scope di questo goal e non l'ho
 misurata. Va nel serbatoio del prossimo, insieme al fatto che `shader-f16`
 resta assente qui (quindi la via f16 non è un'alternativa su questo stack).
+
+## item 12 — quattro scostamenti trovati dal grade e non registrati dall'esecuzione (io, verifica di it.2)
+
+Il grade indipendente ha dato verdetto **refuted** (composito: P3 e P5 hanno
+fatto scattare le loro failCondition pre-registrate, non per lettura infedele —
+ogni numero coincide con l'artefatto alla cifra). Ho rieseguito i gate da sola e
+confermano: ktest 100 PASS / 0 FAIL, vitest 545 passed | 10 skipped, tsc pulito.
+Ho anche ricalcolato le tre cifre di titolo dall'artefatto: 2,6225/0,0609 =
+43,1x, 12,2993/1,8207 = 6,76x, 0,2581 ms per blocco FFN → 5.776 + 2.888 = 8.665
+ms. Reggono.
+
+Ma quattro cose il grade le ha viste e l'esecuzione non le ha messe a docket.
+
+**(a) Il banco è stato CLONATO, non esteso.** Il WP diceva «estenderlo, non
+riscriverlo» e nominava `kdRunner.ts / kdGemv.ts / kdAttn.ts / kdbench.html`.
+L'esecuzione ha creato una famiglia parallela `tt-*` (`ttRunner.ts`, `ttGemm.ts`,
+`ttAttn.ts`, `ttPage.ts`, `ttbench.html`, `scripts/tt-microbench-run.mjs`,
++1600 righe), toccando `kdRunner.ts` solo di sponda. **Da oggi ci sono due
+famiglie di banco da mantenere**, con lo stesso schema e lo stesso pattern di
+pagina. Lavoro mio, non un ruling: o si unificano, o si dichiara perché due.
+
+**(b) Il memo dichiara 34 celle, il JSON ne ha 32.** `skipped: []` è corretto in
+entrambi. Errore di contabilità nel memo, non nell'artefatto. Da correggere nel
+memo — è esattamente il tipo di cifra che qualcuno ricontrollerà fra sei mesi.
+
+**(c) La cella `coldw` non è stata girata sulla VINCITRICE.** Era
+pre-registrata come discriminante della CAUSA di P3 — se il vantaggio evapora a
+pesi freddi, è occupancy e non traffico. È stata girata su `regs` (0,1400 contro
+0,1294: il vantaggio regge) e sulla forma attuale, **non su `splitk`**, che è la
+forma che ha poi vinto. Quindi la causa della vincitrice resta indiscriminata, e
+l'artefatto non lo dice. Costo per chiuderla: una cella. Da fare all'inizio
+della riga 2, prima di costruirci sopra.
+
+**(d) Il disegno di P1 è stato rivisto DOPO aver visto un numero che lo
+refutava.** Prima sonda: 5,86 TFLOP/s, sotto il bordo della banda. Rivista con
+12 warm-up, 40 campioni e shape interleavate: 8,92. La revisione è dichiarata
+apertamente nel memo, resta dentro i minimi del §DISEGNO, e la giustificazione
+(rampa di boost) è visibile nei campioni pubblicati — e il verso dell'errore
+spinge il numero verso il bordo BASSO, quindi P1 reggeva anche col disegno
+vecchio (8,07 a 4096³ è già dentro la banda). Ma è l'unico punto del WP in cui
+il protocollo si è mosso a risultato noto, e va contato come grado di libertà
+speso. Nessuna azione: registrato perché il prossimo che legge questi numeri
+sappia quanto pesarli.
