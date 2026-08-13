@@ -112,3 +112,44 @@ goal.
 
 Nessun commit durante la ripresa: `git add` sopra una patch applicata a meta'
 sarebbe il modo piu' rapido di rovinare un albero pulito.
+
+## it.5 (2026-08-13, fase 1 CHIUSA) — 2,72x a contesto vero: 9,95 -> 27,06 tok/s
+
+Seconda ondata della build SDD integrata (5 task, 24 agenti). Verificato da me,
+non preso per buono.
+
+**I gate, tutti eseguiti ora**: ktest **100 PASS / 0 FAIL** · `q35-model-4b-argmax`
+argmax **IDENTICO** all'oracolo (gate secco) · `q35-attn-full-real-blk3` contro
+il cpuref f64 a **L2rel 2,07e-7** — meglio della tolleranza di ieri, nonostante
+lo streaming cambi l'ordine delle somme · `dense-batch-attn-chunk` **BIT-IDENTICO**
+(il prefill non e' stato sfiorato, come da contratto) · suite **472|10** · tsc
+pulito.
+
+**LA MISURA** (stesso host, stessa configurazione, `--vram-gib 8`, quiescent):
+
+| | prima | dopo | |
+|---|---|---|---|
+| ctx 388 | 38,72 ms | **35,69** | 1,08x |
+| ctx 6333 | 100,52 ms | **36,95** | **2,72x** |
+| tok/s a ctx 6333 | 9,95 | **27,06** | |
+| pendenza | 10,40 us/pos | **0,21** | 50x piu' piatta |
+| scansione KV | 6,3 GB/s | **308** | 1,4% -> 71% del picco |
+
+**Il token e' quasi indipendente dal contesto**: 35,69 a 388 posizioni contro
+36,95 a 6333. La cosa che dominava il decode a contesto vero — 65,8 ms su 100,5
+— e' scesa a ~1,3 ms.
+
+**Obiettivo NON ancora raggiunto**: 27,06 contro 30 a ctx >= 6000. Mancano 3,
+e la riga 2 (GEMV quantizzati, 4,0x nel micro-bench sul corpo da ~27 ms) e'
+esattamente la leva che li copre — con margine, se anche solo meta' del fattore
+si trasferisce.
+
+**Nota di metodo, perche' e' la seconda volta in due giorni**: la fase 0 aveva
+predetto la vittoria dello `split` (175,3 GB/s) e il micro-bench diceva 33,7x
+sul kernel isolato. Nel motore il kernel rende 308 GB/s sulla scansione, ma il
+guadagno END-TO-END e' 2,72x perche' il resto del token non e' cambiato. Il
+micro-bench non mente e non basta: dice quanto vale il pezzo, non quanto vale
+il tutto. Il numero del contratto e' sempre stato il secondo.
+
+Artefatto con prima/dopo nello stesso JSON, hostState dichiarato e i gate:
+`results/engine/attn-split-fase1-4090-2026-08-13T02-15-18-710Z.json`.

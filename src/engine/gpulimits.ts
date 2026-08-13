@@ -115,10 +115,16 @@ export interface EngineNeedsOpts {
   /**
    * L'attention MLA (solo GLM) tiene `scores[ctxMax]` in workgroup memory.
    * `false` toglie QUELLA voce — non toglie il fabbisogno dell'attenzione di
-   * Qwen, che ha lo stesso `scores[ctxMax]` in `attnDecodeWgsl` ed e' contata
-   * SEMPRE (goal engine-kernel-decode, docket item 2: il commento di prima
-   * diceva "un consumatore che quel modello non ha", e non era vero — il path
-   * q35 otteneva il limite giusto solo perche' nessuno passava `false`).
+   * Qwen, che e' contata SEMPRE (goal engine-kernel-decode, docket item 2: il
+   * commento di prima diceva "un consumatore che quel modello non ha", e non
+   * era vero — il path q35 otteneva il limite giusto solo perche' nessuno
+   * passava `false`).
+   * Dalla fase 1 di quel goal la voce di Qwen NON cresce piu' col contesto: il
+   * decode fa softmax in streaming e il suo workgroup storage e' costante
+   * (`attnDecodeWorkgroupStorageBytes`, 1.536 B a headDim 256). Resta contata
+   * comunque — un requisito si dichiara perche' esiste, non perche' e' il
+   * massimo: QUELLA voce la batte `QWEN_WORKGROUP_STORAGE_BYTES`, mentre il
+   * massimo complessivo puo' benissimo venire dall'MLA quando non e' spenta.
    */
   mlaAttention?: boolean;
   /** Byte della KV cache di UN layer, se bindata intera. Default: formula GLM. */
@@ -162,9 +168,23 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
     },
     {
       limit: "maxComputeWorkgroupStorageSize",
-      // TRE consumatori, e il terzo mancava: `attnDecodeWgsl` (Qwen) tiene
-      // `scores[ctxMax]` esattamente come l'MLA di GLM. La formula arriva dal
-      // file del kernel, non e' ricopiata qui.
+      // TRE consumatori CONTATI, e il terzo mancava: `attnDecodeWgsl`,
+      // l'attenzione di decode di Qwen. Dalla fase 1 (goal
+      // engine-kernel-decode, docket item 2) il suo fabbisogno e' COSTANTE in
+      // ctxMax — softmax in streaming — ma si conta lo stesso. La formula
+      // arriva dal file del kernel, non e' ricopiata qui.
+      // Ma un `scores[ctxMax]` in workgroup memory esiste ancora, in
+      // produzione e fuori dall'MLA — e NON e' contato qui. Lo dichiara
+      // `attnPrefillChunkWgsl` (qh[headDim] + quel `scores` + red[64] =
+      // 4·ctxMax + 1.280 B a headDim 256), che gpuforward.ts istanzia dallo
+      // STESSO path che qui passa `mlaAttention: false`; e il ramo batch
+      // legacy di `attnDecodeWgsl` (q35gpumodel) ne chiede 4·ctxMax + 256 B.
+      // Oggi non rompono niente solo perche' CTX_MAX vale 1024 (5.376 B <
+      // 30.848): il pareggio col termine fuso e' a ctxMax ~7.392, e sopra
+      // quel valore la pipeline del prefill fallisce in validazione mentre
+      // questo modulo ha dichiarato di meno. Contarli alzerebbe un requisito
+      // del device per tutti: e' una decisione da docket (goal
+      // engine-kernel-decode), non un ritocco di commento.
       value: Math.max(
         QWEN_WORKGROUP_STORAGE_BYTES,
         attnDecodeWorkgroupStorageBytes(o.ctxMax),

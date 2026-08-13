@@ -1,0 +1,103 @@
+[ktest] adapter: {"webgpu":true,"adapter":"nvidia lovelace"}
+kernel	esito	max|Δ|	maxRel	note
+gemv-q4_0-896x896-bias	PASS	2.86e-6	1.29e-3	
+gemv-q4_0-896x128-bias	PASS	2.86e-6	2.37e-5	
+gemv-q4_0-896x4864	PASS	2.09e-6	9.51e-5	
+gemv-q4_0-4864x896	PASS	5.72e-6	2.25e-4	
+gemv-q8_0-896x2048	PASS	4.96e-5	3.19e-4	
+gemv-q4_1-1536x2048	PASS	7.63e-6	5.13e-7	
+gemv-q4_1-10240x256	PASS	2.29e-5	9.34e-6	
+gemv-q4_K-2048x512	PASS	2.21e-4	5.58e-5	
+gemv-q4_K-512x2048	PASS	1.22e-4	2.33e-5	
+gemv-q5_K-2048x1536	PASS	7.63e-4	2.25e-4	
+gemv-q6_K-1536x2048	PASS	9.77e-4	1.35e-5	
+gemv-q6_K-2048x1024	PASS	1.22e-3	5.39e-6	
+gemv-f32-router	PASS	3.81e-6	1.58e-6	
+gemv-q4_0-accum	PASS	2.86e-6	3.88e-4	
+gemv-q4_1-accum	PASS	5.72e-6	3.67e-3	
+moe-ffn-block-downq4_0	PASS	2.56e+3	7.21e-5	experts=[30,28,33,11] Σw=1.800000
+moe-ffn-block-downq4_1	PASS	7.68e+2	2.28e-4	experts=[33,3,15,58] Σw=1.800000
+prefill-moe-batched-vs-decode-chain	PASS	0.00e+0	0.00e+0	BIT-IDENTICO: M=4, unione 6 expert su 16 selezioni (molteplicita' 2.67)
+shexp-batch-vs-per-row	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe (stesso modulo, indicizzazione di riga)
+dense-batch-gemv-q4_0	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-gemv-q4_1	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-gemv-q8_0	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-gemv-f32	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-gemv-q8heads	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-rmsnorm	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-rope-mla	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-kvappend	PASS	0.00e+0	0.00e+0	BIT-IDENTICA l'intera cache (righe 7..9 scritte, il resto intatto)
+dense-batch-strided-copy	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-rope-neox	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-siluMul	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-sigmoidMul	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-addInPlace	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-deltanet-gates	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-batch-attn-chunk	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-rows-deltanet-recurrence	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-flat-rmsnorm-per-head	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+dense-flat-stridedcopy	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe
+router-top4-gpu-vs-cpu	PASS	7.38e-8	1.64e-7	draws=64 setFlips(sep>=0.00001)=0 orderFlips=0 sottoSoglia=0 minSepRetto=3.43e-5
+q35-router-resolve-gpu-vs-cpu	PASS	2.76e-8	2.32e-7	softmax 256x8, draws=64 setFlips(sep>=0.00001)=0 orderFlips=0 sottoSoglia=0 resolveErrati=0 minSepRetto=1.92e-5
+router-top4-near-tie	PASS	0.00e+0	0.00e+0	bases=8 tenuto fino a eps=1e-6 primo flip a eps=1e-7 (gate dichiarato 1e-5)
+router-resolve-slottable	PASS	4.40e-8	9.76e-8	residenti e54→s0,e41→s1,e61→s2, top4 CPU {54,7,41,40}, wMaxRel=9.76e-8, MISS post-eviction 4/4
+pair-gemv-silu-fast-exp	PASS	9.16e-5	1.61e-5	
+gemv-q4_0-accum-fast	PASS	2.38e-6	1.52e-4	
+gemv-q4_1-accum-fast	PASS	3.81e-6	1.75e-4	
+expert-arena-vs-slotrange-q4_0	PASS	0.00e+0	0.00e+0	BIT-A-BIT identico su 1536 + 2048 f32 (slot 5 = buffer 1 offset 2, selIdx 3)
+expert-arena-miss-q4_0	PASS	0.00e+0	0.00e+0	slot 0xffffffff (w=0.5, flags=1): gate/up e down non toccano l'uscita, bit per bit
+expert-arena-vs-slotrange-q4_1	PASS	0.00e+0	0.00e+0	BIT-A-BIT identico su 1536 + 2048 f32 (slot 5 = buffer 1 offset 2, selIdx 3)
+expert-arena-miss-q4_1	PASS	0.00e+0	0.00e+0	slot 0xffffffff (w=0.5, flags=1): gate/up e down non toccano l'uscita, bit per bit
+pair-gemv-silu-q5k-fast-shexp	PASS	3.00e+0	5.87e-4	
+gemv-q6k-fast-1536x2048	PASS	1.22e-3	7.98e-5	
+gemv-q6k-fast-2048x1024	PASS	9.77e-4	1.82e-5	
+deltanet-conv-256	PASS	5.96e-8	5.86e-5	out+shift stato (shift esatto: true)
+deltanet-conv-8192	PASS	1.19e-7	1.55e-4	out+shift stato (shift esatto: true)
+deltanet-gates	PASS	1.91e-6	6.86e-4	
+deltanet-core-hd16	PASS	4.77e-7	1.36e-4	out + stato post-update
+deltanet-core-hd128	PASS	1.31e-6	6.45e-3	out + stato post-update
+deltanet-chain-T12	PASS	5.36e-7	1.07e-3	campione pinnato 12 token, stato persistente su GPU
+rope-neox-partial-64of256	PASS	7.30e-7	4.28e-4	canali ≥64 invariati: true
+sigmoid-mul	PASS	5.96e-8	2.32e-7	
+q35-attn-linear-real-blk0	PASS	1.19e-7	1.60e-4	pesi reali 4B, T=3, L2rel=7.72e-7
+q35-attn-full-real-blk3	PASS	7.15e-7	1.17e-3	pesi reali 4B, T=3, L2rel=2.07e-7
+q35-mtp-head-real-blk32	PASS	4.77e-6	5.67e-4	pesi reali 4B-MTP, T=3, L2rel=2.67e-7
+q35-mtp-draft-4b	PASS	NaN	NaN	accept-rate GPU 31/62 = 50.0% (cpuref f64 stessa finestra: 50,0%) — 63 draft a 4.93 ms (load 10.0s, run 2.8s)
+q35-mtp-specdec-invariance	PASS	NaN	NaN	16/16 token IDENTICI al sequenziale su ENTRAMBI i path · per-riga 11 passate 6 accettate (55%) · batch 10 passate 7 accettate (70%), 8 rollback · ms/token: sequenziale 34.5 · spec per-riga 48.6 · spec batch 41.8
+q35-mtp-costo-verifica	PASS	NaN	NaN	token intero 34.4 = corpo 27.6 + coda 6.8 (norma+lm_head+argmax+readback) · passata di verifica 66.8 = corpo2 48.3 + 2 code 13.6 + draft 4.9 · corpo2/corpo = 1.75x
+q35-model-4b-argmax	PASS	0.00e+0	0.00e+0	argmax GPU == oracolo 6/6 (load 8.8s, 39 pos in 1.6s, 570 dispatch/token) — MICRO-BENCH a caldo A CONTESTO 39 POSIZIONI (non confrontabile con un bench su prompt vero senza correggere per il contesto: ~10,4 us/posizione, it.59), 3 ripetizioni interleavate (mediana, [min-max]): sync 34.3 [34.3-34.5] · batch 31.1 [30.8-31.3] · senza-sync 26.5 [26.5-26.6] ⇒ delta batch -3.2 ms/token (-9.5%); argmax IDENTICO su 39 token
+q35-arena-vs-slotrange-blk0-q4kdown	PASS	0.00e+0	0.00e+0	BIT-A-BIT identico su 2048 f32 (arena bindata intera, slot da Sel) vs binding a sotto-range
+q35-moe-block-real-blk0-q4kdown	PASS	5.59e-9	6.38e-6	pesi reali 35B, top-8 di 256, arena offset-binding, L2rel=2.11e-7
+q35-arena-vs-slotrange-blk34-q6kdown	PASS	0.00e+0	0.00e+0	BIT-A-BIT identico su 2048 f32 (arena bindata intera, slot da Sel) vs binding a sotto-range
+q35-moe-block-real-blk34-q6kdown	PASS	1.86e-9	8.88e-6	pesi reali 35B, top-8 di 256, arena offset-binding, L2rel=2.79e-7
+rope-mla-norm-q	PASS	1.44e-5	1.41e-3	
+rope-mla-norm-kpe	PASS	1.33e-5	1.88e-4	
+gemv-q8-heads-absorb-kb	PASS	3.05e-5	6.37e-4	
+gemv-q8-heads-vout-vb	PASS	6.10e-5	3.77e-3	
+mla-attn-decode	PASS	3.73e-8	1.00e-3	
+mla-attn-split-p7	PASS	5.96e-8	1.57e-3	
+mla-attn-split-p15	PASS	5.96e-8	5.92e-4	
+mla-attn-split-p16	PASS	5.96e-8	6.01e-4	
+mla-attn-split-p40	PASS	2.24e-8	1.61e-3	
+mla-attn-split-p200	PASS	3.35e-8	7.88e-4	
+mla-attn-split-vs-mono	PASS	1.08e-7	1.32e-3	
+mla-split-batch-vs-per-row	PASS	0.00e+0	0.00e+0	BIT-IDENTICO su 3 righe a passato crescente (14..16, bordo di partizione attraversato)
+strided-copy-qrope	PASS	0.00e+0	0.00e+0	
+rmsnorm	PASS	1.19e-7	1.19e-7	
+rope-neox	PASS	3.55e-6	9.02e-4	
+kv-append+attn-decode	PASS	2.61e-8	6.48e-5	
+silu-mul	PASS	8.94e-8	2.36e-7	
+add-inplace	PASS	0.00e+0	0.00e+0	
+argmax-2stage	PASS	0.00e+0	0.00e+0	got=137713 ref=137713
+residency-opfs-roundtrip	PASS	0.00e+0	0.00e+0	import 37.6 MB sha-ok in 205 ms; h1/m8/ev2; read 10.8 pack 37.9 up 2.6 ms
+glm-model-2layer	PASS	3.58e+7	1.31e-4	6 pos, L2rel=2.07e-7, wMaxRel=1.84e-7, argmax 6/6, logitMaxRel=1.91e-4, h14/m10/ev3, arena nBuf=3, 55 dispatch/token misurati (piano 53 + testa 2), 2 submit / 1 sync per token
+glm-model-2layer-shadow	PASS	3.58e+7	1.31e-4	6 pos, L2rel=2.07e-7, wMaxRel=1.84e-7, argmax 6/6, logitMaxRel=1.91e-4, h14/m10/ev3, arena nBuf=3, 56 dispatch/token misurati (piano 54 + testa 2), 2 submit / 1 sync per token; router GPU: set 6/6, ordine 6/6, wMaxRel=1.27e-7, slot risolti 14, miss 10, Sel di produzione riletta 24/24
+glm-model-shadow-invariance	PASS	0.00e+0	0.00e+0	L2rel 2.07e-7 in entrambi, 55 → 56 dispatch/token, submit 2 e sync 1 per token invariati
+glm-model-2layer-gpu	PASS	3.58e+7	1.31e-4	6 pos, L2rel=2.07e-7, wMaxRel=3.11e-7, argmax 6/6, logitMaxRel=4.47e-4, h0/m64/ev0, arena nBuf=3, 56 dispatch/token misurati (piano 54 + testa 2), 1 submit / 0 sync per token; selMiss=0, Sel di produzione riletta 24/24, preload 64/64 expert, submit osservati 6/6 (telemetria 6); vs run cpu: hidden maxRel=2.50e-7 (bit-identici 8309/12288), id expert identici per-k, pesi maxRel=1.27e-7; logits maxRel=2.56e-4 (bit-identici 7212/12288), argmax 6/6
+glm-model-gpu-residenza-parziale	PASS	0.00e+0	0.00e+0	errore atteso: "glmmodel: select "gpu" esige la RESIDENZA TOTALE — classe q4_1: 7 slot per 64 expert del modello. In modo gpu la CPU non vede piu' la selezione, quindi non puo'…"
+glm-optimistic-forced-miss	PASS	0.00e+0	5.98e-8	pulito: L2rel=5.98e-8, 1 submit/0 sync, dispatch ok; forzati {3,2} (+controllo 4): missCount=2, first=1, degrado vs ref-azzerato L2rel=5.15e-8, logitMaxRel=7.34e-4
+glm-hidden-checkpoint	PASS	0.00e+0	3.17e-7	3 pos: gpu==optimistic 4096/4096 bit, riga0==xIn 2048/2048 bit, riga1 vs f64 L2rel=3.17e-7, dispatch/token invariati
+glm-optimistic-identita	PASS	0.00e+0	0.00e+0	64 pos (3 con replay): hidden bit 131072/131072, logits bit 131072/131072, argmax 64/64, submits 67 = 64+3 replay, sync/token 0, repairMs=66.5
+glm-optimistic-precondizione	PASS	0.00e+0	0.00e+0	errore atteso: "glmmodel: select "optimistic" esige la residenza NEAR-TOTAL — 7 slot per 64 expert = 10.9% < 0.8. Sotto questa soglia il decode ottimistico collassa (WP-0: a bu…"
+glm-layer0-conformance	PASS	8.82e-8	1.67e-3	pesi reali blk.0, 16 pos decode, L2rel=2.35e-7, 22 dispatch
+[ktest] STATUS: done

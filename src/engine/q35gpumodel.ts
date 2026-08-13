@@ -9,7 +9,8 @@
 // di layer con pesi reali == cpuref a L2rel ~1e-7 (it.7). Qui c'è SOLO
 // l'orchestrazione: loop 32 layer + embed row + ffn + head + residui.
 import {
-  addInPlaceWgsl, ARGMAX_CHUNK, argmaxStage1Wgsl, argmaxStage2Wgsl, attnDecodeWgsl, axpyWgsl,
+  addInPlaceWgsl, ARGMAX_CHUNK, argmaxStage1Wgsl, argmaxStage2Wgsl,
+  attnDecodeCombineWgsl, attnDecodeWgsl, axpyWgsl,
   gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
   gemvQ6KWgsl, gemvQuantWgsl, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
   siluMulWgsl, stridedCopyWgsl, routerTopKWgsl,
@@ -20,6 +21,7 @@ import type { SlabTensorLayout } from "./moe";
 import { deltaNetConvWgsl, deltaNetCoreWgsl, deltaNetGatesWgsl } from "./kernels/deltanet";
 import { GGML_TYPE, tensorByteSize, type GgufTensorInfo } from "./gguf";
 import { dequantQ4_0, dequantQ6_K, dequantQ8_0, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
+import { q35AttnPartialsFloats, q35AttnSplitPlan } from "./q35attnsplit";
 import { q35IsFullAttn, type Q35Shape } from "./q35shape";
 import { ROUTER_QWEN35MOE, routerSelect, WEIGHTS_SUM_CLAMP_MIN, type RouterConfig } from "./moe";
 import {
@@ -482,6 +484,29 @@ export async function createQ35GpuModel(
   const qFull = empty(2 * qDim * 4), kCur = empty(kvDim * 4), vCur = empty(kvDim * 4);
   const qB = empty(qDim * 4), gateB = empty(qDim * 4), qN = empty(qDim * 4), kN = empty(kvDim * 4);
   const attnO = empty(qDim * 4);
+  /**
+   * PARZIALI dell'attention decode split (pass 1 -> pass 2), UNA coppia per
+   * tutto il modello. Il sizing viene da `q35AttnPartialsFloats` — la stessa
+   * funzione da cui il kernel ricava la propria geometria, non una copia — e
+   * passa da `empty`, quindi finisce in `allocBytes` e nel `vramPlan` come ogni
+   * altro scratch.
+   *
+   * PERCHE' SI POSSONO CONDIVIDERE fra i layer full-attn E la testa MTP. I due
+   * dispatch (split + combine) sono accodati come step CONSECUTIVI, e in WebGPU
+   * i dispatch dello stesso compute pass sono ordinati fra loro con barriera
+   * implicita (e i pass dello stesso submit a maggior ragione: la sonda dei
+   * timestamp puo' spezzare il pass su una marca senza cambiare nulla). Nessun
+   * altro step legge o scrive questi due buffer nel mezzo: il layer l+1
+   * sovrascrive i parziali del layer l solo DOPO che il combine del layer l li
+   * ha gia' letti. La testa MTP gira in un submit separato (mtpSteps, dopo il
+   * piano del token), quindi non si sovrappone per costruzione. Costo evitato:
+   * nHead*splits*(headDim+2) float per OGNI layer invece che una volta sola.
+   */
+  const attnParts = q35AttnPartialsFloats({ nHead: S.nHead, headDim: hd, ctxMax });
+  const attnPartOut = empty(attnParts.out * 4);
+  const attnPartMS = empty(attnParts.ms * 4);
+  /** Y del dispatch del pass 1 — stesso piano che il kernel ha baked dentro. */
+  const { splits: attnSplits } = q35AttnSplitPlan(ctxMax);
   const gateF = empty(dFfn ? dFfn * 4 : 16), upF = empty(dFfn ? dFfn * 4 : 16);
   // --- MoE (it.17): scratch dedicati (i dinamici non toccano quelli shexp) ---
   const nE = S.nExpert ?? 0, topK = S.nExpertUsed ?? 0, dE = S.dFfnExpert ?? 0;
@@ -597,6 +622,42 @@ export async function createQ35GpuModel(
     const bind = device.createBindGroup({ layout: p.getBindGroupLayout(0), entries });
     stepTarget.push({ pipe: p, bind, wgs: typeof wgs === "number" ? [wgs, 1, 1] : [wgs[0], wgs[1], 1] });
   };
+  /**
+   * ATTENTION DECODE in DUE dispatch (split sul contesto + combine log-sum-exp).
+   * Un helper solo perche' i due call-site — i layer full-attn del piano token e
+   * la testa MTP — devono restare per costruzione la stessa aritmetica: se
+   * divergono, il draft si accetta contro un'attenzione diversa da quella che lo
+   * verifica.
+   *
+   * GRIGLIA FISSA IN ctxMax, LAVORO NO. `q35AttnSplitPlan` sceglie i chunk col
+   * criterio dichiarato in q35attnsplit.ts: chunk di almeno
+   * Q35_ATTN_MIN_CHUNK = 512 posizioni (sotto, il combine e i parziali costano
+   * piu' di quanto renda l'occupancy in piu') e al piu'
+   * Q35_ATTN_MAX_SPLITS = 64 chunk (oltre, cresce il chunk e NON il numero di
+   * workgroup: e' il punto dello split, tenere i buffer parziali costanti in
+   * ctxMax). Il dispatch e' quindi (nHead, splits) su ctxMax e non su nPast+1, e
+   * a contesto corto lancia workgroup che non hanno niente da fare. E' voluto: i
+   * bind group e le griglie sono PRECOSTRUITI una volta sola (nessuna
+   * ricreazione per token), e un chunk oltre nPast+1 esce col loop vuoto
+   * scrivendo m = -3.0e38, s = 0, acc = 0, che il combine annulla
+   * (exp(-3e38 - gm) = 0, nessun NaN). Si paga qualche workgroup vuoto;
+   * l'alternativa era ricostruire griglia e bind group a ogni token.
+   *
+   * Binding congelati dai kernel: pass 1 = [q, kCache, vCache, partOut, partMS]
+   * con l'uniform a binding 5 (`withUni`, che `push` mette a `bufs.length`);
+   * pass 2 = [partOut, partMS, out] e NESSUN uniform — quanti chunk esistono e'
+   * baked nel WGSL, `nPast` al combine non serve.
+   */
+  function pushAttnDecodeSplit(qSrc: GPUBuffer, kCache: GPUBuffer, vCache: GPUBuffer, dst: GPUBuffer): void {
+    push(
+      attnDecodeWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: hd, ctxMax }),
+      [qSrc, kCache, vCache, attnPartOut, attnPartMS], [S.nHead, attnSplits], true,
+    );
+    push(
+      attnDecodeCombineWgsl({ nHead: S.nHead, headDim: hd, ctxMax }),
+      [attnPartOut, attnPartMS, dst], S.nHead,
+    );
+  }
   const gemv = (w: { qs: GPUBuffer; scales: GPUBuffer; k: number; n: number; kind?: "q4_0" | "q4_1" | "q8_0" }, src: GPUBuffer, dst: GPUBuffer, kind?: "q4_0" | "q4_1" | "q8_0"): void => {
     const kk = kind ?? w.kind ?? "q4_0";
     push(gemvQuantWgsl({ kind: kk, K: w.k, N: w.n, hasBias: false }), [w.qs, w.scales, src, dst], gemvGrid(w.n));
@@ -690,7 +751,7 @@ export async function createQ35GpuModel(
       push(ropeNeoxWgsl(S.nKvHead, hd, S.ropeFreqBase, S.ropeDims), [kN], Math.ceil((S.nKvHead * S.ropeDims / 2) / 64), true);
       push(kvAppendWgsl(kvDim), [kN, kCache], Math.ceil(kvDim / 64), true);
       push(kvAppendWgsl(kvDim), [vCur, vCache], Math.ceil(kvDim / 64), true);
-      push(attnDecodeWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: hd, ctxMax }), [qN, kCache, vCache, attnO], S.nHead, true);
+      pushAttnDecodeSplit(qN, kCache, vCache, attnO);
       push(sigmoidMulWgsl(qDim), [attnO, gateB], Math.ceil(qDim / 64));
       wo.push(attnO, attnY);
       if (PB) {
@@ -1885,7 +1946,9 @@ export async function createQ35GpuModel(
     push(ropeNeoxWgsl(S.nKvHead, hd, S.ropeFreqBase, S.ropeDims), [mKN], Math.ceil((S.nKvHead * S.ropeDims / 2) / 64), true);
     push(kvAppendWgsl(kvDim), [mKN, mKCache], Math.ceil(kvDim / 64), true);
     push(kvAppendWgsl(kvDim), [mVCur, mVCache], Math.ceil(kvDim / 64), true);
-    push(attnDecodeWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: hd, ctxMax }), [mQN, mKCache, mVCache, mAttnO], S.nHead, true);
+    // stessi parziali dei layer del token: la testa gira in un submit a parte,
+    // dopo, e i suoi due dispatch sono consecutivi come quelli dei layer.
+    pushAttnDecodeSplit(mQN, mKCache, mVCache, mAttnO);
     push(sigmoidMulWgsl(qDim), [mAttnO, mGateB], Math.ceil(qDim / 64));
     woM.push(mAttnO, mY);
     push(addInPlaceWgsl(d), [mHp, mY], Math.ceil(d / 64));

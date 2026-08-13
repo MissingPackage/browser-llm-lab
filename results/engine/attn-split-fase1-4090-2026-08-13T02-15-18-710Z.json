@@ -1,0 +1,103 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-attn-split-fase1",
+ "date": "2026-08-13T02:15:18.710Z",
+ "verdict": "L attenzione di decode del path Qwen passa a softmax in streaming + split del contesto su piu workgroup. La dipendenza dal contesto e praticamente sparita: pendenza 10,40 -> 0,21 us/posizione, scansione KV 6,3 -> 308 GB/s (dall 1,4% al 71% del picco misurato della scheda). Obiettivo del goal (30 tok/s a ctx >= 6000) NON ancora raggiunto: 27,06.",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "decodePath": "batched K=32, vramTier 8 GiB",
+ "before": {
+  "source": "it.59, stesso host e stessa configurazione, 2026-08-12",
+  "ctx388": {
+   "msPerTokenP50": 38.72,
+   "tokS": 25.83
+  },
+  "ctx6333": {
+   "msPerTokenP50": 100.52,
+   "tokS": 9.95
+  },
+  "slopeUsPerPosition": 10.4,
+  "kvScanGBps": 6.3
+ },
+ "after": {
+  "ctx388": {
+   "msPerTokenP50": 35.690000012516975,
+   "tokS": 28.019052946183418,
+   "decodeContext": {
+    "startPositions": 388,
+    "endPositions": 452,
+    "note": "ms/token cresce ~10,4 us per posizione (it.59): confrontare solo a contesto dichiarato"
+   }
+  },
+  "ctx6333": {
+   "msPerTokenP50": 36.95499999821186,
+   "tokS": 27.059937763452496,
+   "decodeContext": {
+    "startPositions": 6333,
+    "endPositions": 6397,
+    "note": "ms/token cresce ~10,4 us per posizione (it.59): confrontare solo a contesto dichiarato"
+   }
+  },
+  "slopeUsPerPosition": 0.21278384957020777,
+  "kvScanGBps": 307.99329992559643
+ },
+ "speedup": {
+  "ctx388": 1.084897730076222,
+  "ctx6333": 2.7200649439822446
+ },
+ "kvBytesPerPosition": 65536,
+ "note": "byte KV per posizione = 8 layer full-attn x 4 kv-head x 256 dim x (k,v) x 4 B. I 24 layer DeltaNet hanno stato di taglia fissa e non crescono col contesto.",
+ "gates": {
+  "ktest": "100 PASS / 0 FAIL",
+  "argmaxGolden": "IDENTICO all oracolo 6/6",
+  "attnVsCpuref": "L2rel 2,07e-7",
+  "prefillChunk": "BIT-IDENTICO",
+  "tsc": "pulito",
+  "suite": "472 passed | 10 skipped"
+ },
+ "repro": [
+  "npx vite",
+  "node scripts/q35-bench-run.mjs --prompt-idx 4 --n-decode 64 --vram-gib 8 --declared quiescent",
+  "node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --declared quiescent"
+ ],
+ "deviceLabel": "4090",
+ "hostState": {
+  "before": {
+   "declared": "quiescent",
+   "before": {
+    "temperatureC": 39,
+    "smClockMHz": 210,
+    "powerW": 588.21,
+    "memUsedMiB": 700,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000001"
+   },
+   "after": {
+    "temperatureC": 44,
+    "smClockMHz": 2265,
+    "powerW": 78.94,
+    "memUsedMiB": 708,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000000"
+   }
+  },
+  "after": {
+   "declared": "quiescent",
+   "before": {
+    "temperatureC": 44,
+    "smClockMHz": 2265,
+    "powerW": 35.75,
+    "memUsedMiB": 708,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000000"
+   },
+   "after": {
+    "temperatureC": 54,
+    "smClockMHz": 2265,
+    "powerW": 74.78,
+    "memUsedMiB": 716,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000000"
+   }
+  }
+ }
+}

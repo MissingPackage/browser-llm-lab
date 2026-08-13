@@ -7,7 +7,8 @@
 // int8, indici argmax) devono essere esatte.
 import {
   gemvQuantWgsl, gemvF32Wgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
-  attnDecodeWgsl, siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, type KArenaOpts,
+  attnDecodeWgsl, attnDecodeRefWgsl, attnDecodeCombineWgsl,
+  siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, type KArenaOpts,
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
   routerTopKWgsl, pairGemvSiluFastWgsl, gemvAccumFastWgsl, gemvGrid, type ArenaOpts,
   pairGemvSiluGatherWgsl, gemvDownSlotsWgsl, moeCombineWgsl,
@@ -15,6 +16,7 @@ import {
   pairGemvSiluQ5KFastWgsl, gemvQ6KFastWgsl,
 } from "../kernels/wgsl";
 import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen } from "../mlasplit";
+import { q35AttnSplitPlan, q35AttnPartialsFloats } from "../q35attnsplit";
 import { KQUANT_FAST_Q5K_PAIR_REL_TOL, KQUANT_FAST_Q6K_REL_TOL } from "../kquantfast";
 import { createGlmLayer0 } from "../glmforward";
 import {
@@ -482,6 +484,13 @@ async function testQ35AttnLayersReal(g: Gpu): Promise<KResult[]> {
       const xn = g.empty(D.d * 4), qFull = g.empty(2 * qDim * 4), kBuf = g.empty(kvDim * 4), vBuf = g.empty(kvDim * 4);
       const qB = g.empty(qDim * 4), gateB = g.empty(qDim * 4), qN = g.empty(qDim * 4), kN = g.empty(kvDim * 4);
       const attnO = g.empty(qDim * 4), y = g.empty(D.d * 4);
+      // parziali dello split del decode: la griglia e' fissa in ctxMax, quindi
+      // i buffer si allocano UNA volta e si riusano fra le posizioni t (i
+      // dispatch sono sequenziali, ogni pass 1 riscrive per intero cio' che il
+      // pass 2 ha gia' letto).
+      const aSplits = q35AttnSplitPlan(meta.T).splits;
+      const aPart = q35AttnPartialsFloats({ nHead: D.nHead, headDim: hd, ctxMax: meta.T });
+      const partOut = g.empty(aPart.out * 4), partMS = g.empty(aPart.ms * 4);
       for (let t = 0; t < meta.T; t++) {
         const u = g.uniform(t, t);
         const x = g.buf(f32c(meta.inputs.offset + t * D.d * 4, D.d * 4));
@@ -497,7 +506,9 @@ async function testQ35AttnLayersReal(g: Gpu): Promise<KResult[]> {
         await g.run(ropeNeoxWgsl(D.nKvHead, hd, D.freqBase, D.ropeDims), [kN], Math.ceil((D.nKvHead * D.ropeDims / 2) / 64), u);
         await g.run(kvAppendWgsl(kvDim), [kN, kCache], Math.ceil(kvDim / 64), u);
         await g.run(kvAppendWgsl(kvDim), [vBuf, vCache], Math.ceil(kvDim / 64), u);
-        await g.run(attnDecodeWgsl({ nHead: D.nHead, nKvHead: D.nKvHead, headDim: hd, ctxMax: meta.T }), [qN, kCache, vCache, attnO], D.nHead, u);
+        await g.run(attnDecodeWgsl({ nHead: D.nHead, nKvHead: D.nKvHead, headDim: hd, ctxMax: meta.T }),
+          [qN, kCache, vCache, partOut, partMS], [D.nHead, aSplits, 1], u);
+        await g.run(attnDecodeCombineWgsl({ nHead: D.nHead, headDim: hd, ctxMax: meta.T }), [partOut, partMS, attnO], D.nHead);
         await g.run(sigmoidMulWgsl(qDim), [attnO, gateB], Math.ceil(qDim / 64));
         await g.run(gemvQuantWgsl({ kind: "q4_0", K: wo.k, N: wo.n, hasBias: false }), [wo.qs, wo.scales, attnO, y], wo.n);
         const got = new Float32Array(await g.read(y, D.d * 4));
@@ -583,6 +594,10 @@ async function testQ35MtpHeadReal(g: Gpu): Promise<KResult> {
   const qB = g.empty(qDim * 4), gateB = g.empty(qDim * 4), qN = g.empty(qDim * 4), kN = g.empty(kvDim * 4);
   const attnO = g.empty(qDim * 4), y = g.empty(d * 4), gateF = g.empty(dFfn * 4), upF = g.empty(dFfn * 4);
   const out = g.empty(d * 4);
+  // parziali dello split del decode, allocati una volta e riusati fra le t
+  const aSplits = q35AttnSplitPlan(meta.T).splits;
+  const aPart = q35AttnPartialsFloats({ nHead: D.nHead, headDim: hd, ctxMax: meta.T });
+  const partOut = g.empty(aPart.out * 4), partMS = g.empty(aPart.ms * 4);
   const expected = f32c(meta.expected.offset, meta.expected.bytes);
   const gq = (w: { qs: GPUBuffer; scales: GPUBuffer; n: number; k: number }, kind: "q4_0" | "q8_0", x: GPUBuffer, o: GPUBuffer): Promise<void> =>
     g.run(gemvQuantWgsl({ kind, K: w.k, N: w.n, hasBias: false }), [w.qs, w.scales, x, o], w.n);
@@ -612,7 +627,9 @@ async function testQ35MtpHeadReal(g: Gpu): Promise<KResult> {
     await g.run(ropeNeoxWgsl(D.nKvHead, hd, D.freqBase, D.ropeDims), [kN], Math.ceil((D.nKvHead * D.ropeDims / 2) / 64), u);
     await g.run(kvAppendWgsl(kvDim), [kN, kCache], Math.ceil(kvDim / 64), u);
     await g.run(kvAppendWgsl(kvDim), [vBuf, vCache], Math.ceil(kvDim / 64), u);
-    await g.run(attnDecodeWgsl({ nHead: D.nHead, nKvHead: D.nKvHead, headDim: hd, ctxMax: meta.T }), [qN, kCache, vCache, attnO], D.nHead, u);
+    await g.run(attnDecodeWgsl({ nHead: D.nHead, nKvHead: D.nKvHead, headDim: hd, ctxMax: meta.T }),
+      [qN, kCache, vCache, partOut, partMS], [D.nHead, aSplits, 1], u);
+    await g.run(attnDecodeCombineWgsl({ nHead: D.nHead, headDim: hd, ctxMax: meta.T }), [partOut, partMS, attnO], D.nHead);
     await g.run(sigmoidMulWgsl(qDim), [attnO, gateB], Math.ceil(qDim / 64));
     await gq(wo, "q4_0", attnO, y);
     await g.run(addInPlaceWgsl(d), [hp, y], Math.ceil(d / 64));
@@ -2955,7 +2972,10 @@ async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
       const o = g.empty(qDim * 4);
       const uni = g.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
       g.device.queue.writeBuffer(uni, 0, new Uint32Array([basePast + m, basePast + m, 0, 0]) as unknown as BufferSource);
-      await g.run(attnDecodeWgsl({ nHead, nKvHead, headDim, ctxMax }), [g.buf(qs[m]), kC, vC, o, uni], nHead);
+      // riferimento per-riga: il template LEGACY, non lo split. Il confronto e'
+      // BIT-A-BIT contro il ramo `batch: true`, e solo il legacy ne e' il
+      // gemello strutturale (stesso testo, stesso ordine di accumulo).
+      await g.run(attnDecodeRefWgsl({ nHead, nKvHead, headDim, ctxMax }), [g.buf(qs[m]), kC, vC, o, uni], nHead);
       refs.push(new Float32Array(await g.read(o, qDim * 4)));
     }
     const oM = g.empty(M * qDim * 4);
@@ -3963,8 +3983,11 @@ async function main(): Promise<void> {
       await g.run(kvAppendWgsl(KV), [g.buf(kCur), kBuf], Math.ceil(KV / 64), u);
       await g.run(kvAppendWgsl(KV), [g.buf(vCur), vBuf], Math.ceil(KV / 64), u);
       const out = g.empty(S.nHead * HD * 4);
+      const aPart = q35AttnPartialsFloats({ nHead: S.nHead, headDim: HD, ctxMax });
+      const partOut = g.empty(aPart.out * 4), partMS = g.empty(aPart.ms * 4);
       await g.run(attnDecodeWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: HD, ctxMax }),
-        [g.buf(q), kBuf, vBuf, out], S.nHead, u);
+        [g.buf(q), kBuf, vBuf, partOut, partMS], [S.nHead, q35AttnSplitPlan(ctxMax).splits, 1], u);
+      await g.run(attnDecodeCombineWgsl({ nHead: S.nHead, headDim: HD, ctxMax }), [partOut, partMS, out], S.nHead);
       results.push(compare("kv-append+attn-decode", new Float32Array(await g.read(out, S.nHead * HD * 4)), ref, 5e-4, 1e-4));
     }
 
