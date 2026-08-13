@@ -18,7 +18,7 @@ import {
   rmsGemmQkvChunkFastWgsl, rmsPairGemmSiluChunkFastWgsl, gemmResidChunkFastWgsl,
   attnSplitPartWgsl, attnSplitReduceWgsl, embedGatherQ4Wgsl,
 } from "./kernels/wgsl";
-import { planPrefill, PREFILL_M } from "./prefillplan";
+import { planPrefill, PREFILL_M_DENSE05B } from "./prefillplan";
 import { ATTN_CHUNK_P, attnSMax, attnPartialsLen } from "./attnsplit";
 import { createEngineDevice } from "./gpudevice";
 import { type CoreCounters } from "./telemetry";
@@ -336,7 +336,7 @@ export async function createEngine(
   // causale intra-chunk, KV append di M righe in un dispatch, RoPE con pos
   // per-riga. lm_head/argmax NON sono nel piano: girano una volta sola a fine
   // prefill riusando la coda del piano decode (tailSteps).
-  const M_MAX = PREFILL_M;
+  const M_MAX = PREFILL_M_DENSE05B;
   const QKV_DIM = S.dModel + 2 * KV_DIM;
   const xM = storage(M_MAX * S.dModel * 4);
   const qkvM = storage(M_MAX * QKV_DIM * 4);
@@ -502,7 +502,12 @@ export async function createEngine(
       const n = tokens.length;
       if (n < 1) throw new Error("prefill vuoto");
       kv.assertNext(posStart, n); // posStart === kvLen o throw (+ capacità)
-      const plan = planPrefill(n, posStart);
+      // mMax ESPLICITO: il default di planPrefill e' la CONVENZIONE del piano
+      // (oggi 16), questo path e' l'eccezione pinnata a 8. Lasciarlo implicito
+      // farebbe emettere chunk da 16 righe contro buffer e kernel compilati per
+      // 8 (xM = 8·dModel·4 B, mMax dei WGSL) — copy fuori dai limiti e pipeline
+      // invalida. M_MAX e' l'unica fonte del numero in questo modulo.
+      const plan = planPrefill(n, posStart, M_MAX);
       // Error scope come CONTRATTO del prefill (lezione fase 6): una pipeline
       // invalida fa droppare a Dawn ogni submit IN SILENZIO e i readback restituiscono
       // dati stale del run precedente — qui il throw è sincrono e attribuibile.

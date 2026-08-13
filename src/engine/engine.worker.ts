@@ -5,7 +5,11 @@ import { createEngine, CTX_MAX, type EngineHandle } from "./gpuforward";
 import { createEngineDevice } from "./gpudevice";
 import { grantedLimits } from "./gpulimits";
 import { diffCounters } from "./telemetry";
-import { PREFILL_M, PREFILL_SUBMIT_TOKENS } from "./prefillplan";
+// Il PIN del path denso, non la convenzione del piano: i report qui sotto
+// DICHIARANO il knob del motore che hanno misurato (createEngine di gpuforward.ts),
+// che gira sul pin. Dichiarare la convenzione renderebbe il gate un bugiardo
+// (knob dichiarato ≠ knob eseguito). Il test lo verifica scansionando il sorgente.
+import { PREFILL_M_DENSE05B, PREFILL_SUBMIT_TOKENS } from "./prefillplan";
 import { parseGguf } from "./gguf";
 import { dequantQ4_0Row } from "./quant";
 import { QWEN25_05B } from "./shape";
@@ -86,7 +90,7 @@ async function runConformance(modelUrl: string, goldenUrl: string, sampleEvery: 
       wallMs, msPerForward: wallMs / Math.max(1, forwards * golden.prompts.length),
       // stato dei knob del run nel JSON (nota verifier fase 2: gate auto-evidenti)
       telemetryGpu,
-      prefill: { path: "chunked", mMax: PREFILL_M, submitTokens: PREFILL_SUBMIT_TOKENS },
+      prefill: { path: "chunked", mMax: PREFILL_M_DENSE05B, submitTokens: PREFILL_SUBMIT_TOKENS },
     },
   });
 }
@@ -297,7 +301,7 @@ async function runBench(modelUrl: string, promptUrl: string, genTokens: number, 
       // fuorviante in B2: la baseline seq migliora con lo split attention per
       // ragioni che nulla c'entrano col prefill). speedupVsSeq resta informativo.
       prefill: {
-        path: "chunked", mMax: PREFILL_M, submitTokens: PREFILL_SUBMIT_TOKENS,
+        path: "chunked", mMax: PREFILL_M_DENSE05B, submitTokens: PREFILL_SUBMIT_TOKENS,
         prefillMs: { mean: prefillMean, reps: prefillVals },
         seqBaselineMs: { mean: seqMean, reps: seqReps },
         speedupVsSeq: seqMean / prefillMean,

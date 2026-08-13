@@ -60,7 +60,7 @@ export const expertArenaBindings = (nBuf: number): number => nBuf + 3;
 
 /**
  * Workgroup storage del path Qwen FUSO, indipendente dal contesto:
- * rmsPairGemmSiluChunkFast con K = dModel 896 e mMax = PREFILL_M 8
+ * rmsPairGemmSiluChunkFast con K = dModel 896 e mMax = PREFILL_M_DENSE05B 8
  *   4·K·mMax + 256·mMax + 16·mMax = 30 848 B.
  * NOTA: il commento storico in gpuforward.ts cita 19,7 KB (il down-proj), ma
  * il consumatore massimo è questo — i 32 768 richiesti a mano lasciavano
