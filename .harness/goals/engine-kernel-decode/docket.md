@@ -235,3 +235,48 @@ piu' efficiente di non accorgersi di niente.
 L'item 7 resta valido su UNA cosa sola, e va tenuta: `--host-state quiescent` e'
 comunque una promessa che il runner non verifica. Ma non e' quello che e'
 successo qui.
+
+## item 8 — la non-reg GLM non e' risolvibile con questo disegno: il delta e' TUTTO in `read` da disco (io → PI)
+
+Cinque run stanotte, quattro ipotesi mie cadute in fila. Riepilogo per chi
+legge, perche' il valore sta negli scarti:
+
+| braccio | read ms/tok | upload | repair | decode tok/s |
+|---|---|---|---|---|
+| PRE-GOAL (408f190, worktree, 2° in ordine) | **4,8** | 3,0 | 7,6 | **13,096** |
+| HEAD main-tree, 1° | 16,9 | 2,7 | 20,6 | 11,444 |
+| HEAD main-tree, 3° (cache calda) | 18,6 | 2,7 | 22,2 | 11,424 |
+| HEAD worktree fresco, 4° | — | — | 21,2 | 11,137 |
+
+**Il codice e' ESCLUSO, e non per ragionamento**: gli 8 call-site GLM di
+`glmmodel.ts`/`glmforward.ts`, generati con gli argomenti ESATTI letti dal
+sorgente, danno WGSL **byte-identico** fra 408f190 e HEAD (hash sha256 uguali,
+lunghezze uguali); i limiti richiesti al device sono identici voce per voce;
+nessun file del grafo di import di glmbench e' stato toccato. Residenza (82,1%),
+P(dirty) 93,8% e replayFrac 64,6% sono uguali in tutti i bracci: il MECCANISMO
+e' lo stesso.
+
+**Il delta e' interamente in `read`** — la lettura degli expert da OPFS — che
+passa da 4,8 a 17-19 ms/token. Upload identico, pack zero. E' I/O, ed e'
+esattamente la landmine §3 di HANDOFF: «la cache del filesystem falsa il
+confronto del 35-41%; nessuno dei due artefatti dichiara il proprio stato di
+cache». La magnitudine qui e' proprio quella.
+
+**Quindi il gate resta NON RISOLTO**, e non perche' manchi una misura: perche'
+tutte e cinque le mie run avevano un disegno che questo progetto ha gia'
+dichiarato invalido. Le quattro ipotesi cadute — contesa CPU, flag del prefill,
+ordine/cache, ambiente — sono cadute una per una MISURANDO, il che va bene; ma
+il disegno giusto lo sapevo gia' e sta scritto in it.36 del goal precedente:
+**bracci INTERLEAVATI (A/B/A/B) con `debugEvictAll` fra i bracci e stato di
+cache dichiarato**.
+
+**RULING RICHIESTO** (il costo e' la ragione per cui non decido da solo): quel
+disegno costa ~1 ora di GPU. Le opzioni:
+(a) eseguirlo e chiudere il gate come il contratto chiede;
+(b) accettare come prova di non-regressione l'IDENTITA' BYTE-PER-BYTE del WGSL
+    GLM + l'identita' dei limiti + l'identita' del meccanismo di residenza, e
+    dichiarare la banda ±5% non misurabile su questo host senza controllo della
+    cache;
+(c) rimandare al tag di release, dove la non-reg piena si rifa' comunque.
+Raccomando (a) se il PI vuole il gate alla lettera, (b) se conta la sostanza:
+un kernel byte-identico non puo' regredire, e cio' che varia e' il disco.
