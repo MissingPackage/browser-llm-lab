@@ -163,3 +163,65 @@ PRODOTTO, non di motore — è un goal suo o entra qui? La mia raccomandazione:
 sì alla riformulazione della riga 4 (è più onesta e sblocca il conflitto),
 selettore di modello a un goal suo (ha bisogno del tetto di VRAM e della
 paginazione, non solo dei limiti di workgroup — e quello è il goal sul load).
+
+---
+
+## item 9 — il warm-up del banco è tarato sui kernel corti, e sui lunghi mente (misurato, it.2)
+
+**Cosa ho visto.** La sonda del picco fp32 (dispatch da 15-55 ms) misurava p50
+**5,86 TFLOP/s con IQR 16,6%**, sotto il bordo della banda pre-registrata. I 40
+campioni mostrano una **rampa di boost**: i primi 5-8 girano a 30-39 ms, il
+regime è 15-16. `WARMUP_SAMPLES = 3` è tarato sui kernel da decimi di ms del
+decode, dove basta; su un dispatch da decine di ms dopo un idle, tre scarti non
+portano la GPU a clock stabile. Rifatta con le due shape **interleavate fra
+loro** e 4 passate: 8,92 p50 / 9,26 in regime, IQR utile.
+
+**Perché va a docket e non l'ho "sistemato" ovunque.** La stessa distorsione può
+esserci sulle celle lente della fase 0 del goal precedente
+(`kernel-decode-fase0-*.json`): `gemv base K2560xN248320` a 5,85 ms e
+`attn-decode base n=6333` a 9,98 ms sono nella fascia dove la rampa morde, e
+sono **celle di baseline già pubblicate e già usate come riferimento**. Se sono
+sottostimate, i rapporti di quel goal sono SOVRA-stimati. Correggerle vuol dire
+ri-misurare un artefatto chiuso e toccare numeri che il ruling di
+non-regressione protegge: non è un ritocco, è una decisione.
+
+**RULING RICHIESTO**: si ri-misura la fase 0 del goal precedente col warm-up
+corretto (e si accetta che qualche rapporto pubblicato scenda), oppure la
+correzione vale solo da qui in avanti e si annota il limite sui vecchi JSON?
+Raccomandazione: **solo da qui in avanti**, con una riga nel memo di fase 0 —
+quei numeri hanno già deciso ciò che dovevano decidere, e il verso dell'errore
+(baseline lenta ⇒ rapporto generoso) non ha cambiato nessuna scelta.
+
+## item 10 — l'occupancy è il termine che il piano non ha mai scritto (it.2)
+
+Entrambe le sonde della riga 1 sono state decise dall'**occupancy**, e in
+entrambe la pre-registrazione aveva scritto «traffico di memoria»:
+
+- il moltiplicatore multi-riga: `splitk` batte `regs` di **2,13x** con lo stesso
+  corpo e lo stesso workgroup storage, solo 576 workgroup invece di 144;
+- l'attenzione a chunk: la fusione GQA taglia il traffico KV di **4x** ed è
+  **più lenta**, perché scende da 256 a 64 workgroup su 76 SM.
+
+Il modello mentale del goal («il prefill è memory-bound sui pesi, il riuso è la
+leva») era giusto sulla forma ATTUALE e sbagliato su tutte le forme candidate:
+appena il riuso c'è, il collo si sposta e la banda misurata crolla a **108 GB/s**
+su un device che ne fa 300+.
+
+**Non ho toccato niente**: le righe 2 e 3 hanno done-when scritti in termini di
+byte per token, e quelli restano validi e verificabili. Ma se il piano volesse
+un secondo termine, quello è «workgroup in volo per dispatch», e oggi non è
+misurato da nessuna parte nel motore.
+
+**Segnalazione, non ruling richiesto**: l'unica cosa che chiedo è che la riga 3
+NON adotti la fusione GQA "perché sul decode ha funzionato" — sul prefill la
+misura dice il contrario, ed è nel memo.
+
+## item 11 — una leva intera mai provata: `packed_4x8_integer_dot_product` (it.2)
+
+La sonda delle feature la dà **presente e corretta** su questo stack
+(`dot4I8Packed((1,2,3,4),(5,6,7,8)) = 70`), e nessun kernel del motore la usa. Il
+dequant q4_0 di oggi fa `f32(nibble) - 8.0` e poi `dot()` in floating point: la
+via intera farebbe il prodotto scalare sui nibble impacchettati e applicherebbe
+la scala una volta sola per blocco. Non è nello scope di questo goal e non l'ho
+misurata. Va nel serbatoio del prossimo, insieme al fatto che `shader-f16`
+resta assente qui (quindi la via f16 non è un'alternativa su questo stack).
