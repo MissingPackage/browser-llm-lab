@@ -775,3 +775,84 @@ cablata. È la riga 3.
 
 **Gate**: tsc pulito · vitest 645 passed | 10 skipped · ktest 100 PASS / 0 FAIL ·
 non-reg decode 48,00 ≥ 45,53 · guardia prefill > decode 123,3 > 48,0.
+
+---
+
+## it.16 (2026-08-14) — un agente fantasma nel mio working tree, e la miccia era un file in git
+
+**Non è l'iterazione che avevo in programma.** Stavo per lanciare `sdd-conductor`
+sulla riga 2 quando ho letto `q35gpumodel.ts` e ci ho trovato il cablaggio
+`idot` — completo, con un commento che citava «(it.14)», cioè la MIA diagnosi.
+Non l'avevo scritto io. `git status`: file modificato, non committato. Un JSON
+di misura untracked, scritto 24 secondi prima.
+
+**`ListAgents`: una sessione peer, `browser-llm-lab-89`, avviata 13 minuti
+prima, viva, che scriveva nel mio stesso albero e usava la mia stessa GPU.**
+
+Mi sono fermato prima di scrivere qualunque cosa e le ho mandato un messaggio
+chiedendo chi fosse, cosa possedesse e chi dovesse continuare. Ha risposto in
+modo esemplare: loop rianimato dal watchdog dalla sessione `0348f2c0`, che si
+era fermata DELIBERATAMENTE con `ScheduleWakeup{stop:true}` prima del riavvio.
+Ha committato e pushato tutto, si è tolta di mezzo, e ha lasciato un passaggio
+di consegne con la trappola GQA e due note operative sui profili Chrome.
+
+**LA CAUSA, ricostruita dal reflog e dal log del watchdog, e combacia al
+secondo:**
+
+    00:00:51  io: git checkout wip/riga2-cablaggio-non-verificato
+              — il PRIMO comando che il mio stesso HANDOFF prescriveva
+    quel ramo porta .harness/loop-state.json con status "active",
+    next_wake_epoch 1786655564 = 2026-08-13T23:12:44
+    00:01:34  il watchdog polla (timer ogni 2 min), legge il file che il mio
+              checkout aveva appena riscritto, vede un risveglio scaduto da
+              48 minuti, e rianima la sessione 0348f2c0
+
+Il log dice «scaduto da 48 min»: 00:01:34 − 48 = 23:13, cioè il `next_wake` del
+RAMO — non quello di main (23:19:17), non lo `stopped` di main. Non è
+un'inferenza: è lo stesso numero.
+
+**Il watchdog non legge male: legge `active` perché glielo ha appena scritto
+git.** Il difetto è che un file di RUNTIME stesse sotto controllo di versione.
+Corretto (`c21648e`): `.gitignore` + `git rm --cached`.
+
+**Il residuo è più grande dell'incidente: 19 rami portano ancora
+`status: "active"`** — tutti i `wip/riga2-*` e i `worktree-wf_*`. Toglierlo da
+main impedisce a main di ri-armare la miccia, NON impedisce a un checkout di
+quei rami di riarmarla. La difesa robusta sta in
+`~/Projects/harness/tools/loop-watchdog.sh` — altro repo, non toccato, riportato
+al PI. Due difetti da correggere lì: rifiutare uno stato scaduto da troppi poll
+(48 minuti su un timer da 2 significa ~24 poll mancati: è staleness, non
+ritardo), e non saltare il controllo «transcript fresco ⇒ sta lavorando» sul
+ramo `headless_dead`, che è il motivo per cui è stata rianimata dentro una
+directory in cui qualcuno stava attivamente scrivendo.
+
+**Verifica indipendente del lavoro del peer** (non ho preso per buono il suo
+riassunto — è la regola che mi sono dato): `HEAD == origin/main == 719b229`,
+albero pulito, i tre commit ci sono. Poi i gate rifatti da me: **tsc pulito ·
+vitest 645 passed | 10 skipped · ktest 100 PASS / 0 FAIL**. Regge.
+
+**Stato della metrica, che nel frattempo si è mossa davvero:**
+
+| | prefill | TTFT a caldo |
+|---|---|---|
+| baseline (it.1) | 72,30 tok/s | 87.618 ms |
+| split-K f32 (it.14, mia) | 111,16 | 56.984 |
+| **via intera (it.15, del peer)** | **123,26** | **51.392** |
+
+**1,70× sulla baseline. Barra 21.905 ⇒ manca 2,35×.** Le due misure indipendenti
+della forma f32 (56.984 e 57.485) distano lo 0,9%, dentro il rumore ~2,4% di
+questa macchina: si confermano a vicenda.
+
+**Riga 3 lanciata via `sdd-conductor`** (`wf_991df002-d1d`), che è il veicolo
+dichiarato per quella riga. È anche il test della conclusione sospesa: se regge
+dopo il riavvio, l'item 15/17/18 («il veicolo non chiude un task di questa
+classe qui») era una diagnosi sbagliata di una causa infrastrutturale.
+
+**Controllo di fattibilità prima di spendere ⇒ docket item 21.** La clausola (a)
+della riga 3 chiede tre cose, e la terza — «KV letta una volta per gruppo GQA» —
+**è la fusione GQA, che la riga 1 ha misurato più LENTA sul prefill** (2,0879
+contro 1,8207 ms). Il 6,76× non ne ha bisogno: l'artefatto lo attribuisce alla
+sola softmax in streaming + vec4. Decisione presa e registrata, non escalata
+(test dello step 5: se non arrivasse mai risposta farei esattamente questo).
+Il vincolo negativo è scritto nella spec del conductor, col numero, e il review
+ha istruzione di bocciare qualunque task che proponga la fusione.

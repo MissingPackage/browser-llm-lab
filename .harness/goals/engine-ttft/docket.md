@@ -668,3 +668,35 @@ alla FINE, dopo `waitForFunction`. Su un timeout non resta nessun output
 parziale, quindi non si sa **a quale kernel** sia morto. Con uno streaming
 incrementale della tabella questa diagnosi sarebbe stata di un minuto invece che
 impossibile. Lavoro mio, piccolo, e va fatto prima del prossimo tentativo.
+
+## item 21 — la riga 3 chiede una cosa che la riga 1 ha MISURATO dannosa (io, it.16) — DECISIONE PRESA, non escalation
+
+Controllo di fattibilità PRIMA di spendere, come impone il protocollo (una riga
+rotta sui fatti si docketa prima della spesa, non si esegue alla lettera).
+
+La clausola (a) della riga 3 chiede TRE cose insieme:
+  1. softmax in streaming (niente `scores: array<f32, ctxMax>`)
+  2. letture vec4
+  3. **KV letta una volta per gruppo GQA**
+
+La terza **è la fusione delle teste GQA**, e la riga 1 l'ha misurata **PIÙ LENTA
+sul prefill**: 2,0879 contro 1,8207 ms a ctx 6333. La ragione è la stessa che il
+goal ha già scoperto due volte: taglia il traffico KV di 4× ma scende da 256 a
+64 workgroup su 76 SM, e su questo device il collo è l'**occupancy**, non la
+banda. HANDOFF lo dice già in forma di ruling: «La riga 3 non deve adottare la
+fusione GQA "perché sul decode ha funzionato": sul prefill la misura dice il
+contrario.»
+
+**Il 6,76× non ne ha bisogno.** L'artefatto di it.2 attribuisce quel guadagno
+alla «sola softmax in streaming + vec4» — cioè alle clausole 1 e 2. La leva è
+interamente disponibile senza la 3.
+
+**DECISIONE PRESA E REGISTRATA, non domanda al PI.** Test di step 5 del
+protocollo: se non arrivasse mai una risposta, lascerei cadere la sotto-clausola
+3 citando la misura. Coincide con la mia raccomandazione ⇒ non è un'escalation,
+è una decisione da registrare. La riga 3 si esegue su (1) e (2); la (3) è
+**esclusa coi numeri**, che è esattamente la forma che il done-when del goal
+chiede per una leva scartata («ognuna in produzione o esclusa coi numeri»).
+
+Se il PI dissente, il costo del dissenso è basso: la fusione GQA si aggiunge
+dopo, ed è una modifica locale allo stesso kernel.
