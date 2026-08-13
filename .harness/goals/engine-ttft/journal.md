@@ -523,3 +523,30 @@ conformità), t6 (copertura della convenzione), t8 (bench prima/dopo). Li faccio
 io uno per volta, committando appena verificati — che è il punto dell'opzione
 (b): ogni passo sopravvive alla morte del processo, che in questa sessione ha
 già ucciso due build e tre server.
+
+## it.10 (2026-08-13, riga 2) — terza morte, e la diagnosi giusta
+
+Il terzo lancio del conductor e' morto con **un solo agente** completato. Contando
+i tre: il 1° non ha prodotto niente, il 2° (ripresa dalla cache) e' arrivato
+all'integrazione con 506 inserzioni e 66 test — quelli mergiati in `0c66fbd` — e
+il 3°, partenza da zero con spec nuova, e' morto subito.
+
+**La causa non e' il conductor: e' che un workflow in background non sopravvive
+all'uscita del processo che lo ospita.** Stessa causa dei tre server di sviluppo
+morti stasera; per quelli `setsid` ha risolto, per i workflow non esiste
+l'equivalente perche' il runtime vive dentro il processo.
+
+**E la ripresa dalla cache e' il meccanismo che fa avanzare il lavoro**: il 2°
+lancio e' arrivato lontano proprio perche' replicava il 1° istantaneamente. La
+strategia corretta non e' scegliere fra conductor e lavoro a mano, ma
+**riprendere finche' non chiude**. Ripresa lanciata (`wp3x2as00`).
+
+**Il PI aveva ragione e la mia decisione di it.8 era mal motivata**: avevo scelto
+il lavoro a mano dicendo «cosi' ogni passo sopravvive al processo», ma il lavoro
+del conductor era gia' sopravvissuto — le patch erano nell'albero e sono risultate
+verdi. Cio' che si perde a ogni morte e' la VERIFICA, che tocca a me comunque
+perche' e' seriale su GPU. Avevo pesato un costo gia' recuperato. Registrato a
+docket item 16.
+
+**Stato invariato della metrica**: TTFT a caldo fermo a **87.618 ms**. I kernel
+sono in produzione e testati; `q35gpumodel.ts` non e' ancora cablato.

@@ -1,6 +1,9 @@
 {
- "status": "stopped",
+ "status": "active",
  "session_id": "0348f2c0-1d0a-4913-93cf-ede7de3e30af",
- "updated_epoch": 1786642740,
- "updated": "2026-08-13T19:39:00+0200"
+ "next_wake_epoch": 1786654549,
+ "next_wake": "2026-08-13T22:55:49+0200",
+ "prompt": "/loop-iteration engine-ttft riga 2: raccogli l'esito della build sdd-conductor wf_baf87ff8-cd8 (seconda met\u00e0: t5 assemblatore, t3 gpulimits, t4 tolleranza del gate, t6 copertura). Verifica PRIMA DI TUTTO che q35gpumodel.ts sia davvero toccato \u2014 la build precedente ha consegnato tre task veri col portante bloccato, un esito che sembra progresso e non muove la metrica. Poi riesegui i gate a mano (tsc, vitest, ktest con BASE_URL=http://localhost:5199, argmax del golden) e misura tu il prefill sul prompt-idx 0 prima/dopo con --prefill-m 16. Se vite \u00e8 gi\u00f9, riavvialo staccato con setsid.",
+ "updated_epoch": 1786652749,
+ "updated": "2026-08-13T22:25:49+0200"
 }

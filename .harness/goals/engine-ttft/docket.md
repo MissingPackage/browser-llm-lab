@@ -508,3 +508,41 @@ prese dalle due morti:
 
 Resta mio, e lo dichiaro nel brief: ktest e bench alla fine, seriali, e la
 verifica non si delega.
+
+## item 16 — TRE morti dello stesso veicolo, e la diagnosi vera non e' il conductor (io, it.10)
+
+Terzo lancio di `sdd-conductor` sulla riga 2 (`wf_baf87ff8-cd8`), terza morte
+senza record di completamento. Il conteggio ora e':
+
+| lancio | esito | prodotto |
+|---|---|---|
+| 1° `wf_a2d320d5-ce3` | morto in volo | niente nell'albero |
+| 2° (ripresa dalla cache) | morto in volo | **506 inserzioni applicate**, 3 task, 66 test — recuperate e mergiate (`0c66fbd`) |
+| 3° `wf_baf87ff8-cd8` | morto in volo | **1 agente** completato |
+
+**La diagnosi non e' «il conductor non funziona».** E' che un workflow lungo in
+background **non sopravvive all'uscita del processo che lo ospita** — la stessa
+causa che in questa sessione ha ucciso anche tre server di sviluppo, e che per
+quelli si e' risolta con `setsid`. Per i workflow non c'e' un equivalente: il
+runtime vive dentro il processo.
+
+**E la ripresa dalla cache E' il meccanismo che fa avanzare il lavoro**: il 2°
+lancio e' arrivato all'integrazione proprio perche' replicava istantaneamente il
+1°. Il 3° e' morto presto perche' era una partenza da zero (spec nuova, cache
+vuota). Quindi la strategia corretta non e' «scegliere fra conductor e lavoro a
+mano», ma **riprendere finche' non chiude**: ogni ripresa parte piu' avanti.
+
+**Correzione a una mia decisione, e la registro perche' il PI ha avuto ragione.**
+In it.8 avevo deciso di procedere a mano, motivandolo con «cosi' ogni passo
+sopravvive al processo». Il PI ha obiettato: «non siamo piu' efficaci con
+sdd-conductor?». Aveva ragione, e il mio ragionamento era piu' debole di come
+l'avevo presentato — **il lavoro del conductor era gia' sopravvissuto** (le patch
+erano nell'albero, le ho recuperate dal ramo e sono verdi); cio' che si e' perso
+e' la VERIFICA, che tocca comunque a me perche' e' seriale su GPU. Avevo dato
+peso a un costo che avevo gia' recuperato.
+
+**Nessun ruling richiesto**: la strategia e' decisa (riprendere dalla cache
+finche' non chiude, verificare io alla fine) ed e' in corso. Questo item esiste
+perche' il prossimo che vede tre fallimenti di fila sappia che la causa e' il
+ciclo di vita del processo, non lo strumento — e che il rimedio e' la ripresa,
+non il cambio di veicolo.
