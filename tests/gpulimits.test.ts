@@ -6,7 +6,12 @@
 // motore ha già sbagliato due volte proprio perché i due vivevano in file
 // diversi senza niente in mezzo (prima costanti difensive inventate, poi il
 // massimo dell'adapter chiesto senza consumatore).
-import { attnDecodeWorkgroupStorageBytes } from "../src/engine/kernels/wgsl";
+import {
+  attnDecodeWgsl, attnDecodeWorkgroupStorageBytes, attnPrefillChunkWgsl,
+  prefillGemmWorkgroupStorageBytes,
+} from "../src/engine/kernels/wgsl";
+import { PREFILL_M, PREFILL_M_DENSE05B } from "../src/engine/prefillplan";
+import { GLM_PREFILL_M } from "../src/engine/moeprefillplan";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -289,5 +294,222 @@ describe("grantedLimits", () => {
     const g = grantedLimits(dev);
     expect(g.maxComputeInvocationsPerWorkgroup).toBe(256);
     expect(g.maxStorageBufferBindingSize).toBe(SPEC_DEFAULTS.maxStorageBufferBindingSize);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Il GEMM multi-riga del prefill (goal engine-ttft, riga 2) e il debito che
+// resta scoperto accanto a lui.
+//
+// La riga 2 del goal porta in produzione `prefillGemmQ4SplitK*`: un kernel che
+// tiene le attivazioni in memoria di gruppo, quindi un consumatore NUOVO di
+// `maxComputeWorkgroupStorageSize`. Qui si asserisce che venga DICHIARATO — col
+// suo valore, DENTRO il `value` che si negozia col device e non solo nel testo
+// del `consumer` — come ogni altro requisito di questo file.
+//
+// Il numero non si ricopia: viene da `prefillGemmWorkgroupStorageBytes`,
+// importata dal file del kernel. Se cambia la tilatura cambia il numero
+// dichiarato — e non il test.
+// ---------------------------------------------------------------------------
+
+// I due kernel dell'attenzione che questo modulo NON dichiara (vedi il describe
+// del debito, in fondo). Le loro formule non si ricopiano nemmeno qui: si
+// LEGGONO dal WGSL che i generatori producono, sommando le `array<f32, N>` di
+// memoria di gruppo. `attnDecodeLegacyWgsl` e' privata e per quei due kernel non
+// esiste una formula esportata come `attnDecodeWorkgroupStorageBytes`; scriverla
+// vuol dire toccare wgsl.ts, che e' fuori da questo task e va con le righe 3-4
+// di PHASES. Fino ad allora il testo generato e' la sorgente di verita' piu'
+// vicina leggibile da qui: se domani uno dei due guadagna o perde un
+// `var<workgroup>`, il pareggio e il tetto si spostano QUI invece di restare
+// asseriti su numeri vecchi.
+const ATTN = { nHead: 16, nKvHead: 2, headDim: 256 };
+const workgroupF32Bytes = (code: string, decls: number): number => {
+  const found = [...code.matchAll(/var<workgroup>\s+\w+\s*:\s*array<f32,\s*(\d+)>/g)];
+  // il conteggio e' parte dell'asserzione: se una dichiarazione cambia tipo
+  // (vec4<f32>, u32, ...) la somma non deve poter calare in silenzio
+  expect(found.length, "var<workgroup> array<f32> nel WGSL generato").toBe(decls);
+  return found.reduce((s, m) => s + Number(m[1]) * 4, 0);
+};
+/** ramo `batch` legacy di attnDecodeWgsl (q35gpumodel): scores[ctxMax] + red[64]. */
+const legacyBatchBytes = (ctxMax: number): number =>
+  workgroupF32Bytes(attnDecodeWgsl({ ...ATTN, ctxMax, batch: true }), 2);
+/** attnPrefillChunkWgsl a headDim 256: qh[headDim] + scores[ctxMax] + red[64]. */
+const prefillChunkAttnBytes = (ctxMax: number): number =>
+  workgroupF32Bytes(attnPrefillChunkWgsl({ ...ATTN, ctxMax, mMax: PREFILL_M }), 3);
+
+describe("workgroup storage: il GEMM multi-riga del prefill", () => {
+  const storageNeed = (o: Parameters<typeof engineNeeds>[0]) =>
+    engineNeeds(o).find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
+  // La shape che la riga 1 del goal ha misurato (K2560xN9216, 4 fette). NON e'
+  // la shape a decidere il fabbisogno — solo M — e il primo test lo dimostra:
+  // per questo il test se la puo' scrivere qui senza condividerla con
+  // `gpulimits.ts`.
+  const GEMM = (M: number) => ({ kind: "q4_0" as const, K: 2560, N: 9216, M, splits: 4 });
+  // il termine come lo dichiara il consumer: LETTO dal testo, non dedotto
+  const gemmTerm = (consumer: string): { M: number; via: string; bytes: number } => {
+    const m = /prefillGemm splitK M=(\d+) \(([^)]+)\) = (\d+) B/.exec(consumer);
+    if (!m) throw new Error(`il consumer non nomina il GEMM del prefill: ${consumer}`);
+    return { M: Number(m[1]), via: m[2], bytes: Number(m[3]) };
+  };
+
+  it("il fabbisogno dipende SOLO da M: la shape scelta da gpulimits non conta", () => {
+    // e' cio' che autorizza gpulimits a passare una shape valida qualunque
+    for (const via of ["idot", "f32"] as const) {
+      expect(prefillGemmWorkgroupStorageBytes(GEMM(16), via), via)
+        .toBe(prefillGemmWorkgroupStorageBytes({ kind: "q4_0", K: 64, N: 1, M: 16, splits: 1 }, via));
+    }
+  });
+
+  it("il need NOMINA il GEMM del prefill col valore della formula, e segue M", () => {
+    const need = storageNeed({ ctxMax: 6400 });
+    expect(need.consumer).toContain("prefillGemm");
+    expect(gemmTerm(need.consumer)).toEqual({
+      M: PREFILL_M, via: "peggiore fra idot e f32",
+      bytes: prefillGemmWorkgroupStorageBytes(GEMM(PREFILL_M)),
+    });
+    // se si cambia M il numero dichiarato cambia DI CONSEGUENZA: viene dalla
+    // formula importata, non da una costante ricopiata qui accanto
+    for (const M of [8, 16, 32, 64]) {
+      const t = gemmTerm(storageNeed({ ctxMax: 6400, prefillM: M }).consumer);
+      expect(t.M, `M=${M}`).toBe(M);
+      expect(t.bytes, `M=${M}`).toBe(prefillGemmWorkgroupStorageBytes(GEMM(M)));
+    }
+    // ...e il legame e' quello lineare del kernel, non una coincidenza a M=16
+    expect(gemmTerm(storageNeed({ ctxMax: 6400, prefillM: 32 }).consumer).bytes)
+      .toBe(2 * gemmTerm(storageNeed({ ctxMax: 6400, prefillM: 16 }).consumer).bytes);
+  });
+
+  it("a M=16: 1.152 B via idot, 4.096 B via f32, e senza dirlo si dichiara il peggiore", () => {
+    expect(prefillGemmWorkgroupStorageBytes(GEMM(16), "idot")).toBe(1_152);
+    expect(prefillGemmWorkgroupStorageBytes(GEMM(16), "f32")).toBe(4_096);
+    // etichette asserite per UGUAGLIANZA: `toContain("idot")` non
+    // discriminerebbe niente, perche' l'etichetta di default ("peggiore fra
+    // idot e f32") contiene entrambi i nomi.
+    const idot = gemmTerm(storageNeed({ ctxMax: 6400, prefillM: 16, prefillGemmIdot: true }).consumer);
+    expect(idot).toEqual({ M: 16, via: "via idot", bytes: 1_152 });
+    const f32 = gemmTerm(storageNeed({ ctxMax: 6400, prefillM: 16, prefillGemmIdot: false }).consumer);
+    expect(f32).toEqual({ M: 16, via: "via f32", bytes: 4_096 });
+    // Senza `prefillGemmIdot` si dichiara il PEGGIORE: quale via giri lo decide
+    // la language feature a runtime, e chi negozia i limiti lo fa PRIMA di
+    // saperlo. Chiedere 1.152 e ritrovarsi sulla via f32 = pipeline invalida su
+    // un device che concede esattamente il richiesto.
+    expect(gemmTerm(storageNeed({ ctxMax: 6400, prefillM: 16 }).consumer))
+      .toEqual({ M: 16, via: "peggiore fra idot e f32", bytes: 4_096 });
+  });
+
+  it("il termine e' COSTANTE in ctxMax", () => {
+    for (const idot of [undefined, true, false]) {
+      const vals = [525, 4096, 8192, 16384].map((ctxMax) =>
+        gemmTerm(storageNeed({ ctxMax, prefillGemmIdot: idot }).consumer).bytes);
+      expect(new Set(vals).size, `prefillGemmIdot=${idot}`).toBe(1);
+    }
+  });
+
+  // IL TERMINE STA NEL `value`, NON SOLO NEL TESTO. `limitsFor` e
+  // `negotiateLimits` leggono `need.value` e non guardano MAI il `consumer`: un
+  // termine che comparisse solo nella stringa sarebbe una dichiarazione che il
+  // device non vede. A M=16 le due forme non si distinguono (4.096 < 30.848: il
+  // max non cambia), quindi si SONDA l'aritmetica a un M in cui il GEMM domina.
+  // Se il termine uscisse dal `Math.max`, questo test cadrebbe da solo.
+  it("il termine entra nel value negoziato, non solo nel consumer", () => {
+    const M = 256; // sonda: 256·16·16 = 65.536 B > 30.848 del path fuso
+    expect(prefillGemmWorkgroupStorageBytes(GEMM(M))).toBe(65_536);
+    expect(storageNeed({ ctxMax: 6400, prefillM: M }).value)
+      .toBe(prefillGemmWorkgroupStorageBytes(GEMM(M)));
+    // ...e a ogni M il value e' esattamente il maggiore fra il path fuso e il
+    // termine dichiarato: ne' sotto (dichiarazione muta) ne' sopra (requisito
+    // gonfiato). 121 e' il primo M in cui il GEMM supera i 30.848.
+    for (const M2 of [8, 16, 32, 121]) {
+      const need = storageNeed({ ctxMax: 6400, prefillM: M2 });
+      expect(need.value, `M=${M2}`).toBe(
+        Math.max(QWEN_WORKGROUP_STORAGE_BYTES, gemmTerm(need.consumer).bytes));
+    }
+    expect(prefillGemmWorkgroupStorageBytes(GEMM(121))).toBeGreaterThan(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(prefillGemmWorkgroupStorageBytes(GEMM(120))).toBeLessThan(QWEN_WORKGROUP_STORAGE_BYTES);
+  });
+
+  // NON-REGRESSIONE sul percorso di prodotto: dichiarare un consumatore in piu'
+  // non deve alzare di un byte cio' che si chiede al device. Uguaglianza, non
+  // `<=`: se un domani il totale scende, questo test va aggiornato di
+  // proposito, come ogni altro numero pinnato di questo file.
+  it("a ctxMax 6400 il valore complessivo resta 30.848 B", () => {
+    for (const idot of [undefined, true, false]) {
+      expect(storageNeed({ ctxMax: 6400, prefillGemmIdot: idot }).value, `prefillGemmIdot=${idot}`)
+        .toBe(30_848);
+    }
+    expect(storageNeed({ ctxMax: 6400 }).value).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+    // il GEMM del prefill sta DENTRO cio' che si chiedeva gia': e' dichiarato
+    // perche' esiste, non perche' vince
+    expect(gemmTerm(storageNeed({ ctxMax: 6400 }).consumer).bytes)
+      .toBeLessThan(QWEN_WORKGROUP_STORAGE_BYTES);
+  });
+
+  // L'M di DEFAULT e' `PREFILL_M` (lo impone il contratto di questo task), ma
+  // nessun percorso di prodotto legge oggi quella costante: il prefill denso
+  // gira a `PREFILL_M_DENSE05B` e quello GLM a `GLM_PREFILL_M`. Finche' il
+  // default coincide col piu' grande dei due, dichiara abbastanza per entrambi;
+  // se un domani uno dei due lo supera, gpulimits dichiarerebbe un M che
+  // nessuno esegue — e si scopre qui, non in validazione di pipeline.
+  it("il default PREFILL_M copre l'M dei percorsi di prodotto", () => {
+    expect(Math.max(PREFILL_M_DENSE05B, GLM_PREFILL_M)).toBe(PREFILL_M);
+  });
+
+  // Il rapporto con la sotto-dichiarazione legacy scritto come ASSERZIONE e non
+  // come commento: il termine che questo file NON dichiara sta un ordine di
+  // grandezza sopra quello che dichiara. E' la misura del debito.
+  it("il termine non dichiarato del ramo legacy vale >= 6x quello nuovo (>= 22x via idot)", () => {
+    const legacyBatch = legacyBatchBytes(6400);
+    expect(legacyBatch).toBe(25_856); // 4·6400 + 256
+    expect(legacyBatch / 4_096).toBeGreaterThanOrEqual(6);
+    expect(legacyBatch / 1_152).toBeGreaterThanOrEqual(22);
+  });
+});
+
+// IL DEBITO, INCHIODATO. Non un promemoria: un sensore.
+//
+// Il ramo `batch` legacy di `attnDecodeWgsl` (q35gpumodel) chiede
+// `4·ctxMax + 256` B di memoria di gruppo, e questo file NON lo dichiara. La
+// scelta e' deliberata e ha una data di scadenza: la riga 3 di PHASES del goal
+// engine-ttft ("Attenzione a chunk del prefill") toglie quel ramo dal legacy e
+// rende il fabbisogno costante; la riga 4 lo dichiara. Dichiararlo OGGI
+// alzerebbe il requisito HARD sopra i 49.152 B che il device di riferimento
+// concede, e `limitsFor` fallirebbe dove oggi passa.
+//
+// Questo test cade in entrambe le direzioni: se qualcuno dichiara il termine
+// senza toccare il test, e se i numeri di pareggio cambiano sotto i piedi (le
+// due formule sono LETTE dal WGSL generato, non ricopiate).
+describe("debito: il ramo batch legacy dell'attenzione non e' contato", () => {
+  const CHIUSO_DA = "lo chiude la riga 3 di PHASES (engine-ttft): attenzione a chunk del prefill, " +
+    "`attnDecodeWgsl` con batch smette di instradare al legacy; la riga 4 lo dichiara";
+
+  it("il ctxMax di pareggio col termine fuso e' 7.392, e a 12.224 sfonda i 49.152", () => {
+    // PAREGGIO: sotto quel contesto la sotto-dichiarazione non morde, perche'
+    // il termine fuso (che SI dichiara) copre gia' quello che non si dichiara.
+    // Il primo dei due a pareggiare e' l'attenzione a chunk del prefill.
+    expect(prefillChunkAttnBytes(7_392)).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(prefillChunkAttnBytes(7_393)).toBeGreaterThan(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(legacyBatchBytes(7_648)).toBe(QWEN_WORKGROUP_STORAGE_BYTES); // il ramo batch, poco dopo
+    // TETTO: oltre 12.224 dichiarare il ramo legacy renderebbe il requisito
+    // HARD non servibile sul device di riferimento — ed e' la ragione per cui
+    // il debito resta debito finche' la riga 3 non cambia il kernel.
+    expect(legacyBatchBytes(12_224)).toBe(ADAPTER_4090.maxComputeWorkgroupStorageSize);
+    expect(legacyBatchBytes(12_225)).toBeGreaterThan(ADAPTER_4090.maxComputeWorkgroupStorageSize);
+  });
+
+  it("SENSORE: oggi non e' dichiarato, e per questo limitsFor passa dove fallirebbe", () => {
+    const ctxMax = 12_225; // il primo contesto in cui dichiararlo sfonderebbe
+    const legacy = legacyBatchBytes(ctxMax);
+    const needs = engineNeeds({ ctxMax, mlaAttention: false });
+    const storage = needs.find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
+    expect(storage.value, CHIUSO_DA).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(storage.value, CHIUSO_DA).toBeLessThan(legacy);
+    expect(storage.consumer, CHIUSO_DA).not.toMatch(/legacy/i);
+    // il motore negozia e ottiene...
+    expect(() => limitsFor(fakeAdapter(ADAPTER_4090), needs), CHIUSO_DA).not.toThrow();
+    // ...mentre lo STESSO requisito, dichiarato, non sarebbe servibile
+    expect(() => limitsFor(fakeAdapter(ADAPTER_4090), [{
+      limit: "maxComputeWorkgroupStorageSize", value: legacy, hard: true,
+      consumer: "ramo batch legacy di attnDecodeWgsl (q35gpumodel)",
+    }]), CHIUSO_DA).toThrow(UnmetLimitError);
   });
 });
