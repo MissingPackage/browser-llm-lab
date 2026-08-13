@@ -172,14 +172,18 @@ GLM-4.7-Flash resta residency-bound
   (2026-08-13, tutte exit 144 = ucciso da segnale, non crash). Evidenza: il log
   si ferma su «ready» senza una riga di errore, nessun OOM in `dmesg`, 19 GB
   liberi. L'ipotesi — il supervisore dei comandi in background lo reap al confine
-  di turno — è **CONFERMATA dal test discriminante**: i tre morti erano tutti a
-  confine di turno; avviato staccato in una sessione propria, ha superato il
-  confine successivo ed è ancora vivo. **Avviarlo sempre così:**
+  di turno — è **CONFERMATA per i confini di turno**: i tre morti erano tutti lì, e
+  avviato staccato ha superato il confine successivo (verificato con `curl`).
+  **NON sopravvive però all'uscita del processo Claude Code**: alla ripresa di
+  sessione era di nuovo giù. `setsid` sposta il problema, non lo toglie.
+  **Avviarlo così, e ri-avviarlo a ogni ripresa di sessione:**
 
       setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
 
-  Verificare comunque PRIMA di ogni run che costa GPU:
-  `curl -s -o /dev/null -w "%{http_code}" http://localhost:5199/<entry>.html`.
+  Verificare comunque PRIMA di ogni run che costa GPU, **con `curl` e non con
+  `pgrep`**: `curl -s -o /dev/null -w "%{http_code}" http://localhost:5199/<entry>.html`.
+  `pgrep -f "vite --port 5199"` FA MATCH SULLA PROPRIA RIGA DI COMANDO e risponde
+  sempre "vivo" — ci sono cascata il 2026-08-13, dichiarando vivo un server morto.
   Il gate dei kernel almeno NOMINA la causa (exit 2, «nessun server su …»); i
   runner di bench no, e per loro il sintomo resta un fallimento di caricamento
   pagina, cioè una causa travestita.
