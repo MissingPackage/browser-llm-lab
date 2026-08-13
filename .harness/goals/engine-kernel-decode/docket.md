@@ -155,3 +155,19 @@ Vale anche per gli altri runner: `q35-bench-run.mjs` ha lo stesso schema
 funzionato perche' li' l'`out` di default e' gia' assoluto e il mio veniva usato
 tale e quale. Due runner della stessa famiglia che trattano lo stesso flag in
 modo diverso: e' quello il difetto, piu' del path.
+
+## item 6 — due call-site GLM nel ktest non sono coperti dal freeze (censimento it.8)
+
+Il censimento di copertura (142/142, 100%) ha segnalato che
+`ktest.worker.ts:1514` e `:1516` sono siti GLM protetti SOLO dalla convenzione:
+il freeze sha256 del testo generato copre il down `scaledAccum` di riga 1519, non
+loro. Oggi nessuno passa `vec4Rows2` li', quindi sono conformi — ma la garanzia
+e' "nessuno lo fa", non "il test lo impedisce".
+
+Caveat aggiuntivo del censimento, da tenere se un domani qualcuno volesse
+adottarli: i loro binding sono SOTTO-RANGE di uno slab (offset+size), quindi la
+size andrebbe verificata multipla di 16 B prima di poterli bindare come
+`array<vec4<u32>>`.
+
+Lavoro mio, non un ruling: estendere il freeze a quei due siti. Non fatto ora
+perche' tocca il ktest di GLM a goal quasi chiuso e il rischio non lo giustifica.

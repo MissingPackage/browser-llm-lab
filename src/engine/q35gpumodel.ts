@@ -708,8 +708,16 @@ export async function createQ35GpuModel(
   };
   const gemvB = (w: { qs: GPUBuffer; scales: GPUBuffer; k: number; n: number; kind?: "q4_0" | "q4_1" | "q8_0" }, src: GPUBuffer, dst: GPUBuffer, kind?: "q4_0" | "q4_1" | "q8_0"): void => {
     const kk = kind ?? w.kind ?? "q4_0";
-    const [gx, gy] = gemvGrid(w.n);
-    pushB(gemvQuantWgsl({ kind: kk, K: w.k, N: w.n, hasBias: false, batch: true }), [w.qs, w.scales, src, dst], [gx, gy, M_MAX]);
+    // `batch` NON e' ammesso dalla forma a 2 righe (fase 0 non l'ha misurata):
+    // qui il kernel resta quello di prima, byte per byte. La griglia pero' si
+    // deriva lo stesso da `gemvQuantGrid` invece che da `gemvGrid` a mano —
+    // oggi danno lo stesso numero (1 riga per workgroup sul batch), ma un TERZO
+    // posto che decide le righe-per-workgroup e' esattamente la forma del bug
+    // trovato in it.7, dove due posti che decidevano la stessa cosa la
+    // decidevano diversamente. Uno solo, e non si ripresenta.
+    const opts = { kind: kk, K: w.k, N: w.n, hasBias: false, batch: true };
+    const [gx, gy] = gemvQuantGrid(opts);
+    pushB(gemvQuantWgsl(opts), [w.qs, w.scales, src, dst], [gx, gy, M_MAX]);
   };
 
   /**

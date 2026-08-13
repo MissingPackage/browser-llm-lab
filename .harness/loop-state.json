@@ -1,11 +1,9 @@
 {
  "status": "active",
  "session_id": "254166be-837c-499f-90ee-763ba9bd54a1",
- "next_wake_epoch": 1786593039,
- "next_wake": "2026-08-13T05:50:39+0200",
+ "next_wake_epoch": 1786596447,
+ "next_wake": "2026-08-13T06:47:27+0200",
  "prompt": "/loop /product-loop",
- "updated_epoch": 1786591239,
- "updated": "2026-08-13T05:20:39+0200",
- "watchdog_attempt_epoch": 1786594170,
- "watchdog_attempts": 1
+ "updated_epoch": 1786595547,
+ "updated": "2026-08-13T06:32:27+0200"
 }
