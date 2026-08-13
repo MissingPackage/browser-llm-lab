@@ -375,7 +375,7 @@ describe("[6] ACCETTAZIONE 2: il traffico pesi del prefill del 4B, prima e dopo"
     console.log(
       `[ACCETTAZIONE 2] Qwen3.5-4B, M=${M}: legacy ${(before / 1e9).toFixed(3)} GB → piano ` +
       `${(after / 1e9).toFixed(3)} GB = ${ratio.toFixed(4)}x sull'inventario per-layer INTERO ` +
-      `(atteso dal done-when ~16x, teorico massimo M=${M}); ` +
+      `(barra del ruling PI 2026-08-13: >= 5,5x sull'inventario INTERO; teorico massimo M=${M}); ` +
       `copertura ${covered.length}/${sites.length} siti = ` +
       `${(100 * onePass(covered) / onePass(sites)).toFixed(3)}% dei byte; ` +
       `${exceptions.length} eccezioni = ${(100 * onePass(excepted) / onePass(sites)).toFixed(3)}% dei byte`);
@@ -411,21 +411,25 @@ describe("[6] ACCETTAZIONE 2: il traffico pesi del prefill del 4B, prima e dopo"
     expect(ratio).toBeCloseTo(5.8593, 4);
   });
 
-  it("[6d] DONE-WHEN (6) alla lettera NON e' soddisfatto: 5,86x < 8 sull'inventario intero", () => {
-    // QUESTO TEST ESISTE PER NON NASCONDERE UNA DEVIAZIONE. Il contratto chiede
-    // sum(legacy)/sum(dispatches) >= 8 sulla lista pinnata; il valore reale e'
-    // 5,86. Non e' un errore di calcolo ne' un difetto del piano: e' la
+  it("[6d] 5,86x sta fra la barra del ruling (5,5) e il testo originale del contratto (8)", () => {
+    // QUESTO TEST ESISTE PER NON NASCONDERE UNA DEVIAZIONE. Il contratto NASCEVA
+    // chiedendo sum(legacy)/sum(dispatches) >= 8 sulla lista pinnata; il valore
+    // reale e' 5,86. Non e' un errore di calcolo ne' un difetto del piano: e' la
     // COPERTURA. Le 24 `ssm_out` Q5_K e le 4 `ffn_down` Q4_1 sono l'11,54% dei
     // byte per-layer, restano legacy e quindi si pagano M volte ANCHE dopo.
     //   rapporto = M·(F+L)/(F+M·L), con L/(F+L) = 0,11537 ⇒ 5,859
     // Per arrivare a 8 servirebbe copertura >= 93,3% dei byte, cioe' una forma
     // multi-riga per Q5_K e Q4_1 — che nessuno ha mai misurato: inventarla per
     // far passare un'asserzione sarebbe il modo peggiore di chiudere la riga.
-    // Il gate del goal va quindi riscritto dal PI (>= 8 sui byte COPERTI, che
-    // e' cio' che la riga 2 controlla) oppure spostato a una riga che misuri i
-    // K-quant. Finche' non lo fa, il numero sta qui, in rosso su bianco.
-    // Se un giorno la copertura sale, questo test fallisce e va cancellato con
-    // la sua ragione: e' il promemoria, non un lasciapassare.
+    // RULING DEL PI, 2026-08-13: la barra scende da >= 8 a **>= 5,5
+    // sull'inventario per-layer INTERO**, e il residuo (le 24 Q5_K + 4 Q4_1)
+    // diventa scope del goal K-quant. Il >= 8 era irraggiungibile a qualunque M
+    // praticabile: tetto 8,67x, servirebbe M >= 92. Quindi 5,8593 PASSA la
+    // barra vigente — questo test non registra piu' un fallimento, registra la
+    // DISTANZA fra il testo originale del contratto e la barra che l'ha
+    // sostituito, perche' chi rilegge il goal non deduca il 5,86 dal 16 del
+    // banco. Se un giorno la copertura sale, questo test fallisce e va
+    // cancellato con la sua ragione: e' il promemoria, non un lasciapassare.
     const sites = sites4B();
     const { dispatches, legacy } = prefillPlanDispatches({ sites, M, idot: true });
     const ratio = sum(legacy) / sum(dispatches);
