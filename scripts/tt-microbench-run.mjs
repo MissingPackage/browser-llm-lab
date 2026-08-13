@@ -62,85 +62,103 @@ const plan = await page.evaluate(() => window.__sweepPlan ?? null);
 // -------------------------------------------------------------------------
 let sweep = null;
 if (status === "done" && plan) {
-  console.log("[tt] spazzata dei limiti concessi:", plan.requestedLimits.join(", "));
+  console.log("[tt] spazzata dei limiti concessi:", plan.requestedLimits.join(", "),
+    "— forme:", plan.forms.map((f) => `${f.variant} (${f.workgroupStorageBytes} B)`).join(", "));
   sweep = await page.evaluate(async ({ plan, ops }) => {
-    const adapter = await navigator.gpu.requestAdapter();
-    const points = [];
+    const mk = async (device, code, label) => {
+      device.pushErrorScope("validation");
+      const module = device.createShaderModule({ code, label });
+      const info = await module.getCompilationInfo();
+      const errs = info.messages.filter((m) => m.type === "error");
+      if (errs.length) {
+        await device.popErrorScope();
+        return { pipeline: null, error: errs.map((e) => `${e.lineNum}: ${e.message}`).join(" | ").slice(0, 300) };
+      }
+      let pipeline = null;
+      let err = null;
+      try {
+        pipeline = await device.createComputePipelineAsync({ layout: "auto", compute: { module, entryPoint: "main" } });
+      } catch (e) { err = String(e).slice(0, 300); }
+      const scoped = await device.popErrorScope();
+      if (scoped) return { pipeline: null, error: scoped.message.slice(0, 300) };
+      if (err) return { pipeline: null, error: err };
+      return { pipeline, error: null };
+    };
+
+    // una TACCA = un device. `requestDevice` CONSUMA l'adapter (Dawn:
+    // Adapter.cpp:328), quindi ogni tacca chiede il suo adapter: un adapter solo
+    // fa fallire tutte le tacche dopo la prima, ed e' esattamente cosi' che la
+    // prima esecuzione di questa sonda e' andata persa.
+    const sweeps = plan.forms.map((f) => ({
+      variant: f.variant, shape: { K: plan.K, N: plan.N }, M: plan.M,
+      workgroupStorageBytes: f.workgroupStorageBytes,
+      legacyAttnWorkgroupStorageBytes: plan.attnLegacy.workgroupStorageBytes,
+      legacyAttnCtxMax: plan.attnLegacy.ctxMax,
+      points: [],
+    }));
     const live = [];
     for (const L of plan.requestedLimits) {
-      const pt = {
-        requestedWorkgroupStorage: L, grantedWorkgroupStorage: null, deviceCreated: false,
-        pipelineCreated: false, error: null, msPerOpP50: null, samples: [],
-        note: "", legacyAttnPipelineCreated: null, legacyAttnError: null,
-      };
+      const adapter = await navigator.gpu.requestAdapter();
       let device = null;
+      let devErr = null;
+      let granted = null;
       try {
-        device = await adapter.requestDevice({
-          requiredLimits: { maxComputeWorkgroupStorageSize: L },
-        });
-        pt.deviceCreated = true;
-        pt.grantedWorkgroupStorage = device.limits.maxComputeWorkgroupStorageSize;
-      } catch (e) {
-        pt.error = `requestDevice: ${String(e).slice(0, 300)}`;
-        points.push(pt);
-        continue;
-      }
-      device.addEventListener("uncapturederror", (e) => console.error("[tt-sweep][gpu-error]", e.error.message.slice(0, 300)));
+        device = await adapter.requestDevice({ requiredLimits: { maxComputeWorkgroupStorageSize: L } });
+        granted = device.limits.maxComputeWorkgroupStorageSize;
+        device.addEventListener("uncapturederror", (e) => console.error("[tt-sweep][gpu-error]", e.error.message.slice(0, 300)));
+      } catch (e) { devErr = `requestDevice: ${String(e).slice(0, 300)}`; }
 
-      // 1) la forma vincente compila e gira a questo tetto?
-      const mk = async (code, label) => {
-        device.pushErrorScope("validation");
-        const module = device.createShaderModule({ code, label });
-        const info = await module.getCompilationInfo();
-        const errs = info.messages.filter((m) => m.type === "error");
-        if (errs.length) {
-          await device.popErrorScope();
-          return { pipeline: null, error: errs.map((e) => `${e.lineNum}: ${e.message}`).join(" | ").slice(0, 300) };
+      let legacy = { pipeline: null, error: devErr };
+      if (device) legacy = await mk(device, plan.attnLegacy.wgsl, "attn-legacy");
+
+      for (let fi = 0; fi < plan.forms.length; fi++) {
+        const f = plan.forms[fi];
+        const pt = {
+          requestedWorkgroupStorage: L, grantedWorkgroupStorage: granted, deviceCreated: device !== null,
+          pipelineCreated: false, error: devErr, msPerOpP50: null, samples: [],
+          legacyAttnPipelineCreated: device ? legacy.pipeline !== null : null,
+          legacyAttnError: legacy.error,
+          note: `forma '${f.variant}' K${plan.K}xN${plan.N} M${plan.M}, ${f.workgroupStorageBytes} B di workgroup storage, ${ops} dispatch per campione, timing CPU (onSubmittedWorkDone)`,
+        };
+        sweeps[fi].points.push(pt);
+        if (!device) continue;
+        const r = await mk(device, f.wgsl, `gemm-${f.variant}`);
+        if (!r.pipeline) {
+          pt.error = `pipeline: ${r.error}`;
+          continue;
         }
-        let pipeline = null;
-        let err = null;
-        try {
-          pipeline = await device.createComputePipelineAsync({ layout: "auto", compute: { module, entryPoint: "main" } });
-        } catch (e) { err = String(e).slice(0, 300); }
-        const scoped = await device.popErrorScope();
-        if (scoped) return { pipeline: null, error: scoped.message.slice(0, 300) };
-        if (err) return { pipeline: null, error: err };
-        return { pipeline, error: null };
-      };
-
-      const legacy = await mk(plan.attnLegacy.wgsl, "attn-legacy");
-      pt.legacyAttnPipelineCreated = legacy.pipeline !== null;
-      pt.legacyAttnError = legacy.error;
-
-      const g = plan.gemm;
-      const r = await mk(g.wgsl, "gemm-regs");
-      if (!r.pipeline) {
-        pt.error = `pipeline: ${r.error}`;
-        pt.note = `la forma '${g.variant}' (${g.workgroupStorageBytes} B di workgroup storage) non crea la pipeline a ${L} B concessi`;
-        points.push(pt);
-        device.destroy();
-        continue;
+        let combine = null;
+        if (f.combineWgsl) {
+          combine = await mk(device, f.combineWgsl, `combine-${f.variant}`);
+          if (!combine.pipeline) { pt.error = `combine: ${combine.error}`; continue; }
+        }
+        pt.pipelineCreated = true;
+        const U = GPUBufferUsage.STORAGE;
+        const qs = device.createBuffer({ size: plan.qsBytes, usage: U });
+        const sc = device.createBuffer({ size: plan.scalesBytes, usage: U });
+        const x = device.createBuffer({ size: plan.xBytes, usage: U });
+        const y = device.createBuffer({ size: plan.yBytes, usage: U });
+        const part = combine ? device.createBuffer({ size: f.partBytes, usage: U }) : null;
+        const bg = device.createBindGroup({
+          layout: r.pipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: qs } }, { binding: 1, resource: { buffer: sc } },
+            { binding: 2, resource: { buffer: x } }, { binding: 3, resource: { buffer: part ?? y } },
+          ],
+        });
+        const cbg = combine ? device.createBindGroup({
+          layout: combine.pipeline.getBindGroupLayout(0),
+          entries: [{ binding: 0, resource: { buffer: part } }, { binding: 1, resource: { buffer: y } }],
+        }) : null;
+        live.push({
+          pt, device, pipeline: r.pipeline, bg, gx: f.gx, gy: f.gy,
+          combine: combine ? combine.pipeline : null, cbg, cgx: f.combineGx,
+        });
       }
-      pt.pipelineCreated = true;
-      const U = GPUBufferUsage.STORAGE;
-      const qs = device.createBuffer({ size: g.qsBytes, usage: U });
-      const sc = device.createBuffer({ size: g.scalesBytes, usage: U });
-      const x = device.createBuffer({ size: g.xBytes, usage: U });
-      const y = device.createBuffer({ size: g.yBytes, usage: U });
-      const bg = device.createBindGroup({
-        layout: r.pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: qs } }, { binding: 1, resource: { buffer: sc } },
-          { binding: 2, resource: { buffer: x } }, { binding: 3, resource: { buffer: y } },
-        ],
-      });
-      pt.note = `forma '${g.variant}' K${g.K}xN${g.N} M${g.M}, ${g.workgroupStorageBytes} B di workgroup storage, ${ops} dispatch per campione, timing CPU (onSubmittedWorkDone)`;
-      live.push({ pt, device, pipeline: r.pipeline, bg, gx: g.gx, gy: g.gy });
-      points.push(pt);
     }
 
-    // esecuzione INTERLEAVATA fra i device: la deriva DVFS non deve coincidere
-    // con l'ordine dei tetti concessi.
+    // esecuzione INTERLEAVATA fra device e forme: la deriva DVFS non deve
+    // coincidere con l'ordine dei tetti concessi.
     const WARM = 3;
     const REPS = 10;
     for (let rep = 0; rep < WARM + REPS; rep++) {
@@ -151,6 +169,11 @@ if (status === "done" && plan) {
           pass.setPipeline(l.pipeline);
           pass.setBindGroup(0, l.bg);
           pass.dispatchWorkgroups(l.gx, l.gy, 1);
+          if (l.combine) {
+            pass.setPipeline(l.combine);
+            pass.setBindGroup(0, l.cbg);
+            pass.dispatchWorkgroups(l.cgx, 1, 1);
+          }
         }
         pass.end();
         const t0 = performance.now();
@@ -160,20 +183,14 @@ if (status === "done" && plan) {
         if (rep >= WARM) l.pt.samples.push(ms);
       }
     }
+    const seen = new Set();
     for (const l of live) {
       const s = [...l.pt.samples].sort((a, b) => a - b);
       l.pt.msPerOpP50 = s[Math.floor(s.length / 2)];
-      l.device.destroy();
+      if (!seen.has(l.device)) { seen.add(l.device); }
     }
-    return {
-      variant: plan.gemm.variant,
-      shape: { K: plan.gemm.K, N: plan.gemm.N },
-      M: plan.gemm.M,
-      workgroupStorageBytes: plan.gemm.workgroupStorageBytes,
-      legacyAttnWorkgroupStorageBytes: plan.attnLegacy.workgroupStorageBytes,
-      legacyAttnCtxMax: plan.attnLegacy.ctxMax,
-      points,
-    };
+    for (const d of seen) d.destroy();
+    return sweeps;
   }, { plan, ops: SWEEP_OPS });
 }
 
@@ -184,7 +201,7 @@ if (status !== "done" || !report) {
   process.exit(2);
 }
 
-report.limitSweep = sweep ? [sweep] : null;
+report.limitSweep = sweep ?? null;
 mkdirSync("results/microbench", { recursive: true });
 const ts = report.ts.replace(/[:.]/g, "-");
 const path = `results/microbench/ttft-riga1-${LABEL}-${ts}.json`;
@@ -204,14 +221,23 @@ for (const c of report.cells) {
 }
 for (const s of report.skipped) console.log(`[tt] SKIP ${s.kernel} ${s.variant} ${JSON.stringify(s.shape)} — ${s.reason}`);
 if (sweep) {
-  console.log(`[tt] sweep '${sweep.variant}' (${sweep.workgroupStorageBytes} B) — legacy attn chiede ${sweep.legacyAttnWorkgroupStorageBytes} B a ctxMax ${sweep.legacyAttnCtxMax}`);
-  for (const p of sweep.points) {
-    console.log(
-      `[tt] limite chiesto ${String(p.requestedWorkgroupStorage).padStart(6)} concesso ${String(p.grantedWorkgroupStorage).padStart(6)}` +
-      `  pipeline ${p.pipelineCreated ? "OK " : "NO "}  legacy-attn ${p.legacyAttnPipelineCreated ? "OK " : "NO "}` +
-      `  p50 ${p.msPerOpP50 === null ? "n/d" : p.msPerOpP50.toFixed(4) + " ms"}` +
-      (p.error ? `  err ${p.error}` : "") +
-      (p.legacyAttnError ? `  legacyErr ${String(p.legacyAttnError).slice(0, 120)}` : ""),
-    );
+  for (const sw of sweep) {
+    console.log(`[tt] sweep '${sw.variant}' (${sw.workgroupStorageBytes} B) — legacy attn chiede ${sw.legacyAttnWorkgroupStorageBytes} B a ctxMax ${sw.legacyAttnCtxMax}`);
+    for (const p of sw.points) {
+      console.log(
+        `[tt]   chiesto ${String(p.requestedWorkgroupStorage).padStart(6)} concesso ${String(p.grantedWorkgroupStorage).padStart(6)}` +
+        `  pipeline ${p.pipelineCreated ? "OK " : "NO "}  legacy-attn ${p.legacyAttnPipelineCreated ? "OK " : "NO "}` +
+        `  p50 ${p.msPerOpP50 === null || p.msPerOpP50 === undefined ? "n/d" : p.msPerOpP50.toFixed(4) + " ms"}` +
+        (p.error ? `  err ${String(p.error).slice(0, 140)}` : ""),
+      );
+    }
+    const ok = sw.points.filter((p) => p.msPerOpP50 !== null && p.msPerOpP50 !== undefined);
+    if (ok.length > 1) {
+      const lo = Math.min(...ok.map((p) => p.msPerOpP50));
+      const hi = Math.max(...ok.map((p) => p.msPerOpP50));
+      console.log(`[tt]   spread fra i tetti concessi: ${(100 * (hi / lo - 1)).toFixed(1)} %`);
+    }
   }
+  const first = sweep[0]?.points?.[0];
+  if (first?.legacyAttnError) console.log(`[tt] legacy attn a 16.384 B: ${String(first.legacyAttnError).slice(0, 200)}`);
 }

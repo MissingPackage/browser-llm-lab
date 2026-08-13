@@ -171,15 +171,25 @@ export interface VariantSpec {
 
 export interface Measured { gpu: number[]; cpu: number[] }
 
-/** Esecuzione INTERLEAVATA: round-robin variante-per-ripetizione. */
+/**
+ * Esecuzione INTERLEAVATA: round-robin variante-per-ripetizione.
+ *
+ * `passes` moltiplica il blocco (warm-up + misurate) per le celle la cui
+ * dispersione lo richiede: un dispatch da decine di ms su un portatile
+ * power-limited oscilla col DVFS molto piu' di uno da decimi di ms, e su 10
+ * campioni la p50 di quella cella non e' stabile. I warm-up si scartano a ogni
+ * passata, i campioni misurati si accumulano.
+ */
 export async function measureInterleaved(
   device: GPUDevice, timer: Timer, variants: VariantSpec[], onProgress: (s: string) => void,
+  passes = 1,
 ): Promise<Map<string, Measured>> {
   const out = new Map<string, Measured>();
   for (const v of variants) out.set(v.id, { gpu: [], cpu: [] });
-  for (let rep = 0; rep < WARMUP_SAMPLES + MEASURED_SAMPLES; rep++) {
-    const measuring = rep >= WARMUP_SAMPLES;
-    onProgress(`rep ${rep + 1}/${WARMUP_SAMPLES + MEASURED_SAMPLES}${measuring ? "" : " (warm-up scartato)"}`);
+  const perPass = WARMUP_SAMPLES + MEASURED_SAMPLES;
+  for (let rep = 0; rep < perPass * passes; rep++) {
+    const measuring = rep % perPass >= WARMUP_SAMPLES;
+    onProgress(`rep ${rep + 1}/${perPass * passes}${measuring ? "" : " (warm-up scartato)"}`);
     for (const v of variants) {
       const r = await sampleOnce(device, timer, v.ops, v.opsPerSample, v.rot);
       if (!measuring) continue;

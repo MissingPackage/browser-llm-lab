@@ -175,6 +175,9 @@ export interface TtftLimitSweepPoint {
   error: string | null;
   msPerOpP50: number | null;
   samples: number[];
+  /** il legacy dell'attenzione (25.856 B a ctxMax 6400) crea la pipeline qui? */
+  legacyAttnPipelineCreated: boolean | null;
+  legacyAttnError: string | null;
   note: string;
 }
 
@@ -183,6 +186,8 @@ export interface TtftLimitSweep {
   shape: Record<string, number>;
   M: number;
   workgroupStorageBytes: number;
+  legacyAttnWorkgroupStorageBytes: number;
+  legacyAttnCtxMax: number;
   points: TtftLimitSweepPoint[];
 }
 

@@ -55,6 +55,8 @@ export const MULTIROW_SHAPES: Array<{ K: number; N: number; label: string; Ms: n
 ];
 
 export const SPLIT_K = 4;
+/** Passate della sonda del picco: e' la cella con la dispersione peggiore. */
+export const DENSE_PASSES = 4;
 /** Copie dei pesi ruotate a ogni dispatch nella cella `coldw` (8 x 13,3 = 106 MB). */
 export const WEIGHT_COPIES = 8;
 /** Contesti su cui si misura l'attenzione a chunk (M = 16). */
@@ -87,14 +89,27 @@ export interface TtRunOpts {
   onProgress: (s: string) => void;
 }
 
-/** Il piano che il driver esegue per la spazzata dei limiti (sonda d / P6). */
+/**
+ * Il piano che il driver esegue per la spazzata dei limiti (sonda d / P6).
+ * Porta TUTTE le forme candidate: quale vinca lo decide la misura, e la spazzata
+ * deve poter rispondere sulla vincitrice vera, non su quella predetta.
+ */
+export interface TtSweepForm {
+  variant: string;
+  wgsl: string;
+  workgroupStorageBytes: number;
+  gx: number; gy: number;
+  /** secondo dispatch (split-K): somma dei parziali */
+  combineWgsl: string | null;
+  combineGx: number;
+  partBytes: number;
+}
+
 export interface TtSweepPlan {
-  gemm: {
-    variant: string; wgsl: string; workgroupStorageBytes: number;
-    K: number; N: number; M: number; gx: number; gy: number;
-    qsBytes: number; scalesBytes: number; xBytes: number; yBytes: number;
-    opsPerSample: number;
-  };
+  forms: TtSweepForm[];
+  K: number; N: number; M: number;
+  qsBytes: number; scalesBytes: number; xBytes: number; yBytes: number;
+  opsPerSample: number;
   attnLegacy: { wgsl: string; workgroupStorageBytes: number; ctxMax: number };
   requestedLimits: number[];
 }
@@ -183,66 +198,82 @@ export async function runTtftProbeBench(
 
   // =========================================================================
   // (a) SONDA DEL PICCO DI CALCOLO fp32 — GEMM densa
+  //
+  // Le due shape si misurano INSIEME e interleavate, e su DENSE_PASSES passate:
+  // un dispatch da decine di ms su un portatile power-limited oscilla col DVFS
+  // (IQR 15% su 10 campioni, misurato), e con una shape alla volta la deriva
+  // coinciderebbe con l'ordine delle shape. E' la cella che decide P1/P2:
+  // e' l'unica che meritava piu' campioni.
   // =========================================================================
-  for (const s of DENSE_SHAPES) {
-    onProgress(`gemm densa ${s.label}: allocazione…`);
-    const aBuf = device.createBuffer({ size: s.M * s.K * 4, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
-    fillRandomF32(new Float32Array(aBuf.getMappedRange()), 11); aBuf.unmap();
-    const bBuf = device.createBuffer({ size: s.K * s.N * 4, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
-    fillRandomF32(new Float32Array(bBuf.getMappedRange()), 22); bBuf.unmap();
-    const cBuf = device.createBuffer({ size: s.M * s.N * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    const code = gemmDenseF32Wgsl(s.M, s.K, s.N);
-    const wgs = workgroupStorageBytes(code);
-    const { pipeline, error } = await compile(device, code, `gemm-dense-${s.label}`);
-    if (!pipeline) {
-      skipped.push({ kernel: "gemm-dense-f32", variant: "tile64x64x8", shape: { M: s.M, K: s.K, N: s.N }, reason: `compilazione: ${error}` });
-      for (const b of [aBuf, bBuf, cBuf]) b.destroy();
-      continue;
-    }
-    const bg = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: aBuf } }, { binding: 1, resource: { buffer: bBuf } },
-        { binding: 2, resource: { buffer: cBuf } },
-      ],
-    });
-    const [gx, gy] = gemmDenseGrid(s.M, s.N);
-    const ops: Dispatch[] = [{ pipeline, bindGroups: [bg], gx, gy }];
-    onProgress(`gemm densa ${s.label}: misura…`);
-    const measured = await measureInterleaved(
-      device, timer, [{ id: "tile64x64x8", ops, opsPerSample: 1, batched: false, rot: { i: 0 } }],
-      (m) => onProgress(`gemm densa ${s.label} ${m}`));
-    await runOnce(device, ops);
-    // checksum su un prefisso: C intero e' fino a 233 MB, la mappatura costerebbe
-    // piu' della misura. Il prefisso copre 65 536 uscite di piu' tile.
-    const ckFloats = Math.min(s.M * s.N, 65536);
-    const ck = await readChecksum(device, cBuf, ckFloats);
-    const mm = measured.get("tile64x64x8")!;
-    const st = stats(mm.gpu.length > 0 ? mm.gpu : mm.cpu);
-    const flop = 2 * s.M * s.N * s.K;
-    const bytes = (s.M * s.K + s.K * s.N + s.M * s.N) * 4;
-    if (!Number.isFinite(ck.sum) || ck.sum === 0) {
-      skipped.push({ kernel: "gemm-dense-f32", variant: "tile64x64x8", shape: { M: s.M, K: s.K, N: s.N }, reason: `checksum sospetto (${ck.sum})` });
-    } else {
-      cells.push({
-        kernel: "gemm-dense-f32", variant: "tile64x64x8", shape: { M: s.M, K: s.K, N: s.N }, M: s.M,
-        context: `${s.label} — GEMM densa fp32, tile 64x64x8, workgroup_size 256 (16x16 thread, 4x4 uscite per thread), A e B a tile in workgroup memory. E' la sonda del PICCO di calcolo (done-when a).`,
-        dispatchesPerOp: 1, opsPerSample: 1, warmupDiscarded: WARMUP_SAMPLES,
-        timingSource: mm.gpu.length > 0 ? timingSource : "cpu",
-        msPerOp: st, cpuMsPerOp: stats(mm.cpu),
-        bytesUnique: bytes, bytesEmitted: bytes,
-        effectiveGBps: bytes / 1e6 / st.p50, emittedGBps: bytes / 1e6 / st.p50,
-        weightsPerSecond: null,
-        weightBytesUnique: null, weightBytesEmitted: null, weightBytesPerToken: null,
-        tokensPerSecond: null,
-        tflops: flop / (st.p50 / 1000) / 1e12,
-        workgroupStorageBytes: wgs,
-        checksum: ck.sum, checksumAbs: ck.abs, checksumRelDiff: null,
-        hostState: o.hostState,
-        notes: `un dispatch per campione, p50 su ${st.n} campioni. checksum sul prefisso di ${ckFloats} uscite (C intero = ${(s.M * s.N * 4 / 2 ** 20).toFixed(0)} MiB).`,
+  {
+    const bufs: GPUBuffer[] = [];
+    const dvariants: VariantSpec[] = [];
+    const dmeta = new Map<string, { shape: typeof DENSE_SHAPES[number]; ops: Dispatch[]; wgs: number; cBuf: GPUBuffer }>();
+    for (const s of DENSE_SHAPES) {
+      onProgress(`gemm densa ${s.label}: allocazione…`);
+      const aBuf = device.createBuffer({ size: s.M * s.K * 4, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+      fillRandomF32(new Float32Array(aBuf.getMappedRange()), 11); aBuf.unmap();
+      const bBuf = device.createBuffer({ size: s.K * s.N * 4, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+      fillRandomF32(new Float32Array(bBuf.getMappedRange()), 22); bBuf.unmap();
+      const cBuf = device.createBuffer({ size: s.M * s.N * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+      bufs.push(aBuf, bBuf, cBuf);
+      const code = gemmDenseF32Wgsl(s.M, s.K, s.N);
+      const { pipeline, error } = await compile(device, code, `gemm-dense-${s.label}`);
+      if (!pipeline) {
+        skipped.push({ kernel: "gemm-dense-f32", variant: "tile64x64x8", shape: { M: s.M, K: s.K, N: s.N }, reason: `compilazione: ${error}` });
+        continue;
+      }
+      const bg = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: aBuf } }, { binding: 1, resource: { buffer: bBuf } },
+          { binding: 2, resource: { buffer: cBuf } },
+        ],
       });
+      const [gx, gy] = gemmDenseGrid(s.M, s.N);
+      const ops: Dispatch[] = [{ pipeline, bindGroups: [bg], gx, gy }];
+      const id = `M${s.M}K${s.K}N${s.N}`;
+      dmeta.set(id, { shape: s, ops, wgs: workgroupStorageBytes(code), cBuf });
+      dvariants.push({ id, ops, opsPerSample: 1, batched: false, rot: { i: 0 } });
     }
-    for (const b of [aBuf, bBuf, cBuf]) b.destroy();
+    if (dvariants.length > 0) {
+      onProgress("gemm densa: misura interleavata…");
+      const measured = await measureInterleaved(device, timer, dvariants, (m) => onProgress(`gemm densa ${m}`), DENSE_PASSES);
+      for (const [id, dm] of dmeta) {
+        const s = dm.shape;
+        await runOnce(device, dm.ops);
+        // checksum su un prefisso: C intero e' fino a 233 MB, la mappatura
+        // costerebbe piu' della misura. Il prefisso copre piu' tile.
+        const ckFloats = Math.min(s.M * s.N, 65536);
+        const ck = await readChecksum(device, dm.cBuf, ckFloats);
+        const mm = measured.get(id)!;
+        const st = stats(mm.gpu.length > 0 ? mm.gpu : mm.cpu);
+        const flop = 2 * s.M * s.N * s.K;
+        const bytes = (s.M * s.K + s.K * s.N + s.M * s.N) * 4;
+        if (!Number.isFinite(ck.sum) || ck.sum === 0) {
+          skipped.push({ kernel: "gemm-dense-f32", variant: "tile64x64x8", shape: { M: s.M, K: s.K, N: s.N }, reason: `checksum sospetto (${ck.sum})` });
+          continue;
+        }
+        cells.push({
+          kernel: "gemm-dense-f32", variant: "tile64x64x8", shape: { M: s.M, K: s.K, N: s.N }, M: s.M,
+          context: `${s.label} — GEMM densa fp32, tile 64x64x8, workgroup_size 256 (16x16 thread, 4x4 uscite per thread), A e B a tile in workgroup memory. E' la sonda del PICCO di calcolo (done-when a). Le due shape sono misurate interleavate fra loro.`,
+          dispatchesPerOp: 1, opsPerSample: 1, warmupDiscarded: WARMUP_SAMPLES * DENSE_PASSES,
+          timingSource: mm.gpu.length > 0 ? timingSource : "cpu",
+          msPerOp: st, cpuMsPerOp: stats(mm.cpu),
+          bytesUnique: bytes, bytesEmitted: bytes,
+          effectiveGBps: bytes / 1e6 / st.p50, emittedGBps: bytes / 1e6 / st.p50,
+          weightsPerSecond: null,
+          weightBytesUnique: null, weightBytesEmitted: null, weightBytesPerToken: null,
+          tokensPerSecond: null,
+          tflops: flop / (st.p50 / 1000) / 1e12,
+          workgroupStorageBytes: dm.wgs,
+          checksum: ck.sum, checksumAbs: ck.abs, checksumRelDiff: null,
+          hostState: o.hostState,
+          notes: `un dispatch per campione, p50 su ${st.n} campioni in ${DENSE_PASSES} passate interleavate. TFLOP/s al MINIMO campione (il tetto meno sporcato dal DVFS) = ${(flop / (st.min / 1000) / 1e12).toFixed(3)}. checksum sul prefisso di ${ckFloats} uscite (C intero = ${(s.M * s.N * 4 / 2 ** 20).toFixed(0)} MiB).`,
+        });
+      }
+    }
+    for (const b of bufs) b.destroy();
   }
 
   // =========================================================================
@@ -365,21 +396,24 @@ export async function runTtftProbeBench(
         }
         meta.set(s.id, { ops, ctx: s.ctx, wgs: workgroupStorageBytes(s.code), emit: s.weightEmitFactor, xEmit: s.xEmitFactor, disp: ops.length });
         variants.push({ id: s.id, ops, opsPerSample: GEMV_OPS_PER_SAMPLE, batched: false, rot: { i: 0 } });
-        if (s.id === "regs" && K === 2560 && M === 16) {
-          sweepPlan = {
-            gemm: {
-              variant: "regs", wgsl: s.code, workgroupStorageBytes: workgroupStorageBytes(s.code),
-              K, N, M, gx: s.grid[0], gy: s.grid[1],
-              qsBytes, scalesBytes: scBytes, xBytes: M * K * 4, yBytes: M * N * 4,
-              opsPerSample: GEMV_OPS_PER_SAMPLE,
-            },
+        if (K === 2560 && M === 16 && (s.id === "regs" || s.id === "shared" || s.id === "splitk")) {
+          const legacyCode = attnDecodeWgsl({ ...TT_ATTN_SHAPE, batch: true });
+          sweepPlan ??= {
+            forms: [], K, N, M,
+            qsBytes, scalesBytes: scBytes, xBytes: M * K * 4, yBytes: M * N * 4,
+            opsPerSample: GEMV_OPS_PER_SAMPLE,
             attnLegacy: {
-              wgsl: attnDecodeWgsl({ ...TT_ATTN_SHAPE, batch: true }),
-              workgroupStorageBytes: workgroupStorageBytes(attnDecodeWgsl({ ...TT_ATTN_SHAPE, batch: true })),
+              wgsl: legacyCode, workgroupStorageBytes: workgroupStorageBytes(legacyCode),
               ctxMax: TT_ATTN_SHAPE.ctxMax,
             },
             requestedLimits: [16384, 24576, 32768, 49152],
           };
+          sweepPlan.forms.push({
+            variant: s.id, wgsl: s.code, workgroupStorageBytes: workgroupStorageBytes(s.code),
+            gx: s.grid[0], gy: s.grid[1],
+            combineWgsl: s.combine ?? null, combineGx: Math.ceil((M * N) / 64),
+            partBytes: SPLIT_K * M * N * 4,
+          });
         }
       }
       if (variants.length === 0) continue;
@@ -554,7 +588,9 @@ export async function runTtftProbeBench(
   timer.querySet?.destroy(); timer.queryBuf?.destroy(); timer.readBuf?.destroy();
   device.destroy();
 
-  if (!sweepPlan) throw new Error("sweepPlan non prodotto: la cella 'regs' K2560 M16 non e' stata compilata");
+  if (!sweepPlan || sweepPlan.forms.length === 0) {
+    throw new Error("sweepPlan non prodotto: nessuna forma candidata compilata a K2560 M16");
+  }
 
   return {
     runFile: {

@@ -116,3 +116,76 @@ modifica viaggia con due run che la esercitano.
 
 **Gate**: ktest 100 PASS / 0 FAIL · vitest 531 passed | 10 skipped ·
 `tsc --noEmit` pulito · non-reg decode PASS.
+
+---
+
+## it.2 — riga 1: le leve esistono (43x), il bersaglio no (~8,7 s proiettati)
+
+Fase di sole misure con potere di chiudere il goal. Pre-registrazione committata
+**prima** di eseguire (`79cc3bd`), banco dopo (`d29eb0d`), risultati dopo ancora:
+l'ordine dei commit è la cosa che rende falsificabile tutto il resto.
+
+**LA REGOLA DI STOP NON SCATTA, e non ci va vicino.** A M=16 su K2560×N9216 la
+forma vincente fa **43,1x** la forma attuale (262.881 contro 6.101 token/s), con
+riuso dei pesi **16,0x** — il massimo teorico, e il doppio degli 8x che il
+done-when della riga 2 chiede. La riga 2 e la riga 3 si fanno.
+
+**Ma la vincitrice non è quella predetta, e il motivo conta.** P3 diceva `regs`
+(pesi in registri): vince invece `splitk`, che è `regs` col contesto K spezzato
+su 4 workgroup — stesso corpo, stesso workgroup storage (4.096 B), **2,13x** più
+veloce. La ragione la dicono le bande: `regs` legge i suoi 13,3 MB unici a soli
+**108 GB/s** su un device che ne fa 300+. Non era memory-bound: era
+**occupancy-bound** (144 workgroup su 76 SM). La pre-registrazione aveva
+modellato il problema come traffico di memoria, e per quello ha nominato la
+forma sbagliata. La cella `coldw` chiude l'obiezione simmetrica: con i pesi a
+106 MB, fuori dalla L2, il vantaggio passa da 20,3x a **18,7x** — non è un
+artefatto di cache.
+
+**Stessa storia sull'attenzione, e stessa sorpresa.** Il legacy misura 12,30 ms
+per chunk a ctx 6333 (predetto 8–20, punto 12: centrato). La softmax in
+streaming + vec4 rende **6,76x** — ma le due varianti che tagliano il traffico
+KV di 4x e 8x (fusione GQA, righe fuse) sono **più lente**, perché scendono a 64
+e 32 workgroup. E a ctx 388 il guadagno è **5,42x**, non il «< 1,5x» predetto:
+il legacy paga `scores[ctxMax]` = 25.856 B di workgroup memory **anche quando il
+contesto è 388**, e quello strozza l'occupancy sempre. La riga 3 va riscritta:
+streaming sì, fusione GQA no.
+
+**IL BERSAGLIO DEI 4 s VA ESCLUSO COI NUMERI.** Picco fp32 sostenuto misurato in
+WebGPU: **9,26 TFLOP/s** (GEMM densa sulla shape reale del prefill) — i 12,8
+TFLOP/s richiesti sono il **138%**, non il 40%. Il conto sui tempi misurati
+(blocco FFN a 8,78 TFLOP/s effettivi ⇒ 5.776 ms di matmul; 8 layer full
+attention ⇒ 2.888 ms) proietta **8.665 ms**, dentro la banda P2 pre-registrata
+(5.000–15.000, punto 8.000). È **10,1x** sulla baseline e **2,2x** dal bersaglio,
+e non conta ancora i 24 layer DeltaNet, le norm, la RoPE e i dispatch. La riga 5
+chiuderà con `decision: "excluded-by-numbers"`.
+
+**Il tetto negoziabile non è una leva** (docket item 6 risolto): spazzando
+{16.384, 24.576, 32.768, 49.152} il throughput è piatto entro **0,1–2,3%** su
+tutte e tre le forme. E il **conflitto di docket item 1 non esiste**: la forma
+vincente spende 4.096 B a M=16, sotto il pavimento di spec. Verificato non
+dedotto — il legacy dell'attenzione, chiedendo esattamente 16.384 B, **fallisce
+in creazione della pipeline** («total use of workgroup storage (25856 bytes) is
+larger than the maximum allowed (16384)»), e fallisce anche a 24.576.
+
+**Correzione di metodo, dichiarata nel memo.** La prima misura del picco fp32
+dava 5,86 TFLOP/s con IQR 16,6% — sotto il bordo della banda P1 per un artefatto:
+i campioni mostrano una rampa di boost, e 3 warm-up non bastano per dispatch da
+decine di ms dopo un idle. Rifatta con le due shape interleavate fra loro e 4
+passate (40 campioni): 8,92 p50, 9,26 in regime. Il codice pubblicato è quello
+che ha prodotto il JSON pubblicato. Il banco ha guadagnato per questo un
+parametro `passes` su `measureInterleaved`.
+
+**Codice**: nessun file di `src/engine/**` toccato. `kdRunner.ts` esporta la sua
+meccanica di misura e guadagna la terza dimensione di griglia (la forma attuale
+mette le M righe del chunk su `wid.z`); il resto è nuovo sotto
+`src/microbench/tt*.ts`. La spazzata dei limiti vive nel driver: chiede device
+distinti con `requiredLimits` espliciti, e il punto unico di `src/` negozia
+sempre ≥ 30.848 B.
+
+**Artefatti**: `results/microbench/ttft-riga1-4090-linux-2026-08-13T13-06-23-120Z.json`
+(34 celle, **0 skipped**, `timestamp-query` su tutte, checksum entro 2·10⁻⁸ dalla
+forma attuale contro una tolleranza di 10⁻³), memo
+`docs/deep-dive/ttft-riga1-memo-2026-08-13.md`.
+
+**Gate**: ktest 100 PASS / 0 FAIL · vitest 545 passed | 10 skipped ·
+`tsc --noEmit` pulito. Zero run di modello, come da vincolo.
