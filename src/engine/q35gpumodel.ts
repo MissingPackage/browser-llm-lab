@@ -16,8 +16,10 @@ import {
   siluMulWgsl, stridedCopyWgsl, routerTopKWgsl,
   SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE, type KArenaOpts,
   prefillGemmQ4SplitKWgsl, prefillSplitKCombineWgsl, prefillGemmGrid,
-  prefillGemmSplitsFor, PREFILL_SPLITS_MEASURED,
+  PREFILL_SPLITS_MEASURED,
+  prefillGemmQ4SplitKIdotWgsl, prefillQuantXQ8Wgsl,
 } from "./kernels/wgsl";
+import { planPrefillGemm, prefillGemmCapsFor } from "./prefillgemmplan";
 import { expertArenaBindings } from "./gpulimits";
 import type { SlabTensorLayout } from "./moe";
 import { deltaNetConvWgsl, deltaNetCoreWgsl, deltaNetGatesWgsl } from "./kernels/deltanet";
@@ -606,6 +608,16 @@ export async function createQ35GpuModel(
   const prefillPart = prefillOn
     ? empty(PREFILL_SPLITS_MEASURED * M_MAX * prefillMaxN * 4)
     : null;
+  // VIA INTERA (q4_0 x q8_0): le attivazioni quantizzate a i8 per blocco da 32 e
+  // le loro scale. La capacita' si SONDA da `navigator.gpu.wgslLanguageFeatures`
+  // — non da `device.features`, perche' `dot4I8Packed` e' una language feature
+  // del WGSL e non un'estensione (costato una run in it.5). Se manca, il piano
+  // instrada sulla via f32 e lo DICHIARA nel suo `reason`.
+  const prefillIdot = prefillGemmCapsFor(navigator.gpu).idot;
+  // Dimensionati sulla K piu' grande del prefill: 8 u32 per blocco da 32 pesi
+  // (= K/4 u32 per riga) e una scala f32 per blocco (= K/32 per riga).
+  const prefillXq = prefillOn && prefillIdot ? empty(M_MAX * (prefillMaxN / 4) * 4) : null;
+  const prefillXsc = prefillOn && prefillIdot ? empty(M_MAX * (prefillMaxN / 32) * 4) : null;
   /**
    * ETICHETTE per la sonda dei tempi (fase 4, it.23): `{at, cat}` dice che dallo
    * step `at` in poi si entra nella categoria `cat`. Sono MARCHE su intervalli e
@@ -740,13 +752,31 @@ export async function createQ35GpuModel(
     // q4_0-only per costruzione, come il GEMV del goal precedente) e K
     // multiplo di 64 (il loop avanza a BK = 2 blocchi da 32). Fuori da queste,
     // si resta sulla forma di prima — che e' corretta, solo lenta.
-    if (kk === "q4_0" && w.k % 64 === 0 && prefillPart !== null) {
-      const splits = prefillGemmSplitsFor(w.k, w.n);
-      const o = { kind: kk as "q4_0", K: w.k, N: w.n, M: M_MAX, splits };
-      pushB(prefillGemmQ4SplitKWgsl(o), [w.qs, w.scales, src, prefillPart], prefillGemmGrid(o));
-      pushB(prefillSplitKCombineWgsl({ N: w.n, M: M_MAX, splits }), [prefillPart, dst],
-        [Math.ceil((M_MAX * w.n) / 64), 1, 1]);
-      return;
+    // LA ROTTA NON SI DECIDE QUI: la chiede al piano (`prefillgemmplan.ts`), che
+    // e' l'unico posto che sa quali shape il kernel accetta e quale via e' la
+    // piu' veloce. Prima questo sito ri-derivava la condizione a mano ed e' cosi'
+    // che il cablaggio e' finito sulla via f32 — misurata 1,745x PIU' LENTA di
+    // quella intera — mentre il piano che sceglieva `idot` esisteva gia' e non
+    // lo chiamava nessuno (it.14).
+    if (prefillPart !== null) {
+      const route = planPrefillGemm({ kind: kk, K: w.k, N: w.n, M: M_MAX, idot: prefillIdot });
+      if (route.via !== "legacy") {
+        const o = { kind: "q4_0" as const, K: w.k, N: w.n, M: M_MAX, splits: route.splits };
+        if (route.via === "idot" && prefillXq !== null && prefillXsc !== null) {
+          // Un dispatch in piu': quantizza le M righe di attivazioni a i8 per
+          // blocco. Misurato il 5,6% del moltiplicatore, ed e' gia' dentro
+          // l'1,745x — non e' un costo nascosto (it.6).
+          pushB(prefillQuantXQ8Wgsl({ K: w.k, M: M_MAX }), [src, prefillXq, prefillXsc],
+            [Math.ceil((M_MAX * (w.k / 32)) / 64), 1, 1]);
+          pushB(prefillGemmQ4SplitKIdotWgsl(o),
+            [w.qs, w.scales, prefillXq, prefillPart, prefillXsc], prefillGemmGrid(o));
+        } else {
+          pushB(prefillGemmQ4SplitKWgsl(o), [w.qs, w.scales, src, prefillPart], prefillGemmGrid(o));
+        }
+        pushB(prefillSplitKCombineWgsl({ N: w.n, M: M_MAX, splits: route.splits }), [prefillPart, dst],
+          [Math.ceil((M_MAX * w.n) / 64), 1, 1]);
+        return;
+      }
     }
     // FALLBACK: la forma di prima, byte per byte. La griglia si deriva da
     // `gemvQuantGrid` invece che da `gemvGrid` a mano — oggi danno lo stesso
