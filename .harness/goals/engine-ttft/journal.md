@@ -392,3 +392,61 @@ stesso modo (docket).
 
 **Gate, eseguiti sul BASE_URL giusto e con `STATUS: done` verificato**:
 ktest **100 PASS / 0 FAIL** · vitest **545 passed | 10 skipped** · tsc pulito.
+
+## it.6 (2026-08-13) — il gate che non poteva fallire ora fallisce, e il rapporto della via intera è misurato
+
+**Chiuso il difetto del gate (docket item 14).** `engine-ktest.mjs` usciva 0/1
+solo sullo `status` della pagina: ogni errore PRIMA — profilo occupato, porta
+sbagliata, timeout — era un'eccezione nuda, nessun test eseguito, tabella vuota,
+e `grep -c FAIL` restituiva **0**, che è esattamente ciò che si vede quando va
+tutto bene. In it.5 l'ho dichiarato verde due volte su una run che non aveva
+eseguito un solo kernel.
+
+Ora ha tre difese: ogni fallimento è catturato e stampato come causa con exit
+non-zero; il driver **conta lui** i PASS/FAIL invece di lasciarli dedurre a un
+grep; e c'è una **asserzione di plausibilità** (`KTEST_MIN_PASS`, default 90) —
+zero fallimenti su zero test non è un gate superato.
+
+**Verificato in negativo, che è l'unico modo di sapere che un gate esiste**:
+porta sbagliata → exit 2 col messaggio che nomina `BASE_URL`; soglia impossibile
+→ exit 4 con «ZERO FALLIMENTI SU ZERO TEST NON E' UN GATE SUPERATO»; run buona →
+exit 0, 100 PASS. Prima di questo, la prova negativa non era mai stata fatta.
+
+**Chiuso il «fuori misura» di it.5 (docket item 12c per la via intera).** Due
+celle nuove: `quantx-q8` (la sola passata di quantizzazione) e
+`splitk-idot-full` (quantizzazione + moltiplicatore + combinazione nello stesso
+campione).
+
+| M=16, K2560×N9216 | p50 |
+|---|---|
+| `splitk` (f32) | 0,0609 ms |
+| `quantx-q8` | 0,0019 ms |
+| `splitk-idot` (solo kernel) | 0,0333 ms |
+| **`splitk-idot-full` (la LEVA)** | **0,0349 ms** |
+
+**Il rapporto onesto è 1,74×, non 1,83×.** La quantizzazione costa il 5,3% del
+totale. Avevo scritto in it.5 che «dovrebbe essere piccolo»: lo è — ma adesso è
+nell'artefatto invece che nel mio giudizio, ed è la differenza fra le due cose
+che conta, non il numero.
+
+**Proiezione aggiornata**: blocco FFN 0,2578 → 0,1482 ms (1,74×), matmul 3.320
+ms, totale con l'attenzione **~6.208 ms** (era 8.665 con `splitk` in virgola
+mobile, 6.097 col kernel intero contato senza la sua quantizzazione).
+
+**Due difetti di misura trovati facendo, e sistemati**: il gate di checksum a
+1e-3 bocciava `splitk-idot-full`, che fa la STESSA aritmetica di `splitk-idot` e
+ha la stessa tolleranza pre-registrata in P8 (2e-2); e `quantx-q8` non scrive
+`y`, quindi il suo checksum era quello lasciato dalla variante precedente e non
+diceva niente — ora è esente, con la ragione nel JSON invece che con un numero
+finto.
+
+**Da tenere presente leggendo l'artefatto**: le colonne `tflops` e `tokensPerSecond`
+della cella `quantx-q8` sono prive di senso (406 TFLOP/s a M=16): la formula
+assume una GEMM e quella cella non lo è. Il numero da guardare è solo `p50`.
+
+**La contesa dell'item 13 è costata due run.** Due tentativi morti su «profilo
+già in uso» perché l'altra incarnazione girava `engine-ktest`. Ho aspettato che
+finisse e poi usato un profilo dedicato — che è il rimedio, non la soluzione.
+
+**Gate** (col ktest nuovo, exit code guardato): ktest exit 0 · 100 PASS / 0 FAIL
+· vitest 545 passed | 10 skipped · `tsc --noEmit` pulito.
