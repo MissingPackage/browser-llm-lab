@@ -171,7 +171,7 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
         o.mlaAttention === false ? 0 : mlaWorkgroupStorageBytes(o.ctxMax),
       ),
       hard: true,
-      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, attnDecode 4·ctxMax+256 = ${attnDecodeWorkgroupStorageBytes(o.ctxMax)} B${o.mlaAttention === false ? "" : `, mlaAttnDecode ${mlaWorkgroupStorageBytes(o.ctxMax)} B`} a ctxMax ${o.ctxMax})`,
+      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, attnDecode (streaming, costante in ctxMax) = ${attnDecodeWorkgroupStorageBytes(o.ctxMax)} B${o.mlaAttention === false ? "" : `, mlaAttnDecode ${mlaWorkgroupStorageBytes(o.ctxMax)} B`} a ctxMax ${o.ctxMax})`,
     },
   ];
   if (o.arenaBuffers !== undefined) {

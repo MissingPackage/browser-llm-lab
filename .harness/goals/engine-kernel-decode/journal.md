@@ -86,3 +86,29 @@ sapere quanto.
 **FASE 0 CHIUSA, regola di stop non scattata.** Il piano non si riscrive: la
 riga 1 parte, e parte con un progetto deciso dalla misura — split del contesto
 + softmax in streaming, SENZA fusione GQA.
+
+## it.3 (2026-08-13, fase 1) — la build si e' fermata sul canale, non sul piano
+
+Primo tentativo della riga 1 col conductor: 5 task su 5 BLOCKED. Il messaggio
+diceva "conflitto patch-apply", che nel design del conductor significa "il piano
+degli `owns` e' sbagliato" — e mi avrebbe mandato a ri-pianificare.
+
+**Era falso, e l'ho verificato prima di crederci**: la patch di T1 e' 40.209
+caratteri, lo script la passa all'integratore con `slice(0, 16000)`. Arrivava
+tagliata dentro un file nuovo (hunk che dichiara 88 righe, ne porta 77), e
+`git apply` rispondeva `corrupt patch at line 369`.
+
+L'integratore aveva gia' fatto il lavoro di diagnosi al posto mio: niente
+`--3way`, niente risoluzione manuale, e un `--check` sui soli hunk interi per
+mostrare che combaciavano tutti con l'albero. La riga che chiude il caso e'
+sua: "non e' un conflitto di contesto, e' il testo della patch che arriva
+incompleto".
+
+Fix e ripresa: tolto lo `slice` nella copia dello script di questo run, e
+`resumeFromRunId` — i risultati degli implementatori rientrano dalla cache
+(nessun lavoro ripetuto), si rifa' solo l'integrazione. Il workflow INSTALLATO
+resta rotto: docket item 3, va corretto alla fonte e non e' codice di questo
+goal.
+
+Nessun commit durante la ripresa: `git add` sopra una patch applicata a meta'
+sarebbe il modo piu' rapido di rovinare un albero pulito.

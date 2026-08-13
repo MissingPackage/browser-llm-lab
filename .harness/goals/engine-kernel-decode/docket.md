@@ -80,3 +80,32 @@ Fuori dallo scope di questo goal (che ha per bersaglio i due kernel caldi), ma
 va davanti al PI **prima** della fase 3, non dopo: se la fase 3 arriva a 40-60
 tok/s la soglia è presa e la coda non serve, se arriva a 28 la coda è l'unica
 cosa rimasta e nessuno l'ha guardata.
+
+## item 3 — il conductor tronca le patch a 16.000 caratteri e il sintomo sembra un conflitto di owns (io, harness)
+
+FASE 1, primo tentativo: tutti e cinque i task BLOCKED. T1 per "conflitto
+patch-apply", T2-T5 per dipendenza a monte.
+
+**Non era un conflitto.** Lo script del workflow passa la patch all'integratore
+con `r.patch.slice(0, 16000)`; la patch di T1 e' **40.209 caratteri**. Arrivava
+tagliata a meta' di un file nuovo — un hunk che dichiara 88 righe e ne porta 77
+— e `git apply` diceva `corrupt patch at line 369`.
+
+L'integratore ha fatto la cosa giusta due volte: NON ha usato `--3way`, NON ha
+risolto a mano (design §4: un conflitto e' un bug del piano `owns`, non roba da
+aggiustare in integrazione), e ha isolato la causa vera facendo un `--check` sui
+soli hunk arrivati interi — che combaciavano tutti. Senza quella diagnosi avrei
+speso un'iterazione a ri-pianificare gli `owns` di un piano che non aveva
+niente che non andasse.
+
+**Perche' e' un difetto e non una svista**: il troncamento fa sembrare un
+problema del CANALE un problema del PIANO. E' la stessa classe delle sentinelle
+che questo progetto si e' dato altrove — uno strumento che tace, o peggio che
+mente sulla causa, e' peggio che non averlo.
+
+FIX (it.3): tolto lo `slice` nello script del run, e commento sul perche'. La
+correzione vive nella COPIA di questo run
+(`.claude/.../workflows/scripts/sdd-conductor-wf_f89a2754-af3.js`), non nel
+workflow installato in `~/.claude/workflows/sdd-conductor.workflow.js`:
+**quello e' ancora rotto e va corretto alla fonte**. Fuori dal grant di autorita'
+di questo goal (non e' codice di progetto): registrato qui, da portare al PI.

@@ -6,6 +6,13 @@ const coopCoep = {
 };
 
 export default defineConfig({
+  // I workflow dell'harness (sdd-conductor) lavorano su COPIE del repo dentro
+  // `.claude/worktrees/`. Vitest non le esclude di default, quindi ogni test
+  // girava DUE volte — una sulla copia, con file vecchi — e una build appena
+  // integrata risultava rossa per asserzioni che nell'albero vero erano gia'
+  // state aggiornate (visto in it.4: 6 fallimenti, di cui 3 fantasmi).
+  // Un gate che misura una copia stantia non e' un gate.
+  test: { exclude: ["**/node_modules/**", "**/dist/**", ".claude/**", ".harness/worktrees/**"] },
   server: { headers: coopCoep },
   preview: { headers: coopCoep },
   build: {

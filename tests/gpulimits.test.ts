@@ -53,16 +53,20 @@ describe("derivazione vs parco kernel (scansione del WGSL vero)", () => {
   });
 
   it("MAX_STATIC_STORAGE_BINDINGS copre il bind group più affollato", () => {
-    // conta i binding `var<storage>` dentro ogni generatore (blocchi separati
-    // da `export function`), perché gli indici ripartono da 0 a ogni kernel
-    const blocks = src.split(/^export function /m).slice(1);
+    // conta i binding `var<storage>` dentro ogni generatore, perché gli indici
+    // ripartono da 0 a ogni kernel. I blocchi si separano su `function`
+    // ESPORTATA O NO: un template privato (es. `attnDecodeLegacyWgsl`) emette
+    // il proprio bind group, e attribuire i suoi binding al blocco che lo
+    // precede gonfiava il conteggio a 10 su kernel che ne dichiarano 5
+    // (goal engine-kernel-decode it.4).
+    const blocks = src.split(/^(?:export )?function /m).slice(1);
     const perKernel = blocks.map((b) => (b.match(/@group\(0\)\s*@binding\(\d+\)\s*var<storage/g) ?? []).length);
     expect(blocks.length).toBeGreaterThan(20);
     expect(Math.max(...perKernel)).toBe(MAX_STATIC_STORAGE_BINDINGS);
   });
 
   it("nessun kernel dichiara più binding LETTERALI di quanti il limite ne conceda", () => {
-    const blocks = src.split(/^export function /m).slice(1);
+    const blocks = src.split(/^(?:export )?function /m).slice(1);
     for (const b of blocks) {
       const n = (b.match(/@group\(0\)\s*@binding\(\d+\)\s*var<storage/g) ?? []).length;
       expect(n).toBeLessThanOrEqual(MAX_STATIC_STORAGE_BINDINGS);
@@ -157,11 +161,46 @@ describe("requisiti derivati", () => {
       expect(off.value).toBeGreaterThanOrEqual(QWEN_WORKGROUP_STORAGE_BYTES);
       expect(off.consumer).toContain("attnDecode");
     }
-    // e a contesto lungo il valore cresce col contesto anche con MLA spenta:
-    // la dichiarazione "path Qwen indipendente dal contesto" era falsa
+    // FINO A it.3 QUI SI ASSERIVA IL CONTRARIO: che il valore CRESCESSE col
+    // contesto. Era vero del kernel di ieri (`scores[ctxMax]` in memoria di
+    // gruppo) ed era il modo di provare che la frase "path Qwen indipendente
+    // dal contesto" fosse falsa. La riscrittura in streaming (riga 1 del goal)
+    // l'ha resa VERA: il fabbisogno ora e' costante, ed e' un done-when del
+    // contratto. Il test non si cancella — si rovescia, e resta a guardia del
+    // fatto nuovo: nessun ritorno a una forma che lega la memoria al contesto.
     const a = engineNeeds({ ctxMax: 8192, mlaAttention: false }).find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
     const b = engineNeeds({ ctxMax: 16384, mlaAttention: false }).find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
-    expect(b.value).toBeGreaterThan(a.value);
+    expect(b.value).toBe(a.value);
+  });
+
+  // Done-when (e) della riga 1 — e qui il contratto chiedeva piu' di quanto la
+  // riga 1 possa dare, scoperto ESEGUENDO (docket item 4).
+  //
+  // Cio' che la riga 1 ha ottenuto: il TETTO DI CONTESTO non esiste piu'. Il
+  // fabbisogno dell'attenzione e' 1.536 B COSTANTI (16·ceil(headDim/4)+512),
+  // contro 4·ctxMax+256 di ieri, e sta larghissimo sotto i 16 KB garantiti da
+  // WebGPU. Nessun contesto, per quanto lungo, puo' piu' impedire la creazione
+  // della pipeline.
+  //
+  // Cio' che NON dipende dalla riga 1: il totale richiesto dal motore resta
+  // 30.848 B, perche' un ALTRO consumatore — `rmsPairGemmSiluChunkFast`, il
+  // kernel fuso del prefill — sta sopra la garanzia da solo e non dipende dal
+  // contesto. E' un limite di portabilita' vero, ma appartiene al prefill
+  // (goal TTFT), non a questo.
+  it("l'attenzione non lega piu' la memoria di gruppo al contesto", () => {
+    const WEBGPU_GUARANTEED = 16384;
+    // la formula del kernel non guarda piu' il contesto...
+    expect(attnDecodeWorkgroupStorageBytes(64)).toBe(attnDecodeWorkgroupStorageBytes(1_000_000));
+    // ...e sta sotto la garanzia con tre ordini di grandezza di margine
+    expect(attnDecodeWorkgroupStorageBytes(1_000_000)).toBeLessThan(WEBGPU_GUARANTEED);
+    // il totale richiesto non cresce piu' col contesto a MLA spenta
+    const vals = [64, 4096, 65536, 1_000_000].map((ctxMax) =>
+      engineNeeds({ ctxMax, mlaAttention: false }).find((x) => x.limit === "maxComputeWorkgroupStorageSize")!.value);
+    expect(new Set(vals).size).toBe(1);
+    // e cio' che resta sopra i 16 KB e' UN consumatore solo, nominato: se un
+    // domani sparisce anche quello, questo test va aggiornato di proposito
+    expect(vals[0]).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(QWEN_WORKGROUP_STORAGE_BYTES).toBeGreaterThan(WEBGPU_GUARANTEED);
   });
 
   it("l'arena alza binding size e storage per stage, col suo consumatore", () => {
