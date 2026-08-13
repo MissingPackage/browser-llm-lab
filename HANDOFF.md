@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (aggiornato 2026-08-12)
+# HANDOFF — browser-llm-lab   (aggiornato 2026-08-13)
 
 ## 1. Next decidable
 
@@ -14,34 +14,40 @@ vettoriali, due righe per gruppo e riduzione di sottogruppo dove è dimostrabile
 che è sicura (1,77× ulteriore). La stessa fase ha **escluso** la fusione delle
 teste GQA: misurata più lenta.
 
-**Goal `engine-ttft` APERTO** (2026-08-13, ruling A del PI): il primo token
-entro 4 secondi **a modello caldo** — `prefill.ms + decode.firstMs` — sul
-prompt-idx 0 da 6333 token. Il caricamento del modello (10,89 s misurati) ha una
-soglia sua, separata, e non appartiene a questo goal. `PHASES.md` scritto,
-**`plan-check` aperto**: l'iterazione 1 aspetta l'approvazione della
-decomposizione.
+**Goal `engine-ttft` APERTO e IN CORSO** (2026-08-13, ruling A del PI): il primo
+token entro 4 secondi **a modello caldo** — `prefill.ms + decode.firstMs` — sul
+prompt da 6333 token. Il caricamento del modello (10,9 s) ha una soglia sua e
+non appartiene a questo goal. Piano approvato; **riga 0 CHIUSA (it.1)**.
 
-**CORREZIONE al numero che questa sezione portava prima.** «TTFT 22,7 s su un
-prompt da 6k» era sbagliato in due punti, entrambi verificati su
-`results/engine/q35-bench-4b-tier8-fase-d-it43.json`:
+**LA BASELINE ORA ESISTE, ed è la prima misura end-to-end del 4B sul codice di
+oggi**: TTFT a caldo **87.618 ms** contro un bersaglio di 4.000 ⇒ **serve
+21,9×**. Scomposto: caricamento 10.892 ms · lettura del prompt 87.582 ms
+(6332 token a 72,30 tok/s) · primo token 36 ms. Decode 47,79 tok/s a contesto
+6333, che conferma il 47,93 del checkpoint e passa il gate di non-regressione.
+Artefatto: `results/engine/ttft-baseline-4b-prompt0-2026-08-13.json`.
 
-1. il prompt è il **prompt-idx 4 = 388 token**, non 6k. I 6333 sono il
-   prompt-idx 0, usato per il DECODE del goal precedente: due run su prompt
-   diversi, appaiate per errore.
-2. `ttftMs = loadMs + prefillMs + firstMs` (`q35conf.worker.ts:246`). Dei
-   22.695 ms, **10.890 sono il LOAD** e 11.760 il prefill di 387 token; il primo
-   token vero costa 46 ms.
+**Il percorso "a blocchi" è 2,10× PIÙ LENTO, misurato.** L'ipotesi della riga 0
+— instradare il bench su `prefillChunk`, già in albero e già bit-esatto,
+potrebbe muovere la metrica senza scrivere kernel — è **refutata**: 34,36 contro
+72,30 tok/s. Il motivo conferma la diagnosi invece di smentirla: `prefillChunk`
+instrada su `gemvQuantWgsl` con `batch: true` (M GEMV replicate sull'asse z,
+riuso dei pesi ZERO) e il GEMV veloce del goal precedente **rifiuta `batch` per
+costruzione** (`wgsl.ts:216-249`), mentre `step()` quei kernel veloci li ha.
+Conseguenza per la riga 2: non basta "usare il chunking" — il riuso va portato
+AL kernel veloce.
 
-**Il TTFT su un prompt da 6k non è mai stato misurato**: è il primo done-when
-del goal. A 32,91 tok/s il solo prefill di 6333 token vale ~192 s [proiezione].
+**Prossimo passo, senza gate**: riga 1, le sonde. Decide se le leve esistono
+(GEMM multi-riga con riuso vero, attenzione a chunk del prefill) e **se il
+bersaglio esiste**: 6333 token su 4e9 parametri sono 50,7 TFLOP, cioè 12,8
+TFLOP/s sostenuti in 3,96 s, e il picco fp32 di questo device in WebGPU non è
+mai stato misurato. È l'unica riga con potere di chiudere il goal.
 
-**E il prefill oggi è più lento del decode**: 32,91 contro 47,93. Due ragioni
-misurate, non ipotesi — il bench prefilla **una posizione alla volta**
-(`q35conf.worker.ts:207`) benché `prefillChunk` sia in albero e già bit-esatto;
-e il prefill a chunk, quando gira, usa `gemvQuantWgsl` con `batch: true`
-dispatchata sull'asse z, cioè **M GEMV replicate** con riuso dei pesi ZERO per
-costruzione. Il GEMV veloce del goal precedente rifiuta `batch` esplicitamente
-(`wgsl.ts:216-249`): il prefill non ha ricevuto nemmeno l'1,77x.
+**Tre decisioni aperte nel docket di `engine-ttft`**: dove vive lo spec-dec MTP
+ora che accelera una metrica già raggiunta · se una dichiarazione `hostState`
+smentita debba far fallire la run o solo annotarla · se la clausola di
+portabilità passi da «sotto 16.384 B sempre» a «dichiarare, negoziare,
+degradare», ora che si è verificato che il tetto di WebGPU **è negoziabile** via
+`requiredLimits` (puro JavaScript, nessun permesso: Chrome Android compreso).
 
 **Il 35B non ha ricevuto nulla da questo goal, ed e' misurato**: non ha un solo
 tensore Q4_0 (Q8_0 251 · Q4_K 117 · Q6_K 4), e la forma nuova dei
@@ -54,11 +60,14 @@ load, 13 GiB di tetto per un modello da 20,9), contro i 22,6 di riferimento a
 caldo — il divario e' paginazione, non kernel.
 
 **Cinque cose aperte che ho registrato e non deciso** (docket del goal chiuso):
-il conductor installato tronca le patch a 16 KB e il sintomo si traveste da
-conflitto di pianificazione · il done-when sulla portabilità chiede più di
-quanto quella fase potesse dare (il tetto residuo è del prefill) · un `--out`
-assoluto si perde nel runner GLM · due call-site GLM nel ktest non sono
-congelati · `hostState.declared` è una promessa che nessun runner verifica.
+il conductor troncava le patch a 16 KB — **CORRETTO alla fonte dalla sessione
+harness** (`59e19d3`), installato qui · il done-when sulla portabilità chiede
+più di quanto quella fase potesse dare: ereditato da `engine-ttft` riga 4, e il
+suo senso cambia ora che il tetto WebGPU è verificato **negoziabile** · `--out`
+assoluto/relativo: erano **nove** runner con due convenzioni opposte, il primo
+(`q35-bench-run`) **corretto in it.1**, gli altri otto a docket · due call-site
+GLM nel ktest non congelati · `hostState.declared` è una promessa che nessun
+runner verifica.
 
 ## 2. Mappa
 
@@ -66,10 +75,10 @@ congelati · `hostState.declared` è una promessa che nessun runner verifica.
 restando usabile: almeno **30 token/secondo** e **primo token entro 4 secondi**.
 
 **Distanza adesso**: Qwen 4B **47,93 tok/s a contesto 6333** (era 9,95) —
-**sopra i 30 dell'obiettivo**. Il TTFT a caldo su un prompt da 6k non è mai
-stato misurato: a 32,91 tok/s di prefill sarebbe ~192 s contro i 4 richiesti
-[proiezione]. È la metà dell'obiettivo di prodotto ancora aperta, ed è il goal
-`engine-ttft`. GLM-4.7-Flash resta residency-bound
+**sopra i 30 dell'obiettivo**. Il TTFT a caldo sul prompt da 6333 token è
+**87,6 s MISURATO** (it.1) contro i 4 richiesti: serve 21,9×. È la metà
+dell'obiettivo di prodotto ancora aperta, ed è il goal `engine-ttft`.
+GLM-4.7-Flash resta residency-bound
 (~13 tok/s, TTFT 14,7): nessuna delle leve di questo goal lo tocca. Il 35B non
 è stato rimisurato dopo i kernel nuovi.
 
@@ -96,9 +105,8 @@ stato misurato: a 32,91 tok/s di prefill sarebbe ~192 s contro i 4 richiesti
 - Il raggruppamento degli expert e il pipelining del decode: registrati, non aperti
 - **L'attenzione a chunk del prefill** (`attnDecodeWgsl` con `batch`) ha gli
   STESSI tre difetti di quella del decode — ridondanza GQA 4x, letture scalari,
-  `scores` in memoria di gruppo — e la stessa riscrittura li toglie. Va al goal
-  sul TEMPO AL PRIMO TOKEN, non a quello sul decode: stesso kernel, obiettivo
-  diverso (it.59, 2026-08-13)
+  `scores` in memoria di gruppo — e la stessa riscrittura li toglie. È ora la
+  riga 3 del goal `engine-ttft`: non più fuori scope
 - Tutti i numeri destinati alla pubblicazione: si rimisurano al tag di release
 
 ## 3. Landmines
@@ -114,8 +122,11 @@ stato misurato: a 32,91 tok/s di prefill sarebbe ~192 s contro i 4 richiesti
   non dice cosa sta misurando — ed è così che 10,89 s di load sono finiti in un
   obiettivo di prodotto sul prefill.
 - **`--prompt-idx` ha default 4 = 388 token, non il prompt da 6k.** È il flag da
-  cui viene il numero sbagliato in §1. I prompt ≥ 6000 token sono l'idx 0 (6333)
-  e l'idx 5 (6128).
+  cui veniva il numero sbagliato corretto in it.0. I prompt ≥ 6000 token sono
+  l'idx 0 (6333) e l'idx 5 (6128).
+- **Il prefill "a chunk" è più LENTO del sequenziale** (34,4 contro 72,3 tok/s,
+  it.1): instrada sul GEMV vecchio, mentre `step()` usa quello veloce. Un bench
+  che non dichiara `prefillPath` non dice quale dei due ha misurato.
 - **La cache del filesystem falsa il confronto col motore nativo del 35-41%.**
   Nessuno dei due artefatti dichiara il proprio stato di cache.
 - **Mai confrontare misure fra macchine senza stato dell'host dichiarato**: la

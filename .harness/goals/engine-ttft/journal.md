@@ -57,3 +57,62 @@ l'esclusione. [proiezione, non promessa]
 
 **STOP by design**: goal di prodotto ⇒ gate `plan-check`. PHASES.md aspetta
 l'approvazione del PI prima dell'iterazione 1.
+
+## it.1 (2026-08-13, riga 0) — BASELINE MISURATA, e l'ipotesi della riga è refutata
+
+Due bracci sul prompt-idx 0 (6333 token), host `quiescent` verificato a mano
+prima di ogni run (GPU 0%, 572/581 MiB), tre termini scomposti in entrambi.
+Artefatto unico: `results/engine/ttft-baseline-4b-prompt0-2026-08-13.json`.
+
+| | load | prefill | tok/s prefill | firstMs | **TTFT a caldo** | decode |
+|---|---|---|---|---|---|---|
+| (a) sequenziale | 10.892 | 87.582 | **72,30** | 36 | **87.618 ms** | 47,79 |
+| (b) chunked M=16 | 10.366 | 184.283 | 34,36 | 27 | 184.310 ms | 44,81 |
+
+**IL CHUNKING È 2,10× PIÙ LENTO.** L'ipotesi che la riga 0 doveva testare —
+«instradare il bench su `prefillChunk` potrebbe muovere la metrica senza
+scrivere un kernel» — è **refutata dalla misura**. Va nella direzione opposta.
+
+**La causa combacia col censimento di it.0, e questo è il valore del risultato.**
+`prefillChunk` instrada su `gemvQuantWgsl` con `batch: true`, cioè M GEMV
+replicate sull'asse z con riuso dei pesi ZERO; e il GEMV veloce del goal
+precedente (vec4 + 2 righe/workgroup + `subgroupAdd`) **rifiuta `batch` per
+costruzione** (`wgsl.ts:216-249`). Il path sequenziale usa `step()`, che quei
+kernel veloci li ha. Quindi oggi il chunking paga M volte la lettura dei pesi
+**col kernel lento**, e il sequenziale la paga una volta per token **col kernel
+veloce** — e vince. Non è un difetto del chunking: è che il chunking non ha mai
+ricevuto le ottimizzazioni del decode.
+
+**Conseguenza per la riga 2**: non basta "usare `prefillChunk`". La leva 1 deve
+portare il riuso vero AL kernel veloce, non instradare su quello lento.
+
+**Correzione a un numero mio di it.0**: avevo proiettato ~192 s di prefill dai
+32,91 tok/s del contratto. Quel 32,91 veniva da `q35-bench-4b-tier8-fase-d-it43`
+— codice vecchio, prompt-idx 4 da 388 token. Sul codice di oggi il prefill
+sequenziale rende **72,30 tok/s**: l'attenzione riscritta del goal precedente ha
+già dato 2,20× anche al prefill, perché il prefill sequenziale *è* il path del
+decode. Il prefill misurato è **87,6 s**, non 192.
+
+**LA BASELINE DEL GOAL**: TTFT a caldo **87.618 ms** contro un bersaglio di
+4.000. Serve **21,9×**, non i 48× che la proiezione sbagliata suggeriva.
+
+**Primo bench end-to-end del 4B sul codice di oggi**: decode 47,79 tok/s a ctx
+6333-6397, che conferma il 47,93 del checkpoint di micro-bench e soddisfa il
+gate di non-regressione (≥ 45,53).
+
+**Osservazione, non regressione**: nel braccio (b) il decode rende 44,81 tok/s,
+−6,2% dal riferimento e fuori banda. Il codice committato non è toccato (senza
+`--prefill-m` il modello non si costruisce con `prefillM`), ma costruire il
+modello con `prefillM: 16` sembra costare ~6% al decode. n=1 per braccio:
+registrato, non concluso.
+
+**Codice toccato** (dentro l'authority della riga 0: `src/engine/q35conf/**`,
+`scripts/**`): il braccio del prefill nel bench, con `prefillPath` DICHIARATO
+nel report — è l'applicazione diretta della lezione di it.9 del goal precedente,
+dove due JSON incompatibili furono riconciliati confrontando quel campo e non i
+numeri. E il fix di `--out` assoluto/relativo (docket item 3) su
+`q35-bench-run.mjs`, fatto qui perché la riga toccava comunque il runner e la
+modifica viaggia con due run che la esercitano.
+
+**Gate**: ktest 100 PASS / 0 FAIL · vitest 531 passed | 10 skipped ·
+`tsc --noEmit` pulito · non-reg decode PASS.

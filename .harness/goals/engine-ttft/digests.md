@@ -18,3 +18,23 @@
   scostamenti, la casa dello spec-dec MTP, la severità del controllo su
   `hostState`). Item 3 e 5 sono lavoro mio, ereditati dal goal precedente.
 - STOP by design: `plan-check` aperto, l'iterazione 1 aspetta il sì del PI.
+
+## it.1 (2026-08-13) — riga 0 chiusa: la baseline esiste, e dice 21,9×
+
+- **Traiettoria**: l'obiettivo era senza numero (mai misurato), ora è **87.618 ms**
+  di tempo al primo token a modello caldo contro un bersaglio di 4.000. Serve
+  **21,9×**. Ciò che lo muove è la riga 1: decidere quali forme di kernel esistono.
+- Il prompt da 6333 token non era mai stato misurato: ora lo è, coi tre tempi
+  separati (caricamento 10,9 s · lettura del prompt 87,6 s · primo token 36 ms).
+- **L'ipotesi della riga è caduta**: usare il percorso "a blocchi" già in albero
+  rende il prefill **2,10× più lento**, non più veloce. Motivo: quel percorso usa
+  il moltiplicatore vecchio, mentre il percorso una-posizione-alla-volta usa
+  quello veloce riscritto il mese scorso. Il risultato conferma la diagnosi di
+  it.0 invece di smentirla.
+- Corretto un numero mio: avevo proiettato 192 s di prefill da una misura di
+  codice vecchio. Il vero è 87,6 s — l'attenzione riscritta aveva già dato 2,20×
+  anche qui.
+- Gate tutti verdi: ktest 100/0, suite 531, tipi puliti, decode non regredito
+  (47,79 contro un minimo di 45,53).
+- Fatto per strada: il fix di `--out` (docket item 3) sul runner che la riga
+  toccava comunque.

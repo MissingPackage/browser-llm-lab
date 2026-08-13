@@ -213,11 +213,33 @@ async function main(cfg: Cfg): Promise<void> {
     const p = golden.prompts[cfg.bench.promptIdx];
     model.resetState();
     const P = p.promptTokens.length;
+    // BRACCIO DEL PREFILL (goal engine-ttft, riga 0). Con `prefillm` il prompt
+    // passa da `prefillChunk` — M righe in un submit — invece che da `step` una
+    // posizione alla volta. Il chunk deve essere PIENO (il piano gemello ha le
+    // taglie cotte dentro), quindi la CODA `nPre % M` la fa `step`, che e'
+    // esattamente cio' che il contratto di `prefillChunk` prescrive.
+    //
+    // Il braccio si DICHIARA nel report (`prefillPath`). Non e' decorazione:
+    // in `engine-kernel-decode` it.9 due JSON con numeri incompatibili sono
+    // stati riconciliati confrontando questo campo e non i numeri — un prefill
+    // a chunk e uno sequenziale differiscono di ~3x e senza il campo sembrano
+    // una regressione.
+    // `chunkM`, non `M`: in questo scope `M` e' gia' il descrittore del modello.
+    const chunkM = model.prefillChunk !== null && cfg.prefillM ? cfg.prefillM : 0;
+    const nPre = P - 1;
+    const nChunk = chunkM ? Math.floor(nPre / chunkM) : 0;
+    const prefillPath = chunkM
+      ? `chunked M=${chunkM} (${nChunk} chunk + coda ${nPre - nChunk * chunkM} via step)`
+      : "sequenziale (step per posizione)";
     const tPre = performance.now();
     // await OBBLIGATORIO: sul MoE step() contiene i readback del router
     // (fire-and-forget = mapAsync concorrenti sullo stesso staging, it.19);
     // sul denso con read=false ritorna subito: semantica di misura invariata.
-    for (let t = 0; t < P - 1; t++) await model.step(p.promptTokens[t], t, false);
+    for (let c = 0; c < nChunk; c++) {
+      await model.prefillChunk!(p.promptTokens.slice(c * chunkM, (c + 1) * chunkM), c * chunkM);
+      if (c % 32 === 0) post({ type: "tick", msg: `prefill chunk ${c}/${nChunk}` });
+    }
+    for (let t = nChunk * chunkM; t < nPre; t++) await model.step(p.promptTokens[t], t, false);
     await device.queue.onSubmittedWorkDone();
     const prefillMs = performance.now() - tPre;
     const tFirst = performance.now();
@@ -241,6 +263,7 @@ async function main(cfg: Cfg): Promise<void> {
       declared: "orchestratore correttezza-prima; sui densi decode BATCHED (fase D fase 3: argmax su GPU, K=32 token/submit, un readback ogni K); sul MoE ancora un readback del router per layer",
       prompt: { idx: cfg.bench.promptIdx, file: p.file, tokens: P },
       loadMs: Math.round(loadMs),
+      prefillPath,
       prefill: { tokens: P - 1, ms: Math.round(prefillMs), tokS: (P - 1) / (prefillMs / 1000) },
       decode: { n: cfg.bench.nDecode, msPerTokenP50: p50, tokS: 1000 / p50, firstMs: Math.round(firstMs) },
       ttftMs: Math.round(loadMs + prefillMs + firstMs),

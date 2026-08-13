@@ -1,0 +1,115 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-ttft-baseline",
+ "date": "2026-08-13",
+ "goal": "engine-ttft",
+ "phase": "riga 0 \u2014 baseline onesta",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "modelSha256": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
+ "deviceLabel": "4090-linux",
+ "prompt": {
+  "idx": 0,
+  "file": "/home/neuromancer/Projects/browser-llm-lab/tools/oracle-moe/corpus/01-code-ts-review.txt",
+  "tokens": 6333
+ },
+ "ruling": "opzione A (PI 2026-08-13): l'obiettivo dei 4 s vale sul TTFT A CALDO = prefill.ms + decode.firstMs. Il load ha una soglia sua, fuori da questo goal.",
+ "targetWarmMs": 4000,
+ "arms": [
+  {
+   "label": "sequenziale (step per posizione) \u2014 il path del bench di sempre",
+   "source": "results/engine/ttft-baseline-4b-seq-prompt0-2026-08-13.json",
+   "prefillPath": null,
+   "loadMs": 10892,
+   "prefillMs": 87582,
+   "prefillTokS": 72.2982785827992,
+   "firstMs": 36,
+   "ttftWarmMs": 87618,
+   "ttftTotalMs": 98510,
+   "decodeTokS": 47.789725181854344,
+   "decodeContext": {
+    "startPositions": 6333,
+    "endPositions": 6397,
+    "note": "ms/token cresce ~10,4 us per posizione (it.59): confrontare solo a contesto dichiarato"
+   },
+   "hostState": {
+    "declared": "quiescent",
+    "before": {
+     "temperatureC": 33,
+     "smClockMHz": 210,
+     "powerW": 5.47,
+     "memUsedMiB": 572,
+     "utilizationPct": 0,
+     "throttleReasons": "0x0000000000000001"
+    },
+    "after": {
+     "temperatureC": 51,
+     "smClockMHz": 2265,
+     "powerW": 49.65,
+     "memUsedMiB": 581,
+     "utilizationPct": 0,
+     "throttleReasons": "0x0000000000000024"
+    }
+   }
+  },
+  {
+   "label": "chunked M=16 via prefillChunk (395 chunk + coda 12 via step)",
+   "source": "results/engine/ttft-baseline-4b-chunk16-prompt0-2026-08-13.json",
+   "prefillPath": "chunked M=16 (395 chunk + coda 12 via step)",
+   "loadMs": 10366,
+   "prefillMs": 184283,
+   "prefillTokS": 34.36019786741941,
+   "firstMs": 27,
+   "ttftWarmMs": 184310,
+   "ttftTotalMs": 194676,
+   "decodeTokS": 44.8129061217496,
+   "decodeContext": {
+    "startPositions": 6333,
+    "endPositions": 6397,
+    "note": "ms/token cresce ~10,4 us per posizione (it.59): confrontare solo a contesto dichiarato"
+   },
+   "hostState": {
+    "declared": "quiescent",
+    "before": {
+     "temperatureC": 37,
+     "smClockMHz": 210,
+     "powerW": 12.97,
+     "memUsedMiB": 581,
+     "utilizationPct": 0,
+     "throttleReasons": "0x0000000000000001"
+    },
+    "after": {
+     "temperatureC": 51,
+     "smClockMHz": 2265,
+     "powerW": 46.43,
+     "memUsedMiB": 589,
+     "utilizationPct": 0,
+     "throttleReasons": "0x0000000000000024"
+    }
+   }
+  }
+ ],
+ "verdict": "Il prefill A CHUNK e' 2,10x PIU' LENTO del sequenziale (34,36 contro 72,30 tok/s). L'ipotesi della riga 0 -- 'instradare il bench su prefillChunk potrebbe muovere la metrica senza scrivere kernel' -- e' REFUTATA dalla misura. La causa e' coerente col censimento di it.0: prefillChunk instrada su gemvQuantWgsl con batch:true, cioe' M GEMV replicate sull'asse z con riuso dei pesi ZERO, e il GEMV veloce del goal precedente (vec4 + 2 righe/workgroup + subgroupAdd) RIFIUTA batch per costruzione (wgsl.ts:216-249). Il path sequenziale usa step(), che quei kernel veloci li ha. Quindi oggi il chunking paga M volte la lettura dei pesi CON il kernel lento, mentre il sequenziale la paga una volta per token CON il kernel veloce -- e vince.",
+ "baseline": {
+  "chosen": "sequenziale",
+  "ttftWarmMs": 87618,
+  "targetWarmMs": 4000,
+  "speedupNeeded": 21.9,
+  "note": "E' il numero da cui parte engine-ttft. Il 32,91 tok/s del contratto veniva da q35-bench-4b-tier8-fase-d-it43.json (codice vecchio, prompt-idx 4 da 388 token): sul codice di oggi e sul prompt-idx 0 il prefill sequenziale rende 72,30 tok/s. La proiezione di ~192 s scritta in it.0 e' SUPERATA dalla misura: 87,6 s."
+ },
+ "gates": {
+  "vitest": "531 passed | 10 skipped",
+  "ktest": "100 PASS / 0 FAIL",
+  "tsc": "pulito",
+  "nonRegDecode": {
+   "riferimento": 47.93,
+   "banda5pct": 45.53,
+   "misurato": 47.789725181854344,
+   "esito": "PASS (47,79)"
+  },
+  "nota": "il braccio (b) rende decode 44,81 tok/s, -6,2% dal riferimento e FUORI banda. Il codice committato non e' toccato (senza --prefill-m il modello non si costruisce con prefillM), ma costruire il modello con prefillM=16 sembra costare ~6% al decode. n=1 per braccio: registrato come osservazione, non come regressione."
+ },
+ "repro": [
+  "node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --declared quiescent --out results/engine/ttft-baseline-4b-seq-prompt0-2026-08-13.json",
+  "node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --declared quiescent --prefill-m 16 --out results/engine/ttft-baseline-4b-chunk16-prompt0-2026-08-13.json"
+ ]
+}

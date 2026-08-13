@@ -3,7 +3,12 @@
 // numeri senza host state). Uso:
 //   node scripts/q35-bench-run.mjs [--prompt-idx 4] [--n-decode 64]
 //     [--model 4b|9b|35b] [--vram-gib 12] [--arena-gib 11]
-//     [--declared user-session-light] [--out results/engine/...json]
+//     [--declared user-session-light] [--prefill-m 16] [--out results/engine/...json]
+//
+// --prefill-m instrada il prompt su `prefillChunk` (M righe per submit) invece
+// che su `step` una posizione alla volta. Senza il flag il bench prefilla
+// SEQUENZIALMENTE, che e' il path di sempre: il braccio si legge in
+// `prefillPath` del JSON, mai dedotto dai numeri (goal engine-ttft riga 0).
 //
 // --vram-gib e --arena-gib NON sono sinonimi, e la differenza e' il senso della
 // fase 5 (it.35, docket item 11): `--arena-gib` ASSERISCE il budget dell'arena
@@ -18,7 +23,7 @@
 import { chromium } from "playwright";
 import { copyFileSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { hostState } from "./lib/hoststate.mjs";
 import { watchGpuErrors, invalidPath } from "./lib/gpuerrors.mjs";
 
@@ -31,10 +36,16 @@ const promptIdx = arg("prompt-idx", "4");
 const nDecode = arg("n-decode", "64");
 const declared = arg("declared", "undeclared");
 const modelTag = arg("model", "4b");
+const prefillM = arg("prefill-m", null);
 const arenaGiB = arg("arena-gib", null);
 const vramGiB = arg("vram-gib", null);
 const outTag = vramGiB ? `tier${vramGiB}` : arenaGiB ? `arena${arenaGiB}` : "fullresident";
-const out = arg("out", join(ROOT, `results/engine/q35-bench-${modelTag}-${outTag}-${new Date().toISOString().slice(0, 10)}.json`));
+// `--out` ASSOLUTO o RELATIVO alla root, indifferentemente: i runner di questa
+// famiglia scrivevano `out` grezzo (quindi un relativo finiva nella CWD) e
+// quelli GLM fanno `join(ROOT, out)` (quindi un assoluto veniva mangiato, e a
+// goal precedente e' costato una run GPU da 20 minuti). Una convenzione sola.
+const outArg = arg("out", `results/engine/q35-bench-${modelTag}-${outTag}-${new Date().toISOString().slice(0, 10)}.json`);
+const out = isAbsolute(outArg) ? outArg : join(ROOT, outArg);
 const golden = arg("golden", join(ROOT, `results/engine/golden/q35/golden-q35-${modelTag}-full-2026-08-10.json`));
 const PROFILE = process.env.E2E_PROFILE ?? join(homedir(), ".cache/blab-q35conf-profile");
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:5199";
@@ -55,7 +66,7 @@ const browser = await chromium.launchPersistentContext(PROFILE, { headless: fals
 const page = browser.pages()[0] ?? (await browser.newPage());
 // docket item 24: gli errori GPU non si stampano soltanto — decidono l'esito.
 const gpu = watchGpuErrors(page, "q35bench");
-await page.goto(`${BASE_URL}/q35conf.html?bench=${promptIdx},${nDecode}${modelTag !== "4b" ? `&model=${modelTag}` : ""}${arenaGiB ? `&arena=${arenaGiB}` : ""}${vramGiB ? `&vram=${vramGiB}` : ""}`, { waitUntil: "load" });
+await page.goto(`${BASE_URL}/q35conf.html?bench=${promptIdx},${nDecode}${modelTag !== "4b" ? `&model=${modelTag}` : ""}${arenaGiB ? `&arena=${arenaGiB}` : ""}${vramGiB ? `&vram=${vramGiB}` : ""}${prefillM ? `&prefillm=${prefillM}` : ""}`, { waitUntil: "load" });
 
 const t0 = Date.now();
 for (;;) {
@@ -99,7 +110,7 @@ for (;;) {
       process.exit(5);
     }
     writeFileSync(out, JSON.stringify(full, null, 1));
-    console.log(`[q35bench] done: decode ${report.decode.tokS.toFixed(2)} tok/s (p50 ${report.decode.msPerTokenP50.toFixed(1)} ms) a contesto ${decodeContext ? `${decodeContext.startPositions}-${decodeContext.endPositions}` : "?"}, prefill ${report.prefill.tokS.toFixed(1)} tok/s, TTFT ${(report.ttftMs / 1000).toFixed(1)} s -> ${out}`);
+    console.log(`[q35bench] done: decode ${report.decode.tokS.toFixed(2)} tok/s (p50 ${report.decode.msPerTokenP50.toFixed(1)} ms) a contesto ${decodeContext ? `${decodeContext.startPositions}-${decodeContext.endPositions}` : "?"}, prefill ${report.prefill.tokS.toFixed(1)} tok/s [${report.prefillPath ?? "?"}], TTFT ${(report.ttftMs / 1000).toFixed(1)} s -> ${out}`);
     process.exit(0);
   }
   await new Promise((res) => setTimeout(res, 1500));
