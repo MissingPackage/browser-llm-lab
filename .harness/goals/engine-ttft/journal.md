@@ -621,3 +621,36 @@ arriva senza toccare il gate di correttezza, e la via intera si misura contro un
 riferimento gia' aggiornato invece che contro la baseline vecchia.
 
 **Metrica invariata**: TTFT a caldo **87.618 ms**.
+
+## it.13 (2026-08-13, riga 2) — il cablaggio E' SCRITTO, il gate GPU NO
+
+Primo lavoro sincrono dopo la decisione di it.12. `gemvB` in `q35gpumodel.ts`
+instrada sulla forma split-K quando `kind` e' q4_0 e K e' multiplo di 64 —
+condizioni VERIFICATE nel codice, non assunte — con griglia da
+`prefillGemmGrid` e splits da `prefillGemmSplitsFor`. Fuori da quelle, resta la
+forma di prima, corretta e solo lenta.
+
+Aggiunto il buffer dei parziali, allocato al load e dimensionato sul **massimo
+di tutte le `n` che `gemvB` puo' ricevere**, non su quella che capita per prima:
+un buffer corto darebbe scritture fuori range su una shape piu' grande
+incontrata dopo, e **la validazione WebGPU non la vedrebbe**, perche' il binding
+e' l'intero buffer. E' il tipo di errore che produce numeri plausibili.
+
+**Verificato**: `tsc --noEmit` pulito · vitest **645 passed | 10 skipped**
+(erano 611 su main: i test della build coprono il path nuovo).
+
+**NON verificato, e per questo il codice sta su `wip/riga2-cablaggio-splitk` e
+NON su main**: il ktest. Una run e' andata in **TIMEOUT a 600 s con «pagina non
+leggibile»**, poi tre tentativi sono stati uccisi dall'ambiente con exit 144 —
+lo stesso segnale che stasera ha ucciso cinque workflow e tre server.
+
+**Non so attribuire quel timeout**, e non voglio indovinare: puo' essere
+l'infrastruttura che uccide anche i comandi lunghi in primo piano, oppure questo
+kernel che pianta la GPU. Sono due cause con rimedi opposti, e dichiararne una
+senza prove sarebbe esattamente l'errore che questo progetto si e' gia' fatto
+costare piu' volte. **La prossima iterazione deve discriminare**: rieseguire il
+ktest su `main` (senza il cablaggio) e sul ramo, e confrontare. Se `main` va in
+timeout uguale, e' infrastruttura; se solo il ramo, e' il kernel.
+
+**Metrica invariata**: TTFT a caldo **87.618 ms**. Il cablaggio esiste ma non e'
+misurato, e finche' non passa il gate non conta.

@@ -1,9 +1,9 @@
 {
  "status": "active",
  "session_id": "0348f2c0-1d0a-4913-93cf-ede7de3e30af",
- "next_wake_epoch": 1786655564,
- "next_wake": "2026-08-13T23:12:44+0200",
- "prompt": "/loop-iteration engine-ttft riga 2: esito del quinto lancio wunhw2705 (run wf_46624843-194, UN SOLO task, spec stretta). Se ha prodotto patch: verifica TU a mano (tsc, vitest, ktest con BASE_URL=http://localhost:5199, argmax del golden) e poi misura il prefill sul prompt-idx 0 prima/dopo \u2014 e' la prima volta che la metrica si puo' muovere. Se e' morta anche questa: NON un sesto tentativo, come dichiarato a docket item 17 \u2014 si passa al lavoro a mano su q35gpumodel.ts, un pezzo per volta committando appena verificato.",
- "updated_epoch": 1786654664,
- "updated": "2026-08-13T22:57:44+0200"
+ "next_wake_epoch": 1786655957,
+ "next_wake": "2026-08-13T23:19:17+0200",
+ "prompt": "/loop-iteration engine-ttft riga 2 \u2014 CABLAGGIO A MANO, sincrono nel turno (mai piu' workflow: docket item 18). Segui il piano scritto in journal it.12. PRIMO PASSO E BASTA: la sola forma split-K in VIRGOLA MOBILE in src/engine/q35gpumodel.ts, sostituendo gemvB (~riga 709-720). Serve un buffer dei parziali da prefillPartialFloats allocato al load, e gemvB che diventa 2 dispatch (prefillGemmQ4SplitKWgsl + prefillSplitKCombineWgsl) con la griglia da prefillGemmGrid. NON toccare il gate di conformita': in virgola mobile la bit-identita' resta. Poi tsc, vitest, ktest con BASE_URL=http://localhost:5199, e MISURA il prefill sul prompt-idx 0 con --prefill-m 16. Committa appena verde. La via intera e' il passo DOPO.",
+ "updated_epoch": 1786655837,
+ "updated": "2026-08-13T23:17:17+0200"
 }
