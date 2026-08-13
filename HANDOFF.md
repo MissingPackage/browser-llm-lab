@@ -30,6 +30,32 @@ product intero come leva di questo goal.
 serve 4,0×. Scomposto: caricamento 10.892 · lettura del prompt 87.582 (6332
 token a 72,30 tok/s) · primo token 36 ms. Decode 47,79 tok/s a contesto 6333.
 
+**LA METRICA SI È MOSSA — riga 2, it.14 e it.15.** È la prima volta da quando il
+goal è aperto:
+
+| | prefill | TTFT a caldo | decode |
+|---|---|---|---|
+| baseline (it.1) | 72,30 tok/s | 87.618 ms | 47,79 |
+| split-K f32 (it.14) | 110,19 | 57.485 | 49,59 |
+| **via intera (it.15)** | **123,26** | **51.392** | 48,00 |
+
+**1,70× sulla baseline; alla barra manca 2,35×**, e la leva che resta è
+l'attenzione del prefill (**6,76×** misurata) — la riga 3.
+
+**Il riavvio della macchina ha risolto i crash**: `ktest` fa 100 PASS / 0 FAIL
+sullo stesso codice che prima faceva morire la pagina. La causa era
+infrastrutturale, non il cablaggio — e **cade anche la conclusione sul
+`sdd-conductor`**: le sue 5 morti erano lo stesso segnale 144 che uccideva un
+ktest sano, non un limite del veicolo.
+
+**Il buco trovato in it.15 vale più del guadagno**: `prefillgemmplan.ts`
+esisteva già — completo, coi suoi test — e `q35gpumodel.ts` **non lo importava**
+(zero riferimenti). Il sito ri-derivava a mano la condizione e finiva sempre
+sulla via f32, che il kernel stesso documenta come fallback. È la stessa forma
+del difetto di it.7 del goal precedente («un terzo posto che decide la stessa
+cosa»), e il commento che la nomina era tre righe sotto il codice che la
+ripeteva. **Un piano non collegato non è un piano: è documentazione.**
+
 **LE DUE RISPOSTE DELLA FASE DI SONDE (it.2), verificate a mano contro
 l'artefatto**:
 
