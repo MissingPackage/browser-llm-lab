@@ -153,3 +153,33 @@ il tutto. Il numero del contratto e' sempre stato il secondo.
 
 Artefatto con prima/dopo nello stesso JSON, hostState dichiarato e i gate:
 `results/engine/attn-split-fase1-4090-2026-08-13T02-15-18-710Z.json`.
+
+## it.6 (2026-08-13, fase 2) — il gate di capability atterra, il kernel ricasca nel troncamento
+
+Prima ondata della riga 2: T1 e T3 integrati, T2 (il kernel) BLOCKED, T4-T7
+bloccati a valle.
+
+**Cosa e' atterrato, ed e' piu' importante di quanto sembri.**
+`src/engine/gemvcaps.ts` non chiede solo la feature `subgroups`: rifiuta il
+percorso se la dimensione del subgroup non e' FISSA a 32
+(`subgroupMinSize === subgroupMaxSize === 32`). Il motivo e' che la forma
+vincente di fase 0 mette due righe in un workgroup da 64 thread assumendo una
+riga per subgroup da 32 lane: su hardware wave16 o wave64 la riduzione somma le
+lane sbagliate e **il risultato e' numericamente errato senza che nulla
+sollevi un errore** — WebGPU non valida la dimensione del subgroup, il kernel
+compila e gira. Anche "dimensione non leggibile" va a false: non saperlo e'
+indistinguibile dal saperlo sbagliato. E' la stessa dottrina delle sentinelle
+di questo progetto, applicata prima di generare il WGSL invece che dopo.
+
+**E il troncamento ha colpito di nuovo** (docket item 3): la patch di T2 arriva
+tagliata a meta' di un file di test — l'ultima riga del diff e' letteralmente
+`+    e` — e `git apply` la rifiuta. Avevo pre-patchato la copia dello script
+del run, ma il runtime l'aveva gia' caricata: la correzione vale dalla RIPRESA
+in poi, non a caldo. Lezione operativa: la copia va patchata PRIMA di lanciare,
+non dopo.
+
+L'integratore, per la seconda volta, ha fatto la cosa giusta: patch salvata
+byte per byte fuori dal target, `--check` sul solo primo file per mostrare che i
+tre hunk su `wgsl.ts` erano in contesto, e nessuna ricostruzione.
+
+Gate sullo stato integrato: tsc pulito, suite **488|10** (da 472).
