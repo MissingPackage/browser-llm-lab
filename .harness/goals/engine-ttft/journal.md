@@ -279,3 +279,52 @@ una variante esistente. Il disegno è scritto per intero nel docket item 11 e la
 tolleranza va dichiarata prima di misurare: non è bit-identica per costruzione.
 
 **Gate**: ktest 100 PASS / 0 FAIL · vitest 545 passed | 10 skipped · tsc pulito.
+
+## it.5 (2026-08-13, riga 2 cella a0) — P8 e P9 CONFERMATE: la via intera vince 1,83×
+
+Enunciati committati PRIMA di scrivere il kernel (addendum it.5 della
+pre-registrazione). `splitk-idot`: via q4_0 × q8_0 — attivazioni quantizzate a
+i8 per blocco da 32, `dot4I8Packed`, accumulo i32, scala una volta per blocco.
+
+| M=16, K2560×N9216 | p50 | vs `splitk` | vs forma attuale |
+|---|---|---|---|
+| forma attuale | 2,6643 ms | — | 1× |
+| `splitk` | 0,0609 ms | 1× | 43,7× |
+| **`splitk-idot`** | **0,0333 ms** | **1,83×** | **80,0×** |
+
+**P9 CONFERMATA** (predetto < 0,0608; misurato 0,0333). **P8 CONFERMATA**:
+`checksumRelDiff` 2,97e-3, dentro la banda ≤ 2,0e-2 ricavata dal conto
+sull'errore di quantizzazione — e sopra 1e-3, che è il segnale che il kernel sta
+davvero quantizzando invece di fare finta.
+
+**La mia stessa nota di rischio è refutata, ed è la parte informativa.** Avevo
+scritto: «se il kernel è davvero latency-bound sui workgroup in volo, P9 cade,
+e sarebbe la terza conferma della stessa causa». Non è caduta. Quindi il collo
+non era *solo* occupancy: dopo lo split-K c'era ancora testa di calcolo, e il
+lavoro aritmetico per elemento era materiale. Il modello del docket item 10 va
+raffinato, non buttato — l'occupancy decide *fra le forme*, il costo aritmetico
+decide *dentro* la forma vincente.
+
+**Proiezione aggiornata**: blocco FFN da 0,2579 a **0,1433 ms** (1,80×), quindi
+le moltiplicazioni scendono da 5.776 a **3.209 ms** e la somma col termine di
+attenzione fa **~6.097 ms** invece di 8.665. **L'attenzione è ora il 47% del
+totale**: dopo la riga 2 il peso si sposta sulla riga 3.
+
+**Fuori misura, dichiarato**: il costo della passata che quantizza le
+attivazioni. Nel banco arrivano già quantizzate. Su M=16 sono ~0,16 MB contro
+13,3 MB di pesi, quindi il termine dovrebbe essere piccolo — e «dovrebbe» in
+questa riga ha già sbagliato due volte. Va misurato prima della produzione.
+
+**Un errore mio, di dieci minuti di GPU**: ho scritto `enable
+packed_4x8_integer_dot_product;` in testa al kernel. `dot4I8Packed` è una
+LANGUAGE FEATURE, non un'estensione da abilitare: la compilazione è fallita con
+«expected extension» e tutte e cinque le celle sono uscite `skipped`. La sonda
+già in albero (`kdGemv.ts:168`) lo usa nudo e me lo diceva: non l'ho copiata.
+
+**Due difetti trovati eseguendo, entrambi a docket**: una seconda incarnazione
+di questa sessione girava comandi in parallelo, occupando GPU e profilo Chrome e
+riscrivendo i sorgenti sotto di me (item 13); e ktest che crasha riporta 0 PASS e
+0 FAIL, che un gate scritto su `grep -c FAIL` legge come verde (item 14).
+
+**Gate** (rieseguiti col comando giusto, exit code guardato): ktest exit 0, 100
+PASS / 0 FAIL · vitest 545 passed | 10 skipped · `tsc --noEmit` pulito.

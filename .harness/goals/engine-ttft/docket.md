@@ -268,3 +268,62 @@ vecchio (8,07 a 4096³ è già dentro la banda). Ma è l'unico punto del WP in c
 il protocollo si è mosso a risultato noto, e va contato come grado di libertà
 speso. Nessuna azione: registrato perché il prossimo che legge questi numeri
 sappia quanto pesarli.
+
+## item 13 — DUE INCARNAZIONI DELLA STESSA SESSIONE hanno lavorato in parallelo (it.5, metodo)
+
+**Cosa ho osservato, non dedotto.** A metà iterazione la GPU era al 93% mentre
+credevo l'host quiescente. `nvidia-smi --query-compute-apps` e `ps` hanno
+mostrato il PID 324183: `node scripts/tt-microbench-run.mjs`, lanciato con un
+`grep -E "idot|quant|splitk|SKIP|skipped"` **che in quel turno non ho scritto
+io**, dentro una shell col mio stesso `CODEX_COMPANION_SESSION_ID`.
+
+Sintomi che avevo già visto e attribuito a me stessa:
+- `src/microbench/ttGemm.ts` con **due** implementazioni di
+  `gemmQ4MultiRowSplitKIdotWgsl`, la seconda accompagnata da un
+  `quantXQ8Wgsl` che non avevo scritto — e commenti che citano «P8/P9
+  nell'addendum it.5», cioè la MIA pre-registrazione di dieci minuti prima;
+- la seconda copia **sparita da sola** fra due comandi consecutivi;
+- i system-reminder «il file è stato modificato dall'utente o da un linter».
+
+**Il danno reale**: una run GPU sprecata (la mia è morta subito perché il
+profilo Chrome era occupato), il profilo `/tmp/blab-e2e-profile` lasciato in
+mano a dieci processi Chrome orfani con un `SingletonLock` da rimuovere a mano,
+e — la parte cara — **dieci minuti passati a fare forensics su un file che
+cambiava sotto di me**, credendo di aver duplicato io del codice.
+
+**Perché va a docket e non è aneddotica**: la norma di questo progetto dice «i
+bench GPU sono seriali ed esclusivi» e la landmine dice «due runner playwright
+sullo stesso profilo si bloccano a vicenda». Nessuna delle due protegge da
+questo caso, perché entrambe assumono **un solo agente**. Non c'è un lock: né
+sul profilo, né sulla GPU, né sull'albero.
+
+**Raccomandazione, non ruling** (è lavoro mio se la vuoi): un lock file su
+`/tmp/blab-e2e-profile.lock` preso da ktest e dai runner playwright, che
+fallisca subito con «un altro bench sta girando (PID N)» invece di dare
+`Opening in existing browser session` dentro una eccezione non gestita. Costa
+dieci righe in `scripts/lib/` e le usa chiunque.
+
+## item 14 — ktest che CRASHA riporta 0 PASS e 0 FAIL, e un gate a grep lo legge come verde (it.5)
+
+Trovato eseguendo, non ragionando. Con il profilo occupato, ktest muore con
+un'eccezione non gestita **prima di eseguire un solo test**. Il mio gate era
+
+    node .harness/tools/engine-ktest.mjs 2>&1 | grep -cE "\tFAIL\t"   # -> 0
+
+e **zero FAIL è esattamente ciò che si vede quando va tutto bene**. L'ho preso
+per verde una volta prima di accorgermene dal conteggio dei PASS a zero.
+
+È la stessa classe delle sentinelle che questo progetto si è già dato altrove
+(la landmine «i JSON in `results/` possono mentire in silenzio»): uno strumento
+che tace è peggio che non averlo. Due difetti sommati:
+1. il gate non guardava l'**exit code** (qui 1) né il numero di PASS attesi;
+2. `engine-ktest.mjs` ha `BASE_URL` con default **5173** mentre questa sessione
+   serve su **5199**, e `E2E_PROFILE` con default il profilo condiviso —
+   entrambi flag da leggere prima di spenderci sopra, terza recidiva della
+   landmine più cara del progetto.
+
+**Lavoro mio, non un ruling**: il gate di ktest va scritto come «exit code 0 E
+PASS >= N atteso E FAIL == 0», mai come «FAIL == 0» da solo. Da fare quando si
+tocca il gate per altro; nel frattempo il comando corretto è
+`BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs` e si
+guarda l'exit code.

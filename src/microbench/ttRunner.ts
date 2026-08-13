@@ -38,6 +38,7 @@ import { DOT4I8_PROBE_WGSL, F16_PROBE_WGSL, SUBGROUP_PROBE_WGSL } from "./kdGemv
 import {
   gemmDenseF32Wgsl, gemmDenseGrid, gemmQ4MultiRowRegsWgsl, gemmQ4MultiRowRegsGrid,
   gemmQ4MultiRowSharedWgsl, gemmQ4MultiRowSharedGrid, gemmQ4MultiRowSplitKWgsl,
+  gemmQ4MultiRowSplitKIdotWgsl,
   splitKCombineWgsl, workgroupStorageBytes,
 } from "./ttGemm";
 import { TT_ATTN_SHAPE, attnPrefillGrid, attnPrefillStreamWgsl } from "./ttAttn";
@@ -314,13 +315,40 @@ export async function runTtftProbeBench(
     }
     const xBuf = device.createBuffer({ size: Mmax * K * 4, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
     fillRandomF32(new Float32Array(xBuf.getMappedRange()), 1337); xBuf.unmap();
+    // it.5 — ATTIVAZIONI QUANTIZZATE per la cella `splitk-idot` (docket item 11).
+    // Rigenerate con lo STESSO seme di `xBuf`: la cella intera e quelle in
+    // virgola mobile devono vedere gli stessi numeri, o il confronto dei
+    // checksum non misura la quantizzazione ma due input diversi.
+    const nBlk = K / 32;
+    const xHost = new Float32Array(Mmax * K);
+    fillRandomF32(xHost, 1337);
+    const xqHost = new Uint32Array(Mmax * nBlk * 8);
+    const xscHost = new Float32Array(Mmax * nBlk);
+    for (let m = 0; m < Mmax; m++) {
+      for (let b = 0; b < nBlk; b++) {
+        let amax = 0;
+        for (let i = 0; i < 32; i++) amax = Math.max(amax, Math.abs(xHost[m * K + b * 32 + i]));
+        const sc = amax / 127;
+        xscHost[m * nBlk + b] = sc;
+        const inv = sc > 0 ? 1 / sc : 0;
+        for (let i = 0; i < 32; i++) {
+          const q = Math.max(-127, Math.min(127, Math.round(xHost[m * K + b * 32 + i] * inv)));
+          xqHost[(m * nBlk + b) * 8 + (i >> 2)] |= (q & 0xff) << ((i & 3) * 8);
+        }
+      }
+    }
+    const xqBuf = device.createBuffer({ size: xqHost.byteLength, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+    new Uint32Array(xqBuf.getMappedRange()).set(xqHost); xqBuf.unmap();
+    const xscBuf = device.createBuffer({ size: xscHost.byteLength, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+    new Float32Array(xscBuf.getMappedRange()).set(xscHost); xscBuf.unmap();
+
     const yBuf = device.createBuffer({ size: Mmax * N * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const partBuf = device.createBuffer({ size: SPLIT_K * Mmax * N * 4, usage: GPUBufferUsage.STORAGE });
 
     for (const M of shape.Ms) {
       const srcs: Array<{
         id: string; code: string; grid: [number, number, number]; combine?: string;
-        weightEmitFactor: number; xEmitFactor: number; ctx: string; coldw?: boolean;
+        weightEmitFactor: number; xEmitFactor: number; ctx: string; coldw?: boolean; idot?: boolean;
       }> = [];
       const baseCode = gemvQuantWgsl({ kind: "q4_0", K, N, hasBias: false, batch: true });
       const [bgx, bgy] = gemvGrid(N);
@@ -348,6 +376,16 @@ export async function runTtftProbeBench(
           grid: [Math.ceil(N / 64), SPLIT_K, 1], combine: splitKCombineWgsl({ K, N, M, splits: SPLIT_K }),
           weightEmitFactor: 1, xEmitFactor: Math.ceil(N / 64),
           ctx: `come 'regs' ma con K spezzato su ${SPLIT_K} workgroup lungo wid.y + un dispatch di combinazione dei parziali. Serve a compensare l'occupancy: a N ${N} la forma 'regs' lancia solo ${Math.ceil(N / 64)} workgroup.`,
+        });
+      }
+      // it.5 — la leva intera, autorizzata dal PI (docket item 11). Enunciati
+      // P8 (tolleranza) e P9 (velocita') pre-registrati prima di scriverla.
+      if ((K / 32) % (SPLIT_K * 2) === 0) {
+        srcs.push({
+          id: "splitk-idot", code: gemmQ4MultiRowSplitKIdotWgsl({ K, N, M, splits: SPLIT_K }),
+          grid: [Math.ceil(N / 64), SPLIT_K, 1], combine: splitKCombineWgsl({ K, N, M, splits: SPLIT_K }),
+          weightEmitFactor: 1, xEmitFactor: Math.ceil(N / 64), idot: true,
+          ctx: "come 'splitk' ma col PRODOTTO SCALARE INTERO (dot4I8Packed): attivazioni quantizzate a i8 per blocco da 32, accumulo i32, scala applicata una volta per blocco. Via q4_0 x q8_0 di llama.cpp. NON bit-identica per costruzione: tolleranza P8 <= 2,0e-2, dal conto sull'errore di quantizzazione.",
         });
       }
       if (cold && M === 16) {
@@ -388,7 +426,13 @@ export async function runTtftProbeBench(
         const nBg = s.coldw ? copies : 1;
         const bgs = Array.from({ length: nBg }, (_, c) => device.createBindGroup({
           layout: pipeline.getBindGroupLayout(0),
-          entries: [
+          entries: s.idot ? [
+            { binding: 0, resource: { buffer: qsBuf, offset: c * qsBytes, size: qsBytes } },
+            { binding: 1, resource: { buffer: scBuf, offset: c * scBytes, size: scBytes } },
+            { binding: 2, resource: { buffer: xqBuf } },
+            { binding: 3, resource: { buffer: s.combine ? partBuf : yBuf } },
+            { binding: 4, resource: { buffer: xscBuf } },
+          ] : [
             { binding: 0, resource: { buffer: qsBuf, offset: c * qsBytes, size: qsBytes } },
             { binding: 1, resource: { buffer: scBuf, offset: c * scBytes, size: scBytes } },
             { binding: 2, resource: { buffer: xBuf } },
@@ -449,10 +493,17 @@ export async function runTtftProbeBench(
           skipped.push({ kernel: "gemm-q4_0-multirow", variant: `${id}@M${M}`, shape: { K, N, M }, reason: `checksum sospetto (${ck.sum})` });
           continue;
         }
-        if (relDiff !== null && relDiff > 1e-3) {
+        // Tolleranza PER VARIANTE, non una sola per tutte. Le forme che cambiano
+        // solo l'ordine delle somme restano a 1e-3; `splitk-idot` cambia
+        // l'ARITMETICA (attivazioni quantizzate a 8 bit) e ha la sua tolleranza
+        // PRE-REGISTRATA in P8, ricavata dal conto sull'errore di quantizzazione
+        // e non tarata su ciò che è uscito. Resta un gate: sopra 2e-2 la cella è
+        // sbagliata, non imprecisa.
+        const tol = id === "splitk-idot" ? 2e-2 : 1e-3;
+        if (relDiff !== null && relDiff > tol) {
           skipped.push({
             kernel: "gemm-q4_0-multirow", variant: `${id}@M${M}`, shape: { K, N, M },
-            reason: `checksum fuori tolleranza 1e-3: relDiff ${relDiff.toExponential(3)} (base ${baseCk!.sum}, variante ${ck.sum})`,
+            reason: `checksum fuori tolleranza ${tol.toExponential(0)}: relDiff ${relDiff.toExponential(3)} (base ${baseCk!.sum}, variante ${ck.sum})`,
           });
           continue;
         }
@@ -484,7 +535,7 @@ export async function runTtftProbeBench(
         });
       }
     }
-    for (const b of [qsBuf, scBuf, xBuf, yBuf, partBuf]) b.destroy();
+    for (const b of [qsBuf, scBuf, xBuf, xqBuf, xscBuf, yBuf, partBuf]) b.destroy();
   }
 
   // =========================================================================

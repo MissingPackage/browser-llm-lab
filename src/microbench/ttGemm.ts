@@ -414,8 +414,12 @@ export function gemmQ4MultiRowSplitKIdotWgsl(o: MultiRowOpts & { splits: number 
   const bpr = K / 32;
   if (bpr % (splits * 2) !== 0) throw new Error(`splitk-idot: ${bpr} blocchi non divisibili in ${splits} fette da BK=2`);
   const per = bpr / splits;
-  return `enable packed_4x8_integer_dot_product;
-@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+  // NIENTE `enable`: `dot4I8Packed` e' una LANGUAGE FEATURE del WGSL
+  // (`navigator.gpu.wgslLanguageFeatures` la espone come
+  // `packed_4x8_integer_dot_product`), non un'estensione da abilitare. Scriverlo
+  // fa fallire la compilazione con «expected extension» — costato una run.
+  // La sonda gia' in albero (kdGemv.ts DOT4I8_PROBE_WGSL) lo usa nudo.
+  return `@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
 @group(0) @binding(1) var<storage, read> scales: array<u32>;
 @group(0) @binding(2) var<storage, read> xq: array<u32>;
 @group(0) @binding(3) var<storage, read_write> part: array<f32>;
