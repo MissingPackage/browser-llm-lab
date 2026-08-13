@@ -168,15 +168,20 @@ GLM-4.7-Flash resta residency-bound
 - **`--prompt-idx` ha default 4 = 388 token, non il prompt da 6k.** È il flag da
   cui veniva il numero sbagliato corretto in it.0. I prompt ≥ 6000 token sono
   l'idx 0 (6333) e l'idx 5 (6128).
-- **Il server di sviluppo muore da solo, ed è successo DUE volte in una
-  sessione** (2026-08-13, entrambe exit 144, entrambe dopo un bench GPU lungo;
-  memoria non satura). Un loop autonomo che dipende da `npx vite --port 5199` in
-  background deve **verificarlo prima di ogni run che costa GPU**:
+- **Il server di sviluppo muore da solo: TRE volte in una sessione**
+  (2026-08-13, tutte exit 144 = ucciso da segnale, non crash). Evidenza: il log
+  si ferma su «ready» senza una riga di errore, nessun OOM in `dmesg`, 19 GB
+  liberi. L'ipotesi è che il supervisore dei comandi in background lo reap al
+  confine di turno; NON è provata — la prova è se sopravvive alla prossima.
+  **Mitigazione applicata**, avvio staccato in una sessione propria:
+
+      setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
+
+  Verificare comunque PRIMA di ogni run che costa GPU:
   `curl -s -o /dev/null -w "%{http_code}" http://localhost:5199/<entry>.html`.
-  Il gate dei kernel ora almeno NOMINA la causa (exit 2, «nessun server su …»)
-  invece di uscire 0 — ma i runner di bench non hanno la stessa difesa, e per
-  loro il sintomo resta un fallimento di caricamento pagina, cioè una causa
-  travestita.
+  Il gate dei kernel almeno NOMINA la causa (exit 2, «nessun server su …»); i
+  runner di bench no, e per loro il sintomo resta un fallimento di caricamento
+  pagina, cioè una causa travestita.
 - **Il prefill "a chunk" è più LENTO del sequenziale** (34,4 contro 72,3 tok/s,
   it.1): instrada sul GEMV vecchio, mentre `step()` usa quello veloce. Un bench
   che non dichiara `prefillPath` non dice quale dei due ha misurato.
