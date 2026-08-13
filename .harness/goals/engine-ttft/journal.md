@@ -550,3 +550,24 @@ docket item 16.
 
 **Stato invariato della metrica**: TTFT a caldo fermo a **87.618 ms**. I kernel
 sono in produzione e testati; `q35gpumodel.ts` non e' ancora cablato.
+
+## it.11 (2026-08-13, riga 2) — quarta morte: la ripresa avanza ma non chiude, quindi accorcio
+
+La strategia di it.10 era «riprendere finche' non chiude». Eseguita, e **ha
+avanzato**: il journal e' passato da 1 a 14 voci (9 transcript, 5 risultati).
+Ma e' morta di nuovo prima dell'integrazione, senza lasciare niente nell'albero.
+
+**Il vincolo binding e' la DURATA, non il piano** — e riprovare della stessa
+lunghezza sarebbe il loop-bug che il protocollo vieta. Ho cambiato una variabile
+sola: la dimensione. Quinto lancio con **UN SOLO TASK** (cablare
+`q35gpumodel.ts`), `suiteCmd` ridotto a `tsc --noEmit`, e un fallback scritto
+nella spec — se la via intera e' troppo grossa, fare la sola forma split-K in
+virgola mobile e annotare il resto.
+
+**Dichiarato PRIMA di vedere l'esito**, per non razionalizzare dopo: se anche
+questa muore, non ci sara' un sesto tentativo. La conclusione sara' che il
+veicolo non chiude un task di questa classe nella vita di un processo, e la riga
+2 si fa a mano accettando che sia piu' lenta.
+
+**Metrica invariata**: TTFT a caldo **87.618 ms**. Kernel in produzione e
+testati, `q35gpumodel.ts` non ancora cablato.

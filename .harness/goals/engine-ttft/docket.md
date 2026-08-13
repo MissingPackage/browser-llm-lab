@@ -546,3 +546,37 @@ finche' non chiude, verificare io alla fine) ed e' in corso. Questo item esiste
 perche' il prossimo che vede tre fallimenti di fila sappia che la causa e' il
 ciclo di vita del processo, non lo strumento — e che il rimedio e' la ripresa,
 non il cambio di veicolo.
+
+
+## item 17 — QUARTA morte, e la variabile che ho cambiato (io, it.11)
+
+La strategia di item 16 («riprendere dalla cache finche' non chiude») e' stata
+eseguita e **ha avanzato davvero**: il journal del run e' passato da **1 a 14
+voci, 9 transcript, 5 risultati**. Ma e' morta di nuovo prima dell'integrazione,
+e non ha lasciato niente nell'albero.
+
+**Enunciato del fallimento, come chiede il contratto di debug**: fallisce perche'
+il runtime del workflow vive DENTRO il processo Claude Code e il processo esce
+prima che il workflow finisca — dimostrato da quattro run senza record di
+completamento, e dal journal che cresce fra le riprese senza mai raggiungere
+l'integrazione.
+
+**Quindi il vincolo binding e' la DURATA, non il piano.** Riprovare della stessa
+lunghezza e' il loop-bug che il protocollo vieta. Ho cambiato UNA variabile: la
+dimensione del lavoro.
+
+**Quinto lancio, `wf_46624843-194`: UN SOLO TASK** — cablare
+`q35gpumodel.ts` sulla forma multi-riga — con `suiteCmd` ridotto al solo
+`tsc --noEmit` (la suite completa costa ~60 s per task e qui non serve come gate
+di ondata: la eseguo io). Nella spec c'e' anche un **fallback esplicito**: se la
+via intera rende il task troppo grosso, fare la sola forma split-K in virgola
+mobile e annotare il resto — «meglio un cablaggio che funziona e si misura, che
+due leve a meta'».
+
+Costo accettato: la cache dei 14 agenti e' persa, perche' la spec e' cambiata.
+E' il prezzo di cambiare la variabile giusta invece di ritentare.
+
+**Se anche questa muore**, la conclusione non e' un sesto tentativo: e' che
+questo veicolo non chiude un task di questa classe nella vita di un processo, e
+la riga 2 va fatta a mano accettando che sia piu' lenta. Lo dico ORA, prima di
+vedere l'esito, cosi' non e' una razionalizzazione a posteriori.
