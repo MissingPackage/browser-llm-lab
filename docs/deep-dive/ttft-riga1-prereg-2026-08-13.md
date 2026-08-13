@@ -280,3 +280,36 @@ Dichiarato in anticipo perché il grade lo possa usare:
   256 workgroup invece di 16, quindi l'occupancy migliora e il legacy potrebbe
   sembrare meno peggio di quanto sia per token. Se il legacy misura ≪ 8 ms per
   chunk, la leva della riga 3 vale meno di quanto il piano assume.
+
+---
+
+## ADDENDUM it.4 (2026-08-13) — la cella che mancava, pre-registrata prima di girarla
+
+`splitk-coldw`. La riga 1 ha pre-registrato la cella `coldw` come **discriminante
+della CAUSA**: se il vantaggio di una forma evapora coi pesi fuori dalla L2,
+allora era traffico e non occupancy. L'ha girata su `regs` e sulla forma
+attuale, **non su `splitk`, che è la forma che ha vinto** (grade indipendente,
+drift (c); docket item 12c). La causa della vincitrice è quindi oggi
+indiscriminata, e la riga 2 sta per costruirci sopra.
+
+**P7 — enunciato**: `splitk` a pesi freddi (8 copie ruotate, working set 106 MiB,
+oltre la L2 di questa Lovelace) resta **entro +15%** del suo p50 a caldo
+(0,0609 ms a M=16, K2560×N9216), cioè `splitk-coldw` ≤ 0,0700 ms.
+
+**Perché**: `splitk` legge ogni blocco di peso **una volta sola** e lo usa per
+tutte le M righe — non ha niente da riguadagnare dalla cache, a differenza della
+forma attuale che rilegge tutto M volte. Il precedente misurato nella stessa
+sessione è `regs`: 0,1294 → 0,1400 a freddo, **+8,2%**. `splitk` ha lo stesso
+corpo e lo stesso riuso, quindi mi aspetto lo stesso ordine di degrado.
+
+**failCondition**: P7 è REFUTATA se `splitk-coldw` > 0,0700 ms. Se degrada oltre
+**2×** (> 0,122 ms), la conclusione della riga 1 va riscritta: il vantaggio di
+43,1× sarebbe in parte un artefatto di L2-residenza del banco, la proiezione di
+8.665 ms sarebbe ottimistica, e la riga 2 andrebbe ripianificata prima di
+scrivere codice di motore.
+
+**Nota di onestà sulla direzione dell'errore**: la forma ATTUALE è quella che la
+L2 favorisce (rilegge i pesi M volte), e infatti la sua cella fredda è
+identica alla calda (2,6157 contro 2,6225 — è già limitata da altro). Quindi il
+rapporto 43,1× misurato a caldo è, se mai, un **limite inferiore** di quello nel
+motore, non superiore. P7 verifica che non ci sia una sorpresa nell'altro verso.
