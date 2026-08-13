@@ -479,3 +479,32 @@ non si è mossa di un millisecondo. Restano t5 (assemblatore), t3 (gpulimits),
 t4 (tolleranza del gate di conformità), t6 (copertura), t8 (bench prima/dopo).
 Li faccio io, uno per volta, committando appena verificati — che è il punto di
 (b): ogni passo sopravvive al processo.
+
+### CORREZIONE del PI (2026-08-13, it.9): l'opzione (b) era motivata male
+
+«Sicuro di volerli fare a mano? Non siamo più efficaci con sdd-conductor?»
+
+Il PI ha ragione e la mia motivazione per (b) non reggeva. Avevo scritto «a mano,
+così ogni passo sopravvive al processo» — ma **il lavoro del conductor era già
+sopravvissuto**: le patch erano nell'albero, recuperate dal ramo, verdi. Quello
+che si è perso è la VERIFICA, che è mia e seriale comunque. Il costo che citavo
+a giustificazione era un costo già recuperato.
+
+E i numeri dicono il contrario della mia conclusione: il 2° lancio ha prodotto
+**1.348 righe con 66 test** in ~83 minuti. A mano non ci arrivo.
+
+**Deciso: si riprende col conductor** (`wf_baf87ff8-cd8`), con due correzioni
+prese dalle due morti:
+
+1. **NON una ripresa dalla cache**, un lancio nuovo con brief più stretto. I tre
+   task completati sono già mergiati in `main`: una ripresa replicherebbe le loro
+   patch dalla cache e l'integratore andrebbe in conflitto su codice già
+   presente. Il brief nuovo dichiara in testa cosa è già fatto e ordina di non
+   rifarlo.
+2. **t5 è dichiarato PORTANTE nel brief**: «senza di lui gli altri quattro non
+   hanno oggetto e la riga 2 è un non-risultato». La build precedente ha
+   consegnato tre task veri e il portante bloccato — un esito che *sembra*
+   progresso e non muove la metrica. Nominarlo è l'unica difesa che ho.
+
+Resta mio, e lo dichiaro nel brief: ktest e bench alla fine, seriali, e la
+verifica non si delega.
