@@ -250,3 +250,34 @@ rileggerla.
 un'ora di GPU per l'esperimento interleavato. La misura giusta costava zero e
 stava gia' su disco. Registrato come lezione: prima di chiedere una decisione
 sul COSTO di un esperimento, guardare se l'esperimento e' gia' stato fatto.
+
+## it.11 (2026-08-13) — CHIUSURA: checklist voce per voce
+
+| # | DONE WHEN del contratto | esito | evidenza |
+|---|---|---|---|
+| 1 | decode >= 30 tok/s a ctx >= 6000 | **47,93** | `decode-kernel-checkpoint-4090-*.json`, ctx 6333, hostState dichiarato |
+| 2 | fase 0 superata prima di riscrivere, con regola di stop | non scattata | `kernel-decode-fase0-*.json`, 32 celle 0 skipped, grade indipendente `confirmed` |
+| 3 | leva 1 (attenzione) misurata prima/dopo, pendenza ricalcolata | 10,40 → **0,150** us/pos | `attn-split-fase1-*.json` |
+| 4 | portabilita: memoria di gruppo non legata al contesto | 1.536 B **costanti** | `tests/gpulimits.test.ts`; totale motore ancora 30.848 per il kernel fuso del prefill → **docket item 4, ruling al PI** |
+| 5 | leva 2 (GEMV) misurata prima/dopo | corpo 27,1 → ~7 ms | checkpoint + micro-bench 4,0x sulla lm_head |
+| 6 | GLM non regredisce | **calcolo identico**: token a zero miss 30,38 vs 30,72 ms | `glm-nonreg-verdict-*.json`; il delta di tok/s e' I/O (landmine §3) |
+| 7 | ogni numero col proprio contesto | `decodeContext` in tutti i JSON | regola nata da it.59 del goal precedente |
+| — | copertura della convenzione | **142/142**, worklist vuota | censimento `pattern-coverage` |
+| — | gate di correttezza | ktest **100/0**, argmax **IDENTICO**, suite **526\|10**, tsc pulito | eseguiti a ogni integrazione |
+
+**Il numero del goal, per intero**: 9,95 → **47,93 tok/s** a contesto realistico
+(**4,82x**), e il contesto praticamente non si paga piu' (0,150 us/posizione
+contro 10,40). L'obiettivo di prodotto — 30 tok/s in browser — e' superato sul
+4B.
+
+**Cosa passa al PI** (registrato, non deciso): il conductor installato tronca le
+patch a 16 KB e il sintomo si traveste da conflitto di pianificazione (item 3);
+il done-when (e) chiede piu' di quanto questa riga possa dare (item 4); l'`--out`
+assoluto che si perde nel runner GLM (item 5); due call-site GLM nel ktest non
+congelati (item 6); `hostState.declared` che nessuno verifica (item 7).
+
+**Cosa mi porto come metodo**, perche' e' costato piu' del codice: quattro
+ipotesi mie sulla non-regressione GLM cadute una dopo l'altra, e la risposta era
+nel primo artefatto — la decomposizione fra token con e senza miss, scritta dal
+runner stesso. Prima di progettare un esperimento nuovo, leggere per intero
+quello che l'esperimento vecchio ha gia' scritto.

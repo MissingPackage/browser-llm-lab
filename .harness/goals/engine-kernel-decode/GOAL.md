@@ -111,3 +111,13 @@ CONTEXT ANCHORS:
 - `src/engine/kernels/wgsl.ts` (`attnDecodeWgsl`, `gemvQuantWgsl`),
   `deltanet.ts`, `q35gpumodel.ts`
 - `results/engine/native-vs-browser-q35-2026-08-10.json` — riferimento esterno
+
+<!-- STATUS: CHIUSO il 2026-08-13 (it.10-11). Obiettivo RAGGIUNTO e superato:
+     47,93 tok/s a contesto 6333 contro la soglia di 30, partendo da 9,95
+     (4,82x). Checklist del DONE WHEN voce per voce nel journal it.11.
+     Aperti e passati al PI: docket item 3 (il conductor installato tronca le
+     patch a 16 KB — non e' codice di progetto), item 4 (il done-when (e) chiede
+     piu' di quanto la riga 1 possa dare: il totale del motore resta a 30.848 B
+     per il kernel FUSO DEL PREFILL, che appartiene al goal TTFT), item 5, 6, 7.
+     Il goal successivo naturale e' il TEMPO AL PRIMO TOKEN, che eredita il
+     multi-riga, l'attenzione a chunk del prefill e la clausola (e2). -->
