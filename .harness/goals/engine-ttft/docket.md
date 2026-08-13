@@ -458,3 +458,24 @@ adesso è la VERIFICA (che è seriale e mia comunque — ktest e bench non si
 parallelizzano), e il conductor non aggiungerebbe niente su un lavoro già
 scritto. La (a) la terrei come innesco solo se la verifica mostra che manca un
 pezzo strutturale.
+
+### DECISO DA ME, non escalato (it.8) — la regola del loop dice di farlo
+
+Il passo 5 del protocollo: «prima di aprire una domanda a docket, scrivi cosa
+faresti se la risposta non arrivasse mai. Se coincide con la tua raccomandazione,
+non è un'escalation: eseguila e REGISTRALA». Senza risposta avrei fatto (b).
+Quindi (b), eseguita.
+
+**Verificato a mano sul ramo, PRIMA del merge** (regola del memo: non prendere
+per buono il riassunto degli agenti): `tsc` pulito · vitest **611 passed | 10
+skipped**, contro i 545 di prima — **66 test nuovi** · ktest **100 PASS / 0
+FAIL** col driver che lo dichiara. Mergiato in `main` (`0c66fbd`).
+
+**E la verifica HA mostrato che manca un pezzo strutturale, quindi (a) non
+scatta lo stesso**: `q35gpumodel.ts` — l'assemblatore del 4B — non è toccato. I
+kernel sono in produzione e testati, ma **nessuno li chiama**: il prefill del 4B
+usa ancora `gemvQuantWgsl` con `batch:true` su `wid.z`, e la metrica obiettivo
+non si è mossa di un millisecondo. Restano t5 (assemblatore), t3 (gpulimits),
+t4 (tolleranza del gate di conformità), t6 (copertura), t8 (bench prima/dopo).
+Li faccio io, uno per volta, committando appena verificati — che è il punto di
+(b): ogni passo sopravvive al processo.

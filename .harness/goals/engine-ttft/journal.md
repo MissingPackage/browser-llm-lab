@@ -489,3 +489,37 @@ attenzione in streaming 6,76×. Resta da portarle in produzione — la riga 2.
 
 **Gate**: ktest 100 PASS / 0 FAIL (col driver che lo dichiara) · vitest 545
 passed | 10 skipped · tsc pulito.
+
+## it.8 (2026-08-13, riga 2) — il lavoro salvato è verde e mergiato, ma la metrica non si è mossa
+
+L'item 15 chiedeva un ruling fra tre opzioni. **Non era un'escalation**: il passo
+5 del protocollo dice che se ciò che faresti senza risposta coincide con la tua
+raccomandazione, si esegue e si registra. Avrei fatto (b). Fatta (b).
+
+**Verificato a mano sul ramo prima del merge**, non sulla parola degli agenti:
+`tsc --noEmit` pulito · vitest **611 passed | 10 skipped** contro i 545 di prima
+(**+66 test**) · ktest **100 PASS / 0 FAIL**, col driver che lo dichiara.
+Mergiato in `main` (`0c66fbd`).
+
+**Cosa è entrato** (3 task su 8): i kernel vincenti della fase di sonde portati
+in `src/engine/kernels/wgsl.ts` (+385 righe), `PREFILL_M` da 8 a 16, la
+contabilità dei byte di peso per token in `prefillbytes.ts`.
+
+**Il conflitto di it.0 è risolto come si deve.** `PREFILL_M = 16` è la
+CONVENZIONE; il path denso 0.5B ha un'**eccezione pinnata** a 8 con la ragione
+NUMERICA e non storica — `rmsPairGemmSiluChunkFast` chiede `4·K·m + 256·m + 16·m`
+con K=896, cioè 30.848 B a m=8 e **61.696 a m=16**, sopra il cap negoziato — e il
+conto vive come aritmetica ESEGUIBILE in `tests/engine-chunking.test.ts`: se
+cambia, il test lo dice. È la forma giusta per un'eccezione: non un commento, un
+test.
+
+**COSA NON È ENTRATO, ed è perché la riga 2 NON è chiusa.** `q35gpumodel.ts` —
+l'assemblatore del 4B — **non è toccato**. Il prefill del 4B usa ancora
+`gemvQuantWgsl` con `batch:true` su `wid.z`. **I kernel sono in produzione,
+testati, e non li chiama nessuno: la metrica obiettivo è ferma a 87.618 ms.**
+
+Restano t5 (assemblatore), t3 (gpulimits), t4 (tolleranza del gate di
+conformità), t6 (copertura della convenzione), t8 (bench prima/dopo). Li faccio
+io uno per volta, committando appena verificati — che è il punto dell'opzione
+(b): ogni passo sopravvive alla morte del processo, che in questa sessione ha
+già ucciso due build e tre server.
