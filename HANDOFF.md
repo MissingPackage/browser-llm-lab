@@ -14,12 +14,20 @@ vettoriali, due righe per gruppo e riduzione di sottogruppo dove è dimostrabile
 che è sicura (1,77× ulteriore). La stessa fase ha **escluso** la fusione delle
 teste GQA: misurata più lenta.
 
-**Goal `engine-ttft` APERTO e IN CORSO** (2026-08-13, ruling A del PI): il primo
-token entro 4 secondi **a modello caldo** — `prefill.ms + decode.firstMs` — sul
-prompt da 6333 token. Righe 0 e 1 CHIUSE.
+**Goal `engine-ttft` APERTO e IN CORSO** (2026-08-13): portare il tempo al primo
+token **a modello caldo** — `prefill.ms + decode.firstMs` — sul prompt da 6333
+token **il più in basso che questa macchina consenta**. Righe 0 e 1 CHIUSE.
 
-**Baseline (it.1)**: TTFT a caldo **87.618 ms** contro un bersaglio di 4.000 ⇒
-serve 21,9×. Scomposto: caricamento 10.892 · lettura del prompt 87.582 (6332
+**IL BERSAGLIO DEI 4 SECONDI È STATO TOLTO DAL PI** (2026-08-13, dopo la riga 1):
+«va bene se non arriviamo a 4 secondi su questa macchina, scendiamo il più
+possibile». Poiché «il più possibile» non è graduabile da un verificatore, la
+forma meccanica è in tre clausole: TTFT a caldo **< 21.905 ms** (un quarto della
+baseline) · **esaurimento delle leve**, ognuna in produzione o esclusa coi numeri
+· **contabilità del tetto residuo** per segmento. Autorizzato anche il dot
+product intero come leva di questo goal.
+
+**Baseline (it.1)**: TTFT a caldo **87.618 ms**; la barra meccanica è 21.905 ⇒
+serve 4,0×. Scomposto: caricamento 10.892 · lettura del prompt 87.582 (6332
 token a 72,30 tok/s) · primo token 36 ms. Decode 47,79 tok/s a contesto 6333.
 
 **LE DUE RISPOSTE DELLA FASE DI SONDE (it.2), verificate a mano contro
@@ -35,8 +43,10 @@ l'artefatto**:
    Proiezione dalla formula fissata prima di misurare, coi tempi misurati:
    5.776 ms di moltiplicazioni + 2.888 di attenzione = **8.665 ms**, ed è un
    PAVIMENTO — non conta i 24 layer DeltaNet, le norm, il RoPE, i dispatch. È
-   10,1× sulla baseline e 2,2× SOPRA il bersaglio. La riga 5 chiuderà con
-   `decision: "excluded-by-numbers"`, che è un ramo previsto dal contratto.
+   10,1× sulla baseline e 2,2× sopra i 4 s. **Dopo il ruling questo non è più un
+   fallimento**: la riga 5 non sceglie fra «raggiunto» ed «escluso», contabilizza
+   la discesa e il tetto. Il pavimento proiettato sta comodamente sotto la barra
+   dei 21.905.
 
 **IL MODELLO MENTALE DEL GOAL ERA SBAGLIATO, ed è la scoperta che conta** (docket
 item 10). Il piano diceva «il prefill è limitato dalla banda sui pesi, il riuso è
@@ -100,6 +110,9 @@ runner verifica.
 
 **Destinazione.** Far girare in browser il modello più capace possibile
 restando usabile: almeno **30 token/secondo** e **primo token entro 4 secondi**.
+Il secondo termine è un'aspirazione di prodotto, non una promessa di questa
+macchina: su un prompt da 6k il 4B ha un pavimento misurato di ~9,4 s, e il PI
+ha riscritto l'obiettivo del goal in «il più in basso possibile» (2026-08-13).
 
 **Distanza adesso**: Qwen 4B **47,93 tok/s a contesto 6333** (era 9,95) —
 **sopra i 30 dell'obiettivo**. Il TTFT a caldo sul prompt da 6333 token è
