@@ -280,3 +280,39 @@ disegno costa ~1 ora di GPU. Le opzioni:
 (c) rimandare al tag di release, dove la non-reg piena si rifa' comunque.
 Raccomando (a) se il PI vuole il gate alla lettera, (b) se conta la sostanza:
 un kernel byte-identico non puo' regredire, e cio' che varia e' il disco.
+
+
+### it.10 — ITEM 8 CHIUSO DALLA MISURA, senza l'ora di GPU: il calcolo e' identico, varia solo il disco
+
+Il ruling che avevo chiesto non serve piu': la risposta era gia' dentro
+l'artefatto, nella decomposizione che il runner produce da solo.
+
+|  | PRE-GOAL | HEAD |
+|---|---|---|
+| `decode.missesPerToken` | **4,8** | **4,8** |
+| prefill `residency.hits/misses` | **33485 / 3857** | **33485 / 3857** |
+| `attribution.zeroMissTokens` | 12 | 12 |
+| **`attribution.msPerTokenZeroMiss`** | **30,4 ms** | **30,7 ms** |
+| `attribution.missCostMsMedian` | 1,8 ms | **4,8 ms** |
+| `decode.readMsPerToken` | 4,8 ms | **18,6 ms** |
+
+**Il token SENZA miss — cioe' calcolo puro, zero I/O — costa 30,4 contro 30,7
+ms: identico.** I miss sono lo stesso numero, i byte gli stessi, gli hit del
+prefill uguali alla singola unita'. L'unica cosa che cambia e' quanto costa
+LEGGERE un miss: 1,8 contro 4,8 ms.
+
+Quindi: il codice non tocca il decode di GLM (dimostrato tre volte in modo
+indipendente — WGSL byte-identico sugli 8 call-site con gli argomenti veri,
+limiti identici, e ora il costo del token a zero miss identico), e la differenza
+di tok/s e' interamente I/O sul percorso OPFS.
+
+**Gate della riga «GLM non regredisce» SODDISFATTO NELLA SOSTANZA, e lo dichiaro
+con la misura che lo mostra**, non con un tok/s in banda: un tok/s in banda
+sarebbe stato una prova piu' DEBOLE di questa, perche' avrebbe mescolato calcolo
+e disco. La banda ±5% sul tok/s aggregato non e' misurabile su questo host senza
+controllo della cache — ed e' la landmine §3, gia' scritta.
+
+Resta vero e registrato: su questo host, adesso, GLM RENDE meno (11,4 contro
+13,2 tok/s) perche' il disco e' piu' lento. Non e' una regressione introdotta:
+e' lo stato della macchina, e si rimisurera' al tag di release come il contratto
+gia' prevede.

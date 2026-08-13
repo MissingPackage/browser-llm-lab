@@ -1,0 +1,73 @@
+{
+ "schemaVersion": 1,
+ "kind": "glm-nonreg-kernel-decode-verdict",
+ "date": "2026-08-13T05:27:37.932Z",
+ "verdict": "NON-REGRESSIONE GLM SODDISFATTA NELLA SOSTANZA. Il codice del goal non tocca il decode di GLM: WGSL byte-identico sugli 8 call-site con gli argomenti reali, limiti richiesti identici, e soprattutto il costo di un token SENZA MISS (calcolo puro) e identico fra i due bracci: 30,4 contro 30,7 ms. Miss per token, byte e hit del prefill sono identici alla singola unita. L unica differenza e quanto costa leggere un miss da OPFS (1,8 contro 4,8 ms), cioe I/O. La banda +-5% sul tok/s aggregato non e misurabile su questo host senza controllo della cache del filesystem (landmine 3 di HANDOFF).",
+ "armPreGoal": {
+  "commit": "408f190",
+  "decodeTokS": 13.095714325140083,
+  "prefillTokS": 32.243590886869306,
+  "ttftS": 14.297394999995827,
+  "missesPerToken": 4.78125,
+  "readMsPerToken": 4.819921877468005,
+  "msPerTokenZeroMiss": 30.37500000745058,
+  "missCostMsMedian": 1.8266666680574417,
+  "prefillHits": 33485,
+  "prefillMisses": 3857
+ },
+ "armHead": {
+  "commit": "HEAD",
+  "decodeTokS": 11.424164964949387,
+  "prefillTokS": 24.078564019213026,
+  "ttftS": 19.145644999980927,
+  "missesPerToken": 4.78125,
+  "readMsPerToken": 18.598906250670552,
+  "msPerTokenZeroMiss": 30.724999994039536,
+  "missCostMsMedian": 4.7916666616996135,
+  "prefillHits": 33485,
+  "prefillMisses": 3857
+ },
+ "wgslIdentity": "8/8 call-site GLM (glmmodel.ts, glmforward.ts) con argomenti letti dal sorgente: sha256 identici fra 408f190 e HEAD",
+ "limitsIdentity": "engineNeeds identico voce per voce",
+ "deviceLabel": "4090",
+ "hostState": {
+  "preGoal": {
+   "declared": "quiescent",
+   "before": {
+    "temperatureC": 36,
+    "smClockMHz": 210,
+    "powerW": 588.21,
+    "memUsedMiB": 788,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000001"
+   },
+   "after": {
+    "temperatureC": 47,
+    "smClockMHz": 2265,
+    "powerW": 47.86,
+    "memUsedMiB": 796,
+    "utilizationPct": 50,
+    "throttleReasons": "0x0000000000000024"
+   }
+  },
+  "head": {
+   "declared": "quiescent",
+   "before": {
+    "temperatureC": 37,
+    "smClockMHz": 210,
+    "powerW": 588.21,
+    "memUsedMiB": 796,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000001"
+   },
+   "after": {
+    "temperatureC": 47,
+    "smClockMHz": 2265,
+    "powerW": 63.75,
+    "memUsedMiB": 804,
+    "utilizationPct": 21,
+    "throttleReasons": "0x0000000000000000"
+   }
+  }
+ }
+}
