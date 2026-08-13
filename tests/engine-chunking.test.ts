@@ -1,19 +1,33 @@
 import { describe, it, expect } from "vitest";
-import { planPrefill, causalLen, PREFILL_M, PREFILL_SUBMIT_TOKENS } from "../src/engine/prefillplan";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  planPrefill, causalLen, PREFILL_M, PREFILL_M_DENSE05B, PREFILL_SUBMIT_TOKENS,
+} from "../src/engine/prefillplan";
+import { QWEN_WORKGROUP_STORAGE_BYTES } from "../src/engine/gpulimits";
 import { createKvLen } from "../src/engine/kvlen";
 
-// Unit CPU-side sul piano di chunking M≤8 (spec B1 §Forward multi-token) —
+// Unit CPU-side sul piano di chunking (spec B1 §Forward multi-token) —
 // convenzione CI-senza-GPU della fase A: la geometria del piano (copertura,
 // posizioni, maschera causale, granularità di submit) si verifica qui; la
 // matematica dei kernel la verifica la conformance (gate doppio).
+//
+// Le asserzioni sulla geometria sono scritte IN FUNZIONE di PREFILL_M, non del
+// suo valore: alzare ancora la convenzione non deve costringere a riscrivere il
+// file (l'unico vincolo residuo, dichiarato dov'e' usato, e' che M divida i 64
+// token del boundary di submit).
 
 describe("planPrefill — copertura e continuità", () => {
   it("469 token (prompt del bench): copre tutto, chunk pieni + ultimo parziale", () => {
     const plan = planPrefill(469, 0);
-    // 469 = 58*8 + 5
-    expect(plan.length).toBe(59);
+    // ORACOLO INDIPENDENTE dal loop di planPrefill: il piano è il copri-minimo di
+    // 469 righe con chunk di al più M — cioè M·len basta e M·(len−1) NON basta.
+    // (Il `Math.ceil(469/M)` sarebbe la formula dell'implementazione ri-scritta.)
+    expect(PREFILL_M * plan.length).toBeGreaterThanOrEqual(469);
+    expect(PREFILL_M * (plan.length - 1)).toBeLessThan(469);
     expect(plan.slice(0, -1).every((c) => c.rows === PREFILL_M)).toBe(true);
-    expect(plan[plan.length - 1].rows).toBe(5);
+    // resto della divisione, non il 5 di M=8: con M=16 è ancora 5, con M=32 è 21
+    expect(plan[plan.length - 1].rows).toBe(469 % PREFILL_M || PREFILL_M);
     // copertura senza buchi né overlap
     let next = 0;
     for (const c of plan) {
@@ -53,6 +67,11 @@ describe("planPrefill — granularità di submit", () => {
     const submitsAt = plan
       .filter((c) => c.submitAfter)
       .map((c) => c.start + c.rows);
+    // PRECONDIZIONE del caso concreto qui sotto: M divide i 64 del knee, quindi
+    // un boundary di submit cade sempre a fine chunk. Se un domani M non dividesse
+    // 64 (es. 24), il piano NON sbaglia — sono questi attesi a non valere più, e
+    // questa riga lo dice invece di lasciare un diff misterioso.
+    expect(PREFILL_SUBMIT_TOKENS % PREFILL_M).toBe(0);
     // boundary sui multipli di 64 + chiusura sul totale
     expect(submitsAt).toEqual([64, 128, 192, 256, 320, 384, 448, 469]);
   });
@@ -114,9 +133,62 @@ describe("planPrefill — validazione hard (postura ds4)", () => {
     expect(() => planPrefill(8, 0, 8, 0)).toThrow();
   });
 
-  it("costanti del piano coerenti con la spec (M≤8, submit ~64)", () => {
-    expect(PREFILL_M).toBe(8);
+  it("costanti del piano coerenti con la spec (M ≥ 16, submit ~64)", () => {
+    // M=8 e' degenere per l'obiettivo (PHASES C7-2, ratificato dal PI): la
+    // convenzione del piano e' M ≥ 16. Il 64 resta il knee misurato.
+    expect(PREFILL_M).toBeGreaterThanOrEqual(16);
     expect(PREFILL_SUBMIT_TOKENS).toBe(64);
+  });
+});
+
+// -------------------------------------------------------------------------
+// L'ECCEZIONE del path denso Qwen2.5-0.5B, dimostrata invece che commentata.
+// -------------------------------------------------------------------------
+describe("PREFILL_M_DENSE05B — il PIN del path denso, col suo conto", () => {
+  // rmsPairGemmSiluChunkFast, K = dModel 896 (il consumatore MASSIMO del path
+  // Qwen fuso — gpulimits.ts §QWEN_WORKGROUP_STORAGE_BYTES): il workgroup storage
+  // e' 4·K·mMax (tile delle attivazioni) + 256·mMax (partial) + 16·mMax (gRes)
+  // byte — verificato contro il WGSL vero (wgsl.ts, xs4/partial/gRes). LINEARE in M.
+  const wgStorage = (m: number) => 4 * 896 * m + 256 * m + 16 * m;
+  // Cap OPERATIVO di oggi: il device chiede min(adapter, QWEN_WORKGROUP_STORAGE_BYTES)
+  // — gpulimits.ts, e tests/gpudevice.test.ts lo verifica sul limite concesso.
+  const DEVICE_WG_CAP = QWEN_WORKGROUP_STORAGE_BYTES;
+  // Cap storico «richiesto a mano» prima della negoziazione (gpulimits.ts §1): piu'
+  // largo di quello operativo, e la dimostrazione regge anche contro di lui.
+  const LEGACY_WG_CAP = 32_768;
+
+  it("il conto a M=8 sta sotto il cap — ed e' esattamente quello negoziato", () => {
+    expect(PREFILL_M_DENSE05B).toBe(8);
+    expect(wgStorage(PREFILL_M_DENSE05B)).toBe(30_848);
+    // il pin non e' un numero a sé: e' il limite che il device concede davvero
+    expect(wgStorage(PREFILL_M_DENSE05B)).toBe(DEVICE_WG_CAP);
+    expect(wgStorage(PREFILL_M_DENSE05B)).toBeLessThanOrEqual(LEGACY_WG_CAP);
+  });
+
+  it("lo stesso conto alla convenzione PREFILL_M sfonda il cap: ecco PERCHE' il pin", () => {
+    // attesi DERIVATI (linearità in M), non pinnati: il test dimostra l'invariante
+    // «wgStorage(PREFILL_M) > cap», che resta vero — e più vero — se M sale ancora.
+    expect(wgStorage(PREFILL_M)).toBe((PREFILL_M / PREFILL_M_DENSE05B) * wgStorage(PREFILL_M_DENSE05B));
+    expect(wgStorage(PREFILL_M)).toBeGreaterThan(DEVICE_WG_CAP);
+    expect(wgStorage(PREFILL_M)).toBeGreaterThan(LEGACY_WG_CAP);
+    // e non di un pelo: già a M=16 (il valore di oggi) sono 61 696 B, quasi il doppio
+    expect(wgStorage(16)).toBe(61_696);
+    expect(wgStorage(16) - LEGACY_WG_CAP).toBe(28_928);
+  });
+
+  it("gpuforward.ts NON dipende piu' da PREFILL_M (alzare la convenzione non trascina il denso)", () => {
+    const src = readFileSync(join(__dirname, "../src/engine/gpuforward.ts"), "utf8");
+    expect(src).toMatch(/PREFILL_M_DENSE05B/);
+    expect(src).not.toMatch(/PREFILL_M\b(?!_DENSE05B)/);
+  });
+
+  it("i report di gate (engine.worker.ts) dichiarano il knob ESEGUITO, non la convenzione", () => {
+    // il campo prefill.mMax dei JSON engine-conformance / bench descrive createEngine
+    // di gpuforward.ts, che gira a PREFILL_M_DENSE05B: se qui rientrasse PREFILL_M il
+    // gate mentirebbe (knob dichiarato ≠ knob eseguito).
+    const src = readFileSync(join(__dirname, "../src/engine/engine.worker.ts"), "utf8");
+    expect(src).toMatch(/mMax: PREFILL_M_DENSE05B/);
+    expect(src).not.toMatch(/PREFILL_M\b(?!_DENSE05B)/);
   });
 });
 
