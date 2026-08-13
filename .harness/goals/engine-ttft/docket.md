@@ -25,7 +25,9 @@ il piano rispetto al contratto approvato in chat:
   che (e2a) vuole sotto 16.384. La riga 1 deve trovare una forma il cui shared
   non scali con M, o la (e2a) si dichiara debito. Registrato, non deciso.
 
-**RULING:** _
+**RULING (PI, 2026-08-13): PIANO APPROVATO.** Lo scostamento M=8 → M ≥ 16 è
+ratificato. Il conflitto mMax-vs-shared è poi risultato in buona parte un
+artefatto: v. item 6, il tetto è negoziabile.
 
 ## item 2 — lo spec-dec MTP non ha un obiettivo a cui appartenere (io → PI)
 
@@ -99,3 +101,65 @@ multipla di 16 B prima di poterli bindare come `array<vec4<u32>>`.
 
 Lavoro mio, non un ruling. Non fatto ancora perché tocca il ktest di GLM e
 questo goal non ha ragione di entrarci prima della riga 3.
+
+## item 6 — il tetto di workgroup storage È GIÀ negoziabile, e cambia il senso della riga 4 (PI → io, verificato)
+
+Spunto del PI (2026-08-13): rendere il cap di WebGPU configurabile, così che il
+motore scelga da solo la migliore coppia (M, workgroup storage) in base al
+device — alto su GPU potenti e memoria unificata, basso su telefoni — e da lì
+sappia dire quale modello quel browser può reggere. Vincolo posto dal PI: solo
+se fattibile **senza modifiche che non tutti possono eseguire** (es. permessi
+Android).
+
+**VERIFICATO SULLA SPEC** (`/gpuweb/gpuweb`, `GPUDeviceDescriptor`): è già così,
+ed è il meccanismo standard.
+
+- `requestDevice({ requiredLimits: {...} })` accetta
+  `record<DOMString, GPUSize64>`. Testuale dal materiale della spec:
+  «Developers should receive minimum limits by default and request higher ones
+  if needed» e «Users must explicitly enable higher limits to obtain them on
+  their device. Limits on the device itself will match the requested limits».
+- Quindi **16.384 B non è un tetto: è ciò che ti danno se non chiedi.**
+  `adapter.limits.maxComputeWorkgroupStorageSize` riporta il massimo vero del
+  device (49.152 su questa scheda, misurato in
+  `results/engine/webgpu-limits-4090laptop-2026-08-02.json`).
+- Chiedere più del massimo dell'adapter ⇒ `requestDevice` **rigetta**.
+- È **puro JavaScript**: nessun permesso, nessun flag, nessuna installazione.
+  Su Chrome Android funziona identico. Il vincolo del PI è soddisfatto.
+
+**E metà della macchina è già scritta.** `gpulimits.ts` ha `limitsFor` (riga
+267: `requiredLimits = min(adapter, requisito)`, con `UnmetLimitError` che
+nomina il consumatore), `negotiateLimits` (282) e `grantedLimits` (287). Manca
+solo la **direzione inversa**: oggi `engineNeeds(o)` prende una configurazione e
+calcola cosa il device deve concedere. Serve `bestConfigFor(adapter)`: dati i
+limiti concessi, scegliere M e ctxMax.
+
+**Conseguenza sul piano — e non è piccola.** Il conflitto che avevo registrato a
+item 1 («alzare mMax peggiora (e2a)») è in buona parte un artefatto di aver
+trattato i 16.384 come un pavimento universale invece che come un minimo
+negoziabile. Il senso della riga 4 cambia: non «stare sotto 16.384 sempre», ma
+**«dichiarare, negoziare, e degradare M con grazia quando il device concede
+meno»**. Che è una clausola più difficile da soddisfare in un senso (serve un
+percorso di degradazione vero, cioè lo stesso kernel generabile a M diversi) e
+molto più facile nell'altro (su un device che concede 49.152, M=8 col kernel
+fuso ci sta già).
+
+**IL TRANELLO, che va misurato e non assunto**: chiedere il massimo NON è
+gratis. Più workgroup storage per workgroup = meno workgroup residenti per
+multiprocessore = meno occupancy = meno latenza nascosta. «Massimizzare il cap»
+può risultare più LENTO di «chiederne meno e tenere più workgroup in volo». La
+scelta automatica non è «prendi il massimo»: è **trovare il ginocchio**, per
+classe di device. È una curva, e va misurata.
+
+**Cosa ho fatto e cosa no.** Ho esteso il done-when (d) della riga 1 perché era
+già una misura pianificata («workgroup storage di ogni variante, misurato non
+dedotto») e questo la allarga di poco: aggiunge la curva throughput-vs-M a
+limite concesso variabile, che è il dato che serve per decidere. **NON ho
+toccato la riga 4**: cambiarne il done-when è must-docket.
+
+**RULING RICHIESTO**: la riga 4 passa da «sotto 16.384 sempre» a «dichiarare,
+negoziare, degradare»? E il selettore di modello per device — che è un pezzo di
+PRODOTTO, non di motore — è un goal suo o entra qui? La mia raccomandazione:
+sì alla riformulazione della riga 4 (è più onesta e sblocca il conflitto),
+selettore di modello a un goal suo (ha bisogno del tetto di VRAM e della
+paginazione, non solo dei limiti di workgroup — e quello è il goal sul load).
