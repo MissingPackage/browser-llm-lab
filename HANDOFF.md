@@ -168,6 +168,12 @@ GLM-4.7-Flash resta residency-bound
 - **`--prompt-idx` ha default 4 = 388 token, non il prompt da 6k.** È il flag da
   cui veniva il numero sbagliato corretto in it.0. I prompt ≥ 6000 token sono
   l'idx 0 (6333) e l'idx 5 (6128).
+- **I bench browser dipendono da un server di sviluppo che può morire in
+  silenzio.** `npx vite --port 5199` girava in background ed è uscito con 144
+  fra due iterazioni (2026-08-13). Il sintomo per il runner successivo NON è
+  "server giù": è un fallimento di caricamento pagina o un timeout, cioè una
+  causa travestita. Verificare `curl -s -o /dev/null -w "%{http_code}"
+  http://localhost:5199/<entry>.html` PRIMA di ogni run che costa GPU.
 - **Il prefill "a chunk" è più LENTO del sequenziale** (34,4 contro 72,3 tok/s,
   it.1): instrada sul GEMV vecchio, mentre `step()` usa quello veloce. Un bench
   che non dichiara `prefillPath` non dice quale dei due ha misurato.

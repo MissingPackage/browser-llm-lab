@@ -362,3 +362,40 @@ stessa causa, quindi informativa quanto una vittoria.
 attivazioni. Nel banco le do già quantizzate. Su un prefill a M=16 le attivazioni
 sono ~0,16 MB contro 13,3 MB di pesi, quindi il termine è piccolo — ma è
 **dichiarato non misurato**, e va misurato prima di portare la leva in produzione.
+
+## ADDENDUM it.5 (2026-08-13) — `splitk-idot`, pre-registrato prima di scrivere il kernel
+
+La via intera autorizzata dal PI: `packed_4x8_integer_dot_product` al posto del
+dequant in virgola mobile. È la forma q4_0 × q8_0 di llama.cpp — i pesi restano
+a 4 bit, **le attivazioni si quantizzano a 8 bit per blocco da 32**, il prodotto
+scalare è intero e le due scale si applicano una volta per blocco.
+
+**P8 — TOLLERANZA, dichiarata prima di misurare perché il risultato NON è
+bit-identico.** Le celle esistenti hanno un gate di checksum a `1e-3` relativo
+contro la forma attuale. `splitk-idot` non può passarlo per costruzione: cambia
+l'**aritmetica**, non l'ordine delle somme. Tolleranza dichiarata:
+**|checksumRelDiff| ≤ 2e-2**.
+Ragione numerica: quantizzando x a 8 bit con segno per blocco da 32, l'errore
+relativo per elemento è ≤ 2⁻⁸ ≈ 3,9e-3; su K=2560 (80 blocchi) gli errori sono
+indipendenti in segno e si cancellano parzialmente, quindi l'errore sul prodotto
+scalare è dell'ordine di 4e-3, e 2e-2 è un tetto largo cinque volte. **Se il
+diff supera 2e-2 la cella è SBAGLIATA, non imprecisa**: il gate resta un gate.
+
+**P9 — PRESTAZIONE.** `splitk-idot` batte `splitk` sul p50 a M=16, K2560×N9216,
+di un fattore **fra 1,15x e 1,8x** (punto 1,35x).
+Ragione: la riga 1 ha stabilito che il collo è calcolo e occupancy, non traffico
+(docket item 10). Il dequant nel ciclo interno costa oggi, per ogni blocco da
+32 pesi, 8 shift + 8 mask + 8 sottrazioni + 8 conversioni a f32; la via intera
+le sostituisce con 8 `dot4I8Packed` e una moltiplicazione di scala per blocco.
+Ma il traffico sui pesi è identico e le attivazioni vanno quantizzate in più.
+
+**failCondition di P9**: REFUTATA se il rapporto è < 1,15x. Se `splitk-idot` è
+più LENTO di `splitk`, la leva si dichiara **esclusa coi numeri** e si scrive
+perché — che è un esito legittimo del done-when "esaurimento delle leve", non un
+fallimento del ciclo.
+
+**Rischio dichiarato**: la passata di quantizzazione delle attivazioni è un
+dispatch in più. A M=16 le attivazioni sono 16×2560×4 B = 164 KB contro 13,3 MB
+di pesi, quindi dovrebbe sparire nel rumore — ma è esattamente il tipo di
+ragionamento sul traffico che la riga 1 ha già smentito una volta. Il costo
+della quantizzazione va misurato SEPARATO e pubblicato, non dedotto.

@@ -388,3 +388,103 @@ export function workgroupStorageBytes(wgsl: string): number {
   }
   return total;
 }
+
+/**
+ * VARIANTE `splitk-idot` — `splitk` col PRODOTTO SCALARE INTERO
+ * (`packed_4x8_integer_dot_product`, docket item 11, autorizzata dal PI).
+ *
+ * E' la via q4_0 x q8_0 di llama.cpp: i pesi sono gia' a 4 bit, le ATTIVAZIONI
+ * arrivano quantizzate a i8 per blocco da 32 con la loro scala, l'accumulo e'
+ * in i32 e `sc_w * sc_x` si applica UNA VOLTA PER BLOCCO invece che per
+ * elemento. Sparisce dal ciclo interno il dequant in virgola mobile (oggi 8
+ * `vec4<f32>` costruite per blocco con shift, mask e sottrazione) e restano 8
+ * `dot4I8Packed`.
+ *
+ * NON E' BIT-IDENTICA per costruzione: cambia l'aritmetica, non l'ordine delle
+ * somme. La tolleranza e' pre-registrata in P8 (<= 2,0e-2 di checksumRelDiff),
+ * ricavata dal conto sull'errore di quantizzazione a 8 bit e non a posteriori.
+ *
+ * BINDING 4 IN PIU' rispetto alle altre forme: `xsc`, la scala per (riga,
+ * blocco). Il layout di `xq` e' quello naturale del blocco — u32 0..3 = elementi
+ * 0..15, u32 4..7 = elementi 16..31 — che e' esattamente l'ordine in cui i
+ * nibble basso e alto di `qs4` escono: nessun rimescolamento.
+ */
+export function gemmQ4MultiRowSplitKIdotWgsl(o: MultiRowOpts & { splits: number }): string {
+  const { K, N, M, splits } = o;
+  const bpr = K / 32;
+  if (bpr % (splits * 2) !== 0) throw new Error(`splitk-idot: ${bpr} blocchi non divisibili in ${splits} fette da BK=2`);
+  const per = bpr / splits;
+  return `enable packed_4x8_integer_dot_product;
+@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> xq: array<u32>;
+@group(0) @binding(3) var<storage, read_write> part: array<f32>;
+@group(0) @binding(4) var<storage, read> xsc: array<f32>;
+const BPR = ${bpr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+var<workgroup> xs: array<u32, ${M * 16}>;
+var<workgroup> xss: array<f32, ${M * 2}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let bStart = s * PER;
+  let bEnd = bStart + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var b0 = bStart;
+  loop {
+    if (b0 >= bEnd) { break; }
+    // due blocchi per passata, come 'splitk': 16 u32 di attivazioni per riga
+    for (var idx = t; idx < ${M * 16}u; idx = idx + 64u) {
+      let m = idx / 16u;
+      let qi = idx % 16u;
+      xs[idx] = xq[(m * BPR + b0) * 8u + qi];
+    }
+    for (var idx = t; idx < ${M * 2}u; idx = idx + 64u) {
+      let m = idx / 2u;
+      xss[idx] = xsc[m * BPR + b0 + (idx % 2u)];
+    }
+    workgroupBarrier();
+    if (r < N_ROWS) {
+      for (var bi = 0u; bi < 2u; bi = bi + 1u) {
+        let gb = r * BPR + b0 + bi;
+        let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+        let w = qs4[gb];
+        // i 32 pesi del blocco come QUATTRO+QUATTRO quartetti i8 impacchettati:
+        // (nibble - 8) in complemento a due su 8 bit = (nibble + 248) & 255.
+        var lo: array<u32, 4>;
+        var hi: array<u32, 4>;
+        for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+          let word = w[wi];
+          let nl = (vec4<u32>(word) >> vec4<u32>(0u, 8u, 16u, 24u)) & vec4<u32>(15u);
+          let nh = (vec4<u32>(word) >> vec4<u32>(4u, 12u, 20u, 28u)) & vec4<u32>(15u);
+          let sl = (nl + vec4<u32>(248u)) & vec4<u32>(255u);
+          let sh = (nh + vec4<u32>(248u)) & vec4<u32>(255u);
+          lo[wi] = sl.x | (sl.y << 8u) | (sl.z << 16u) | (sl.w << 24u);
+          hi[wi] = sh.x | (sh.y << 8u) | (sh.z << 16u) | (sh.w << 24u);
+        }
+        let xb = bi * 8u;
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          let xo = m * 16u + xb;
+          var idot = 0i;
+          for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+            idot = idot + dot4I8Packed(lo[wi], xs[xo + wi]);
+            idot = idot + dot4I8Packed(hi[wi], xs[xo + 4u + wi]);
+          }
+          // la scala si applica UNA VOLTA per blocco, non per elemento
+          acc[m] = acc[m] + f32(idot) * sc * xss[m * 2u + bi];
+        }
+      }
+    }
+    workgroupBarrier();
+    b0 = b0 + 2u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
