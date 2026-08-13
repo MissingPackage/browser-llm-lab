@@ -603,3 +603,61 @@ workflow e tre server di sviluppo. Tutto cio' che eseguo **dentro** il turno e'
 affidabile: le sei misure GPU, i gate, i merge. **Il lavoro va fatto sincrono.**
 
 Nessun sesto tentativo, come dichiarato PRIMA di vedere l'esito.
+
+## item 19 — il done-when del riuso è ARITMETICAMENTE IRRAGGIUNGIBILE, e non per colpa del kernel (io → PI, it.13)
+
+La build ha fermato sé stessa su questo, ed è il modo giusto di fallire: ha
+misurato, ha visto che il gate non è verde, e **non ha aggiustato il numero**.
+
+Il done-when della riga 2 chiede: byte di peso emessi per token prefillato
+**≥ 8× più bassi a M ≥ 16**. Misurato sull'inventario per-layer INTERO del 4B:
+**5,86×**. Ricalcolato da me, indipendentemente, e combacia alla terza cifra.
+
+**La causa non è il kernel: è la copertura.** La forma nuova è q4_0-only per
+costruzione. Nel 4B, 24 tensori `ssm_out` in Q5_K e 4 `ffn_down` in Q4_1 sono
+l'**11,54% dei byte** e restano sul percorso vecchio, quindi si pagano M volte
+anche dopo. Con l'88,46% dei byte a 16× e l'11,54% a 1×:
+
+    1 / (0,1154 + 0,8846/M)   ⇒   M=8: 4,43×   M=16: 5,86×   M=32: 6,99×
+
+**Il tetto a M infinito è 8,67×, e il ≥8× richiederebbe M ≥ 92.** Non è una
+questione di tarare M: il gate come l'ho scritto io è irraggiungibile a qualunque
+M praticabile, e lo era già quando l'ho scritto — non me ne ero accorto perché
+il banco misurava una shape sola, dove la copertura è 100% e il rapporto è
+esattamente 16×.
+
+**RULING RICHIESTO**, tre opzioni:
+(a) **riscrivere il gate su ≥ 5,5× sull'inventario INTERO** — è una barra vera
+    (il misurato è 5,86×, margine 6%), sul denominatore onesto, e dichiara che
+    l'11,54% residuo appartiene a un altro goal;
+(b) riscrivere il gate su ≥ 8× dei soli byte COPERTI — verde per costruzione
+    (è 16×), ma è cherry-picking del denominatore: lo sconsiglio;
+(c) tenere ≥ 8× e dichiarare la riga 2 bloccata finché le famiglie K-quant non
+    hanno la loro forma multi-riga — che è **esattamente il goal accanto** già
+    identificato («dare alle famiglie K-quant e Q8_0 la stessa fase 0 che ha
+    avuto la q4_0»).
+
+**Raccomandazione: (a)**, con una riga nel contratto che nomina il residuo e lo
+assegna al goal K-quant. La (c) è intellettualmente la più pulita ma blocca un
+lavoro che vale 5,86× per aspettarne uno che non è nemmeno aperto.
+
+## item 20 — il cablaggio dell'assemblatore è scritto ma NON verificato (io, it.13)
+
+`q35gpumodel.ts` chiama ora `prefillGemmQ4SplitKWgsl` + `prefillSplitKCombineWgsl`
+al posto di `gemvQuantWgsl` con `batch:true`. Salvato su
+`wip/riga2-cablaggio-non-verificato` (`8042c7b`), **NON mergiato**.
+
+- **Verificato**: `tsc --noEmit` pulito; vitest **645 passed | 10 skipped**
+  (erano 611).
+- **NON verificato**: il ktest. Passava **100 PASS / 0 FAIL prima** di questo
+  cablaggio (it.8); adesso va in timeout con la **pagina morta** («pagina non
+  leggibile»), che è un sintomo diverso da un kernel che fallisce il confronto.
+- **Non ho potuto discriminare** se sia il cablaggio o l'infrastruttura: nella
+  stessa finestra anche i miei comandi lunghi sono stati uccisi con 144, la
+  stessa causa che stasera ha ucciso 5 workflow e 3 server.
+
+**Limite dello strumento trovato qui**: `engine-ktest.mjs` stampa la tabella solo
+alla FINE, dopo `waitForFunction`. Su un timeout non resta nessun output
+parziale, quindi non si sa **a quale kernel** sia morto. Con uno streaming
+incrementale della tabella questa diagnosi sarebbe stata di un minuto invece che
+impossibile. Lavoro mio, piccolo, e va fatto prima del prossimo tentativo.
