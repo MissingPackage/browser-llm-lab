@@ -2,43 +2,42 @@
 
 ## 1. Next decidable
 
-**Goal nuovo: `engine-kernel-decode`** (contratto e fasi in
-`.harness/goals/engine-kernel-decode/`). Obiettivo: **30 token/s a contesto
-realistico** (≥ 6000 posizioni) sul modello 4B, dove oggi ne fa **9,95**.
+**Goal `engine-kernel-decode` CHIUSO: l'obiettivo di prodotto è superato sul
+4B.** Il decode a contesto realistico (6333 posizioni) è passato da **9,95 a
+47,93 token/s** — **4,82×**, contro una soglia di 30 — e il contesto ormai non
+si paga quasi più: 0,15 µs per posizione contro 10,4.
 
-**Perché quel numero e non 25,9.** La misura di it.59 ha scoperto che il
-riferimento storico era preso a contesto corto: 38,72 ms/token a 388 posizioni
-contro **100,52 a 6333**, cioè 10,4 µs per ogni posizione di contesto. A
-contesto vero il token è per il **65% scansione della cache delle chiavi**, che
-gira a 6,3 GB/s — l'1,4% di quanto la scheda sa fare.
+Due leve, entrambe scelte da una fase di sole misure che aveva il potere di
+chiudere il goal: l'**attenzione** col contesto spezzato su più gruppi di lavoro
+e softmax in streaming (2,72×), e i **moltiplicatori quantizzati** con letture
+vettoriali, due righe per gruppo e riduzione di sottogruppo dove è dimostrabile
+che è sicura (1,77× ulteriore). La stessa fase ha **escluso** la fusione delle
+teste GQA: misurata più lenta.
 
-**Le tre leve, in ordine di peso a contesto vero**: l'attenzione (65,8 ms su
-100,5), i moltiplicatori quantizzati (27,1 ms, a un quarto della velocità che
-llama.cpp ottiene sulla stessa scheda e sullo stesso file), e il multi-riga —
-che però è la leva del *tempo al primo token*, quindi sta nel goal dopo.
+**Prossimo passo, e richiede un tuo sì**: il goal naturale successivo è il
+**TEMPO AL PRIMO TOKEN** — oggi 22,7 s su un prompt da 6k, obiettivo 4. Eredita
+tre cose già nominate: il moltiplicatore matriciale a più righe con riuso vero
+dei pesi, l'attenzione a chunk del prefill (stesso kernel del decode, stessi tre
+difetti, stessa riscrittura), e la resurrezione della predizione doppia, che
+sopra quel kernel tornerebbe conveniente.
 
-**Prossimo passo, e questo richiede un tuo sì**: `PHASES.md` è scritto e in
-attesa di `plan-check` (docket item 1). Cinque righe: fase 0 di sole sonde
-prediction-gated che può chiudere il goal se le leve non esistono, poi
-attenzione, poi moltiplicatori, poi il checkpoint dei 30 tok/s o l'esclusione
-coi numeri, poi la chiusura.
-
-**Già trovato scrivendo il piano** (docket item 2): `gpulimits.ts` crede che il
-path Qwen non dipenda dal contesto e chiede 30.848 byte fissi di memoria di
-gruppo, mentre il kernel di attenzione ne usa `4·ctxMax + 256`. Combaciano fino
-a **ctxMax 7648**; sopra, la pipeline non si crea. Il motore ha un tetto di
-contesto che il modulo dei limiti non dichiara.
+**Cinque cose aperte che ho registrato e non deciso** (docket del goal chiuso):
+il conductor installato tronca le patch a 16 KB e il sintomo si traveste da
+conflitto di pianificazione · il done-when sulla portabilità chiede più di
+quanto quella fase potesse dare (il tetto residuo è del prefill) · un `--out`
+assoluto si perde nel runner GLM · due call-site GLM nel ktest non sono
+congelati · `hostState.declared` è una promessa che nessun runner verifica.
 
 ## 2. Mappa
 
 **Destinazione.** Far girare in browser il modello più capace possibile
 restando usabile: almeno **30 token/secondo** e **primo token entro 4 secondi**.
 
-**Distanza adesso**, e nessuna configurazione ci arriva: GLM-4.7-Flash **13,4
-tok/s** con **14,5 s** al primo token; Qwen 35B **22,6**; Qwen 4B **25,9**. La
-predizione doppia era l'ultimo moltiplicatore previsto ed è esclusa dai numeri
-(§1): con i kernel di oggi nessuna configurazione arriva a 30, e la strada che
-ci arriverebbe (~42 tok/s) passa da una famiglia di kernel che non esiste.
+**Distanza adesso**: Qwen 4B **47,93 tok/s a contesto 6333** (era 9,95) —
+**sopra i 30 dell'obiettivo**. TTFT 22,7 s contro i 4 richiesti: è la metà
+dell'obiettivo di prodotto ancora aperta. GLM-4.7-Flash resta residency-bound
+(~13 tok/s, TTFT 14,7): nessuna delle leve di questo goal lo tocca. Il 35B non
+è stato rimisurato dopo i kernel nuovi.
 
 **Decisioni prese** (indice: il contenuto vive nel posto indicato, non qui)
 
