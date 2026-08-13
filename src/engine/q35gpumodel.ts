@@ -15,6 +15,8 @@ import {
   gemvQ6KWgsl, gemvQuantWgsl, gemvQuantGrid, gemvQuantVec4Rows2Ok, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
   siluMulWgsl, stridedCopyWgsl, routerTopKWgsl,
   SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE, type KArenaOpts,
+  prefillGemmQ4SplitKWgsl, prefillSplitKCombineWgsl, prefillGemmGrid,
+  prefillGemmSplitsFor, PREFILL_SPLITS_MEASURED,
 } from "./kernels/wgsl";
 import { expertArenaBindings } from "./gpulimits";
 import type { SlabTensorLayout } from "./moe";
@@ -587,6 +589,24 @@ export async function createQ35GpuModel(
     device.queue.writeBuffer(PB.rowUni, 0, u as unknown as BufferSource);
   }
   /**
+   * PARZIALI DELLO SPLIT-K (goal engine-ttft, riga 2). Il moltiplicatore
+   * multi-riga spezza K su `splits` workgroup e scrive `part[(s*M + m)*N + r]`;
+   * un secondo dispatch somma le fette. Il buffer e' UNO SOLO e riusato da ogni
+   * chiamata: i dispatch del piano gemello sono seriali dentro lo stesso pass,
+   * e ciascuno riscrive il parziale prima che il proprio combine lo legga.
+   *
+   * TAGLIA: il massimo su TUTTE le `n` che `gemvB` puo' ricevere, non su quella
+   * che capita per prima — un buffer corto darebbe scritture fuori range su una
+   * shape piu' grande incontrata dopo, e la validazione WebGPU non la vede
+   * perche' il binding e' l'intero buffer. Le `n` sono le stesse dimensioni per
+   * cui il piano alloca gli scratch a M righe qui sopra.
+   */
+  const prefillMaxN = Math.max(d, qkvDim, inner, 2 * qDim, kvDim, S.linVHead,
+    dFfn ?? 0, dE ?? 0, nE ?? 0);
+  const prefillPart = prefillOn
+    ? empty(PREFILL_SPLITS_MEASURED * M_MAX * prefillMaxN * 4)
+    : null;
+  /**
    * ETICHETTE per la sonda dei tempi (fase 4, it.23): `{at, cat}` dice che dallo
    * step `at` in poi si entra nella categoria `cat`. Sono MARCHE su intervalli e
    * non un campo per step, cosi' i ~25 siti di `push` non si toccano.
@@ -708,13 +728,31 @@ export async function createQ35GpuModel(
   };
   const gemvB = (w: { qs: GPUBuffer; scales: GPUBuffer; k: number; n: number; kind?: "q4_0" | "q4_1" | "q8_0" }, src: GPUBuffer, dst: GPUBuffer, kind?: "q4_0" | "q4_1" | "q8_0"): void => {
     const kk = kind ?? w.kind ?? "q4_0";
-    // `batch` NON e' ammesso dalla forma a 2 righe (fase 0 non l'ha misurata):
-    // qui il kernel resta quello di prima, byte per byte. La griglia pero' si
-    // deriva lo stesso da `gemvQuantGrid` invece che da `gemvGrid` a mano —
-    // oggi danno lo stesso numero (1 riga per workgroup sul batch), ma un TERZO
-    // posto che decide le righe-per-workgroup e' esattamente la forma del bug
-    // trovato in it.7, dove due posti che decidevano la stessa cosa la
-    // decidevano diversamente. Uno solo, e non si ripresenta.
+    // VIA VELOCE DEL PREFILL (goal engine-ttft, riga 2). La forma di prima
+    // dispacciava M GEMV sull'asse z: ogni riga rileggeva i pesi per intero,
+    // riuso ZERO per costruzione, ed e' il motivo per cui il prefill a chunk
+    // misurava 2,10x PIU' LENTO del sequenziale (it.1). La forma split-K legge
+    // ogni blocco di peso UNA volta e lo usa per tutte le M righe: misurata
+    // 43,1x a caldo e 38,0x a pesi freddi su K2560xN9216 a M=16 (riga 1, it.2 e
+    // it.4). Il costo e' un secondo dispatch che somma le fette di K.
+    //
+    // CONDIZIONI, verificate qui e non assunte: q4_0 (la via veloce e'
+    // q4_0-only per costruzione, come il GEMV del goal precedente) e K
+    // multiplo di 64 (il loop avanza a BK = 2 blocchi da 32). Fuori da queste,
+    // si resta sulla forma di prima — che e' corretta, solo lenta.
+    if (kk === "q4_0" && w.k % 64 === 0 && prefillPart !== null) {
+      const splits = prefillGemmSplitsFor(w.k, w.n);
+      const o = { kind: kk as "q4_0", K: w.k, N: w.n, M: M_MAX, splits };
+      pushB(prefillGemmQ4SplitKWgsl(o), [w.qs, w.scales, src, prefillPart], prefillGemmGrid(o));
+      pushB(prefillSplitKCombineWgsl({ N: w.n, M: M_MAX, splits }), [prefillPart, dst],
+        [Math.ceil((M_MAX * w.n) / 64), 1, 1]);
+      return;
+    }
+    // FALLBACK: la forma di prima, byte per byte. La griglia si deriva da
+    // `gemvQuantGrid` invece che da `gemvGrid` a mano — oggi danno lo stesso
+    // numero (1 riga per workgroup sul batch), ma un TERZO posto che decide le
+    // righe-per-workgroup e' esattamente la forma del bug trovato in it.7, dove
+    // due posti che decidevano la stessa cosa la decidevano diversamente.
     const opts = { kind: kk, K: w.k, N: w.n, hasBias: false, batch: true };
     const [gx, gy] = gemvQuantGrid(opts);
     pushB(gemvQuantWgsl(opts), [w.qs, w.scales, src, dst], [gx, gy, M_MAX]);

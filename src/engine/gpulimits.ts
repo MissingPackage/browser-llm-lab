@@ -21,8 +21,12 @@
 // limite e il codice che lo consuma — finora vivevano in file diversi senza
 // niente in mezzo, ed è per questo che nessuno dei due si accorgeva dell'altro.
 
-import { attnDecodeWorkgroupStorageBytes } from "./kernels/wgsl";
+import {
+  attnDecodeWorkgroupStorageBytes, prefillGemmWorkgroupStorageBytes,
+  type PrefillGemmOpts,
+} from "./kernels/wgsl";
 import { mlaPartialsLen } from "./mlasplit";
+import { PREFILL_M } from "./prefillplan";
 import { GLM47_FLASH } from "./shape";
 
 // ---------------------------------------------------------------------------
@@ -67,6 +71,21 @@ export const expertArenaBindings = (nBuf: number): number => nBuf + 3;
  * appena 1 920 B di margine senza che nessuno lo sapesse.
  */
 export const QWEN_WORKGROUP_STORAGE_BYTES = 30_848;
+
+/**
+ * Shape con cui si INTERROGA `prefillGemmWorkgroupStorageBytes` — quella che la
+ * riga 1 del goal engine-ttft ha misurato (K2560xN9216, 4 fette da BK=2).
+ *
+ * K, N e `splits` NON entrano nel fabbisogno: il moltiplicatore tiene in memoria
+ * di gruppo le sole attivazioni della tile, quindi il termine dipende dal solo
+ * M. Sono qui perché la formula VALIDA i suoi argomenti (q4_0, K multiplo di 64,
+ * blocchi divisibili per le fette) e rifiuta una shape inventata — ed è giusto
+ * così: un fabbisogno si chiede a un kernel che potrebbe esistere. Il test
+ * asserisce l'indipendenza da K/N/splits, così se un domani la tilatura cambia
+ * e la shape inizia a contare, se ne accorge qualcuno.
+ */
+const prefillGemmShape = (M: number): PrefillGemmOpts =>
+  ({ kind: "q4_0", K: 2560, N: 9216, M, splits: 4 });
 
 /**
  * mlaAttnDecode (kernel MLA MONOLITICO): scores[ctxMax] + red[64].
@@ -127,6 +146,30 @@ export interface EngineNeedsOpts {
    * massimo complessivo puo' benissimo venire dall'MLA quando non e' spenta.
    */
   mlaAttention?: boolean;
+  /**
+   * Righe per chunk del GEMM multi-riga del prefill (`prefillGemmQ4SplitK*`).
+   * Default: `PREFILL_M` del piano — qui non si ricopia quel numero, si importa.
+   * Il fabbisogno di memoria di gruppo di quel kernel è LINEARE in M e costante
+   * in ctxMax: è l'unica cosa di questo file che cambia se cambia la tilatura
+   * del prefill.
+   * ATTENZIONE al default: `PREFILL_M` è l'M NOMINALE del piano, e oggi nessun
+   * percorso di prodotto lo legge — il prefill denso gira a
+   * `PREFILL_M_DENSE05B` (8) e quello GLM a `GLM_PREFILL_M` (16). Vale 16 come
+   * il maggiore dei due, quindi il default dichiara abbastanza per entrambi, e
+   * un test lo sorveglia; l'M vero lo fisserà l'assemblatore della riga 2, che
+   * dovrà passarlo esplicitamente.
+   */
+  prefillM?: number;
+  /**
+   * Quale via del GEMM di prefill girerà: `true` = intera
+   * (`packed_4x8_integer_dot_product`, 1.152 B a M=16), `false` = f32
+   * (4.096 B). Lo decide la language feature a RUNTIME.
+   * OMETTERLO (il default) dichiara il PEGGIORE delle due — che è il numero
+   * giusto per chi negozia i limiti prima di sapere quale via avrà: chiedere
+   * 1.152 e ritrovarsi sulla via f32 significa pipeline invalida su un device
+   * che concede esattamente il richiesto.
+   */
+  prefillGemmIdot?: boolean;
   /** Byte della KV cache di UN layer, se bindata intera. Default: formula GLM. */
   kvBytesPerLayer?: number;
   /**
@@ -153,6 +196,13 @@ export interface EngineNeedsOpts {
 
 /** I requisiti del motore, ciascuno col suo consumatore. */
 export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
+  // Il GEMM multi-riga del prefill (goal engine-ttft riga 2): formula IMPORTATA
+  // dal file del kernel, mai ricopiata — regola già vigente in questo file.
+  const prefillM = o.prefillM ?? PREFILL_M;
+  const prefillGemmVia = o.prefillGemmIdot === undefined
+    ? undefined : o.prefillGemmIdot ? "idot" as const : "f32" as const;
+  const prefillGemmBytes = prefillGemmWorkgroupStorageBytes(prefillGemmShape(prefillM), prefillGemmVia);
+  const prefillGemmViaLabel = prefillGemmVia ? `via ${prefillGemmVia}` : "peggiore fra idot e f32";
   const needs: LimitNeed[] = [
     {
       limit: "maxComputeInvocationsPerWorkgroup", value: MAX_WORKGROUP_SIZE, hard: true,
@@ -168,30 +218,45 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
     },
     {
       limit: "maxComputeWorkgroupStorageSize",
-      // TRE consumatori CONTATI, e il terzo mancava: `attnDecodeWgsl`,
-      // l'attenzione di decode di Qwen. Dalla fase 1 (goal
+      // QUATTRO consumatori CONTATI. Il terzo era `attnDecodeWgsl`,
+      // l'attenzione di decode di Qwen: dalla fase 1 (goal
       // engine-kernel-decode, docket item 2) il suo fabbisogno e' COSTANTE in
-      // ctxMax — softmax in streaming — ma si conta lo stesso. La formula
-      // arriva dal file del kernel, non e' ricopiata qui.
-      // Ma un `scores[ctxMax]` in workgroup memory esiste ancora, in
-      // produzione e fuori dall'MLA — e NON e' contato qui. Lo dichiara
-      // `attnPrefillChunkWgsl` (qh[headDim] + quel `scores` + red[64] =
-      // 4·ctxMax + 1.280 B a headDim 256), che gpuforward.ts istanzia dallo
-      // STESSO path che qui passa `mlaAttention: false`; e il ramo batch
-      // legacy di `attnDecodeWgsl` (q35gpumodel) ne chiede 4·ctxMax + 256 B.
-      // Oggi non rompono niente solo perche' CTX_MAX vale 1024 (5.376 B <
-      // 30.848): il pareggio col termine fuso e' a ctxMax ~7.392, e sopra
-      // quel valore la pipeline del prefill fallisce in validazione mentre
-      // questo modulo ha dichiarato di meno. Contarli alzerebbe un requisito
-      // del device per tutti: e' una decisione da docket (goal
-      // engine-kernel-decode), non un ritocco di commento.
+      // ctxMax — softmax in streaming — ma si conta lo stesso. Il quarto e'
+      // il GEMM multi-riga del prefill (`prefillGemmQ4SplitK*`, goal
+      // engine-ttft riga 2), che tiene le attivazioni della tile in memoria di
+      // gruppo: 72·M B sulla via intera, 256·M B su quella f32, costante in
+      // ctxMax. Entrambe le formule arrivano dal file del kernel, non sono
+      // ricopiate qui.
+      // Il GEMM del prefill NON alza il totale (4.096 B a M=16 contro i 30.848
+      // del path fuso): si dichiara perche' ESISTE, non perche' vince — un
+      // binding o un fabbisogno che non e' nella lista e' un requisito che
+      // nessuno sta guardando. Entra comunque nel `Math.max`, ed e' li' che il
+      // test lo verifica: `limitsFor` legge `value`, non `consumer`.
+      //
+      // DEBITO, esplicito e con la sua aritmetica: un `scores[ctxMax]` in
+      // workgroup memory esiste ancora, in produzione e fuori dall'MLA, e NON
+      // e' contato qui. Lo dichiarano `attnPrefillChunkWgsl` (qh[headDim] +
+      // quel `scores` + red[64] = 4·ctxMax + 1.280 B a headDim 256), che
+      // gpuforward.ts istanzia dallo STESSO path che qui passa
+      // `mlaAttention: false`, e il ramo batch legacy di `attnDecodeWgsl`
+      // (q35gpumodel), che ne chiede 4·ctxMax + 256 B.
+      // Il pareggio col termine fuso e' a ctxMax 7.392 (4·7.392 + 1.280 =
+      // 30.848); e a ctxMax 12.224 quel termine tocca i 49.152 B che il device
+      // di riferimento concede, quindi dichiararlo OGGI farebbe fallire
+      // `limitsFor` dove oggi passa. Lo chiude la riga 3 di PHASES del goal
+      // engine-ttft (attenzione a chunk del prefill: il ramo batch smette di
+      // instradare al legacy), e la riga 4 lo dichiara. Fino ad allora il
+      // debito non vive in questo commento: vive nel describe "debito: il ramo
+      // batch legacy dell'attenzione non e' contato" di tests/gpulimits.test.ts,
+      // che cade se qualcuno lo dichiara senza toccarlo.
       value: Math.max(
         QWEN_WORKGROUP_STORAGE_BYTES,
+        prefillGemmBytes,
         attnDecodeWorkgroupStorageBytes(o.ctxMax),
         o.mlaAttention === false ? 0 : mlaWorkgroupStorageBytes(o.ctxMax),
       ),
       hard: true,
-      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, attnDecode (streaming, costante in ctxMax) = ${attnDecodeWorkgroupStorageBytes(o.ctxMax)} B${o.mlaAttention === false ? "" : `, mlaAttnDecode ${mlaWorkgroupStorageBytes(o.ctxMax)} B`} a ctxMax ${o.ctxMax})`,
+      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, prefillGemm splitK M=${prefillM} (${prefillGemmViaLabel}) = ${prefillGemmBytes} B, attnDecode (streaming, costante in ctxMax) = ${attnDecodeWorkgroupStorageBytes(o.ctxMax)} B${o.mlaAttention === false ? "" : `, mlaAttnDecode ${mlaWorkgroupStorageBytes(o.ctxMax)} B`} a ctxMax ${o.ctxMax})`,
     },
   ];
   if (o.arenaBuffers !== undefined) {
