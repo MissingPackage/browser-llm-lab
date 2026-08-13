@@ -450,3 +450,42 @@ finisse e poi usato un profilo dedicato — che è il rimedio, non la soluzione.
 
 **Gate** (col ktest nuovo, exit code guardato): ktest exit 0 · 100 PASS / 0 FAIL
 · vitest 545 passed | 10 skipped · `tsc --noEmit` pulito.
+
+## it.6 (2026-08-13) — i due item chiusi: il gate che mentiva e la misura che mancava
+
+**Item 13 — `engine-ktest.mjs`.** Tre difese, ognuna provata FACENDOLA SCATTARE
+prima di fidarmene: server assente → exit 2 con la causa; profilo Chrome
+occupato → exit 2 con la serialità spiegata; `KTEST_MIN_PASS=999` → exit 4 con
+«zero fallimenti su zero test non è un gate superato»; run buona → exit 0 con
+«PASS 100 · FAIL 0» stampato dal driver.
+
+Il primo disegno del fix era rotto a sua volta: **timeout fisso di 120 s su una
+suite che ne impiega ~5 minuti**, quindi faceva fallire una run BUONA. Un gate
+che grida al lupo a run sana viene disattivato da chi lo usa, ed è il modo più
+efficace di tornare al punto di partenza. `KTEST_TIMEOUT_MS` default 600.000.
+**Una difesa non testata in positivo non è una difesa.** E, mentre lo provavo,
+il gate ha diagnosticato da solo un Chrome rimasto appeso dal proprio timeout
+precedente — invece di uscire 0. È esattamente il caso per cui esiste.
+
+**Item 14 — il costo della quantizzazione, che it.5 aveva dedotto.** Ora è
+misurato: `quantx-q8` da sola e `splitk-idot-full` = [quant, gemm, combine],
+con `dispatchesPerOp` 1 e 3 contro i 2 di `splitk-idot`.
+
+| M=16 | `splitk` | `quantx-q8` | `splitk-idot-full` | onesto |
+|---|---|---|---|---|
+| gate/up | 0,0609 | **0,0019** | **0,0349** | **1,745×** |
+| down | 0,1361 | 0,0020 | **0,0787** | **1,729×** |
+
+La quantizzazione costa il **5,6%** del kernel intero. La stima di it.5 («5-15%,
+lascerebbe ~1,6×») era giusta come ordine e pessimista come valore: il vero è
+1,745× contro l'1,83× senza. **Blocco FFN 0,2579 → 0,1485 ms (1,737×)**,
+proiezione **~6.214 ms**.
+
+**Dove siamo rispetto al contratto riscritto**: baseline 87.618 ms, barra
+meccanica < 21.905, proiezione con tutte le leve ~6.214 (pavimento: non conta i
+24 layer DeltaNet, norm, RoPE, dispatch). Le tre leve sono tutte MISURATE e
+nessuna esclusa: `splitk` 38,0× a pesi freddi, via intera 1,74× sopra di lei,
+attenzione in streaming 6,76×. Resta da portarle in produzione — la riga 2.
+
+**Gate**: ktest 100 PASS / 0 FAIL (col driver che lo dichiara) · vitest 545
+passed | 10 skipped · tsc pulito.

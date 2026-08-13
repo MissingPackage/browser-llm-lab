@@ -395,3 +395,23 @@ Stima d'ordine (NON misura): 164 KB letti e ~41 KB scritti per chunk contro
 `quantx-q8` col solo dispatch di quantizzazione, e la cella `splitk-idot-full`
 con [quant, gemm, combine], così che il rapporto onesto e il termine aggiunto
 siano entrambi leggibili nell'artefatto senza doverli dedurre.
+
+### CHIUSO (it.6): misurato, e la stima era giusta al bordo basso
+
+`dispatchesPerOp` ora dice la verità: 1 per `quantx-q8`, 3 per
+`splitk-idot-full`, 2 per `splitk-idot` (che resta pubblicata come misura del
+solo KERNEL, dichiarata tale).
+
+| M=16 | `splitk` | `splitk-idot` | `quantx-q8` | `splitk-idot-full` | rapporto onesto |
+|---|---|---|---|---|---|
+| gate/up K2560×N9216 | 0,0609 | 0,0333 | **0,0019** | **0,0349** | **1,745×** |
+| down K9216×N2560 | 0,1361 | 0,0769 | 0,0020 | **0,0787** | **1,729×** |
+
+**La quantizzazione costa 0,0019 ms, il 5,6% del kernel intero.** La stima
+d'ordine di it.5 diceva «5-15%, che lascerebbe ~1,6×»: giusta come ordine,
+pessimista come valore — il vero è 1,745× contro l'1,83× senza. Resta che era
+una stima presentata come tale e ora è una misura.
+
+**Blocco FFN per layer: 0,2579 → 0,1485 ms (1,737×).** Proiezione aggiornata:
+3.326 ms di moltiplicazioni + 2.888 di attenzione = **~6.214 ms**, contro i
+6.096 che it.5 aveva scritto usando il rapporto senza quantizzazione.

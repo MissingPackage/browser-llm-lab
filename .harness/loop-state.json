@@ -1,9 +1,6 @@
 {
- "status": "active",
+ "status": "stopped",
  "session_id": "0348f2c0-1d0a-4913-93cf-ede7de3e30af",
- "next_wake_epoch": 1786636604,
- "next_wake": "2026-08-13T17:56:44+0200",
- "prompt": "/loop-iteration engine-ttft: (1) chiudi docket item 13 \u2014 engine-ktest.mjs deve uscire non-zero quando non gira (try/catch sulla navigazione + asserzione di plausibilit\u00e0: zero kernel eseguiti \u21d2 exit non-zero); (2) chiudi item 14 \u2014 celle quantx-q8 e splitk-idot-full, cos\u00ec il rapporto onesto della via intera \u00e8 nell'artefatto e non dedotto; (3) poi la build della riga 2 con sdd-conductor. Verifica SEMPRE che vite sia su 5199 e passa BASE_URL ai runner.",
- "updated_epoch": 1786636484,
- "updated": "2026-08-13T17:54:44+0200"
+ "updated_epoch": 1786637913,
+ "updated": "2026-08-13T18:18:33+0200"
 }
