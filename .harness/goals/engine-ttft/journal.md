@@ -654,3 +654,36 @@ timeout uguale, e' infrastruttura; se solo il ramo, e' il kernel.
 
 **Metrica invariata**: TTFT a caldo **87.618 ms**. Il cablaggio esiste ma non e'
 misurato, e finche' non passa il gate non conta.
+
+## it.14 (2026-08-13) — ruling sul riuso applicato, e il riavvio è l'esperimento discriminante
+
+**Ruling del PI**: barra del riuso da ≥ 8× a **≥ 5,5× sull'inventario per-layer
+INTERO**, residuo assegnato al goal K-quant. Applicato in `GOAL.md` (done-when
+della leva 1) e `PHASES.md` (riga 2, clausola b), entrambi col conto per esteso.
+Docket item 19 CHIUSO.
+
+**L'errore era mio e vale la pena ricordare da dove veniva**: il banco misurava
+UNA shape, dove la copertura q4_0 è totale e il rapporto è esattamente 16×. Ho
+scritto il done-when su quel numero. Sull'inventario vero del modello la
+copertura è 88,46% e il resto — 24 `ssm_out` Q5_K + 4 `ffn_down` Q4_1 — si paga
+M volte anche dopo, quindi il tetto è 8,67× e il ≥ 8× richiedeva M ≥ 92. **Una
+misura su una shape non autorizza un gate sull'intero modello**, ed è la stessa
+classe della landmine «nessun tok/s senza il suo contesto».
+
+**IL RIAVVIO DELLA MACCHINA È L'ESPERIMENTO CHE MI MANCAVA.** Il cablaggio su
+`wip/riga2-cablaggio-non-verificato` (`8042c7b`) ha tsc pulito e vitest 645
+verde, ma il ktest — che passava **100/0 prima** del cablaggio — va in timeout
+con la pagina morta. Non ho potuto discriminare fra cablaggio e infrastruttura
+perché nella stessa finestra anche i miei comandi venivano uccisi con 144.
+
+Dopo il riavvio la discriminazione è di una riga:
+- ktest **verde** sul ramo ⇒ la causa era l'infrastruttura, il cablaggio è sano,
+  si merga e si misura il prefill;
+- ktest **ancora morto** ⇒ la causa è il cablaggio, e va cercata lì. In quel caso
+  la prima cosa da fare è lo streaming incrementale della tabella (docket item
+  20), senza il quale non si sa nemmeno a quale kernel muore.
+
+**Metrica invariata: TTFT a caldo 87.618 ms.** Le tre leve sono misurate
+(38,0× · 1,745× · 6,76×), i kernel sono in produzione e testati, il cablaggio è
+scritto e non verificato. Proiezione a leve montate ~6.214 ms; barra del
+contratto < 21.905.

@@ -101,9 +101,28 @@ DONE WHEN (all measurable):
 
 - LEVA 1 (GEMM multi-riga con riuso vero dei pesi) misurata: G pesi/s PRIMA e
   DOPO nello stesso JSON, a M = 1, 8, 16, 32. Il done-when non è il tempo ma il
-  RIUSO: **byte di peso letti per token prefillato scende di >= 8x a M >= 16**
-  (ratificato dal PI il 2026-08-13; M=8 e' degenere per l'obiettivo. La riga 1
-  ha misurato 16,0x a M=16, cioe' il massimo teorico: la barra e' raggiungibile).
+  RIUSO: **byte di peso letti per token prefillato scende di >= 5,5x a M >= 16,
+  misurato sull'INVENTARIO PER-LAYER INTERO del 4B** (ruling PI 2026-08-13,
+  it.14).
+
+  PERCHE' 5,5 E NON 8. Il done-when precedente chiedeva >= 8x ed era
+  ARITMETICAMENTE IRRAGGIUNGIBILE, non per un difetto del kernel ma per la
+  COPERTURA: la forma nuova e' q4_0-only per costruzione, e nel 4B 24 tensori
+  `ssm_out` in Q5_K piu' 4 `ffn_down` in Q4_1 sono l'11,54% dei byte e restano
+  sul percorso vecchio, pagandosi M volte anche dopo. Con l'88,46% dei byte a
+  16x e l'11,54% a 1x:
+
+      1 / (0,1154 + 0,8846/M)   =>   M=8: 4,43x   M=16: 5,86x   M=32: 6,99x
+
+  Il tetto a M infinito e' 8,67x, e il >= 8x richiederebbe M >= 92. L'errore era
+  mio e nasceva dal banco, che misurava una shape sola dove la copertura e' 100%
+  e il rapporto e' esattamente 16x. Misurato sull'inventario vero: **5,86x**, e
+  5,5 e' la barra col suo margine.
+
+  IL RESIDUO HA UNA CASA: l'11,54% non coperto e' materia del **goal sulle
+  famiglie K-quant e Q8_0**, quello gia' identificato come «dare a K-quant e
+  Q8_0 la stessa fase 0 che ha avuto la q4_0». Non e' debito silenzioso: e'
+  scope di un altro goal, e va nominato nel consuntivo di questo.
 
 - LEVA 2 (attenzione a chunk del prefill): `attnDecodeWgsl` con `batch: true`
   oggi instrada al LEGACY (`wgsl.ts:530`), che ha i tre difetti già chiusi sul

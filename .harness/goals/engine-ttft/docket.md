@@ -641,6 +641,13 @@ esattamente 16×.
 assegna al goal K-quant. La (c) è intellettualmente la più pulita ma blocca un
 lavoro che vale 5,86× per aspettarne uno che non è nemmeno aperto.
 
+### RULING (PI, 2026-08-13): (a) ACCETTATA — barra a 5,5×, residuo al goal K-quant
+
+«Accetto la tua raccomandazione di abbassare la barra e gestire il residuo nel
+goal sui k quant.» Applicato in `GOAL.md` (done-when della leva 1) e in
+`PHASES.md` (riga 2, clausola b), entrambi col conto per esteso e col residuo
+NOMINATO invece che lasciato implicito. **Item CHIUSO.**
+
 ## item 20 — il cablaggio dell'assemblatore è scritto ma NON verificato (io, it.13)
 
 `q35gpumodel.ts` chiama ora `prefillGemmQ4SplitKWgsl` + `prefillSplitKCombineWgsl`
