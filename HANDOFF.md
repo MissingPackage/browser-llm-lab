@@ -272,3 +272,28 @@ GLM-4.7-Flash resta residency-bound
 - **Leggere i parametri di un runner prima di spenderci sopra minuti di GPU.**
   Due volte in una sessione ho lanciato run con flag sbagliati dedotti invece
   che letti.
+- **UN `git checkout` DI UN RAMO VECCHIO PUÒ FAR NASCERE UN AGENTE FANTASMA nel
+  tuo working tree.** Successo il 2026-08-14, ricostruito dal reflog e dal log
+  del watchdog: alle 00:00:51 il checkout di
+  `wip/riga2-cablaggio-non-verificato` ha riscritto
+  `.harness/loop-state.json` con la copia `status: "active"` di quel ramo
+  (`next_wake` 23:12:44); alle **00:01:34**, 43 secondi dopo,
+  `harness-loop-watchdog.timer` (poll ogni 2 min) l'ha letto, ha visto un
+  risveglio scaduto da 48 minuti e ha **rianimato una sessione che era stata
+  fermata apposta** con `ScheduleWakeup{stop:true}` prima del riavvio. Due
+  sessioni Claude hanno lavorato in parallelo sullo stesso albero e sulla stessa
+  GPU per ~15 minuti, e me ne sono accorto solo perché `q35gpumodel.ts` è
+  cambiato sotto di me.
+  Il watchdog **non legge male**: legge `active` perché glielo ha appena scritto
+  git. Il difetto era che un file di RUNTIME stesse in git — corretto in
+  `c21648e` (`.gitignore` + `git rm --cached`).
+  **RESIDUO APERTO: 19 rami portano ancora `status: "active"`** — tutti i
+  `wip/riga2-*` e i `worktree-wf_*`. Toglierlo da main impedisce a main di
+  ri-armare la miccia, **non** impedisce a un checkout di quei rami di
+  riarmarla. La difesa robusta (rifiutare uno stato scaduto da N poll, e non
+  saltare il controllo «transcript fresco» sul ramo `headless_dead`) sta in
+  `~/Projects/harness/tools/loop-watchdog.sh`, **altro repo, non toccato**.
+  Sintomo da cui riconoscerlo: file sorgente che cambiano senza che tu li abbia
+  scritti. `ListAgents` mostra la sessione peer; `git log -1 --format=%h
+  .harness/loop-state.json` contro `updated_epoch` dice se il file è stato
+  riscritto da un checkout invece che dall'hook.
