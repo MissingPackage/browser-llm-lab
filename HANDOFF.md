@@ -1,4 +1,4 @@
-# HANDOFF — browser-llm-lab   (aggiornato 2026-08-13)
+# HANDOFF — browser-llm-lab   (aggiornato 2026-08-14)
 
 ## 1. Next decidable
 
@@ -69,39 +69,43 @@ il conflitto mMax-vs-shared del docket item 1 **non esiste** per la forma che
 vince, e la portabilità della riga 4 si ottiene gratis. Il legacy dell'attenzione
 invece non crea nemmeno la pipeline sotto i 32.768 B.
 
-**RIPRESA DOPO IL RIAVVIO — la prima cosa da fare, in una riga.**
-Il ramo `wip/riga2-cablaggio-non-verificato` (`8042c7b`) contiene il cablaggio
-dell'assemblatore del 4B. Ha `tsc` pulito e vitest 645 verde, ma il **ktest non
-è verificato**: passava 100/0 PRIMA del cablaggio e dopo va in timeout con la
-pagina morta. Non si è potuto discriminare fra cablaggio e infrastruttura perché
-nella stessa finestra anche i comandi lunghi venivano uccisi (segnale 144, la
-stessa causa che ha ucciso 5 workflow e 3 server di sviluppo).
+**IL RIAVVIO HA RISPOSTO: ERA L'INFRASTRUTTURA** (it.14, 2026-08-14). Server
+avviato staccato, stesso ramo, stesso comando: **ktest 100 PASS · 0 FAIL ·
+exit 0**. Il cablaggio dell'assemblatore era sano; ciò che moriva ieri era il
+reaping al confine di turno. **Mergiato in main (`7bc6b55`).** Di conseguenza va
+riletta anche la conclusione «il conductor non chiude un task di questa classe
+qui»: 5 morti su 5 erano lo stesso segnale 144, non un limite del veicolo.
 
-**Il riavvio È l'esperimento discriminante.** Avviare il server staccato, poi:
+**Stato della metrica: TTFT a caldo 87.618 → 56.984 ms = 1,54×.** Misurato col
+comando identico alla baseline (`--prompt-idx 0 --n-decode 64 --vram-gib 8
+--declared quiescent --prefill-m 16`), artefatto
+`results/engine/ttft-riga2-4b-splitk-m16-prompt0-2026-08-14.json`:
+prefill **34,36 → 111,16 tok/s = 3,24×** sul braccio chunked M=16 (1,54× sul
+sequenziale, che era il path migliore di allora) · `prefill.ms` 56.961 ·
+`firstMs` 23 · decode 47,17 tok/s a ctx 6333 (−1,30% su 47,79: dentro la banda).
+Barra del contratto **< 21.905 ms** ⇒ **manca 2,60×**.
 
-    setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
-    git checkout wip/riga2-cablaggio-non-verificato
-    BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs
+**LA PROSSIMA COSA DA FARE, ED È UN BUCO DEL CABLAGGIO, NON UNA RIGA NUOVA.**
+Il done-when (a0) della riga 2 dice «se `idot` vince, è LEI la forma che va in
+produzione». `idot` ha vinto (1,745× sopra la f32, it.6). Ma
+`q35gpumodel.ts:746` chiama `prefillGemmQ4SplitKWgsl` — la via **f32**, che il
+commento del kernel stesso (`wgsl.ts:3795`) dichiara «FALLBACK DICHIARATO ...
+non come alternativa preferibile». `prefillGemmQ4SplitKIdotWgsl`
+(`wgsl.ts:3718`) è in albero, portata riga-per-riga dal banco, col suo test di
+divergenza testuale — **e nessun call-site la raggiunge**. `gpulimits.ts`
+conosce già il flag `prefillGemmIdot`: il punto d'innesto c'è, mancano la scelta
+a runtime sulla language feature e il ramo che la usa. Manca anche la clausola
+(d) della riga 2, la copertura dei siti con worklist.
 
-- **verde** ⇒ la causa era l'infrastruttura, il cablaggio è sano: mergiare e
-  misurare il prefill sul prompt-idx 0 con `--prefill-m 16`;
-- **ancora morto** ⇒ la causa è il cablaggio. Prima di cercarla, fare lo
-  streaming incrementale della tabella del ktest (docket item 20): oggi la
-  stampa solo alla fine, quindi su un timeout non si sa nemmeno a quale kernel
-  muore.
-
-**Stato della metrica: TTFT a caldo 87.618 ms, invariato.** Baseline misurata su
-prompt da 6333 token; barra del contratto **< 21.905 ms** (un quarto della
-baseline: il bersaglio dei 4 s è stato tolto dal PI perché proiettato
-irraggiungibile su questa macchina). Proiezione a leve montate **~6.214 ms**.
-
-**Le tre leve sono tutte MISURATE e nessuna esclusa**: moltiplicatore multi-riga
-`splitk` **38,0×** a pesi freddi (il vantaggio è occupancy, non cache: degrada
-solo del 12,9% quando i pesi streammano davvero) · via intera q4_0×q8_0
-**1,745×** sopra di lui, quantizzazione delle attivazioni compresa (costa il
-5,6%) · attenzione del prefill in streaming **6,76×** a contesto 6333.
-I kernel sono **in produzione e testati** (`0c66fbd`); manca solo che qualcuno
-li chiami.
+**Le tre leve sono tutte MISURATE**: moltiplicatore multi-riga `splitk` **38,0×**
+a pesi freddi — **IN PRODUZIONE da it.14**, ma nella variante f32 · via intera
+q4_0×q8_0 **1,745×** sopra di lui, quantizzazione delle attivazioni compresa
+(costa il 5,6%) — **in albero, non chiamata** · attenzione del prefill in
+streaming **6,76×** a contesto 6333 — **in albero, non chiamata** (riga 3:
+`attnDecodeWgsl` con `batch` instrada ancora al legacy).
+**Il divario fra i 43,1× del banco sul kernel e gli 1,54× end-to-end dice dove
+sta ora il tempo: il moltiplicatore non è più il termine dominante, lo è
+l'attenzione.** È l'argomento per fare la riga 3 prima o insieme all'idot.
 
 **Ruling del PI del 2026-08-13 sulla barra del riuso**: da ≥ 8× a **≥ 5,5×
 sull'inventario per-layer INTERO**. Il ≥ 8× era irraggiungibile a qualunque M
@@ -121,11 +125,12 @@ scende da 256 a 64 gruppi su 76 processori. **La riga 3 non deve adottare la
 fusione GQA "perché sul decode ha funzionato": sul prefill la misura dice il
 contrario.**
 
-**Il veicolo `sdd-conductor` non chiude un task di questa classe qui**: 5 lanci,
-5 morti, tutte al confine del turno. Tutto ciò che si esegue DENTRO un turno
-regge (6 misure GPU, tutti i gate, tutti i merge). Il lavoro va fatto sincrono.
-Se il riavvio risolve anche questo, la conclusione va rivista — ed è un'altra
-cosa che il riavvio discrimina.
+**Il veicolo `sdd-conductor`: la conclusione di ieri è SOSPESA, non confermata.**
+5 lanci, 5 morti, tutte al confine del turno — ma il riavvio ha dimostrato che
+quel confine uccideva anche un ktest sano. Il veicolo non è stato riprovato dopo
+il riavvio, quindi «non chiude un task di questa classe qui» oggi non ha
+evidenza: ha solo una causa alternativa più semplice. Il lavoro sincrono
+continua a reggere (tutte le misure GPU, tutti i gate, tutti i merge).
 
 **Il 35B non ha ricevuto nulla da questo goal, ed e' misurato**: non ha un solo
 tensore Q4_0 (Q8_0 251 · Q4_K 117 · Q6_K 4), e la forma nuova dei
@@ -155,11 +160,11 @@ Il secondo termine è un'aspirazione di prodotto, non una promessa di questa
 macchina: su un prompt da 6k il 4B ha un pavimento misurato di ~9,4 s, e il PI
 ha riscritto l'obiettivo del goal in «il più in basso possibile» (2026-08-13).
 
-**Distanza adesso**: Qwen 4B **47,93 tok/s a contesto 6333** (era 9,95) —
+**Distanza adesso**: Qwen 4B **47,17 tok/s a contesto 6333** (era 9,95) —
 **sopra i 30 dell'obiettivo**. Il TTFT a caldo sul prompt da 6333 token è
-**87,6 s MISURATO** (it.1) contro una barra di 21,9 s: serve 4,0×, e il
-pavimento misurabile della macchina è ~9,4 s. È la metà dell'obiettivo di
-prodotto ancora aperta, ed è il goal `engine-ttft`.
+**57,0 s MISURATO** (it.14, era 87,6 in it.1) contro una barra di 21,9 s: manca
+2,60×, e il pavimento misurabile della macchina è ~9,4 s. È la metà
+dell'obiettivo di prodotto ancora aperta, ed è il goal `engine-ttft`.
 GLM-4.7-Flash resta residency-bound
 (~13 tok/s, TTFT 14,7): nessuna delle leve di questo goal lo tocca. Il 35B non
 è stato rimisurato dopo i kernel nuovi.

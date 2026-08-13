@@ -687,3 +687,55 @@ Dopo il riavvio la discriminazione è di una riga:
 (38,0× · 1,745× · 6,76×), i kernel sono in produzione e testati, il cablaggio è
 scritto e non verificato. Proiezione a leve montate ~6.214 ms; barra del
 contratto < 21.905.
+
+---
+
+## it.14 (2026-08-14) — il riavvio ha risposto: era INFRASTRUTTURA. Il cablaggio è sano, misurato, mergiato
+
+**L'esperimento discriminante è costato tre comandi e ha dato una risposta
+secca.** Server avviato staccato su 5199, `git checkout
+wip/riga2-cablaggio-non-verificato`, ktest: **100 PASS · 0 FAIL · exit 0**. Lo
+stesso ramo, lo stesso comando, la stessa GPU che ieri dava «pagina non
+leggibile». La causa era il reaping al confine di turno, non il cablaggio — e
+l'ipotesi «il conductor non chiude un task di questa classe qui» va riletta alla
+sua luce: 5 morti su 5 erano lo stesso segnale 144, non un limite del veicolo.
+
+**La misura, comando identico alla baseline di it.1** (`--prompt-idx 0
+--n-decode 64 --vram-gib 8 --declared quiescent --prefill-m 16`):
+
+| | baseline it.1 | it.14 | rapporto |
+|---|---|---|---|
+| prefill, braccio chunked M=16 | 34,36 tok/s | **111,16 tok/s** | **3,24×** |
+| prefill, path migliore di allora (seq) | 72,30 tok/s | 111,16 tok/s | 1,54× |
+| `prefill.ms` | 87.582 (seq) | **56.961** | |
+| TTFT a caldo | 87.618 ms | **56.984 ms** | **1,54×** |
+| decode a ctx 6333 | 47,79 tok/s | 47,17 tok/s | −1,30%, dentro banda |
+
+Artefatto `results/engine/ttft-riga2-4b-splitk-m16-prompt0-2026-08-14.json`.
+Mergiato in main (`7bc6b55`). **Barra del contratto 21.905 ms: manca 2,60×.**
+
+**IL BUCO CHE HO TROVATO GUARDANDO IL CALL-SITE, e che è la cosa che conta di
+questa iterazione.** Il done-when (a0) della riga 2 dice, alla lettera: «Se
+`idot` vince, è LEI la forma che va in produzione». `idot` ha vinto — 1,745×
+sopra la f32, misurato in it.6. Ma `q35gpumodel.ts:746` chiama
+`prefillGemmQ4SplitKWgsl`, cioè la via **f32**, che il commento del kernel stesso
+(`wgsl.ts:3795`) dichiara «FALLBACK DICHIARATO ... si porta per i device senza
+`packed_4x8_integer_dot_product`, **non come alternativa preferibile**».
+`prefillGemmQ4SplitKIdotWgsl` esiste (`wgsl.ts:3718`), è portata riga-per-riga
+dal banco, ha il suo test di divergenza testuale — e **nessun call-site la
+raggiunge**. `gpulimits.ts` conosce già il flag (`prefillGemmIdot`), quindi il
+punto di innesto c'è: manca la scelta a runtime sulla language feature e il
+ramo che la usa.
+
+Il cablaggio non è quindi «la riga 2 fatta al 90%»: è la riga 2 fatta **con la
+forma perdente**. È anche parte della spiegazione del divario fra i 43,1× del
+banco sul kernel e gli 1,54× end-to-end.
+
+**Contabilità del residuo, perché è il done-when della riga 5.** A 56.984 ms
+mancano 2,60× per la barra. Leve misurate e NON ancora in produzione:
+`idot` **1,745×** sul segmento moltiplicazioni · attenzione del prefill in
+streaming **6,76×** sul segmento attenzione (riga 3, `attnDecodeWgsl` con
+`batch` ancora sul legacy) · l'11,54% dei byte fuori dal percorso q4_0, che è
+scope del goal K-quant. Il divario 43,1× → 3,24× dice che dopo il cablaggio il
+moltiplicatore non è più il termine dominante: **l'attenzione lo è**, ed è la
+riga 3.
