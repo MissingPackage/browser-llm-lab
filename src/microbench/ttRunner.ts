@@ -39,7 +39,7 @@ import {
   gemmDenseF32Wgsl, gemmDenseGrid, gemmQ4MultiRowRegsWgsl, gemmQ4MultiRowRegsGrid,
   gemmQ4MultiRowSharedWgsl, gemmQ4MultiRowSharedGrid, gemmQ4MultiRowSplitKWgsl,
   gemmQ4MultiRowSplitKIdotWgsl,
-  splitKCombineWgsl, workgroupStorageBytes,
+  splitKCombineWgsl, workgroupStorageBytes, quantXQ8Wgsl,
 } from "./ttGemm";
 import { TT_ATTN_SHAPE, attnPrefillGrid, attnPrefillStreamWgsl } from "./ttAttn";
 
@@ -349,6 +349,7 @@ export async function runTtftProbeBench(
       const srcs: Array<{
         id: string; code: string; grid: [number, number, number]; combine?: string;
         weightEmitFactor: number; xEmitFactor: number; ctx: string; coldw?: boolean; idot?: boolean;
+        quantOnly?: boolean; quantFirst?: string; quantGx?: number;
       }> = [];
       const baseCode = gemvQuantWgsl({ kind: "q4_0", K, N, hasBias: false, batch: true });
       const [bgx, bgy] = gemvGrid(N);
@@ -385,7 +386,23 @@ export async function runTtftProbeBench(
           id: "splitk-idot", code: gemmQ4MultiRowSplitKIdotWgsl({ K, N, M, splits: SPLIT_K }),
           grid: [Math.ceil(N / 64), SPLIT_K, 1], combine: splitKCombineWgsl({ K, N, M, splits: SPLIT_K }),
           weightEmitFactor: 1, xEmitFactor: Math.ceil(N / 64), idot: true,
-          ctx: "come 'splitk' ma col PRODOTTO SCALARE INTERO (dot4I8Packed): attivazioni quantizzate a i8 per blocco da 32, accumulo i32, scala applicata una volta per blocco. Via q4_0 x q8_0 di llama.cpp. NON bit-identica per costruzione: tolleranza P8 <= 2,0e-2, dal conto sull'errore di quantizzazione.",
+          ctx: "come 'splitk' ma col PRODOTTO SCALARE INTERO (dot4I8Packed): attivazioni quantizzate a i8 per blocco da 32, accumulo i32, scala applicata una volta per blocco. Via q4_0 x q8_0 di llama.cpp. NON bit-identica per costruzione: tolleranza P8 <= 2,0e-2, dal conto sull'errore di quantizzazione. ATTIVAZIONI GIA' QUANTIZZATE: questa cella misura il KERNEL, non la leva.",
+        });
+        // it.6 — il termine che it.5 aveva dichiarato «fuori misura»: la passata
+        // che quantizza le attivazioni. `quantx-q8` da sola, e `splitk-idot-full`
+        // = quantizzazione + moltiplicatore, che e' il confronto ONESTO contro
+        // `splitk` perche' contiene tutto cio' che la leva costa.
+        srcs.push({
+          id: "quantx-q8", code: quantXQ8Wgsl({ K, N, M }), grid: [Math.ceil((M * (K / 32)) / 64), 1, 1],
+          weightEmitFactor: 0, xEmitFactor: 2, quantOnly: true,
+          ctx: "SOLA quantizzazione delle attivazioni a i8 per blocco da 32 (un thread per blocco). E' il costo che la via intera AGGIUNGE, misurato invece che stimato.",
+        });
+        srcs.push({
+          id: "splitk-idot-full", code: gemmQ4MultiRowSplitKIdotWgsl({ K, N, M, splits: SPLIT_K }),
+          grid: [Math.ceil(N / 64), SPLIT_K, 1], combine: splitKCombineWgsl({ K, N, M, splits: SPLIT_K }),
+          weightEmitFactor: 1, xEmitFactor: Math.ceil(N / 64), idot: true,
+          quantFirst: quantXQ8Wgsl({ K, N, M }), quantGx: Math.ceil((M * (K / 32)) / 64),
+          ctx: "LA LEVA PER INTERO: quantizzazione delle attivazioni + moltiplicatore intero + combinazione dei parziali, nello STESSO campione. E' questo il numero da confrontare con 'splitk', non 'splitk-idot' da solo.",
         });
       }
       if (cold && M === 16) {
@@ -426,7 +443,11 @@ export async function runTtftProbeBench(
         const nBg = s.coldw ? copies : 1;
         const bgs = Array.from({ length: nBg }, (_, c) => device.createBindGroup({
           layout: pipeline.getBindGroupLayout(0),
-          entries: s.idot ? [
+          entries: s.quantOnly ? [
+            { binding: 0, resource: { buffer: xBuf } },
+            { binding: 1, resource: { buffer: xqBuf } },
+            { binding: 2, resource: { buffer: xscBuf } },
+          ] : s.idot ? [
             { binding: 0, resource: { buffer: qsBuf, offset: c * qsBytes, size: qsBytes } },
             { binding: 1, resource: { buffer: scBuf, offset: c * scBytes, size: scBytes } },
             { binding: 2, resource: { buffer: xqBuf } },
@@ -440,6 +461,25 @@ export async function runTtftProbeBench(
           ],
         }));
         const ops: Dispatch[] = [{ pipeline, bindGroups: bgs, gx: s.grid[0], gy: s.grid[1], gz: s.grid[2] }];
+        // `splitk-idot-full`: la passata di quantizzazione ENTRA nel campione,
+        // davanti al moltiplicatore. E' cio' che rende il confronto con
+        // `splitk` onesto invece che dedotto (it.6).
+        if (s.quantFirst) {
+          const q = await compile(device, s.quantFirst, `multirow-${s.id}-quant-M${M}`);
+          if (!q.pipeline) {
+            skipped.push({ kernel: "gemm-q4_0-multirow", variant: `${s.id}@M${M}`, shape: { K, N, M }, reason: `quant: ${q.error}` });
+            continue;
+          }
+          const qbg = device.createBindGroup({
+            layout: q.pipeline.getBindGroupLayout(0),
+            entries: [
+              { binding: 0, resource: { buffer: xBuf } },
+              { binding: 1, resource: { buffer: xqBuf } },
+              { binding: 2, resource: { buffer: xscBuf } },
+            ],
+          });
+          ops.unshift({ pipeline: q.pipeline, bindGroups: [qbg], gx: s.quantGx ?? 1, gy: 1 });
+        }
         if (s.combine) {
           const c = await compile(device, s.combine, `multirow-${s.id}-combine-M${M}`);
           if (!c.pipeline) {
@@ -499,8 +539,17 @@ export async function runTtftProbeBench(
         // PRE-REGISTRATA in P8, ricavata dal conto sull'errore di quantizzazione
         // e non tarata su ciò che è uscito. Resta un gate: sopra 2e-2 la cella è
         // sbagliata, non imprecisa.
-        const tol = id === "splitk-idot" ? 2e-2 : 1e-3;
-        if (relDiff !== null && relDiff > tol) {
+        // `quantx-q8` non scrive `y`: il suo checksum e' quello lasciato dalla
+        // variante precedente e NON dice niente sulla sua correttezza. Bocciarla
+        // su quel numero sarebbe teatro; pubblicarla come se il gate l'avesse
+        // approvata sarebbe peggio. Esente, e la ragione va nel JSON (notes).
+        const noChecksum = id === "quantx-q8";
+        // La via intera cambia l'ARITMETICA (attivazioni a 8 bit) e ha la sua
+        // tolleranza PRE-REGISTRATA in P8, ricavata dal conto sull'errore di
+        // quantizzazione: vale per il kernel E per la leva completa, che fanno
+        // esattamente la stessa aritmetica.
+        const tol = (id === "splitk-idot" || id === "splitk-idot-full") ? 2e-2 : 1e-3;
+        if (!noChecksum && relDiff !== null && relDiff > tol) {
           skipped.push({
             kernel: "gemm-q4_0-multirow", variant: `${id}@M${M}`, shape: { K, N, M },
             reason: `checksum fuori tolleranza ${tol.toExponential(0)}: relDiff ${relDiff.toExponential(3)} (base ${baseCk!.sum}, variante ${ck.sum})`,

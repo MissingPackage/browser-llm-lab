@@ -357,6 +357,28 @@ Da valutare nello stesso passaggio: allineare il default a quello degli altri
 runner, o togliere il default e pretendere `BASE_URL` esplicito. La seconda è più
 noiosa e più onesta.
 
+### CHIUSO (it.6), e verificato in negativo prima che in positivo
+
+Tre difese, e ognuna provata facendola scattare:
+
+| caso | atteso | osservato |
+|---|---|---|
+| server assente (`BASE_URL` a una porta morta) | non-zero, causa nominata | **exit 2**, «nessun server su …» col suggerimento del flag |
+| profilo Chrome occupato da un altro runner | non-zero, causa nominata | **exit 2**, «il profilo … è già in uso», serialità spiegata |
+| soglia di plausibilità (`KTEST_MIN_PASS=999`) | non-zero anche a run sana | **exit 4**, «zero fallimenti su zero test non è un gate superato» |
+| run buona | 0, col conteggio dichiarato | **exit 0**, «STATUS: done — PASS 100 · FAIL 0» |
+
+Il conteggio ora lo stampa il driver: chi legge non deve dedurlo da un `grep`
+sulla tabella — ed è così che in it.5 il verde era stato dichiarato due volte su
+una run che non aveva eseguito un kernel.
+
+**Il primo disegno del fix era rotto a sua volta, e vale la pena registrarlo**:
+metteva un timeout fisso di 120 s su una suite che su questa GPU ne impiega ~5
+minuti, quindi faceva fallire una run BUONA. Un gate che grida al lupo a run sana
+viene disattivato da chi lo usa, ed è il modo più efficace di tornare al punto di
+partenza. Ora `KTEST_TIMEOUT_MS` ha default 600.000 e il numero è motivato in
+loco. **Una difesa non testata in positivo non è una difesa.**
+
 ## item 14 — il costo della quantizzazione delle attivazioni non è nella misura di `splitk-idot` (io, it.5)
 
 `dispatchesPerOp = 2` per ENTRAMBE le forme: la cella `splitk-idot` misura

@@ -1,9 +1,9 @@
 {
  "status": "active",
  "session_id": "0348f2c0-1d0a-4913-93cf-ede7de3e30af",
- "next_wake_epoch": 1786636532,
- "next_wake": "2026-08-13T17:55:32+0200",
- "prompt": "/loop-iteration engine-ttft riga 2: la build in produzione con sdd-conductor \u2014 portare splitk-idot nel prefill del 4B (src/engine/kernels/wgsl.ts + q35gpumodel.ts + gate di conformit\u00e0 con tolleranza dichiarata). PRIMA misurare il costo della passata di quantizzazione delle attivazioni, oggi fuori misura. Comando ktest corretto: BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs, e guardare l'exit code (docket item 14).",
- "updated_epoch": 1786636352,
- "updated": "2026-08-13T17:52:32+0200"
+ "next_wake_epoch": 1786636604,
+ "next_wake": "2026-08-13T17:56:44+0200",
+ "prompt": "/loop-iteration engine-ttft: (1) chiudi docket item 13 \u2014 engine-ktest.mjs deve uscire non-zero quando non gira (try/catch sulla navigazione + asserzione di plausibilit\u00e0: zero kernel eseguiti \u21d2 exit non-zero); (2) chiudi item 14 \u2014 celle quantx-q8 e splitk-idot-full, cos\u00ec il rapporto onesto della via intera \u00e8 nell'artefatto e non dedotto; (3) poi la build della riga 2 con sdd-conductor. Verifica SEMPRE che vite sia su 5199 e passa BASE_URL ai runner.",
+ "updated_epoch": 1786636484,
+ "updated": "2026-08-13T17:54:44+0200"
 }

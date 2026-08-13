@@ -492,3 +492,53 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   }
 }`;
 }
+
+/**
+ * QUANTIZZAZIONE DELLE ATTIVAZIONI a i8 per blocco da 32 — il termine che la
+ * via intera AGGIUNGE, e che in it.5 era dichiarato «fuori misura».
+ *
+ * Un thread per blocco: trova il massimo assoluto dei 32 valori, ne ricava la
+ * scala (`amax/127`), scrive gli 8 u32 di byte con segno e la scala. Il layout
+ * di uscita e' quello naturale del blocco — u32 0..3 = elementi 0..15, u32 4..7
+ * = elementi 16..31 — che e' l'ordine in cui il moltiplicatore appaia i nibble
+ * basso (0..15) e alto (16..31) di `qs4`: nessun rimescolamento.
+ *
+ * PERCHE' MISURARLA SEPARATA E NON SOLO INSIEME: sono due domande diverse.
+ * `splitk-idot` da solo dice quanto vale il kernel; `splitk-idot-full`
+ * (quantizzazione + moltiplicatore) dice quanto vale la LEVA. Il rapporto
+ * onesto contro `splitk` e' il secondo, e in it.5 era dedotto invece che
+ * misurato — «su M=16 le attivazioni sono minuscole accanto ai pesi, quindi il
+ * termine dovrebbe essere piccolo». In questa riga «dovrebbe» ha gia' sbagliato
+ * due volte.
+ */
+export function quantXQ8Wgsl(o: MultiRowOpts): string {
+  const { K, M } = o;
+  const bpr = K / 32;
+  return `@group(0) @binding(0) var<storage, read> x4: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read_write> xq: array<u32>;
+@group(0) @binding(2) var<storage, read_write> xsc: array<f32>;
+const BLOCKS = ${M * bpr}u;
+const K4 = ${K / 4}u;
+const BPR = ${bpr}u;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let b = gid.x;
+  if (b >= BLOCKS) { return; }
+  let m = b / BPR;
+  let blk = b % BPR;
+  let base = m * K4 + blk * 8u;          // 8 vec4<f32> = 32 valori
+  var amax = 0.0;
+  for (var i = 0u; i < 8u; i = i + 1u) {
+    let v = abs(x4[base + i]);
+    amax = max(amax, max(max(v.x, v.y), max(v.z, v.w)));
+  }
+  let sc = amax / 127.0;
+  let inv = select(0.0, 1.0 / sc, sc > 0.0);
+  xsc[b] = sc;
+  for (var i = 0u; i < 8u; i = i + 1u) {
+    let q = clamp(round(x4[base + i] * inv), vec4<f32>(-127.0), vec4<f32>(127.0));
+    let u = vec4<u32>(u32(i32(q.x) & 255), u32(i32(q.y) & 255), u32(i32(q.z) & 255), u32(i32(q.w) & 255));
+    xq[b * 8u + i] = u.x | (u.y << 8u) | (u.z << 16u) | (u.w << 24u);
+  }
+}`;
+}
