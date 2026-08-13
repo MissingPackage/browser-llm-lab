@@ -202,3 +202,36 @@ tocca quel runner.
 Nel frattempo, regola operativa per me: **nessun bench mentre gira un
 workflow**. E' la seconda volta in una notte che la mia orchestrazione invalida
 una misura (la prima: due runner playwright sullo stesso profilo).
+
+
+### it.9 — CORREZIONE all'item 7: NON era contesa di CPU. Era il flag sbagliato, per la terza volta
+
+L'item 7 diceva che la non-reg GLM rossa fosse una misura invalida per contesa
+di CPU (bench lanciato sotto un workflow da 27 agenti). **Ipotesi REFUTATA da me
+stesso**: rieseguita a macchina ferma — GPU allo 0%, nessun Chrome vivo — i
+numeri si sono ripetuti identici (decode 9,080 contro 9,299; prefill 10,836
+contro 10,981; TTFT 42,5 contro 42,0). Due run consecutive con la stessa
+lettura: non e' rumore d'ambiente, e non e' nemmeno page cache (la seconda run
+avrebbe trovato caldo cio' che la prima ha letto).
+
+**La causa vera, trovata confrontando le CONFIG dei due JSON invece che i
+numeri**:
+
+    riferimento: "prefillPath": "chunked M=16 (prefillChunk, fase 5)"
+    mia:         "prefillPath": "decode-only (forward per posizione)"
+
+Non avevo passato `--prefill-batch 1`. Il prefill a chunk e' ~3x il sequenziale:
+spiega prefill 31,26 -> 10,84 e il TTFT, che dal prefill e' dominato. (Il decode
+a -31% resta da spiegare e potrebbe dipendere dallo stato della residenza expert
+a fine prefill, diverso fra i due path: si vedra' dalla run corretta.)
+
+**E questo e' il terzo episodio dello stesso errore.** La landmine di HANDOFF lo
+dice testualmente: «Leggere i parametri di un runner PRIMA di spenderci sopra
+minuti di GPU. Due volte in una sessione ho lanciato run con flag sbagliati
+dedotti invece che letti». Stanotte l'ho fatto una terza volta, e per giunta ho
+costruito sopra il numero sbagliato una spiegazione plausibile — che e' il modo
+piu' efficiente di non accorgersi di niente.
+
+L'item 7 resta valido su UNA cosa sola, e va tenuta: `--host-state quiescent` e'
+comunque una promessa che il runner non verifica. Ma non e' quello che e'
+successo qui.
