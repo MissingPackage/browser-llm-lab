@@ -1,0 +1,128 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-decode-kernel-checkpoint",
+ "date": "2026-08-13T04:30:46.419Z",
+ "decision": "target-reached",
+ "verdict": "OBIETTIVO DEL GOAL RAGGIUNTO: 47,93 tok/s a contesto 6333 contro la soglia di 30. Dal punto di partenza (9,95 tok/s, 100,52 ms/token) sono 4,82x. Due leve, entrambe decise dalla misura di fase 0 e non dall opinione: (1) attenzione con split del contesto + softmax in streaming, che ha tolto la dipendenza dal contesto; (2) GEMV q4_0 con letture vec4, 2 righe per workgroup e riduzione di sottogruppo dove il device la rende sicura.",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "decodePath": "batched K=32, vramTier 8 GiB",
+ "timeline": {
+  "start": {
+   "label": "prima del goal (it.59)",
+   "ctx388": {
+    "ms": 38.72,
+    "tokS": 25.83
+   },
+   "ctx6333": {
+    "ms": 100.52,
+    "tokS": 9.95
+   }
+  },
+  "afterAttn": {
+   "label": "fase 1 — attenzione (it.5)",
+   "ctx388": {
+    "ms": 35.69,
+    "tokS": 28.02
+   },
+   "ctx6333": {
+    "ms": 36.95,
+    "tokS": 27.06
+   }
+  },
+  "afterGemv": {
+   "label": "fase 2 — GEMV (it.7)",
+   "ctx388": {
+    "ms": 19.975000008940697,
+    "tokS": 50.062578200370744,
+    "decodeContext": {
+     "startPositions": 388,
+     "endPositions": 452,
+     "note": "ms/token cresce ~10,4 us per posizione (it.59): confrontare solo a contesto dichiarato"
+    }
+   },
+   "ctx6333": {
+    "ms": 20.865000009536743,
+    "tokS": 47.927150708983035,
+    "decodeContext": {
+     "startPositions": 6333,
+     "endPositions": 6397,
+     "note": "ms/token cresce ~10,4 us per posizione (it.59): confrontare solo a contesto dichiarato"
+    }
+   }
+  }
+ },
+ "target": {
+  "tokSAtCtx6000": 30,
+  "reached": true,
+  "margin": 17.927150708983035
+ },
+ "speedupTotal": {
+  "ctx388": 1.9384230279183552,
+  "ctx6333": 4.817637189266975
+ },
+ "contextDependence": {
+  "before": {
+   "slopeUsPerPosition": 10.4,
+   "kvScanGBps": 6.3
+  },
+  "afterAttn": {
+   "slopeUsPerPosition": 0.21,
+   "kvScanGBps": 308
+  },
+  "afterGemv": {
+   "slopeUsPerPosition": 0.14970563508764448
+  }
+ },
+ "gates": {
+  "ktest": "100 PASS / 0 FAIL",
+  "argmaxGolden": "IDENTICO all oracolo 6/6",
+  "suite": "526 passed | 10 skipped",
+  "tsc": "pulito",
+  "glmNonReg": "in corso, riportata a parte"
+ },
+ "repro": [
+  "npx vite",
+  "node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --declared quiescent"
+ ],
+ "deviceLabel": "4090",
+ "hostState": {
+  "ctx388": {
+   "declared": "quiescent",
+   "before": {
+    "temperatureC": 39,
+    "smClockMHz": 210,
+    "powerW": 588.21,
+    "memUsedMiB": 732,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000001"
+   },
+   "after": {
+    "temperatureC": 43,
+    "smClockMHz": 2265,
+    "powerW": 44.56,
+    "memUsedMiB": 740,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000024"
+   }
+  },
+  "ctx6333": {
+   "declared": "quiescent",
+   "before": {
+    "temperatureC": 42,
+    "smClockMHz": 2265,
+    "powerW": 37.74,
+    "memUsedMiB": 740,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000024"
+   },
+   "after": {
+    "temperatureC": 51,
+    "smClockMHz": 2265,
+    "powerW": 38.48,
+    "memUsedMiB": 748,
+    "utilizationPct": 0,
+    "throttleReasons": "0x0000000000000024"
+   }
+  }
+ }
+}

@@ -183,3 +183,40 @@ byte per byte fuori dal target, `--check` sul solo primo file per mostrare che i
 tre hunk su `wgsl.ts` erano in contesto, e nessuna ricostruzione.
 
 Gate sullo stato integrato: tsc pulito, suite **488|10** (da 472).
+
+## it.7 (2026-08-13, fasi 2 e 3) — OBIETTIVO RAGGIUNTO: 47,93 tok/s a contesto 6333
+
+| | ctx 388 | ctx 6333 |
+|---|---|---|
+| partenza (it.59) | 38,72 ms / 25,83 tok/s | 100,52 ms / **9,95 tok/s** |
+| dopo l'attenzione (it.5) | 35,69 / 28,02 | 36,95 / 27,06 |
+| **dopo i GEMV (it.7)** | **19,98 / 50,06** | **20,87 / 47,93** |
+
+**Soglia del contratto: 30 tok/s a ctx >= 6000. Misurato 47,93** — con 17,93 di
+margine, e **4,82x** dal punto di partenza. La pendenza residua e' 0,150
+us/posizione (era 10,40): il contesto praticamente non si paga piu'.
+
+**Il cablaggio l'ho fatto io**, non il conductor: la sua ondata si era fermata
+al gate con 5 rossi nel test nuovo, e a quel punto restava lavoro meccanico che
+il gate dell'argmax copre. Ma i 5 rossi andavano capiti, e uno era vero:
+
+- **incoerenza reale**: `gemvQuantRowsPerWg` diceva 2 sulla sola base di
+  `vec4Rows2`, mentre il generatore LANCIA su q8_0/q4_1/bias/batch/scaledAccum.
+  Per una combinazione rifiutata la griglia sarebbe uscita DIMEZZATA — meta'
+  delle righe mai calcolate — per un kernel che non esiste. Due posti che
+  decidevano la stessa cosa, e la decidevano diversamente. Ora c'e'
+  `gemvQuantVec4Rows2Ok`, una definizione sola usata da entrambi.
+- **quattro asserzioni troppo letterali**: il test legava il gate al NOME del
+  binding (`qs` contro `qs4`) e al letterale della guardia invece che alla
+  proprieta'. Riscritte sulla proprieta' — il tipo e' vec4, la guardia c'e' —
+  perche' un gate che si rompe quando qualcuno rinomina una variabile non sta
+  proteggendo niente.
+
+**Gate**: ktest **100 PASS / 0 FAIL**, argmax golden IDENTICO all'oracolo (gate
+secco: la forma nuova NON cambia un token), suite **526|10**, tsc pulito.
+
+Artefatto del checkpoint con la linea temporale completa, i contesti dichiarati
+e l'hostState: `results/engine/decode-kernel-checkpoint-4090-*.json`.
+
+RESTANO: la non-regressione GLM (in corso al budget di riferimento b12) e il
+censimento di copertura della convenzione GEMV, che e' un done-when della riga 2.
