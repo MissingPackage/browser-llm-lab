@@ -571,3 +571,53 @@ veicolo non chiude un task di questa classe nella vita di un processo, e la riga
 
 **Metrica invariata**: TTFT a caldo **87.618 ms**. Kernel in produzione e
 testati, `q35gpumodel.ts` non ancora cablato.
+
+## it.12 (2026-08-13) — l'ipotesi della durata e' refutata; il piano esatto per il cablaggio a mano
+
+Quinto lancio, un task solo: **3 voci di journal contro le 14** del lancio lungo
+ripreso. **Il lavoro piu' corto e' morto prima.** L'ipotesi di it.11 e' refutata.
+
+La lettura giusta: il processo muore poco dopo la fine del turno, e la
+dimensione del job non c'entra — il lancio lungo era andato piu' avanti solo
+perche' la cache gli bruciava i primi agenti in millisecondi. **Tutto cio' che
+deve sopravvivere al confine del turno e' inaffidabile qui (5 workflow, 3
+server); tutto cio' che eseguo dentro il turno regge (6 misure GPU, tutti i
+gate, i merge).** Il lavoro va fatto sincrono. Docket item 18.
+
+### Il piano del cablaggio, scritto ora che ho letto il codice
+
+I kernel portati NON sono nudi: hanno gia' i loro helper in
+`src/engine/kernels/wgsl.ts`, e questo riduce il lavoro a plumbing.
+
+- `prefillGemmQ4SplitKWgsl(o)` — forma split-K in virgola mobile
+- `prefillGemmQ4SplitKIdotWgsl(o)` — via intera q4_0 x q8_0
+- `prefillQuantXQ8Wgsl({K, M})` — quantizzazione delle attivazioni
+- `prefillSplitKCombineWgsl({N, M, splits})` — somma dei parziali
+- `prefillGemmGrid(o)` — la griglia, gia' calcolata (niente terzo posto che
+  decide le righe-per-workgroup: e' la lezione di it.7 del goal precedente)
+- `prefillPartialFloats(o)` — quanti float serve il buffer dei parziali
+- scelta degli splits a riga ~3965: `PREFILL_SPLITS_MEASURED = 4` se i blocchi
+  sono divisibili, altrimenti `PREFILL_SPLITS_UNSPLIT = 1`
+- `prefillGemmCheck` LANCIA se `kind != "q4_0"` o se `K % 64 != 0`: la via
+  veloce e' q4_0-only per costruzione, come il GEMV del goal precedente
+
+**Il sito da cambiare e' `gemvB` in `q35gpumodel.ts` (~riga 709-720)**, che oggi
+fa `pushB(gemvQuantWgsl({...batch: true}), [qs, scales, src, dst], [gx, gy, M_MAX])`.
+
+**Cosa serve in piu' rispetto a un dispatch solo:**
+1. un buffer dei PARZIALI, dimensionato da `prefillPartialFloats` sul piu' grande
+   (K, N) del modello, allocato UNA VOLTA al load come gli altri;
+2. per la via intera, i buffer delle attivazioni quantizzate (`xq` u32
+   impacchettati + `xsc` scale per blocco) e il dispatch di quantizzazione
+   PRIMA del gemm;
+3. `gemvB` diventa 2 dispatch (gemm + combine) o 3 (con quantizzazione), quindi
+   il piano batch deve accettare piu' step per chiamata.
+
+**Ordine consigliato**: prima la sola forma split-K in VIRGOLA MOBILE (2
+dispatch, nessun buffer di quantizzazione, bit-identita' del gate di conformita'
+INTATTA), misurare, committare. Poi la via intera come secondo passo, con la
+tolleranza 2e-2 gia' pre-registrata. Cosi' il primo movimento della metrica
+arriva senza toccare il gate di correttezza, e la via intera si misura contro un
+riferimento gia' aggiornato invece che contro la baseline vecchia.
+
+**Metrica invariata**: TTFT a caldo **87.618 ms**.

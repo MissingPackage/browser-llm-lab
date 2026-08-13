@@ -1,9 +1,9 @@
 {
  "status": "active",
  "session_id": "0348f2c0-1d0a-4913-93cf-ede7de3e30af",
- "next_wake_epoch": 1786654385,
- "next_wake": "2026-08-13T22:53:05+0200",
- "prompt": "/loop-iteration engine-ttft riga 2: controlla l'esito della ripresa wp3x2as00 (run wf_baf87ff8-cd8). Se e' morta di nuovo col processo, RIPRENDI ANCORA dalla cache \u2014 e' la strategia decisa a docket item 16, ogni ripresa parte piu' avanti. Se ha prodotto patch: verifica TU a mano (tsc, vitest, ktest con BASE_URL=http://localhost:5199, argmax del golden) prima di mergiare, e misura il prefill sul prompt-idx 0 prima/dopo. Verifica vite su 5199 prima di ogni run GPU.",
- "updated_epoch": 1786652885,
- "updated": "2026-08-13T22:28:05+0200"
+ "next_wake_epoch": 1786655564,
+ "next_wake": "2026-08-13T23:12:44+0200",
+ "prompt": "/loop-iteration engine-ttft riga 2: esito del quinto lancio wunhw2705 (run wf_46624843-194, UN SOLO task, spec stretta). Se ha prodotto patch: verifica TU a mano (tsc, vitest, ktest con BASE_URL=http://localhost:5199, argmax del golden) e poi misura il prefill sul prompt-idx 0 prima/dopo \u2014 e' la prima volta che la metrica si puo' muovere. Se e' morta anche questa: NON un sesto tentativo, come dichiarato a docket item 17 \u2014 si passa al lavoro a mano su q35gpumodel.ts, un pezzo per volta committando appena verificato.",
+ "updated_epoch": 1786654664,
+ "updated": "2026-08-13T22:57:44+0200"
 }

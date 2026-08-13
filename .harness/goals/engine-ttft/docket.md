@@ -580,3 +580,26 @@ E' il prezzo di cambiare la variabile giusta invece di ritentare.
 questo veicolo non chiude un task di questa classe nella vita di un processo, e
 la riga 2 va fatta a mano accettando che sia piu' lenta. Lo dico ORA, prima di
 vedere l'esito, cosi' non e' una razionalizzazione a posteriori.
+
+
+## item 18 — l'ipotesi «e' la durata» e' REFUTATA, e la conclusione e' piu' netta (io, it.12)
+
+Item 17 diceva: il vincolo e' la durata, quindi accorcio. Fatto: quinto lancio
+con **un task solo**. Esito: **3 voci di journal, 2 transcript** — contro le
+**14 voci e 9 transcript** del lancio lungo ripreso dalla cache.
+
+**Il lavoro piu' corto e' morto PRIMA di quello lungo.** L'ipotesi della durata
+e' refutata dalla misura, come si deve.
+
+**Lettura corretta**: il processo non muore dopo un tempo proporzionale al
+lavoro — muore poco dopo la fine del mio turno, e quanto lavoro ci sta dentro
+non dipende dalla dimensione del job ma da quanto vive il processo, che non
+controllo. Il lancio lungo era arrivato piu' avanti solo perche' la ripresa
+dalla cache gli faceva bruciare i primi agenti in millisecondi.
+
+**Conseguenza operativa, e vale oltre questo goal**: in questa sessione, tutto
+cio' che deve sopravvivere al confine del turno e' inaffidabile — cinque
+workflow e tre server di sviluppo. Tutto cio' che eseguo **dentro** il turno e'
+affidabile: le sei misure GPU, i gate, i merge. **Il lavoro va fatto sincrono.**
+
+Nessun sesto tentativo, come dichiarato PRIMA di vedere l'esito.
