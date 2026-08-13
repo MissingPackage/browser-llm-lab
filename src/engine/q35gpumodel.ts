@@ -12,7 +12,7 @@ import {
   addInPlaceWgsl, ARGMAX_CHUNK, argmaxStage1Wgsl, argmaxStage2Wgsl,
   attnDecodeCombineWgsl, attnDecodeWgsl, axpyWgsl,
   gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
-  gemvQ6KWgsl, gemvQuantWgsl, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
+  gemvQ6KWgsl, gemvQuantWgsl, gemvQuantGrid, gemvQuantVec4Rows2Ok, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
   siluMulWgsl, stridedCopyWgsl, routerTopKWgsl,
   SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE, type KArenaOpts,
 } from "./kernels/wgsl";
@@ -28,6 +28,7 @@ import {
   ExpertCache, moeParkOf, type ExpertClass, type ExpertRawBytes, type SlotRef,
 } from "./residency";
 import { q35ExpertReader, q35MoeConfig } from "./q35expertstore";
+import { gemvCapsFor } from "./gemvcaps";
 
 export interface Q35RawReader {
   shape: Q35Shape;
@@ -658,9 +659,25 @@ export async function createQ35GpuModel(
       [attnPartOut, attnPartMS, dst], S.nHead,
     );
   }
+  /**
+   * FORMA `vec4-rows2` (fase 2): load vettoriali + `dot()`, DUE righe per
+   * workgroup, riduzione con `subgroupAdd` dove `gemvCapsFor` la dichiara
+   * SICURA (feature presente E subgroup fisso a 32 — v. gemvcaps.ts: una
+   * mappatura riga→subgroup sbagliata somma le lane sbagliate senza sollevare
+   * errori). Ammessa solo su q4_0 nudo: ogni altra combinazione torna al testo
+   * di prima, byte per byte, ed e' cosi' che GLM e i K-quant non regrediscono.
+   *
+   * La griglia NON si calcola a mano: `gemvQuantGrid` la deriva dalle righe per
+   * workgroup del testo generato, e le due decisioni restano una sola
+   * (`gemvQuantVec4Rows2Ok`).
+   */
+  const gemvCaps = gemvCapsFor(device);
   const gemv = (w: { qs: GPUBuffer; scales: GPUBuffer; k: number; n: number; kind?: "q4_0" | "q4_1" | "q8_0" }, src: GPUBuffer, dst: GPUBuffer, kind?: "q4_0" | "q4_1" | "q8_0"): void => {
     const kk = kind ?? w.kind ?? "q4_0";
-    push(gemvQuantWgsl({ kind: kk, K: w.k, N: w.n, hasBias: false }), [w.qs, w.scales, src, dst], gemvGrid(w.n));
+    const opts = { kind: kk, K: w.k, N: w.n, hasBias: false, vec4Rows2: kk === "q4_0", sg: gemvCaps.sg };
+    const ok = gemvQuantVec4Rows2Ok(opts);
+    const use = ok ? opts : { kind: kk, K: w.k, N: w.n, hasBias: false };
+    push(gemvQuantWgsl(use), [w.qs, w.scales, src, dst], gemvQuantGrid(use));
   };
   // ---- gemelli a M righe (fase 4). `pushB` scrive SOLO nel piano gemello. ----
   const pushB = (code: string, bufs: GPUBuffer[], wgs: [number, number, number]): void => {

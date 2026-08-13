@@ -19,9 +19,7 @@ export function gemvGrid(N: number): [number, number] {
   return N <= GEMV_GRID_X ? [N, 1] : [GEMV_GRID_X, Math.ceil(N / GEMV_GRID_X)];
 }
 
-// GEMV dequant-fusa: y[r] = Σ_b scale(b)·Σ_j q_j·x[...] (+ bias). Un workgroup da
-// 64 thread per riga di output; riduzione in shared memory.
-export function gemvQuantWgsl(opts: {
+export interface GemvQuantOpts {
   kind: "q4_0" | "q4_1" | "q8_0"; K: number; N: number; hasBias: boolean;
   /** batch (fase 5): wid.z = riga, x/y a offset di riga — testo non-batch invariato */
   batch?: boolean;
@@ -30,7 +28,33 @@ export function gemvQuantWgsl(opts: {
   // ffn_moe_weighted in build_moe_ffn; l'ordine delle somme sui 4 expert
   // differisce dall'oracolo solo al rounding f32).
   scaledAccum?: boolean;
-}): string {
+  /**
+   * Forma `vec4-rows2` misurata in fase 0 (src/microbench/kdGemv.ts): load
+   * vettoriali + `dot()`, DUE righe per workgroup da 64 thread. Ammessa solo su
+   * q4_0 nudo — vedi `gemvQuantVec4Rows2Wgsl`. Assente/false ⇒ il testo generato
+   * è byte per byte quello di prima (è così che GLM non regredisce).
+   */
+  vec4Rows2?: boolean;
+  /**
+   * Riduzione di riga via `subgroupAdd` invece che ad albero. NON è una feature
+   * che questo modulo decide: arriva già decisa da `gemvCapsFor` (src/engine/
+   * gemvcaps.ts), che la concede solo con subgroup fisso a 32 lane. Qui si
+   * genera soltanto. Richiede `vec4Rows2`: fuori da quella forma non esiste un
+   * kernel dove il subgroup mappi una riga.
+   */
+  sg?: boolean;
+}
+
+// GEMV dequant-fusa: y[r] = Σ_b scale(b)·Σ_j q_j·x[...] (+ bias). Un workgroup da
+// 64 thread per riga di output; riduzione in shared memory.
+export function gemvQuantWgsl(opts: GemvQuantOpts): string {
+  if (opts.vec4Rows2 === true) return gemvQuantVec4Rows2Wgsl(opts);
+  if (opts.sg === true) {
+    throw new Error(
+      "gemvQuantWgsl: sg=true senza vec4Rows2 — la riduzione per subgroup esiste " +
+      "solo nella forma a 2 righe per workgroup misurata in fase 0; il kernel a 1 " +
+      "riga per workgroup non ha una mappatura riga->subgroup da usare");
+  }
   const { kind, K, N, hasBias, scaledAccum, batch } = opts;
   if (K % 32 !== 0) throw new Error("gemv: K non multiplo di 32");
   const blocksPerRow = K / 32;
@@ -131,6 +155,175 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     ${biasAdd}
     ${writeY}
   }
+}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FORMA `vec4-rows2` DEL GEMV q4_0.
+//
+// Cosa cambia rispetto al kernel sopra, e perché. Il kernel a 1 riga per
+// workgroup fa 4 load scalari di u32 per blocco e legge x un f32 alla volta: in
+// fase 0 (src/microbench/kdGemv.ts, celle `vec4`/`vec4-rows2-sg`) la variante
+// con UNA load `vec4<u32>` per blocco, `dot()` per quarto di blocco e DUE righe
+// per workgroup da 64 thread ha misurato il salto. La forma qui sotto è quella,
+// riportata identica: la misura vale per la forma misurata, non per una sua
+// parente. Il ramo `sg` è BYTE PER BYTE il testo di `gemvVec4Rows2SgWgsl`
+// (src/microbench/kdGemv.ts) — non "ispirato a": identico, così che un test
+// possa confrontarli senza normalizzare e una divergenza si veda subito.
+//
+// PERCHÉ SOLO q4_0 NUDO. Fase 0 ha misurato q4_0 senza bias, senza batch e
+// senza accumulo scalato. q8_0/q4_1/K-quant hanno layout di blocco diversi (8
+// word, oppure d+m per blocco): il corpo andrebbe riscritto e la misura rifatta.
+// Finché non esiste, l'opzione lancia invece di generare un kernel non misurato.
+//
+// VINCOLO DI CALL-SITE (WebGPU, non opinione). `array<vec4<u32>>` e
+// `array<vec4<f32>>` hanno stride 16 B: la size della *binding* deve essere
+// multipla di 16. Un tensore le cui righe di x, o il cui buffer qs, non
+// arrivano a un multiplo di 16 B NON può usare questo kernel — l'esclusione si
+// decide al call-site (censimento a parte), non qui: questo modulo genera testo
+// e non vede i buffer.
+//
+// DUE RAMI DI RIDUZIONE, non uno parametrico:
+//  - `sg`: una riga per subgroup da 32 lane, la riduzione è UN `subgroupAdd` e
+//    nessuna barriera. Nessun early return: `subgroupAdd` vuole control flow
+//    subgroup-uniform e l'analisi di Tint non prova che `r` lo sia (dipende da
+//    t/sgSize). Da qui il `if (r < N_ROWS)` attorno al solo loop.
+//  - fallback: 2 righe × 32 lane, riduzione ad albero su `partial[64]` con
+//    `lane < stride`. NON è il codice a 64 lane per riga riusato: con 2 righe
+//    per workgroup ogni riga possiede metà workgroup, e lo stride parte da 16.
+// La guardia `r >= N_ROWS` c'è su ENTRAMBI i rami: con N dispari (e N dispari
+// capita) l'ultimo workgroup ha una riga sola.
+//
+// DOVE STA LA DIFESA CONTRO subgroupSize ≠ 32 (e perché non è qui). Il ramo
+// `sg` assume 32 lane per riga: su wave64 `sub = t / sgSize` vale 0 per tutti i
+// thread e la riga dispari non verrebbe MAI scritta (y resta al valore vecchio,
+// in silenzio). Quel controllo è già scritto, una volta sola, in
+// src/engine/gemvcaps.ts: `gemvCapsFor` concede sg SOLO con
+// subgroupMinSize === subgroupMaxSize === 32, e chi passa `sg: true` senza
+// esserselo fatto dire da lì sta rompendo quel contratto. In-shader NON si
+// aggiunge un `if (sgSize != 32u)`: sarebbe un branch su un valore che l'analisi
+// di uniformità di Tint non tratta come uniforme (è la ragione per cui la forma
+// misurata evita anche l'early return su `r`), e qui non c'è alcun Tint in CI
+// per verificare che compili ancora. Difesa a monte, dove è verificabile.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Righe di output per workgroup: 2 nella forma vec4-rows2, 1 in tutte le altre. */
+/**
+ * La combinazione e' ammissibile per il kernel a 2 righe? UNA definizione, usata
+ * dal generatore E dalla griglia.
+ *
+ * Prima erano due: `gemvQuantRowsPerWg` diceva 2 sulla sola base di
+ * `vec4Rows2`, mentre il generatore LANCIA su q8_0/q4_1/bias/batch/scaledAccum.
+ * Per una combinazione rifiutata la griglia usciva dimezzata — meta' delle
+ * righe non calcolate — per un kernel che non esiste. Il test lo ha preso
+ * (fase 2, it.7): due posti che decidono la stessa cosa finiscono per
+ * deciderla diversamente.
+ */
+export function gemvQuantVec4Rows2Ok(opts: GemvQuantOpts): boolean {
+  return opts.vec4Rows2 === true
+    && opts.kind === "q4_0"
+    && opts.hasBias !== true
+    && opts.batch !== true
+    && opts.scaledAccum !== true;
+}
+
+export function gemvQuantRowsPerWg(opts: GemvQuantOpts): number {
+  return gemvQuantVec4Rows2Ok(opts) ? 2 : 1;
+}
+
+/**
+ * Griglia di dispatch del gemv quant. Sta accanto al kernel apposta: le righe
+ * per workgroup sono una proprietà del TESTO generato, e un call-site che
+ * calcolasse `gemvGrid(N)` a mano su un kernel a 2 righe dispatcherebbe il
+ * doppio dei workgroup necessari (metà a vuoto, ma con la guardia che regge).
+ */
+export function gemvQuantGrid(opts: GemvQuantOpts): [number, number] {
+  return gemvGrid(Math.ceil(opts.N / gemvQuantRowsPerWg(opts)));
+}
+
+function gemvQuantVec4Rows2Wgsl(opts: GemvQuantOpts): string {
+  const { kind, K, N, hasBias, batch, scaledAccum, sg } = opts;
+  const incompat: string[] = [];
+  if (kind !== "q4_0") incompat.push(`kind "${kind}"`);
+  if (hasBias) incompat.push("hasBias");
+  if (batch) incompat.push("batch");
+  if (scaledAccum) incompat.push("scaledAccum");
+  if (incompat.length > 0) {
+    throw new Error(
+      `gemvQuantWgsl: vec4Rows2 non è ammesso con ${incompat.join(" + ")} — ` +
+      "fase 0 ha misurato questa forma solo sul q4_0 nudo del decode, e un " +
+      "kernel non misurato non si genera");
+  }
+  if (K % 32 !== 0) throw new Error("gemv: K non multiplo di 32");
+
+  // Corpo per blocco: UNA load vec4<u32> (16 B), dot() per quarto di blocco.
+  // Nel blocco q4_0 il byte j porta il nibble basso dell'elemento j e quello
+  // alto dell'elemento j+16 — da cui le due dot() su x4 sfalsate di 4 vec4
+  // (`xb + wi` e `xb + 4u + wi`, con xb = b*8: 8 vec4<f32> = 32 pesi per blocco).
+  const blockBody = `
+      let gb = r * BLOCKS_PER_ROW + b;
+      let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+      let w = qs4[gb];
+      let xb = b * 8u;
+      var bd = 0.0;
+      for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+        let by = (vec4<u32>(w[wi]) >> vec4<u32>(0u, 8u, 16u, 24u));
+        let lo = vec4<f32>(by & vec4<u32>(15u)) - vec4<f32>(8.0);
+        let hi = vec4<f32>((by >> vec4<u32>(4u)) & vec4<u32>(15u)) - vec4<f32>(8.0);
+        bd = bd + dot(lo, x4[xb + wi]) + dot(hi, x4[xb + 4u + wi]);
+      }
+      acc = acc + sc * bd;`;
+  // Testa identica a `HEAD` di kdGemv.ts, newline iniziale compresa: senza
+  // `enable subgroups;` la prima riga del testo resta vuota, ed è così anche là.
+  const head = `${sg === true ? "enable subgroups;\n" : ""}
+@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> x4: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+const BLOCKS_PER_ROW = ${K / 32}u;
+const N_ROWS = ${N}u;`;
+
+  if (sg === true) {
+    return `${head}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(subgroup_size) sgSize: u32, @builtin(subgroup_invocation_id) sgId: u32) {
+  let t = lid.x;
+  let sub = t / sgSize;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 2u + sub;
+  var acc = 0.0;
+  // niente early return: 'subgroupAdd' vuole control flow subgroup-uniform e
+  // l'analisi di Tint non prova che 'r' lo sia (dipende da t/sgSize)
+  if (r < N_ROWS) {
+    for (var b = sgId; b < BLOCKS_PER_ROW; b = b + sgSize) {${blockBody}
+    }
+  }
+  let tot = subgroupAdd(acc);
+  if (sgId == 0u && r < N_ROWS) { y[r] = tot; }
+}`;
+  }
+  return `${head}
+var<workgroup> partial: array<f32, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let lane = t & 31u;
+  let sub = t >> 5u;
+  let r = (wid.x + wid.y * ${GEMV_GRID_X}u) * 2u + sub;
+  var acc = 0.0;
+  if (r < N_ROWS) {
+    for (var b = lane; b < BLOCKS_PER_ROW; b = b + 32u) {${blockBody}
+    }
+  }
+  partial[t] = acc;
+  workgroupBarrier();
+  var stride = 16u;
+  while (stride > 0u) {
+    if (lane < stride) { partial[t] = partial[t] + partial[t + stride]; }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+  if (lane == 0u && r < N_ROWS) { y[r] = partial[sub << 5u]; }
 }`;
 }
 
