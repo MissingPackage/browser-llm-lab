@@ -70,7 +70,7 @@ export function stats(samples: number[]): SampleStats {
 // dati
 // --------------------------------------------------------------------------
 /** mulberry32: dati riproducibili, nessun Math.random (stesso PRNG di runner.ts). */
-function fillRandomU32(out: Uint32Array, seed: number): void {
+export function fillRandomU32(out: Uint32Array, seed: number): void {
   let a = seed >>> 0;
   for (let i = 0; i < out.length; i++) {
     a |= 0; a = (a + 0x6d2b79f5) | 0;
@@ -80,13 +80,13 @@ function fillRandomU32(out: Uint32Array, seed: number): void {
   }
 }
 
-function fillRandomF32(out: Float32Array, seed: number): void {
+export function fillRandomF32(out: Float32Array, seed: number): void {
   const u = new Uint32Array(out.length);
   fillRandomU32(u, seed);
   for (let i = 0; i < out.length; i++) out[i] = (u[i] / 4294967296) * 2 - 1;
 }
 
-function f32ToF16Bits(v: number): number {
+export function f32ToF16Bits(v: number): number {
   const f32 = new Float32Array(1); const u32 = new Uint32Array(f32.buffer);
   f32[0] = v; const x = u32[0];
   const sign = (x >>> 16) & 0x8000;
@@ -107,16 +107,22 @@ function f32ToF16Bits(v: number): number {
  * esattamente il difetto che la pre-registrazione aveva dichiarato per il GEMV e
  * NON per l'attenzione.
  */
-interface Dispatch { pipeline: GPUComputePipeline; bindGroups: GPUBindGroup[]; gx: number; gy: number }
+export interface Dispatch {
+  pipeline: GPUComputePipeline; bindGroups: GPUBindGroup[]; gx: number; gy: number;
+  /** terza dimensione della griglia (default 1). La forma attuale del prefill
+   *  mette le M righe del chunk proprio su `wid.z`: senza questa il banco non
+   *  potrebbe misurare la baseline di engine-ttft riga 1. */
+  gz?: number;
+}
 
-interface Timer {
+export interface Timer {
   querySet: GPUQuerySet | null;
   queryBuf: GPUBuffer | null;
   readBuf: GPUBuffer | null;
   useTs: boolean;
 }
 
-async function sampleOnce(
+export async function sampleOnce(
   device: GPUDevice, timer: Timer, ops: Dispatch[], opsPerSample: number, rot: { i: number },
 ): Promise<{ gpuMs: number | null; cpuMs: number }> {
   const enc = device.createCommandEncoder();
@@ -129,7 +135,7 @@ async function sampleOnce(
     for (const d of ops) {
       pass.setPipeline(d.pipeline);
       pass.setBindGroup(0, d.bindGroups[rot.i % d.bindGroups.length]);
-      pass.dispatchWorkgroups(d.gx, d.gy);
+      pass.dispatchWorkgroups(d.gx, d.gy, d.gz ?? 1);
     }
     rot.i++;
   }
@@ -153,7 +159,7 @@ async function sampleOnce(
   return { gpuMs, cpuMs };
 }
 
-interface VariantSpec {
+export interface VariantSpec {
   id: string;
   ops: Dispatch[];
   opsPerSample: number;
@@ -163,10 +169,10 @@ interface VariantSpec {
   rot: { i: number };
 }
 
-interface Measured { gpu: number[]; cpu: number[] }
+export interface Measured { gpu: number[]; cpu: number[] }
 
 /** Esecuzione INTERLEAVATA: round-robin variante-per-ripetizione. */
-async function measureInterleaved(
+export async function measureInterleaved(
   device: GPUDevice, timer: Timer, variants: VariantSpec[], onProgress: (s: string) => void,
 ): Promise<Map<string, Measured>> {
   const out = new Map<string, Measured>();
@@ -185,7 +191,7 @@ async function measureInterleaved(
   return out;
 }
 
-async function readChecksum(
+export async function readChecksum(
   device: GPUDevice, buf: GPUBuffer, floats: number,
 ): Promise<{ sum: number; abs: number }> {
   const read = device.createBuffer({ size: floats * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -200,18 +206,18 @@ async function readChecksum(
   return { sum, abs };
 }
 
-async function runOnce(device: GPUDevice, ops: Dispatch[]): Promise<void> {
+export async function runOnce(device: GPUDevice, ops: Dispatch[]): Promise<void> {
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass();
   for (const d of ops) {
-    pass.setPipeline(d.pipeline); pass.setBindGroup(0, d.bindGroups[0]); pass.dispatchWorkgroups(d.gx, d.gy);
+    pass.setPipeline(d.pipeline); pass.setBindGroup(0, d.bindGroups[0]); pass.dispatchWorkgroups(d.gx, d.gy, d.gz ?? 1);
   }
   pass.end();
   device.queue.submit([enc.finish()]);
   await device.queue.onSubmittedWorkDone();
 }
 
-async function compile(
+export async function compile(
   device: GPUDevice, code: string, label: string,
 ): Promise<{ pipeline: GPUComputePipeline | null; error: string | null }> {
   device.pushErrorScope("validation");

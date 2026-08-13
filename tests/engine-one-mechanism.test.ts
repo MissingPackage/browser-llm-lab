@@ -75,6 +75,7 @@ const ALLOC_ALLOWED: Record<string, string> = {
   "src/engine/glmbench/glmbench.worker.ts": "harness di bench: buffer di telemetria e staging",
   "src/microbench/runner.ts": "microbench dei kernel: alloca buffer di prova, nessun expert e nessuna residenza",
   "src/microbench/kdRunner.ts": "microbench di fase 0 engine-kernel-decode: buffer di prova per le varianti isolate dei due kernel caldi, nessun expert e nessuna residenza",
+  "src/microbench/ttRunner.ts": "microbench di riga 1 engine-ttft: buffer di prova per le sonde del prefill (GEMM densa, moltiplicatore multi-riga, attenzione a chunk), nessun expert e nessuna residenza",
   "src/engine/q35gpumodel.ts": "orchestratore Qwen 3.5/3.6: scratch, KV e pesi non-expert (gli slab expert li chiede a ExpertCache, come glmmodel)",
 };
 const EXPERT_NAME_ALLOWED: Record<string, string> = {

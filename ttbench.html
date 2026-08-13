@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>browser-llm-lab — sonde del prefill (engine-ttft riga 1)</title>
+  </head>
+  <body>
+    <h1>micro-bench sonde del prefill — engine-ttft riga 1</h1>
+    <p>
+      Sonda del picco di calcolo fp32, moltiplicatore multi-riga a M = 1/8/16/32 e
+      attenzione a chunk del prefill. La forma attuale e' <em>importata</em> da
+      <code>src/engine/kernels/wgsl.ts</code>, non ricopiata. Zero run di modello.
+      Il run file finisce su <code>window.__report</code>, il piano della spazzata
+      dei limiti su <code>window.__sweepPlan</code>.
+    </p>
+    <p>Status: <span id="status">starting…</span></p>
+    <pre id="log"></pre>
+    <pre id="results"></pre>
+    <script type="module" src="/src/microbench/ttPage.ts"></script>
+  </body>
+</html>
