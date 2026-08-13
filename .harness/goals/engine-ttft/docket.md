@@ -415,3 +415,46 @@ una stima presentata come tale e ora è una misura.
 **Blocco FFN per layer: 0,2579 → 0,1485 ms (1,737×).** Proiezione aggiornata:
 3.326 ms di moltiplicazioni + 2.888 di attenzione = **~6.214 ms**, contro i
 6.096 che it.5 aveva scritto usando il rapporto senza quantizzazione.
+
+## item 15 — la build della riga 2 è morta DUE VOLTE con la sessione: il veicolo non regge il ciclo di vita del processo (io → PI)
+
+Due lanci di `sdd-conductor` sulla riga 2, due morti senza record di
+completamento — entrambe perché il processo Claude Code è uscito mentre il
+workflow era in volo:
+
+- **1° lancio** (`wf_a2d320d5-ce3`, ~18:22): nessun agente arrivato a
+  integrazione, **niente nell'albero di lavoro**. Perso per intero.
+- **2° lancio** (ripresa dalla cache, ~19:0x-19:32): 5 agenti hanno prodotto
+  transcript, e le patch **SONO state applicate all'albero** — 506 inserzioni su
+  7 file di `src/engine/**` e `tests/**`, più tre file nuovi
+  (`prefillbytes.ts`, `engine-prefillbytes.test.ts`, `engine-prefillgemm.test.ts`).
+  Poi la sessione è morta di nuovo, prima di qualunque verifica.
+
+**Stato del lavoro**: `npx tsc --noEmit` PULITO sulle patch applicate. Nient'altro
+è verificato — la suite non è stata eseguita (interrotta dal PI), il ktest nemmeno,
+e nessun bench. **Messo al sicuro sul ramo `wip/riga2-build-interrotta`
+(`11aeac5`), `main` è pulito.** Non è stato mergiato niente.
+
+**Perché è un item e non un altro tentativo.** La regola del loop dice che lo
+stesso passo fallito due volte si ferma e si registra, invece di riprovare. E la
+causa non è nel piano né nel brief: è che **un workflow lungo in background non
+sopravvive all'uscita del processo che lo ospita**, esattamente come il server di
+sviluppo (landmine di HANDOFF). La ripresa dalla cache funziona — il 2° lancio è
+arrivato molto più avanti del 1° — ma ogni ripresa riparte da un processo che a
+sua volta può morire.
+
+**RULING RICHIESTO**, con le opzioni che vedo:
+(a) **Terza ripresa** dalla cache: costa poco, il grosso è cachato, e il 2°
+    lancio era già arrivato all'integrazione. Rischio: un terzo giro dello stesso
+    dado.
+(b) **Verificare a mano ciò che è già in `wip/riga2-build-interrotta`** — suite,
+    ktest, argomax del golden, bench del prefill — e completare io ciò che manca,
+    senza conductor. Più lento, ma ogni passo sopravvive al processo perché è
+    committato appena verificato.
+(c) Spezzare la riga 2 in build più piccole, una per sessione.
+
+**La mia raccomandazione è (b)**: le patch esistono e compilano, il costo vero
+adesso è la VERIFICA (che è seriale e mia comunque — ktest e bench non si
+parallelizzano), e il conductor non aggiungerebbe niente su un lavoro già
+scritto. La (a) la terrei come innesco solo se la verifica mostra che manca un
+pezzo strutturale.
