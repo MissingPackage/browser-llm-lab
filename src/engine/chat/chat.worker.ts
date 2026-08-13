@@ -307,6 +307,13 @@ async function chat(turn: number, user: string, system: string | null, s: Sampli
     text: tk.decode(gen),
     stats: {
       renderedPrompt: delta,
+      // STATO DELLA CACHE, e non e' decorazione: sul 35B il primo turno dopo il
+      // load paga la lettura degli expert da disco e puo' costare 2-3x il
+      // regime. Senza questo campo due turni identici sembrano lo stesso
+      // esperimento — e' esattamente l'equivoco che ha fatto sembrare "non piu'
+      // veloce" un modello misurato a freddo (2026-08-13).
+      turnSinceLoad: turn,
+      cacheState: turn === 0 ? "cold (primo turno dopo il load)" : "warm",
       promptTokens: ids.length,
       promptIds: ids,
       genTokens: gen.length,

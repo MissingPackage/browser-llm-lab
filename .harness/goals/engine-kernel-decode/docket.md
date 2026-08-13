@@ -316,3 +316,25 @@ Resta vero e registrato: su questo host, adesso, GLM RENDE meno (11,4 contro
 13,2 tok/s) perche' il disco e' piu' lento. Non e' una regressione introdotta:
 e' lo stato della macchina, e si rimisurera' al tag di release come il contratto
 gia' prevede.
+
+## item 9 — il 35B non ha ricevuto niente da questo goal, e la strada e' nominata (io → prossimo goal)
+
+MISURATO leggendo il GGUF pinnato: `Qwen3.6-35B-A3B-UD-Q4_K_S` ha **zero
+tensori Q4_0** (Q8_0 251 · Q4_K 117 · Q6_K 4 · F32 361). La forma `vec4Rows2` e'
+q4_0-only per costruzione (`gemvQuantVec4Rows2Ok`), quindi sul 35B si applica a
+**0 siti su 372 quantizzati**. La leva dell'attenzione invece lo tocca, ma paga
+col contesto (1,08x a ctx 388 contro 2,72x a 6333): in chat non si vede.
+
+Non e' un difetto di copertura — il censimento di it.8 lo classifica gia' come
+eccezione dichiarata, e la fase 0 non ha misurato quelle famiglie. E' il
+PROSSIMO LAVORO, e ha la forma di un goal: **una fase 0 per K-quant e Q8_0**,
+con le stesse regole (varianti isolate, pre-registrazione, regola di stop), non
+un'estensione a intuito del kernel q4_0 — i loro layout di blocco sono diversi
+(superblocchi da 256 con scale gerarchiche contro blocchi da 32) e cio' che ha
+funzionato sulla q4_0 non si trasferisce per analogia.
+
+Dato d'ingresso gia' disponibile: nella chat del 2026-08-13 il 35B ha reso 9,58
+tok/s con TTFT 22,7 s — ma a FREDDO (primo turno dopo il load, tetto 13 GiB per
+20,9 GB di modello). Il riferimento a caldo del goal precedente e' 22,6. Il
+divario fra i due e' paginazione degli expert, non kernel: chi apre il goal
+parta separando le due cose, o misurera' il disco credendo di misurare l'ALU.

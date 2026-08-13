@@ -192,6 +192,30 @@ $("export-json").addEventListener("click", () => {
         chatTemplateRaw: snap?.chatTemplateRaw ?? null,
       },
       runtime: { userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency },
+      // SOMMARIO: le mediane sui turni CALDI, separate dal primo turno a
+      // freddo. Senza questa separazione un JSON di chat si legge come una
+      // misura sola, e sul 35B il primo turno paga la lettura degli expert da
+      // disco (visto il 2026-08-13: 9,58 tok/s a freddo contro 22,6 di
+      // riferimento a caldo). Resta un banco di prova, non un riferimento:
+      // `hostState` e' null per costruzione e `declared` lo dice.
+      summary: (() => {
+        const st = session.turns.flatMap((t) => (t.stats ? [t.stats as Record<string, unknown>] : []));
+        const warm = st.filter((x) => x.cacheState === "warm");
+        const med = (xs: number[]): number | null =>
+          xs.length > 0 ? xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)] : null;
+        const num = (xs: Record<string, unknown>[], k: string): number[] =>
+          xs.map((x) => x[k]).filter((v): v is number => typeof v === "number");
+        return {
+          assistantTurns: st.length,
+          coldTurn: st.length > 0 ? { decodeTokS: st[0].decodeTokS ?? null, ttftMs: st[0].ttftMs ?? null } : null,
+          warmMedian: {
+            turns: warm.length,
+            decodeTokS: med(num(warm, "decodeTokS")),
+            decodeMsPerTokenP50: med(num(warm, "decodeMsPerTokenP50")),
+            ttftMs: med(num(warm, "ttftMs")),
+          },
+        };
+      })(),
       turns: session.turns,
       final: snap,
     };

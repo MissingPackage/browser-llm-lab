@@ -21,6 +21,16 @@ dei pesi, l'attenzione a chunk del prefill (stesso kernel del decode, stessi tre
 difetti, stessa riscrittura), e la resurrezione della predizione doppia, che
 sopra quel kernel tornerebbe conveniente.
 
+**Il 35B non ha ricevuto nulla da questo goal, ed e' misurato**: non ha un solo
+tensore Q4_0 (Q8_0 251 · Q4_K 117 · Q6_K 4), e la forma nuova dei
+moltiplicatori e' q4_0-only per costruzione. Portarlo dove sono 4B e 9B vuol
+dire **dare alle famiglie K-quant e Q8_0 la stessa fase 0 che ha avuto la
+q4_0** — una misura loro, non un'estensione a intuito del kernel esistente. E'
+un goal suo, accanto a quello sul tempo al primo token. Nella chat del
+2026-08-13 il 35B ha reso 9,58 tok/s: numero a FREDDO (primo turno dopo il
+load, 13 GiB di tetto per un modello da 20,9), contro i 22,6 di riferimento a
+caldo — il divario e' paginazione, non kernel.
+
 **Cinque cose aperte che ho registrato e non deciso** (docket del goal chiuso):
 il conductor installato tronca le patch a 16 KB e il sintomo si traveste da
 conflitto di pianificazione · il done-when sulla portabilità chiede più di

@@ -1,9 +1,6 @@
 {
- "status": "active",
+ "status": "stopped",
  "session_id": "254166be-837c-499f-90ee-763ba9bd54a1",
- "next_wake_epoch": 1786599194,
- "next_wake": "2026-08-13T07:33:14+0200",
- "prompt": "/loop /product-loop",
- "updated_epoch": 1786598894,
- "updated": "2026-08-13T07:28:14+0200"
+ "updated_epoch": 1786599240,
+ "updated": "2026-08-13T07:34:00+0200"
 }
