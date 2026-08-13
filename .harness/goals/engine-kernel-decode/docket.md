@@ -171,3 +171,34 @@ size andrebbe verificata multipla di 16 B prima di poterli bindare come
 
 Lavoro mio, non un ruling: estendere il freeze a quei due siti. Non fatto ora
 perche' tocca il ktest di GLM a goal quasi chiuso e il rischio non lo giustifica.
+
+## item 7 — `hostState.declared` e' una PROMESSA dell'operatore, e stanotte l'ho tradita (io, metodo)
+
+La non-reg GLM di it.8 e' uscita rossa: decode 9,30 contro il gate 13,43,
+prefill 10,98 contro 31,26, TTFT 41,98 s contro 14,74. Numeri da regressione
+grave.
+
+**Non e' una regressione: e' una misura invalida, e la colpa e' del mio
+orchestratore.** L'ho lanciata mentre girava il censimento di copertura con 27
+agenti. Il decode di GLM e' per il **61,7% fuori dalla GPU** (attribuzione del
+runner stesso: wall 110,3 = gpuBusy 42,3 + stallo 30,5 + sync/CPU 37,6), cioe'
+e' CPU-bound: 27 processi che leggono e grepano il repo lo affamano. Il piano di
+dispatch e' rimasto identico (1449 dispatch/token, uguale al riferimento), e sul
+path GLM il WGSL generato e' congelato da un test sha256 — il codice non poteva
+spiegare un -65% sul prefill.
+
+**Il difetto strutturale**: `--host-state quiescent` e' una stringa che il
+runner scrive nel JSON senza poterla verificare. Campiona nvidia-smi (che vede
+la GPU, non il carico CPU) e si fida dell'operatore. Un artefatto puo' quindi
+dichiararsi "quiescent" essendo stato misurato sotto contesa, e nessuno se ne
+accorge rileggendolo.
+
+Proposta (lavoro mio, non un ruling): il runner campiona anche il carico CPU
+(loadavg / conteggio processi) prima e dopo, e se la dichiarazione e'
+"quiescent" ma il carico dice altro, il report esce con la stessa quarantena
+`.INVALID` gia' usata per gli errori GPU. Registrato qui; da fare quando si
+tocca quel runner.
+
+Nel frattempo, regola operativa per me: **nessun bench mentre gira un
+workflow**. E' la seconda volta in una notte che la mia orchestrazione invalida
+una misura (la prima: due runner playwright sullo stesso profilo).
