@@ -69,25 +69,29 @@ il conflitto mMax-vs-shared del docket item 1 **non esiste** per la forma che
 vince, e la portabilità della riga 4 si ottiene gratis. Il legacy dell'attenzione
 invece non crea nemmeno la pipeline sotto i 32.768 B.
 
-**La cella mancante è stata girata (it.4) e la causa è accertata**: `splitk` a
-pesi freddi rende 0,0687 ms contro 0,0608 a caldo, **+12,9%** — sotto la soglia
-pre-registrata del 15% e lontanissimo dall'allarme dei 2×. Il vantaggio **non
-era L2-residenza del banco**: è occupancy, e sopravvive allo streaming vero.
-**Il rapporto che conta per il motore è 38,0×** (2,6083 / 0,0687, entrambe
-fredde), non i 43,1× a caldo; la proiezione sale da 8.665 a ~9.409 ms e nessuna
-conclusione cambia.
+**Fase di misura CHIUSA, tutte e tre le leve misurate e nessuna esclusa**:
+moltiplicatore multi-riga `splitk` **38,0×** a pesi freddi (il vantaggio è
+occupancy, non cache: degrada solo del 12,9% quando i pesi streammano davvero) ·
+via intera q4_0×q8_0 **1,745×** sopra di lui, contando anche la quantizzazione
+delle attivazioni che costa il 5,6% · attenzione del prefill in streaming
+**6,76×** a contesto 6333. Proiezione con tutte e tre: **~6.214 ms**, ed è un
+pavimento (non conta 24 layer su 32, norm, RoPE, dispatch).
 
-**Prossimo passo, senza gate**: la cella `splitk-idot` (dot product intero,
-disegno per intero nel docket item 11 — non è bit-identica, tolleranza da
-dichiarare prima), poi la build della riga 2 con `sdd-conductor`.
+**Riga 2 IN CORSO e a metà.** I kernel sono **in produzione e testati**
+(`0c66fbd`, verificato a mano: tsc pulito, vitest 611 passed contro i 545 di
+prima, ktest 100 PASS / 0 FAIL), e `PREFILL_M` è passato a 16 con
+un'**eccezione pinnata** per il path denso 0.5B, la cui ragione numerica vive
+come aritmetica eseguibile in un test.
 
-**Aperto e non deciso, in ordine di peso**: se le celle lente della fase 0 del
-goal PRECEDENTE siano sottostimate dallo stesso difetto di warm-up trovato qui —
-sarebbero rapporti pubblicati sovrastimati (item 9, raccomando: correzione solo
-da qui in avanti) · dove vive lo spec-dec MTP · la severità del controllo su
-`hostState` · una leva intera mai provata, `packed_4x8_integer_dot_product`,
-presente e corretta su questo stack e usata da nessun kernel (item 11) — ed è
-compute-side, cioè attacca esattamente il collo appena identificato.
+**MA `q35gpumodel.ts` — l'assemblatore del 4B — non è toccato: nessuno chiama i
+kernel nuovi, e la metrica obiettivo è ferma a 87.618 ms.** È questo il prossimo
+passo, e non ha gate: cablare il prefill del 4B sulla forma vincente.
+
+**Il veicolo `sdd-conductor` è morto DUE VOLTE sulla riga 2** (docket item 15),
+entrambe perché il processo che lo ospita è uscito mentre il workflow era in
+volo. Deciso e registrato (non escalato): si prosegue a mano, un task per volta,
+committando appena verificato — così ogni passo sopravvive al processo. In
+questa sessione la stessa causa ha ucciso due build e tre server di sviluppo.
 
 **Il 35B non ha ricevuto nulla da questo goal, ed e' misurato**: non ha un solo
 tensore Q4_0 (Q8_0 251 · Q4_K 117 · Q6_K 4), e la forma nuova dei
