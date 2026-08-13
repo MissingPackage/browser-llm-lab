@@ -109,3 +109,31 @@ correzione vive nella COPIA di questo run
 workflow installato in `~/.claude/workflows/sdd-conductor.workflow.js`:
 **quello e' ancora rotto e va corretto alla fonte**. Fuori dal grant di autorita'
 di questo goal (non e' codice di progetto): registrato qui, da portare al PI.
+
+## item 4 — il done-when (e) chiede piu' di quanto la riga 1 possa dare (io → PI, fase 1)
+
+SCOPERTO ESEGUENDO (ruling C7: e' il caso che la verifica a tempo di scrittura
+non ha intercettato). Il contratto chiede: «`maxComputeWorkgroupStorageSize`
+richiesto dal motore < 16384 B a QUALUNQUE ctxMax».
+
+Dopo T1 l'attenzione chiede **1.536 B costanti** (era 4·ctxMax+256): il tetto di
+contesto e' sparito, che era l'INTENZIONE della clausola. Ma il totale richiesto
+resta **30.848 B**, perche' un altro consumatore ci sta sopra da solo:
+`rmsPairGemmSiluChunkFast`, il kernel FUSO DEL PREFILL (4·K·mMax + 256·mMax +
+16·mMax, K=896, mMax=8), che non dipende dal contesto e appartiene al prefill —
+cioe' al goal TTFT, non a questo.
+
+Quindi la clausola, alla lettera, non e' soddisfacibile dalla riga 1; nella
+sostanza lo e'. **Non la riscrivo io**: cambiare un done-when e' esplicitamente
+fuori dal grant di autorita' ("must docket: cambiare i gate"). Il test
+`tests/gpulimits.test.ts` intanto asserisce cio' che e' VERO e nomina cio' che
+resta: il fabbisogno dell'attenzione e' costante e sotto la garanzia, il totale
+non cresce piu' col contesto, e l'unico consumatore sopra i 16 KB e' quello
+fuso, per nome.
+
+**RULING RICHIESTO**, con la mia raccomandazione: spezzare (e) in due —
+(e1) «il fabbisogno dell'ATTENZIONE e' costante in ctxMax e sotto i 16 KB» →
+gia' soddisfatta e sotto test; (e2) «il TOTALE del motore sta sotto i 16 KB» →
+spostata al goal TTFT insieme al kernel fuso del prefill. Se non arriva
+risposta, procedo con (e1) come soddisfatta e (e2) registrata come debito
+dichiarato, senza toccare il testo del contratto.
