@@ -19,6 +19,7 @@ import {
   PREFILL_SPLITS_MEASURED,
   prefillGemmQ4SplitKIdotWgsl, prefillQuantXQ8Wgsl,
   prefillGemmQ5KSplitKWgsl, prefillGemmQ5KSplitKIdotWgsl,
+  prefillGemmQ41SplitKWgsl, prefillGemmQ41SplitKIdotWgsl,
   prefillQuantXGrid, prefillCombineGrid,
 } from "./kernels/wgsl";
 import { planPrefillGemm, prefillGemmCapsFor } from "./prefillgemmplan";
@@ -871,11 +872,42 @@ export async function createQ35GpuModel(
     if (prefillPart !== null) {
       const route = planPrefillGemm({ kind: kk, K: w.k, N: w.n, M: M_MAX, idot: prefillIdot });
       // La seconda condizione e' la stessa del ramo K-quant, e per la stessa
-      // ragione: il kernel emesso qui sotto e' quello del q4_0, e chi lo emette
-      // deve VERIFICARE il formato invece di dedurlo dall'elenco dei kind
-      // misurati, che vive in un altro file. Oggi `kk` non puo' essere altro
-      // (q4_1 e q8_0 li rifiuta il contorno del kernel e la rotta torna legacy):
-      // la condizione non cambia un dispatch, cambia CHI garantisce.
+      // ragione: chi EMETTE il kernel deve verificare il formato invece di
+      // dedurlo dall'elenco dei kind misurati, che vive in un altro file.
+      //
+      // QUESTA GUARDIA HA GIA' PAGATO, e vale la pena scriverlo. Nella riga 3 il
+      // piano ha accettato il q4_1 (`PREFILL_GEMM_KINDS`) prima che questo sito
+      // emettesse i suoi kernel: senza `kk === "q4_0"` il ramo veloce avrebbe
+      // letto pesi q4_1 — nibble SENZA offset e una parola di scale per blocco
+      // invece che ogni due — col kernel del q4_0. Nessun errore WebGPU, nessuna
+      // eccezione: logit storti in silenzio. La guardia ha fatto ricadere quei
+      // tensori sulla legacy, che e' lenta e giusta.
+      // Q4_1 — SITO PROPRIO, non un ternario dentro quello del q4_0 (riga 3).
+      // La forma e' la stessa (split-K, stesse griglie, stesso combine) ma i
+      // kernel sono due: `w = d*q + m` con q in [0,15] SENZA l'offset -8 del
+      // q4_0, piu' il termine `m * Sigma(x)` per blocco e UNA parola di scale
+      // per blocco invece che una ogni due.
+      //
+      // PERCHE' ESPLICITO E NON UN TERNARIO che sceglie il generatore: il gate
+      // strutturale legge il SORGENTE e verifica che il kernel sia emesso con
+      // gli stessi `opts` con cui si e' chiesta la rotta. Dietro una variabile
+      // quella catena non e' piu' leggibile, e il gate diventa cieco proprio
+      // sulla proprieta' che esiste per difendere. Sei righe in piu' qui valgono
+      // un controllo che resta meccanico.
+      if (route.via !== "legacy" && kk === "q4_1") {
+        const o41 = { kind: kk, K: w.k, N: w.n, M: M_MAX, splits: route.splits };
+        if (route.via === "idot" && prefillXq !== null && prefillXsc !== null) {
+          pushB(prefillQuantXQ8Wgsl({ K: w.k, M: M_MAX }), [src, prefillXq, prefillXsc],
+            prefillQuantXGrid({ K: w.k, M: M_MAX }));
+          pushB(prefillGemmQ41SplitKIdotWgsl(o41),
+            [w.qs, w.scales, prefillXq, prefillPart, prefillXsc], prefillGemmGrid(o41));
+        } else {
+          pushB(prefillGemmQ41SplitKWgsl(o41), [w.qs, w.scales, src, prefillPart], prefillGemmGrid(o41));
+        }
+        pushB(prefillSplitKCombineWgsl({ N: w.n, M: M_MAX, splits: route.splits }), [prefillPart, dst],
+          prefillCombineGrid({ N: w.n, M: M_MAX }));
+        return;
+      }
       if (route.via !== "legacy" && kk === "q4_0") {
         const o = { kind: kk, K: w.k, N: w.n, M: M_MAX, splits: route.splits };
         if (route.via === "idot" && prefillXq !== null && prefillXsc !== null) {
@@ -1077,7 +1109,17 @@ export async function createQ35GpuModel(
         gemvB(wu, PB.xn, PB.upF);
         pbCat = "ffn:act";
         pushB(siluMulWgsl(dFfn, true), [PB.gateF, PB.upF], [Math.ceil(dFfn / 64), M_MAX, 1]);
-        pbCat = "gemm:ffn-down";
+        // CATEGORIA PROPRIA PER I QUATTRO SITI Q4_1, e non e' pedanteria.
+        // `gemm:ffn-down` mescola 28 tensori q4_0 (multi-riga dalla riga 2 del
+        // goal engine-ttft) e 4 Q4_1 (legacy fino a questa riga): dei 4.971 ms
+        // misurati, la quota dei secondi era DEDOTTA dal microbench, non
+        // misurata — e un verificatore l'ha marcata come l'anello debole della
+        // proiezione. Con una categoria distinta il checkpoint la ATTRIBUISCE.
+        // Va fatto PRIMA della misura di chiusura, o il prima/dopo non e'
+        // confrontabile: e' la stessa lezione della riga 5 di engine-ttft, dove
+        // tenere la ricorrenza dentro `deltanet:gates` nascondeva il termine che
+        // serviva vedere.
+        pbCat = wd.kind === "q4_1" ? "gemm:ffn-down-q41" : "gemm:ffn-down";
         gemvB(wd, PB.gateF, PB.attnY);
         pushB(addInPlaceWgsl(d, true), [PB.x, PB.attnY], [Math.ceil(d / 64), M_MAX, 1]);
       }

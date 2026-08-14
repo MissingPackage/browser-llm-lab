@@ -3842,6 +3842,12 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
  *
  * q4_0 = riga 1 di engine-ttft (1,745x della via intera sulla f32).
  * q5_K = riga 2 di engine-kquant (28,10x sulla legacy a M=16 su `ssm_out`).
+ * q4_1 = riga 3 di engine-kquant (`blk.0-3.ffn_down` del 4B, 71% dei byte del
+ *        segmento `gemm:ffn-down`).
+ *
+ * L'ORDINE E' PARTE DELL'INTERFACCIA, e q4_1 sta IN CODA: chi consuma questo
+ * elenco per costruire un piano o una tabella lo legge posizionalmente, e un
+ * kind infilato in mezzo sposterebbe tutto in silenzio.
  *
  * AGGIUNGERE UN KIND QUI NON BASTA, ED E' VOLUTO: ogni numero che dipende dal
  * formato vive in `PREFILL_GEMM_SPEC`, che e' un `Record<PrefillGemmKind, …>`.
@@ -3850,7 +3856,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
  * compilazione. E' la lezione del cast `as "q4_0"` che stava nel piano —
  * un formato che passa per un altro non fa rumore, fa numeri.
  */
-export const PREFILL_GEMM_KINDS = ["q4_0", "q5_K"] as const;
+export const PREFILL_GEMM_KINDS = ["q4_0", "q5_K", "q4_1"] as const;
 export type PrefillGemmKind = typeof PREFILL_GEMM_KINDS[number];
 
 export interface PrefillGemmOpts {
@@ -3981,6 +3987,33 @@ const PREFILL_GEMM_SPEC: Record<PrefillGemmKind, PrefillGemmKindSpec> = {
       // `xs` M*32 f32 = 128·M B (2.048 a M=16): UN sotto-blocco per volta, non
       // il superblocco intero (che a M=16 sarebbe 16.384 B, il minimo di spec)
       f32: (M) => M * 32 * 4,
+    },
+  },
+  q4_1: {
+    // la GEOMETRIA e' quella del q4_0 — blocchi da 32, il loop avanza a BK = 2
+    // — perche' il q4_1 e' un formato a blocchi, non a superblocchi. Quello che
+    // cambia e' l'ARITMETICA, e sta tutta nel testo del kernel.
+    kUnit: 64,
+    kUnitWhy: "il loop avanza a BK = 2 blocchi da 32",
+    formatWhy: "q4_1 nibble a 4 bit SENZA l'offset -8 del q4_0, piu' d e m in f16 = UNA parola di scale per blocco da 32",
+    unitsPerRow: (K) => K / 32,
+    slices: (units, splits) => units % (splits * 2) === 0,
+    sliceWhy: (units, splits) => `${units} blocchi non divisibili in ${splits} fette da BK=2`,
+    // stessa scala del q4_0: 4 fette se i blocchi si dividono a BK=2, altrimenti
+    // nessuno split-K. Il 2 non compare perche' sul q4_1 non e' stato misurato,
+    // e i blocchi per riga qui sono tanti quanti sul q4_0 (K/32), non otto volte
+    // meno come sui K-quant — il ripiego secco non lascia scoperto niente.
+    splitsFor: (units) =>
+      units % (PREFILL_SPLITS_MEASURED * 2) === 0 ? PREFILL_SPLITS_MEASURED : PREFILL_SPLITS_UNSPLIT,
+    wgBytes: {
+      // `xs` M*16 u32 + `xss` M*2 f32 + `xsum` M*2 f32 = 80·M B (1.280 a M=16):
+      // sono i 72·M del q4_0 PIU' gli 8·M di `xsum`, cioe' il termine
+      // `m * Sigma(x)` che il q4_0 non ha perche' i suoi nibble sono centrati
+      // su zero.
+      idot: (M) => M * 16 * 4 + M * 2 * 4 + M * 2 * 4,
+      // `xs` M*16 vec4<f32> = 256·M B (4.096 a M=16), identico al q4_0: la via
+      // f32 legge le attivazioni dense e la somma Sigma(x) la fa in registri.
+      f32: (M) => M * 16 * 16,
     },
   },
 };
@@ -4408,6 +4441,201 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
       workgroupBarrier();
     }
     sb = sb + 1u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+// ---------------------------------------------------------------------------
+// PREFILL GEMM q4_1 SPLIT-K — port dal banco (src/microbench/ttKQuant.ts,
+// `kquantQ41MultiRowSplitKIdotWgsl` / `kquantQ41MultiRowSplitKWgsl`).
+//
+// Provenienza: riga 3 di engine-kquant, su `blk.0-3.ffn_down` del 4B (K=9216 =
+// 288 blocchi da 32, N=2560, M=16) — il 71% dei byte del segmento
+// `gemm:ffn-down` (`KQUANT_SHAPES` in ttKQuant.ts).
+//
+// STESSA REGOLA DEL PORT: il testo WGSL e' quello del banco, riga per riga, e
+// ogni divergenza sta in `PREFILL_GEMM_PORT_DIFFS` con la sua ragione.
+//
+// ORDINE DEI BINDING (congelato — lo consumano il piano e il wiring): sono gli
+// STESSI del q4_0, perche' `repackQ4_1` spezza anche questo formato in due
+// buffer (qs + scales), al contrario del superblocco unico del Q5_K.
+//   idot [0 qs4, 1 scales, 2 xq(u32), 3 part(rw), 4 xsc(f32)]
+//   f32  [0 qs4, 1 scales, 2 x4,      3 part(rw)]
+// Quantizzatore delle attivazioni e combine sono quelli del q4_0
+// (`prefillQuantXQ8Wgsl`, `prefillSplitKCombineWgsl`): stessi blocchi da 32.
+//
+// COSA DISTINGUE QUESTO FORMATO DAL q4_0, e sono DUE fatti aritmetici che la
+// forma non tradisce (stessi binding, stessa mappatura, stesso passo):
+//   1. `w = d*q + m` con q in [0,15]: i nibble vanno in i8 SENZA la correzione
+//      -8, e restano positivi;
+//   2. le scale sono UNA parola per blocco (d nei 16 bit bassi, m negli alti),
+//      quindi `unpack2x16float(scales[gb])` — non `scales[gb >> 1u][gb & 1u]`,
+//      che e' la forma q4_0 con due f16 per parola.
+// Dal punto 1 discende il terzo termine: senza offset serve `m * Sigma(x)` per
+// blocco, e quella somma non dipende dalla riga di pesi — si calcola UNA volta
+// in memoria di gruppo (`xsum`), come fa il Q5_K con `dmin*mn_j`.
+// ---------------------------------------------------------------------------
+
+/**
+ * VIA INTERA q4_1 x q8_0 (`dot4I8Packed`) — la forma vincente della riga 3.
+ *
+ * Passo di due blocchi per giro, come la forma q4_0 misurata in riga 1 di
+ * engine-ttft: stessa mappatura, stessa occupancy, cambia solo l'aritmetica del
+ * formato. I nibble si estraggono impacchettati (`w & 0x0f0f0f0f` e
+ * `(w >> 4) & 0x0f0f0f0f`) e restano quattro per parola, pronti per
+ * `dot4I8Packed`; nessuno supera 15, quindi la somma per byte non trabocca.
+ *
+ * NIENTE `enable packed_4x8_integer_dot_product;`: e' una LANGUAGE FEATURE, non
+ * un'estensione. Scriverlo fa fallire la compilazione con «expected extension».
+ */
+export function prefillGemmQ41SplitKIdotWgsl(o: PrefillGemmOpts): string {
+  const { N, M } = o;
+  const { units: bpr, per } = prefillGemmCheck(o, "prefillGemmQ41SplitKIdotWgsl");
+  return `@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> xq: array<u32>;
+@group(0) @binding(3) var<storage, read_write> part: array<f32>;
+@group(0) @binding(4) var<storage, read> xsc: array<f32>;
+const BPR = ${bpr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+var<workgroup> xs: array<u32, ${M * 16}>;
+var<workgroup> xss: array<f32, ${M * 2}>;
+var<workgroup> xsum: array<f32, ${M * 2}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let bEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var b0 = s * PER;
+  loop {
+    if (b0 >= bEnd) { break; }
+    for (var idx = t; idx < ${M * 16}u; idx = idx + 64u) {
+      let m = idx / 16u;
+      let qi = idx % 16u;
+      xs[idx] = xq[(m * BPR + b0) * 8u + qi];
+    }
+    for (var idx = t; idx < ${M * 2}u; idx = idx + 64u) {
+      let m = idx / 2u;
+      xss[idx] = xsc[m * BPR + b0 + (idx % 2u)];
+    }
+    workgroupBarrier();
+    for (var idx = t; idx < ${M * 2}u; idx = idx + 64u) {
+      let m = idx / 2u;
+      let bi = idx % 2u;
+      var sq = 0i;
+      for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+        sq = sq + dot4I8Packed(0x01010101u, xs[m * 16u + bi * 8u + ii]);
+      }
+      xsum[idx] = f32(sq) * xss[idx];
+    }
+    workgroupBarrier();
+    if (r < N_ROWS) {
+      for (var bi = 0u; bi < 2u; bi = bi + 1u) {
+        let gb = r * BPR + b0 + bi;
+        let dm = unpack2x16float(scales[gb]);
+        let w = qs4[gb];
+        var lo: array<u32, 4>;
+        var hi: array<u32, 4>;
+        for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+          lo[wi] = w[wi] & 0x0f0f0f0fu;
+          hi[wi] = (w[wi] >> 4u) & 0x0f0f0f0fu;
+        }
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          let xo = m * 16u + bi * 8u;
+          var idot = 0i;
+          for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+            idot = idot + dot4I8Packed(lo[wi], xs[xo + wi]);
+            idot = idot + dot4I8Packed(hi[wi], xs[xo + 4u + wi]);
+          }
+          acc[m] = acc[m] + dm.x * f32(idot) * xss[m * 2u + bi] + dm.y * xsum[m * 2u + bi];
+        }
+      }
+    }
+    workgroupBarrier();
+    b0 = b0 + 2u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+/**
+ * VIA f32 — FALLBACK DICHIARATO per i device senza
+ * `packed_4x8_integer_dot_product`. Stessa mappatura, attivazioni lette dense
+ * (`x4`, vec4<f32>) come nella via f32 del q4_0.
+ *
+ * Il dequant NON sottrae 8.0: e' la stessa differenza di formato della via
+ * intera, scritta in virgola mobile. E il termine costante `m * Sigma(x)` qui
+ * si accumula in registri (`sx`), perche' senza `dot4I8Packed` non c'e' niente
+ * da condividere fra le righe.
+ */
+export function prefillGemmQ41SplitKWgsl(o: PrefillGemmOpts): string {
+  const { N, M, K } = o;
+  const { units: bpr, per } = prefillGemmCheck(o, "prefillGemmQ41SplitKWgsl");
+  return `@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> x4: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> part: array<f32>;
+const BPR = ${bpr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+const K4 = ${K / 4}u;
+var<workgroup> xs: array<vec4<f32>, ${M * 16}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let bEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var b0 = s * PER;
+  loop {
+    if (b0 >= bEnd) { break; }
+    for (var idx = t; idx < ${M * 16}u; idx = idx + 64u) {
+      let m = idx / 16u;
+      let qi = idx % 16u;
+      xs[idx] = x4[m * K4 + b0 * 8u + qi];
+    }
+    workgroupBarrier();
+    if (r < N_ROWS) {
+      for (var bi = 0u; bi < 2u; bi = bi + 1u) {
+        let gb = r * BPR + b0 + bi;
+        let dm = unpack2x16float(scales[gb]);
+        let w = qs4[gb];
+        var lo: array<vec4<f32>, 4>;
+        var hi: array<vec4<f32>, 4>;
+        for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+          let by = (vec4<u32>(w[wi]) >> vec4<u32>(0u, 8u, 16u, 24u));
+          lo[wi] = vec4<f32>(by & vec4<u32>(15u));
+          hi[wi] = vec4<f32>((by >> vec4<u32>(4u)) & vec4<u32>(15u));
+        }
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          let xo = m * 16u + bi * 8u;
+          var qx = 0.0;
+          var sx = 0.0;
+          for (var wi = 0u; wi < 4u; wi = wi + 1u) {
+            let xa = xs[xo + wi];
+            let xb = xs[xo + 4u + wi];
+            qx = qx + dot(lo[wi], xa) + dot(hi[wi], xb);
+            sx = sx + dot(vec4<f32>(1.0), xa) + dot(vec4<f32>(1.0), xb);
+          }
+          acc[m] = acc[m] + dm.x * qx + dm.y * sx;
+        }
+      }
+    }
+    workgroupBarrier();
+    b0 = b0 + 2u;
   }
   if (r < N_ROWS) {
     for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }

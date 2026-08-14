@@ -99,12 +99,16 @@ describe("[1] la via: idot dove si puo', f32 come fallback dichiarato, legacy co
         expect(r.reason, `${kind}`).toContain(kind);
       }
     }
-    // q4_1 non e' nell'elenco del done-when ma esiste sul 4B (4 `ffn_down`):
-    // stessa regola, stessa ragione parlante.
+    // IL q4_1 NON E' PIU' QUI, ed e' la riga 3 di `engine-kquant` ad averlo
+    // tolto: i 4 `ffn_down` dei layer 0-3 hanno la loro forma multi-riga,
+    // misurata 22,57x a M=16. Questa asserzione diceva `legacy` e adesso dice
+    // il contrario — cambiata deliberatamente, non aggirata.
     const q41 = planPrefillGemm({ kind: "q4_1", K: 9216, N: 2560, M, idot: true });
-    expect(q41.via).toBe("legacy");
+    expect(q41.via).toBe("idot");
     expect(q41.reason).toContain("q4_1");
     expect(q41.reason.length).toBeGreaterThanOrEqual(40);
+    // e senza la feature intera resta la sua f32, non la legacy
+    expect(planPrefillGemm({ kind: "q4_1", K: 9216, N: 2560, M, idot: false }).via).toBe("f32");
   });
 
   it("K%64!=0: legacy, con una ragione che NOMINA K", () => {
@@ -516,31 +520,39 @@ describe("[6] ACCETTAZIONE 2: il traffico pesi del prefill del 4B, prima e dopo"
     // Se un sito coperto scivolasse a legacy, `after` crescerebbe e queste due
     // uguaglianze fallirebbero; se un'eccezione sparisse dalla lista, anche.
     // -----------------------------------------------------------------------
-    const F = HIST_4B.attnQ4_0.bytes + HIST_4B.ffnQ4_0.bytes + HIST_4B.ssmQ5_K.bytes;   // via veloce
-    const L = HIST_4B.ffnQ4_1.bytes + HIST_4B.ssmQ8_0.bytes;
-    expect(F).toBe(1_983_774_720);
-    expect(L).toBe(63_160_320);
+    // RIGA 3: il q4_1 passa da L a F. Restano legacy i soli 48 siti Q8_0
+    // `ssm_alpha`/`ssm_beta` — 0,204% dei byte, N=32 righe di uscita contro le
+    // 64 per workgroup della forma split-K: mezzo workgroup per dispatch,
+    // ESCLUSI COI NUMERI e non dimenticati (v. GOAL.md).
+    const F = HIST_4B.attnQ4_0.bytes + HIST_4B.ffnQ4_0.bytes + HIST_4B.ssmQ5_K.bytes
+      + HIST_4B.ffnQ4_1.bytes;   // via veloce
+    const L = HIST_4B.ssmQ8_0.bytes;
+    expect(F).toBe(2_042_757_120);
+    expect(L).toBe(4_177_920);
     expect(before).toBe(M * (F + L));
     expect(after).toBe(F + M * L);
-    expect(covered.length).toBe(HIST_4B.attnQ4_0.n + HIST_4B.ffnQ4_0.n + HIST_4B.ssmQ5_K.n);   // 196
-    expect(covered.length).toBe(196);
-    expect(excepted.length).toBe(HIST_4B.ffnQ4_1.n + HIST_4B.ssmQ8_0.n);   // 52
-    expect(excepted.length).toBe(52);
+    expect(covered.length).toBe(
+      HIST_4B.attnQ4_0.n + HIST_4B.ffnQ4_0.n + HIST_4B.ssmQ5_K.n + HIST_4B.ffnQ4_1.n);   // 200
+    expect(covered.length).toBe(200);
+    expect(excepted.length).toBe(HIST_4B.ssmQ8_0.n);   // 48
+    expect(excepted.length).toBe(48);
     expect(exceptions.length).toBe(excepted.length);
     expect(onePass(covered)).toBe(F);
     expect(onePass(excepted)).toBe(L);
     for (const e of exceptions) expect(e.reason.length).toBeGreaterThanOrEqual(40);
 
-    // I kind che restano legacy sono DUE: il Q4_1 e' la riga 3 (stessa forma,
-    // misurata a parte perche' altrimenti non si sa quale leva ha prodotto
-    // quale pezzo del guadagno) e il Q8_0 e' l'eredita' del 35B, misurato e
-    // NON cablato (riga 4). Il Q5_K non e' piu' qui: e' la riga 2.
-    expect([...new Set(exceptions.map((e) => e.kind))].sort()).toEqual(["q4_1", "q8_0"]);
+    // RESTA UN SOLO KIND LEGACY, e non e' un residuo dimenticato: i 48 siti
+    // Q8_0 `ssm_alpha`/`ssm_beta` sono lo 0,204% dei byte con N=32 righe di
+    // uscita, cioe' mezzo workgroup per dispatch sulla forma split-K. Sono
+    // ESCLUSI COI NUMERI dal contratto. Il Q5_K se n'e' andato con la riga 2,
+    // il Q4_1 con la riga 3.
+    expect([...new Set(exceptions.map((e) => e.kind))].sort()).toEqual(["q8_0"]);
 
     // e il numero che ne esce, pinnato stretto perche' si legga nel goal.
-    // La barra della riga 2 e' >= 10,9x sull'inventario per-layer INTERO.
-    expect(ratio).toBeGreaterThanOrEqual(10.9);
-    expect(ratio).toBeCloseTo(10.9376, 4);
+    // La barra della riga 3 e' >= 15,5x sull'inventario per-layer INTERO
+    // (era >= 10,9 dopo la riga 2, e 5,8593 prima del goal).
+    expect(ratio).toBeGreaterThanOrEqual(15.5);
+    expect(ratio).toBeCloseTo(15.5247, 4);
   });
 
   // [6d] NON C'E' PIU', ed e' la sua stessa ragione ad averlo tolto. Registrava
@@ -593,12 +605,14 @@ describe("[7] prefillGemmScratchFor: UN solo set di buffer, quindi il MAX", () =
 
   it("le eccezioni non prenotano nulla e non alzano il max", () => {
     const fast: PrefillSite[] = [{ site: "ffn_gate", kind: "q4_0", K: 2560, N: 9216 }];
-    // Le eccezioni di OGGI, dopo la riga 2: il Q5_K non e' piu' fra loro.
-    // Restano il Q4_1 (riga 3) e i K-quant del 35B, misurati e non cablati.
+    // Le eccezioni di OGGI, dopo la riga 3: ne' il Q5_K ne' il Q4_1 sono piu'
+    // fra loro. Restano i K-quant del 35B (misurati e NON cablati) e il Q8_0.
+    // Il q4_1 e' stato tolto da questa lista quando ha smesso di essere
+    // un'eccezione: lasciarlo avrebbe reso il test verde misurando il passato.
     const mixed: PrefillSite[] = [
       ...fast,
       { site: "moe_down", kind: "q4_K", K: 4096, N: 2560 },
-      { site: "ffn_down_q41", kind: "q4_1", K: 9216, N: 2560 },
+      { site: "ssm_alpha", kind: "q8_0", K: 2560, N: 32 },
     ];
     expect(prefillGemmScratchFor({ sites: mixed, M, idot: true }))
       .toEqual(prefillGemmScratchFor({ sites: fast, M, idot: true }));

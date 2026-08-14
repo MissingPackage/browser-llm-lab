@@ -18,10 +18,12 @@ import {
 } from "../src/microbench/ttGemm";
 import {
   kquantQ5KMultiRowSplitKIdotWgsl, kquantQ5KMultiRowSplitKWgsl, kquantSplitsFor,
+  kquantQ41MultiRowSplitKIdotWgsl, kquantQ41MultiRowSplitKWgsl,
 } from "../src/microbench/ttKQuant";
 import {
   prefillGemmQ4SplitKIdotWgsl, prefillGemmQ4SplitKWgsl,
   prefillGemmQ5KSplitKIdotWgsl, prefillGemmQ5KSplitKWgsl,
+  prefillGemmQ41SplitKIdotWgsl, prefillGemmQ41SplitKWgsl,
   prefillQuantXQ8Wgsl, prefillSplitKCombineWgsl,
   prefillGemmGrid, prefillQuantXGrid, prefillCombineGrid,
   prefillGemmSplitsFor, prefillPartialFloats, prefillGemmWorkgroupStorageBytes,
@@ -43,6 +45,20 @@ const MEASURED: PrefillGemmOpts[] = [
  */
 const MEASURED_Q5K: PrefillGemmOpts[] = [
   { kind: "q5_K", K: 4096, N: 2560, M: 16, splits: 4 },
+];
+
+/**
+ * La shape MISURATA al banco per il Q4_1: `blk.0-3.ffn_down` del 4B (K=9216 =
+ * 288 blocchi da 32, N=2560), a chunk 16 e 4 fette — cioe' il 71% dei byte del
+ * segmento `gemm:ffn-down` (`KQUANT_SHAPES` in src/microbench/ttKQuant.ts).
+ *
+ * La geometria e' quella del q4_0 (blocchi da 32, passo BK=2), non quella dei
+ * K-quant: il q4_1 e' un formato a blocchi, non a superblocchi. Cambia solo
+ * l'aritmetica — `w = d*q + m` con q in [0,15], niente offset -8, e UNA parola
+ * di scale per blocco invece di una ogni due.
+ */
+const MEASURED_Q41: PrefillGemmOpts[] = [
+  { kind: "q4_1", K: 9216, N: 2560, M: 16, splits: 4 },
 ];
 
 /**
@@ -73,6 +89,34 @@ const HOT_Q5K_IDOT = [
 const HOT_Q5K_F32 = [
   "if ((qh & (1u << is)) != 0u) { a = a + 16.0; }",
   "acc[m] = acc[m] + dsc * qx - dmn * sx;",
+];
+
+/**
+ * Le righe del ciclo caldo del Q4_1. Sono DUE fatti aritmetici del formato, e
+ * sono quelli su cui un port distratto scivola verso il q4_0:
+ *
+ *  1. i nibble vanno in i8 SENZA la correzione -8 (`w = d*q + m` con q in
+ *     [0,15]); la riga q4_0 corrispondente e' `(nibble + 248) & 255`;
+ *  2. le scale sono UNA parola per blocco — `unpack2x16float(scales[gb])`, d nei
+ *     16 bit bassi e m negli alti — non una ogni DUE blocchi
+ *     (`scales[gb >> 1u][gb & 1u]`, la forma q4_0).
+ *
+ * Il termine `m * Sigma(x)` che ne segue e' il terzo: senza offset sui nibble
+ * serve la somma delle attivazioni del blocco, calcolata UNA volta per
+ * workgroup in `xsum` (lo stesso mestiere che fa il Q5_K con `dmin*mn_j`).
+ */
+const HOT_Q41_IDOT = [
+  "let dm = unpack2x16float(scales[gb]);",
+  "lo[wi] = w[wi] & 0x0f0f0f0fu;",
+  "hi[wi] = (w[wi] >> 4u) & 0x0f0f0f0fu;",
+  "xsum[idx] = f32(sq) * xss[idx];",
+  "acc[m] = acc[m] + dm.x * f32(idot) * xss[m * 2u + bi] + dm.y * xsum[m * 2u + bi];",
+];
+const HOT_Q41_F32 = [
+  "let dm = unpack2x16float(scales[gb]);",
+  "lo[wi] = vec4<f32>(by & vec4<u32>(15u));",
+  "hi[wi] = vec4<f32>((by >> vec4<u32>(4u)) & vec4<u32>(15u));",
+  "acc[m] = acc[m] + dm.x * qx + dm.y * sx;",
 ];
 
 /** diff riga-per-riga (LCS) fra il testo di banco e quello di produzione */
@@ -120,6 +164,21 @@ function q5kPairs(o: PrefillGemmOpts): { name: string; bench: string; prod: stri
   return [
     { name: "q5k-idot", bench: kquantQ5KMultiRowSplitKIdotWgsl(b), prod: prefillGemmQ5KSplitKIdotWgsl(o) },
     { name: "q5k-f32", bench: kquantQ5KMultiRowSplitKWgsl(b), prod: prefillGemmQ5KSplitKWgsl(o) },
+  ];
+}
+
+/**
+ * Le DUE forme Q4_1 del port, appaiate col loro gemello di banco. Come per il
+ * Q5_K, il quantizzatore delle attivazioni e la combine non compaiono: il q4_1
+ * ha blocchi da 32 come il q4_0 e riusa `prefillQuantXQ8Wgsl` /
+ * `prefillSplitKCombineWgsl` tali e quali, gia' appaiati sopra.
+ */
+function q41Pairs(o: PrefillGemmOpts): { name: string; bench: string; prod: string }[] {
+  const { K, N, M, splits } = o;
+  const b = { family: "q4_1" as const, K, N, M, splits };
+  return [
+    { name: "q41-idot", bench: kquantQ41MultiRowSplitKIdotWgsl(b), prod: prefillGemmQ41SplitKIdotWgsl(o) },
+    { name: "q41-f32", bench: kquantQ41MultiRowSplitKWgsl(b), prod: prefillGemmQ41SplitKWgsl(o) },
   ];
 }
 
@@ -236,9 +295,133 @@ describe("[a]-port Q5_K: il testo e' quello del banco, riga per riga", () => {
     });
   }
 
-  it("i kind della via veloce sono esattamente q4_0 e q5_K", () => {
-    expect([...PREFILL_GEMM_KINDS]).toEqual(["q4_0", "q5_K"]);
+  it("i kind della via veloce sono esattamente q4_0, q5_K e q4_1", () => {
+    // L'ORDINE e' parte dell'asserzione: q4_1 sta in CODA. Chi legge questo
+    // elenco per costruire un piano o una tabella (t2..t6) lo consuma
+    // posizionalmente, e un kind infilato in mezzo sposterebbe tutto in
+    // silenzio.
+    expect([...PREFILL_GEMM_KINDS]).toEqual(["q4_0", "q5_K", "q4_1"]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// [a]-port Q4_1 — la terza famiglia, con la stessa tesi delle prime due: il
+// testo che il motore manda al device e' quello del banco
+// (`kquantQ41MultiRowSplitK*Wgsl` in src/microbench/ttKQuant.ts), riga per riga.
+//
+// PERCHE' QUI SERVE PIU' ATTENZIONE CHE ALTROVE: il q4_1 assomiglia al q4_0
+// (blocchi da 32, passo BK=2, stessa mappatura, stessi cinque binding) e
+// diverge in due punti soli, entrambi ARITMETICI e invisibili alla forma —
+// niente offset -8 sui nibble, UNA parola di scale per blocco invece di una
+// ogni due. Un port che ricopiasse il q4_0 e cambiasse solo il nome
+// passerebbe ogni controllo strutturale e darebbe numeri sbagliati.
+// ---------------------------------------------------------------------------
+describe("[a]-port Q4_1: il testo e' quello del banco, riga per riga", () => {
+  for (const o of MEASURED_Q41) {
+    const tag = `K${o.K} N${o.N} M${o.M} splits${o.splits}`;
+
+    for (const { name, bench, prod } of q41Pairs(o)) {
+      it(`${tag} ${name}: identico al banco riga per riga`, () => {
+        const b = bench.split("\n");
+        const p = prod.split("\n");
+        expect(p.length, "numero di righe").toBe(b.length);
+        for (let i = 0; i < b.length; i++) {
+          expect(p[i], `${name}: riga ${i + 1} divergente dal banco`).toBe(b[i]);
+        }
+        expect(prod).toBe(bench);
+      });
+    }
+
+    it(`${tag}: le righe calde della via intera stanno nel banco e in produzione`, () => {
+      const bench = kquantQ41MultiRowSplitKIdotWgsl({ family: "q4_1", K: o.K, N: o.N, M: o.M, splits: o.splits });
+      const prod = prefillGemmQ41SplitKIdotWgsl(o);
+      for (const line of HOT_Q41_IDOT) {
+        expect(bench, "riga sparita dal BANCO: la lista va rifatta").toContain(line);
+        expect(prod).toContain(line);
+      }
+      // e le DUE righe del q4_0 che qui sarebbero un errore di formato non ci
+      // sono: nessuna correzione -8, nessuna scala ogni due blocchi
+      expect(prod).not.toContain("vec4<u32>(248u)");
+      expect(prod).not.toContain("scales[gb >> 1u]");
+    });
+
+    it(`${tag}: le righe calde della via f32 stanno nel banco e in produzione`, () => {
+      const bench = kquantQ41MultiRowSplitKWgsl({ family: "q4_1", K: o.K, N: o.N, M: o.M, splits: o.splits });
+      const prod = prefillGemmQ41SplitKWgsl(o);
+      for (const line of HOT_Q41_F32) {
+        expect(bench, "riga sparita dal BANCO").toContain(line);
+        expect(prod).toContain(line);
+      }
+      // il dequant f32 del q4_0 sottrae 8.0: qui no, ed e' il formato
+      expect(prod).not.toContain("- vec4<f32>(8.0)");
+    });
+
+    it(`${tag}: niente enable packed_4x8 (language feature, non estensione)`, () => {
+      for (const code of [prefillGemmQ41SplitKIdotWgsl(o), prefillGemmQ41SplitKWgsl(o)]) {
+        expect(code).not.toContain("enable packed_4x8");
+      }
+      expect(prefillGemmQ41SplitKIdotWgsl(o)).toContain("dot4I8Packed");
+      // la via f32 e' il FALLBACK: niente prodotto scalare intero li' dentro
+      expect(prefillGemmQ41SplitKWgsl(o)).not.toContain("dot4I8Packed");
+    });
+
+    it(`${tag}: binding CONGELATI, letti dal testo generato`, () => {
+      // gli STESSI cinque del q4_0, nello stesso ordine: il q4_1 e' un formato
+      // a due buffer (qs + scales), non a superblocco unico come il Q5_K
+      expect(storageBindings(prefillGemmQ41SplitKIdotWgsl(o))).toEqual([
+        "0:read:qs4:array<vec4<u32>>",
+        "1:read:scales:array<u32>",
+        "2:read:xq:array<u32>",
+        "3:read_write:part:array<f32>",
+        "4:read:xsc:array<f32>",
+      ]);
+      expect(storageBindings(prefillGemmQ41SplitKWgsl(o))).toEqual([
+        "0:read:qs4:array<vec4<u32>>",
+        "1:read:scales:array<u32>",
+        "2:read:x4:array<vec4<f32>>",
+        "3:read_write:part:array<f32>",
+      ]);
+      // nessun binding sfuggito alla regex (una dichiarazione in altra forma
+      // sarebbe un binding fantasma per chi costruisce il bind group)
+      expect((prefillGemmQ41SplitKIdotWgsl(o).match(/var<storage/g) ?? []).length).toBe(5);
+      expect((prefillGemmQ41SplitKWgsl(o).match(/var<storage/g) ?? []).length).toBe(4);
+      for (const code of [prefillGemmQ41SplitKIdotWgsl(o), prefillGemmQ41SplitKWgsl(o)]) {
+        // geometria a blocchi da 32, come il q4_0: 288 blocchi per riga, 72 per fetta
+        expect(code).toContain(`const BPR = ${o.K / 32}u;`);
+        expect(code).toContain(`const PER = ${o.K / 32 / o.splits}u;`);
+        expect(code).toContain(`const N_ROWS = ${o.N}u;`);
+        expect(code).toContain(`const M_ROWS = ${o.M}u;`);
+        expect(code).toContain("let gb = r * BPR + b0 + bi;");
+        expect(code).toContain("let w = qs4[gb];");
+        expect(code).toContain("let r = wid.x * 64u + t;");
+        expect(code).toContain("let s = wid.y;");
+        expect(code).toContain("@compute @workgroup_size(64)");
+        // part[(s*M + m)*N + r]: la fetta scrive dove la combine condivisa legge
+        expect(code).toContain(
+          "for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }");
+      }
+      expect(prefillGemmQ41SplitKIdotWgsl(o)).toContain("const BPR = 288u;");
+      expect(prefillGemmQ41SplitKIdotWgsl(o)).toContain("const PER = 72u;");
+      // la via intera rilegge xq/xsc dove `prefillQuantXQ8Wgsl` li ha scritti
+      expect(prefillGemmQ41SplitKIdotWgsl(o)).toContain("xs[idx] = xq[(m * BPR + b0) * 8u + qi];");
+      expect(prefillGemmQ41SplitKIdotWgsl(o)).toContain("xss[idx] = xsc[m * BPR + b0 + (idx % 2u)];");
+      // la via f32 legge invece le attivazioni dense
+      expect(prefillGemmQ41SplitKWgsl(o)).toContain(`const K4 = ${o.K / 4}u;`);
+      expect(prefillGemmQ41SplitKWgsl(o)).toContain("xs[idx] = x4[m * K4 + b0 * 8u + qi];");
+    });
+
+    it(`${tag}: griglia e parziali sono le stesse formule del q4_0`, () => {
+      expect(prefillGemmGrid(o)).toEqual([Math.ceil(o.N / 64), o.splits, 1]);
+      expect(prefillGemmGrid(o)).toEqual([40, 4, 1]);
+      expect(prefillPartialFloats(o)).toBe(o.splits * o.M * o.N);
+      expect(prefillPartialFloats(o)).toBe(4 * 16 * 2560);
+      // ...e sono NUMERICAMENTE quelle che il q4_0 darebbe sulla stessa shape:
+      // la geometria non cambia col formato, cambia solo l'aritmetica
+      const asQ40: PrefillGemmOpts = { ...o, kind: "q4_0" };
+      expect(prefillGemmGrid(o)).toEqual(prefillGemmGrid(asQ40));
+      expect(prefillPartialFloats(o)).toBe(prefillPartialFloats(asQ40));
+    });
+  }
 });
 
 describe("[b] ogni divergenza dal banco e' dichiarata in PREFILL_GEMM_PORT_DIFFS", () => {
@@ -261,6 +444,7 @@ describe("[b] ogni divergenza dal banco e' dichiarata in PREFILL_GEMM_PORT_DIFFS
   const ALL: { o: PrefillGemmOpts; ps: { name: string; bench: string; prod: string }[] }[] = [
     ...MEASURED.map((o) => ({ o, ps: pairs(o) })),
     ...MEASURED_Q5K.map((o) => ({ o, ps: q5kPairs(o) })),
+    ...MEASURED_Q41.map((o) => ({ o, ps: q41Pairs(o) })),
   ];
   for (const { o, ps } of ALL) {
     for (const { name, bench, prod } of ps) {
@@ -291,7 +475,7 @@ describe("[b] ogni divergenza dal banco e' dichiarata in PREFILL_GEMM_PORT_DIFFS
 
   // Il record VUOTO dice una cosa precisa: il port non ha riscritto niente.
   // Senza questa asserzione, "vuoto" sarebbe indistinguibile da "dimenticato".
-  it("record vuoto => i sei kernel sono byte-per-byte quelli del banco", () => {
+  it("record vuoto => gli otto kernel sono byte-per-byte quelli del banco", () => {
     if (Object.keys(PREFILL_GEMM_PORT_DIFFS).length !== 0) return;
     for (const { o, ps } of ALL) {
       for (const { name, bench, prod } of ps) {
@@ -511,6 +695,37 @@ describe("[d] workgroup storage: LETTO dal testo, non dedotto", () => {
       expect(prefillGemmWorkgroupStorageBytes(oo), `M=${M}`).toBeLessThanOrEqual(16384);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // [b]-storage Q4_1. La via intera tiene TRE array (`xs` M*16 u32, `xss` M*2
+  // f32, `xsum` M*2 f32) = 80·M B: sono gli stessi 72·M del q4_0 PIU' gli 8·M
+  // di `xsum`, il termine `m * Sigma(x)` che il q4_0 non ha perche' i suoi
+  // nibble sono centrati su zero. La via f32 e' identica al q4_0 (256·M B), e
+  // qui il peggiore torna a essere la f32 — al contrario del Q5_K.
+  // -------------------------------------------------------------------------
+  const q41 = MEASURED_Q41[0];
+
+  it("Q4_1: 1.280 B via intera e 4.096 B via f32 a M=16", () => {
+    expect(prefillGemmWorkgroupStorageBytes(q41, "idot")).toBe(1280);
+    expect(prefillGemmWorkgroupStorageBytes(q41, "f32")).toBe(4096);
+    expect(prefillGemmWorkgroupStorageBytes(q41)).toBe(4096); // il peggiore = la f32
+    // gli 8·M di scarto sulla via intera sono ESATTAMENTE `xsum`
+    expect(prefillGemmWorkgroupStorageBytes(q41, "idot")
+      - prefillGemmWorkgroupStorageBytes({ ...q41, kind: "q4_0", K: 2560 }, "idot")).toBe(16 * 2 * 4);
+  });
+
+  it("Q4_1: i due numeri sono quelli LETTI dal testo, e stanno sotto il tetto di spec", () => {
+    for (const M of [1, 8, 16, 32]) {
+      const oo: PrefillGemmOpts = { ...q41, M };
+      const idot = workgroupStorageBytes(prefillGemmQ41SplitKIdotWgsl(oo));
+      const f32 = workgroupStorageBytes(prefillGemmQ41SplitKWgsl(oo));
+      expect(prefillGemmWorkgroupStorageBytes(oo, "idot"), `M=${M}`).toBe(idot);
+      expect(prefillGemmWorkgroupStorageBytes(oo, "f32"), `M=${M}`).toBe(f32);
+      expect(prefillGemmWorkgroupStorageBytes(oo), `M=${M}`).toBe(Math.max(idot, f32));
+      expect(idot, `M=${M}`).toBeLessThanOrEqual(16384);
+      expect(f32, `M=${M}`).toBeLessThanOrEqual(16384);
+    }
+  });
 });
 
 describe("[e] griglie di dispatch", () => {
@@ -612,11 +827,12 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
     // fette, e quando le 4 misurate non dividono ripiega su 1 (vedi [e]).
   });
 
-  it("kind fuori dai due supportati -> throw che NOMINA il kind e i kind supportati", () => {
+  it("kind fuori dai tre supportati -> throw che NOMINA il kind e i kind supportati", () => {
     for (const kind of ["q8_0", "q4_K", "q6_K", "f32"]) {
       const k = { ...MEASURED[0], kind } as unknown as PrefillGemmOpts;
       for (const gen of [prefillGemmQ4SplitKIdotWgsl, prefillGemmQ4SplitKWgsl,
-        prefillGemmQ5KSplitKIdotWgsl, prefillGemmQ5KSplitKWgsl]) {
+        prefillGemmQ5KSplitKIdotWgsl, prefillGemmQ5KSplitKWgsl,
+        prefillGemmQ41SplitKIdotWgsl, prefillGemmQ41SplitKWgsl]) {
         // il kind RIFIUTATO e' nominato...
         expect(() => gen(k), kind).toThrow(new RegExp(kind));
         // ...e anche quelli supportati, cosi' il messaggio dice dove si puo' andare
@@ -644,12 +860,28 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
     expect(msg).not.toContain("4128");
   });
 
+  it("Q4_1: prima il FORMATO poi la GEOMETRIA, e il generatore non inventa", () => {
+    const q41 = MEASURED_Q41[0];
+    for (const gen of [prefillGemmQ41SplitKIdotWgsl, prefillGemmQ41SplitKWgsl]) {
+      // il q4_1 taglia K a BK = 2 blocchi da 32, come il q4_0: l'unita' e' 64
+      expect(() => gen({ ...q41, K: 9248 })).toThrow(/64/);
+      // 288 blocchi non si dividono in 7 fette da BK=2
+      expect(() => gen({ ...q41, splits: 7 })).toThrow(/fette/);
+    }
+    // e un kind non supportato viene rifiutato PRIMA della geometria
+    const k = { ...q41, kind: "q4_K", K: 9248 } as unknown as PrefillGemmOpts;
+    expect(() => prefillGemmQ41SplitKIdotWgsl(k)).toThrow(/q4_K/);
+    let msg = "";
+    try { prefillGemmQ41SplitKIdotWgsl(k); } catch (e) { msg = (e as Error).message; }
+    expect(msg).not.toContain("9248");
+  });
+
   it("il predicato sta in UNA sede sola: tutte le funzioni rifiutano allo stesso modo", () => {
-    // Sei generatori/funzioni, un solo `prefillGemmCheck`. Se una di queste
+    // Otto generatori/funzioni, un solo `prefillGemmCheck`. Se una di queste
     // avesse il suo predicato, un kind nuovo entrerebbe da una porta e non
     // dall'altra.
     const kinds: PrefillGemmKind[] = [...PREFILL_GEMM_KINDS];
-    expect(kinds.length).toBe(2);
+    expect(kinds.length).toBe(3);
     const k = { ...MEASURED[0], kind: "q6_K" } as unknown as PrefillGemmOpts;
     for (const f of [prefillGemmGrid, prefillPartialFloats, prefillGemmWorkgroupStorageBytes]) {
       expect(() => f(k)).toThrow(/q6_K/);

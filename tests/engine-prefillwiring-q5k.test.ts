@@ -279,15 +279,6 @@ function constObjOf(src: string, ident: string): Map<string, string> | null {
   return brace < 0 ? null : objAt(src, brace);
 }
 
-/** La condizione dell'`if (…)` che segue l'indice `from`. */
-function condAfter(src: string, from: number): string | null {
-  const iff = src.indexOf("if (", from);
-  if (iff < 0) return null;
-  const open = src.indexOf("(", iff);
-  const end = closeOf(src, open);
-  return end < 0 ? null : src.slice(open + 1, end);
-}
-
 /**
  * I DUE SITI che chiedono la rotta, con quello che ciascuno chiama K e N e col
  * formato del kernel che emette. Le asserzioni sotto girano su entrambi: la
@@ -299,7 +290,8 @@ const SITES = [
     name: "gemvB",
     body: (src: string) => helperBody(src, "gemvB"),
     K: "w.k", N: "w.n",
-    /** il kernel emesso qui e' `prefillGemmQ4SplitK*Wgsl` ⇒ il formato e' q4_0 */
+    /** DUE formati da riga 3: q4_0 e q4_1, ognuno col suo kernel e la sua guardia */
+    fmts: ["q4_0", "q4_1"],
     fmt: "q4_0",
     kernel: "prefillGemmQ4SplitKIdotWgsl",
   },
@@ -308,6 +300,7 @@ const SITES = [
     body: (src: string) => kquantBranch(src).body,
     K: "k", N: "n",
     /** il kernel emesso qui e' `prefillGemmQ5KSplitK*Wgsl` ⇒ il formato e' q5_K */
+    fmts: ["q5_K"],
     fmt: "q5_K",
     kernel: "prefillGemmQ5KSplitKIdotWgsl",
   },
@@ -420,15 +413,25 @@ describe("[a] `planPrefillGemm` sta in DUE posti: `gemvB` e il ramo K-quant di `
     // formato va letto, ma un commento che lo nomina non deve valere come
     // condizione (in questo file ce ne sono, ed e' il tranello dichiarato in
     // testa).
+    // UN SITO PUO' APRIRE PIU' DI UN RAMO VELOCE, e da riga 3 `gemvB` ne apre
+    // due (q4_0 e q4_1: formati diversi, kernel diversi, stessa geometria).
+    // Quindi non si guarda "il primo if dopo il piano" — si guardano TUTTI i
+    // rami che escludono la legacy, e si pretende che l'insieme dei formati
+    // guardati sia ESATTAMENTE quello dei formati che il sito emette. Cosi' un
+    // ramo aggiunto senza la sua guardia fa fallire questo test invece di
+    // passare inosservato dietro il primo.
     const body = site.body(uncommented(MODEL))!;
-    const plan = callsTo(body, "planPrefillGemm")[0];
-    const cond = condAfter(body, plan.at);
-    expect(cond, `${site.name}: nessun \`if\` dopo la chiamata al piano`).not.toBeNull();
     const kind = argObjOf(site.body(code(MODEL))!, "planPrefillGemm")!.get("kind")!;
-    expect(cond!, `${site.name}: la condizione deve escludere la rotta legacy`)
-      .toMatch(/!==\s*["']legacy["']/);
-    expect(cond!, `${site.name}: la condizione deve verificare che il formato sia ${site.fmt}`)
-      .toMatch(new RegExp(`${kind}\\s*===\\s*["']${site.fmt}["']`));
+    const conds = [...body.matchAll(/route\.via\s*!==\s*["']legacy["'][^{]*/g)].map((m) => m[0]);
+    expect(conds.length, `${site.name}: nessun ramo che escluda la legacy`)
+      .toBe(site.fmts.length);
+    const guarded = conds.map((c) => {
+      const m = c.match(new RegExp(`${kind}\\s*===\\s*["'](\\w+)["']`));
+      expect(m, `${site.name}: ramo senza guardia sul formato: "${c.trim()}"`).not.toBeNull();
+      return m![1];
+    });
+    expect([...guarded].sort(), `${site.name}: formati guardati`)
+      .toEqual([...site.fmts].sort());
   });
 
   it("il kind del ramo K-quant nomina TUTTI E TRE i formati, non solo quello veloce", () => {
@@ -501,10 +504,15 @@ describe("[b] il ramo K-quant emette la via veloce q5_K, e tiene il gemv come le
     // rifiuto di `prefillQuantXGrid` (K non multiplo di 64). La clausola (d) del
     // done-when vieta il `% 64 === 0` scritto a mano; questa vieta la griglia,
     // che e' la stessa soglia in forma di divisione.
+    // UNA COPPIA DI GRIGLIE PER RAMO VELOCE, non una per sito: da riga 3
+    // `gemvB` ha due rami (q4_0 e q4_1) e ognuno emette la propria
+    // quantizzazione delle attivazioni e la propria combine. Il conto atteso
+    // e' quindi `fmts.length` — se un ramo ne prendesse UNA sola, o se qualcuno
+    // ne aggiungesse una terza senza il suo ramo, questo test lo vede.
     const body = site.body(code(MODEL))!;
     expect(body, `${site.name}: griglia ri-derivata a mano`).not.toMatch(/Math\.ceil\s*\(/);
     for (const g of ["prefillQuantXGrid", "prefillCombineGrid"]) {
-      expect(hitsOf(body, g, "\\(").length, `${site.name}: ${g}(`).toBe(1);
+      expect(hitsOf(body, g, "\\(").length, `${site.name}: ${g}(`).toBe(site.fmts.length);
     }
   });
 
@@ -753,7 +761,10 @@ describe("[6f] CLAUSOLA (d): la copertura per CALL-SITE, con worklist ed eccezio
       .filter((x) => x.r.via === "legacy");
     expect([...new Set(legacy.map((x) => x.s.kind))].sort(),
       `i kind che restano legacy: ${legacy.map((x) => `${x.s.kind} ${x.s.K}x${x.s.N}`).join(", ")}`)
-      .toEqual(["q4_1", "q8_0"]);
+      // Dopo la riga 3 ne resta UNO: il Q8_0 (N=32, mezzo workgroup per
+      // dispatch, 0,204% dei byte — escluso coi numeri). Il q4_1 e' passato
+      // alla via veloce con la sua forma, misurata 22,57x.
+      .toEqual(["q8_0"]);
     for (const x of legacy) expect(x.r.reason.length, `${x.s.kind}`).toBeGreaterThanOrEqual(40);
   });
 
