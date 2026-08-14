@@ -9,8 +9,9 @@
 //   (b) moltiplicatore multi-riga a M = 1, 8, 16, 32 — forma attuale importata
 //       da src/engine/kernels/wgsl.ts contro pesi-in-registri / pesi-in-shared /
 //       split-K;
-//   (c) attenzione a chunk del prefill a ctx 388 e 6333 — legacy importato
-//       contro la famiglia streaming.
+//   (c) attenzione a chunk del prefill a ctx 388 e 6333 — il PRIMA (`legacy`,
+//       il kernel di ieri) contro il DOPO (`prod`, quello di produzione), piu'
+//       la famiglia streaming come record. La lista e' `prefillAttnVariants()`.
 // La sonda (d) — spazzata del tetto negoziabile — vive nel DRIVER: richiede
 // device distinti con `requiredLimits` espliciti, e src/ ha un punto unico di
 // creazione device che negozia (tests/gpudevice.test.ts lo impone).
@@ -44,7 +45,12 @@ import {
   gemmQ4MultiRowSplitKIdotWgsl,
   splitKCombineWgsl, workgroupStorageBytes, quantXQ8Wgsl,
 } from "./ttGemm";
-import { TT_ATTN_SHAPE, attnPrefillGrid, attnPrefillStreamWgsl } from "./ttAttn";
+// La lista dei bracci dell'attenzione NON vive piu' qui: `prefillAttnVariants()`
+// la tiene accanto ai kernel che la compongono (src/microbench/ttAttn.ts), dove
+// un test SENZA GPU puo' leggerla e verificare che il `legacy` sia davvero il
+// legacy e il `prod` davvero il kernel di produzione. Qui resta il BANCO —
+// buffer, gate di checksum, celle — che e' lo stesso per tutti i bracci.
+import { TT_ATTN_SHAPE, TT_ATTN_M, prefillAttnVariants } from "./ttAttn";
 
 /** Shape della sonda del picco: quadrata + la shape reale del prefill del 4B. */
 export const DENSE_SHAPES: Array<{ M: number; K: number; N: number; label: string }> = [
@@ -63,9 +69,14 @@ export const SPLIT_K = 4;
 export const DENSE_PASSES = 4;
 /** Copie dei pesi ruotate a ogni dispatch nella cella `coldw` (8 x 13,3 = 106 MB). */
 export const WEIGHT_COPIES = 8;
-/** Contesti su cui si misura l'attenzione a chunk (M = 16). */
+/**
+ * Contesti su cui si misura l'attenzione a chunk (M = 16): il corto e il lungo
+ * che AC2 pretende. 388 e' il prompt di conformita', 6333 il contesto pieno del
+ * 4B — ed e' li' che il `scores[ctxMax]` della baseline pesa davvero.
+ */
 export const ATTN_CTX = [388, 6333];
-export const ATTN_M = 16;
+/** Ri-esportata da ttAttn, dove la consumano le griglie dei bracci: stesso 16. */
+export const ATTN_M = TT_ATTN_M;
 
 interface Ck { sum: number; abs: number }
 
@@ -607,28 +618,11 @@ export async function runTtftProbeBench(
     const outBuf = device.createBuffer({ size: M * nHead * headDim * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const rowPastBuf = device.createBuffer({ size: M * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
 
-    const legacyCode = attnDecodeLegacyBatchWgsl({ nHead, nKvHead, headDim, ctxMax });
-    const attnSrcs: Array<{ id: string; code: string; grid: [number, number, number]; kvEmit: number; ctx: string }> = [
-      {
-        id: "legacy", code: legacyCode, grid: [nHead, M, 1], kvEmit: (nHead / nKvHead) * M,
-        ctx: `BASELINE importata da src/engine/kernels/wgsl.ts (attnDecodeLegacyBatchWgsl): scores[ctxMax=${ctxMax}] in workgroup memory, letture scalari, un workgroup per (head, riga) — la riga KV si rilegge una volta per ognuna delle ${nHead / nKvHead} head del gruppo GQA e una volta per ognuna delle ${M} righe. Era la forma di PRODUZIONE del prefill a chunk fino al task T1-kernel-batch-streaming; da li' in poi e' il fallback dichiarato, e resta il termine di paragone di questa sonda con lo stesso testo byte per byte.`,
-      },
-      {
-        id: "stream", code: attnPrefillStreamWgsl({ headsPerWg: 1, rowsPerWg: 1 }),
-        grid: attnPrefillGrid({ headsPerWg: 1, rowsPerWg: 1 }, M), kvEmit: (nHead / nKvHead) * M,
-        ctx: "softmax in STREAMING a tile di 64 posizioni (niente scores[ctxMax]: il workgroup storage diventa costante in ctxMax) + letture vec4. Un workgroup per (head, riga), come il legacy: isola l'effetto della sola softmax/vettorizzazione dal traffico.",
-      },
-      {
-        id: "gqa-stream", code: attnPrefillStreamWgsl({ headsPerWg: 4, rowsPerWg: 1 }),
-        grid: attnPrefillGrid({ headsPerWg: 4, rowsPerWg: 1 }, M), kvEmit: M,
-        ctx: "streaming + vec4 + KV letta UNA volta per gruppo GQA (un workgroup per (gruppo, riga)): il traffico KV scende di 4x rispetto al legacy.",
-      },
-      {
-        id: "gqa-rows2", code: attnPrefillStreamWgsl({ headsPerWg: 4, rowsPerWg: 2 }),
-        grid: attnPrefillGrid({ headsPerWg: 4, rowsPerWg: 2 }, M), kvEmit: M / 2,
-        ctx: "streaming + vec4 + fusione GQA + DUE righe del chunk per workgroup: la riga KV serve 4 head x 2 righe, cioe' 8 consumatori invece di 1. E' la leva specifica del prefill, che sul decode non esisteva.",
-      },
-    ];
+    // I bracci arrivano DALLA LISTA (src/microbench/ttAttn.ts): `legacy` per
+    // primo perche' e' la base del gate di checksum, `prod` subito dopo — sono
+    // il prima e il dopo di AC2, misurati nella stessa passata interleavata e
+    // scritti nello stesso JSON.
+    const attnSrcs = prefillAttnVariants();
 
     for (const n of ATTN_CTX) {
       device.queue.writeBuffer(rowPastBuf, 0, new Uint32Array(Array.from({ length: M }, (_, i) => n - M + i)));

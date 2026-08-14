@@ -15,14 +15,24 @@
 // il nome che dichiara cos'e' diventato: un fallback. Il cambio di nome NON e'
 // cosmetico: chiamare ancora `attnDecodeWgsl({ batch: true })` farebbe misurare
 // alla sonda streaming contro streaming, e il numero uscirebbe lo stesso — solo
-// falso. Lo tiene fermo tests/ttprobe.test.ts («il braccio `legacy` fabbrica
-// DAVVERO il legacy»), perche' questo file gira solo su GPU.
+// falso. Lo tiene fermo tests/ttattn-prefill-prodvslegacy.test.ts («la lista
+// dice il vero su se stessa»), perche' questo file gira solo su GPU.
 //
 // Qui vivono le candidate: softmax in STREAMING (workgroup storage costante in
 // ctxMax), letture vec4, KV letta UNA volta per gruppo GQA, e la fusione su piu'
 // RIGHE del chunk (che sul decode non esisteva: e' la leva specifica del
 // prefill, dove M righe guardano quasi la stessa KV). La vincitrice misurata e'
 // `headsPerWg: 1, rowsPerWg: 1` — la fusione GQA PEGGIORA (occupancy).
+//
+// E DA OGGI VIVE QUI ANCHE LA LISTA, `prefillAttnVariants()`: il runner la
+// consuma invece di tenerne una sua. Non e' un riordino estetico — e' cio' che
+// rende il PRIMA/DOPO di AC2 leggibile da un test senza GPU. I due bracci che
+// contano sono `legacy` (il kernel di ieri, che il prefill del 4B usava davvero)
+// e `prod` (il kernel di produzione di oggi, dopo T1-kernel-batch-streaming):
+// entrambi importati da src/engine/kernels/wgsl.ts, perche' un prima/dopo fatto
+// con due imitazioni locali non misura il motore, misura questo file.
+
+import { attnDecodeLegacyBatchWgsl, attnDecodeWgsl } from "../engine/kernels/wgsl";
 
 export const TT_ATTN_SHAPE = {
   nHead: 16,
@@ -31,6 +41,13 @@ export const TT_ATTN_SHAPE = {
   /** ctxMax del 4B: e' il numero che dimensiona `scores[ctxMax]` del legacy */
   ctxMax: 6400,
 } as const;
+
+/**
+ * Righe del chunk misurate dalla sonda. Vive QUI e non nel runner perche' le
+ * griglie dei bracci la contengono ([nHead, M, 1]): il runner la ri-esporta come
+ * `ATTN_M`, valore invariato, cosi' il 16 esiste in un posto solo.
+ */
+export const TT_ATTN_M = 16;
 
 const GROUPS = TT_ATTN_SHAPE.nHead / TT_ATTN_SHAPE.nKvHead;
 const HD4 = TT_ATTN_SHAPE.headDim / 4;
@@ -151,4 +168,68 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 export function attnPrefillGrid(o: PrefillAttnOpts, M: number): [number, number, number] {
   const x = o.headsPerWg === 4 ? TT_ATTN_SHAPE.nKvHead : TT_ATTN_SHAPE.nHead;
   return [x, 1, M / o.rowsPerWg];
+}
+
+/**
+ * LA LISTA CHE IL RUNNER MISURA — un solo posto, e quindi un solo prima/dopo.
+ *
+ * I due bracci di AC2:
+ *   `legacy` — `attnDecodeLegacyBatchWgsl`, il kernel che il prefill a chunk del
+ *     4B usava DAVVERO fino a T1-kernel-batch-streaming: `scores[ctxMax]` in
+ *     workgroup memory (4·ctxMax + 256 B, che cresce col contesto), letture
+ *     scalari, un workgroup per (head, riga). E' il PRIMA, e resta il fallback
+ *     dichiarato del motore: per questo si misura ancora.
+ *   `prod` — `attnDecodeWgsl({ batch: true })`, cioe' cio' che il motore compila
+ *     OGGI: softmax in streaming a tile di 64, letture vec4, workgroup storage
+ *     COSTANTE in ctxMax (1.536 B). E' il DOPO.
+ *
+ * I due si dispacciano sulla STESSA griglia [nHead, M, 1] e sugli STESSI
+ * binding ([q, kCache, vCache, outv, rowPast]): cio' che cambia fra le due celle
+ * dell'artefatto e' il kernel, non il banco.
+ *
+ * Le altre tre restano come RECORD MISURATO, non come candidate: `stream` e' la
+ * gemella-microbench di `prod` (stessa forma, codegen di questo file — se le due
+ * celle divergessero, la porta nel motore avrebbe perso qualcosa per strada), e
+ * `gqa-stream`/`gqa-rows2` sono la fusione GQA che la misura ha BOCCIATO (meno
+ * traffico KV, meno workgroup: sul device di riferimento vince il secondo
+ * effetto — docket item 21, cifre in results/microbench/ttft-riga1-*.json).
+ * Restano perche' un numero che ha deciso qualcosa si rimisura quando il banco
+ * cambia; non diventano `prod` per nessun motivo.
+ *
+ * Nota sulle stringhe `ctx`: finiscono NELL'ARTEFATTO come descrizione del
+ * braccio, quindi dicono cosa il kernel E' (forma, storage, traffico) e mai
+ * quanti ms ha fatto — un millisecondo scritto qui resterebbe congelato alla run
+ * che lo produsse. Lo tiene fermo tests/ttattn-prefill-prodvslegacy.test.ts.
+ */
+export function prefillAttnVariants(): Array<{
+  id: string; code: string; grid: [number, number, number]; kvEmit: number; ctx: string;
+}> {
+  const { nHead, nKvHead, ctxMax } = TT_ATTN_SHAPE;
+  const M = TT_ATTN_M;
+  const groups = nHead / nKvHead;
+  return [
+    {
+      id: "legacy", code: attnDecodeLegacyBatchWgsl(TT_ATTN_SHAPE), grid: [nHead, M, 1], kvEmit: groups * M,
+      ctx: `PRIMA (baseline) importata da src/engine/kernels/wgsl.ts (attnDecodeLegacyBatchWgsl): scores[ctxMax=${ctxMax}] in workgroup memory, letture scalari, un workgroup per (head, riga) — la riga KV si rilegge una volta per ognuna delle ${groups} head del gruppo GQA e una volta per ognuna delle ${M} righe. Era la forma di PRODUZIONE del prefill a chunk fino al task T1-kernel-batch-streaming; da li' in poi e' il fallback dichiarato, e resta il termine di paragone di questa sonda con lo stesso testo byte per byte.`,
+    },
+    {
+      id: "prod", code: attnDecodeWgsl({ ...TT_ATTN_SHAPE, batch: true }), grid: [nHead, M, 1], kvEmit: groups * M,
+      ctx: `DOPO (produzione) importata da src/engine/kernels/wgsl.ts (attnDecodeWgsl con batch: true): softmax in STREAMING a tile di 64 posizioni — niente scores[ctxMax], il workgroup storage e' 1.536 B COSTANTI in ctxMax — e letture vec4. Griglia e binding identici alla baseline: un workgroup per (head, riga), quindi il traffico KV EMESSO e' lo stesso (${groups} head del gruppo GQA x ${M} righe) e cio' che cambia e' solo il kernel.`,
+    },
+    {
+      id: "stream", code: attnPrefillStreamWgsl({ headsPerWg: 1, rowsPerWg: 1 }),
+      grid: attnPrefillGrid({ headsPerWg: 1, rowsPerWg: 1 }, M), kvEmit: groups * M,
+      ctx: "gemella-microbench del braccio `prod`: stessa forma (streaming + vec4, un workgroup per (head, riga)) ma generata da src/microbench/ttAttn.ts. Non e' una candidata — e' il controllo che la porta nel motore non abbia perso niente per strada: se questa cella e `prod` divergono, la differenza sta nel codegen del motore, non nella forma.",
+    },
+    {
+      id: "gqa-stream", code: attnPrefillStreamWgsl({ headsPerWg: 4, rowsPerWg: 1 }),
+      grid: attnPrefillGrid({ headsPerWg: 4, rowsPerWg: 1 }, M), kvEmit: M,
+      ctx: "streaming + vec4 + KV letta UNA volta per gruppo GQA (un workgroup per (gruppo, riga)): il traffico KV scende di 4x rispetto alla baseline. MISURATA E BOCCIATA (docket item 21): meno traffico, ma un quarto dei workgroup, e sul device di riferimento vince il secondo effetto. Resta come record.",
+    },
+    {
+      id: "gqa-rows2", code: attnPrefillStreamWgsl({ headsPerWg: 4, rowsPerWg: 2 }),
+      grid: attnPrefillGrid({ headsPerWg: 4, rowsPerWg: 2 }, M), kvEmit: M / 2,
+      ctx: "streaming + vec4 + fusione GQA + DUE righe del chunk per workgroup: la riga KV serve 4 head x 2 righe, cioe' 8 consumatori invece di 1. E' la leva specifica del prefill, che sul decode non esisteva — e che la misura ha bocciato con la stessa dinamica di `gqa-stream` (occupancy). Resta come record.",
+    },
+  ];
 }
