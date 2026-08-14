@@ -381,3 +381,45 @@ dove il lavoro e' la riga 2.
 
 Prossima: riga 3 — il Q4_1. Piu' corta della 2: `ffn_down` passa da `gemvB`,
 che la rotta al piano la chiede gia'.
+
+## it.5 — riga 3: il Q4_1 e' cablato, la conformita' e' in coda (2026-08-15)
+
+Il workflow si e' fermato al **primo wave con la suite rossa**, e ha fatto bene:
+aveva messo i kernel q4_1 e allargato `PREFILL_GEMM_KINDS`, e **cinque
+asserzioni in altri file** codificavano ancora il mondo precedente (q4_1 =
+legacy). Non ha riscritto test che non erano suoi — che e' la regola giusta.
+
+**LA GUARDIA DELLA RIGA 2 HA PAGATO, ed e' il reperto di questa iterazione.**
+Nel momento in cui il piano ha accettato il q4_1 ma `gemvB` non emetteva ancora
+i suoi kernel, la doppia condizione `route.via !== "legacy" && kk === "q4_0"` ha
+fatto **ricadere quei tensori sulla legacy** invece di leggerli col kernel del
+q4_0 — nibble senza offset, scale con passo sbagliato: logit storti, nessun
+errore WebGPU, nessuna eccezione. La guardia era stata scritta come cintura
+teorica; ha intercettato il caso vero dopo un giorno.
+
+**Completato a mano:**
+- il sito q4_1 in `gemvB`, **esplicito e non un ternario**. Avevo scritto la
+  versione col ternario e il gate strutturale l'ha bocciata: quel test legge il
+  SORGENTE per verificare che il kernel sia emesso con gli stessi `opts` con cui
+  si e' chiesta la rotta, e dietro una variabile la catena non e' piu' leggibile
+  — il gate diventerebbe cieco proprio sulla proprieta' che esiste per
+  difendere. Sei righe in piu' valgono un controllo che resta meccanico;
+- la **categoria di misura propria** per i quattro siti (`gemm:ffn-down-q41`):
+  e' cio' che il verificatore aveva chiesto in it.1, e va fatto PRIMA della
+  misura di chiusura o il prima/dopo non e' confrontabile;
+- le cinque asserzioni aggiornate alla verita' nuova, ognuna con la ragione
+  scritta accanto invece che cambiata in silenzio.
+
+**Copertura: 10,9376x → 15,5247x** sull'inventario per-layer INTERO a M=16.
+**200/248 siti = 99,796% dei byte.** Resta legacy un solo kind: i 48 siti Q8_0
+con N=32, esclusi coi numeri dal contratto (0,204%).
+
+**Gate**: `npx tsc --noEmit` pulito · `npx vitest run` **791 passed | 10
+skipped**.
+
+**RIGA 3 NON CHIUSA, e lo dichiaro**: mancano i due casi ktest del q4_1 e il
+loro floor test — cioe' l'unica parte che nessun test di aritmetica puo'
+dedurre (il kernel gira davvero e da' i numeri giusti su una GPU vera?). Coda
+affidata a un workflow con spec propria
+(`docs/engine/kquant-riga3-coda-spec.md`), che e' una gemellazione del caso
+q5_K e non un progetto nuovo.
