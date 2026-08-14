@@ -758,3 +758,53 @@ proprietà che interessa al prodotto — ma NON la eseguo prima del ruling, perc
 riscrivere il criterio di un gate mentre lo si sta violando è precisamente la
 mossa che un gate esiste per impedire. Fino ad allora la riga 2 resta con la
 clausola (e) **aperta e dichiarata rotta**, non spuntata.
+
+## item 23 — il conductor REGGE dopo il riavvio, e i due task bloccati dicono due difetti diversi (io, it.18)
+
+**PRIMA COSA, perché ribalta una conclusione scritta tre volte**: il veicolo
+`sdd-conductor` ha **completato** (`wf_991df002-d1d`, 3 ondate, 16 agenti,
+2h17m, 0 errori di agente). Gli item 15, 16, 17 e 18 concludevano che «il
+veicolo non chiude un task di questa classe qui». **Era una diagnosi sbagliata
+di una causa infrastrutturale**: le 5 morti erano il segnale 144 al confine di
+turno, la stessa cosa che uccideva ktest sani e tre server di sviluppo. Il
+riavvio l'ha tolta. Gli item 15/17/18 vanno letti come storia, non come regola.
+
+**T1 e T3: fatti, integrati, verdi.** T1 ha prodotto il 2,72× sulla baseline.
+
+**T2 (`conformita-tolleranza-dichiarata`) BLOCKED — due bloccanti indipendenti,
+e solo il secondo è colpa del piano.**
+
+1. **Difetto di canale, non di piano.** La patch è arrivata strutturalmente
+   monca: l'hunk `@@ -2983,7 +3028,16 @@` su `ktest.worker.ts` dichiara 7 righe
+   old / 16 new e ne consegna 6 / 15 — manca l'ultima riga di contesto (la
+   graffa di chiusura). `git apply --check` esce 128 con «corrupt patch at
+   line 154». L'integrator lo ha misurato invece di dedurlo: la trascrizione
+   fedele fa 25.658 caratteri contro i 25.664 dichiarati nel brief, cioè
+   **6 caratteri**, l'ordine di grandezza esatto della riga mancante. È la
+   stessa famiglia del troncamento a 16 KB già corretto alla fonte, e va
+   segnalata alla sessione harness.
+2. **OWNERSHIP SOVRAPPOSTA FRA DUE TASK DELLA STESSA ONDATA — questo sì è un
+   difetto del piano, ed è quello da ricordare.** T1 e T2 scrivevano
+   **lo stesso blocco** di `ktest.worker.ts` con soglie **diverse**: T1 rel 1e-4
+   / abs 1e-5 locali, giustificate da simulazione f32; T2 rel 5e-4 / abs 1e-4
+   importate da un modulo nuovo `src/engine/attnchunktol.ts`. Il contratto §4
+   pretende `owns` disgiunti e li ha validati in codice, ma la disgiunzione è
+   **per file**, e due task possono possedere regioni diverse dello stesso file
+   solo finché non si scoprono a scrivere la stessa. T1 è arrivato primo e ha
+   vinto; T2 non applica più perché il contesto che cerca non esiste.
+
+**Conseguenza sostanziale, da non nascondere dietro il BLOCKED**: la tolleranza
+oggi vive come **due costanti locali** in `ktest.worker.ts:2987`, non in una
+sede unica. L'AC3 chiedeva «dichiarata PRIMA, con la ragione numerica scritta»,
+e T1 la soddisfa (dichiarata prima, ragione in loco, banda nel `note` del
+banco). **Non** soddisfa il principio del progetto «una soglia, un posto», che è
+esattamente il difetto che è costato la riga 2. Il modulo `attnchunktol.ts` di
+T2 è la forma giusta e **non esiste in albero**.
+
+**T4 (`assemblatore-e-copertura`) BLOCKED per dipendenza a monte**, non per un
+suo difetto. È la clausola (d)/AC6: la copertura dei call-site con worklist.
+
+**Nessuno dei due si ripara rilanciando il conductor**: T2 va rifatto a mano
+sopra il codice di T1 (spostare le due costanti in `attnchunktol.ts` e importarle
+nei due consumatori), T4 è un censimento che ho già fatto in it.17 e che va solo
+scritto.

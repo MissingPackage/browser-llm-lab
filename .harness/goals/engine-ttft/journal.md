@@ -931,3 +931,74 @@ GEMM quantizzati del prefill e chiede la rotta a `planPrefillGemm`. Eccezioni
 motivate: `gemvF32Wgsl` (`q35gpumodel.ts:448` e `960`, pesi f32) e i K-quant
 (`468-469`), fuori dalla via veloce perché è q4_0-only per costruzione. Coerente
 col 172/248 siti = 88,46% dei byte già pinnato nel test `[6c]`.
+
+---
+
+## it.18 (2026-08-14) — il conductor regge, la riga 3 rende 2,72×, e il loop non è più eseguibile su questa macchina
+
+**IL NUMERO.** TTFT a caldo **87.618 → 32.265 ms = 2,72× sulla baseline**.
+Barra del contratto 21.905 ⇒ **manca 1,47×**. Il prefill è passato da 72,30 a
+**196,41 tok/s**. Verificato da me su questo albero, non ereditato: tsc pulito ·
+vitest **671 passed | 10 skipped** (erano 645) · ktest **101 PASS / 0 FAIL**
+(era 100: +1, il banco dell'attenzione in streaming con la tolleranza
+dichiarata) · decode 47,89 tok/s a ctx 6333 (−0,2%, in banda).
+
+**IL CONDUCTOR HA COMPLETATO** — 3 ondate, 16 agenti, 2h17m, zero errori di
+agente. Gli item 15/16/17/18 concludevano, con crescente sicurezza, che «il
+veicolo non chiude un task di questa classe qui». **Era una diagnosi sbagliata
+di una causa infrastrutturale.** Le 5 morti erano il segnale 144 al confine di
+turno — la stessa cosa che uccideva ktest sani e tre server. Il riavvio l'ha
+tolta, e il veicolo ha chiuso al primo tentativo. Registrato a item 23.
+
+**T2 e T4 BLOCKED, e i due bloccanti dicono cose diverse** (item 23). Il primo è
+un difetto di canale: la patch è arrivata monca di una riga di contesto, e
+l'integrator l'ha *misurato* — 25.658 caratteri contro i 25.664 dichiarati, cioè
+6, l'ordine di grandezza esatto della riga mancante. Il secondo è un difetto del
+piano, ed è quello da ricordare: **T1 e T2 possedevano lo stesso blocco di
+`ktest.worker.ts` nella stessa ondata**, con soglie diverse. `owns` disgiunti
+valida **per file**; due task possono possedere regioni diverse dello stesso
+file finché non si scoprono a scrivere la stessa. T1 è arrivato primo.
+Conseguenza sostanziale da non nascondere dietro il BLOCKED: la tolleranza vive
+come due costanti locali, non in una sede unica — il principio «una soglia, un
+posto» è violato, ed è lo stesso difetto che è costato la riga 2.
+
+**IL MIO ERRORE DI IT.16, attribuito dal duplicato e confermato da me.** Avevo
+segnato «(e) `q35-prefillchunk-4b` bit per bit ✓» **leggendolo dalla prosa di
+PHASES invece di eseguirlo**. Il gate era rotto da due iterazioni: la via intera
+di it.15 quantizza le attivazioni a int8 e la bit-identità è caduta lì. Nessuno
+se n'era accorto perché il gate si attiva con `--prefill-m` **senza**
+`--prompt-idx`, e tutte le run di it.14-16 passavano `--prompt-idx 0`. È la
+landmine «i JSON possono mentire in silenzio», e qui il silenzio era il mio.
+Item 22, al PI.
+
+**QUATTRO SESSIONI FANTASMA IN TRE ORE, E LA QUARTA ERO IO.** Cronologia dal log
+del watchdog e dal reflog:
+
+    00:01:34  rianimata 0348f2c0 (loop chiuso apposta) — miccia: loop-state.json
+              versionato, riscritto da un mio `git checkout`
+    00:56:05  duplicata ae3ad6a9 (la MIA sessione) — miccia: transcript fermo
+              perché aspettavo un workflow in background
+    02:03:28  duplicata di nuovo ae3ad6a9 — stessa miccia, nonostante avessi
+              allungato il risveglio a 60 minuti apposta
+
+**La mitigazione non funziona, e ora so perché.** Il watchdog usa il silenzio
+del transcript come test di morte. Una sessione che aspetta un workflow è
+silenziosa per costruzione: il workflow non scrive sul transcript di chi l'ha
+lanciato. Quindi **più il lavoro dura, più è certo che venga duplicato**. E il
+ramo `headless_dead` salta del tutto il controllo «transcript fresco ⇒ sta
+lavorando», che è l'unica difesa prevista. Allungare il risveglio sposta
+l'istante, non toglie la condizione.
+
+**Perché fermo il loop invece di schedulare.** Non è prudenza: schedulare un
+risveglio È l'azione che arma la duplicazione successiva. I duplicati hanno
+lavorato bene — l'integrazione di it.17 è pulita e l'attribuzione del gate rotto
+è fatta con un esperimento, non a naso — ma sono fuori dal mio controllo, non
+posso verificarli mentre corrono, e lavorano sullo stesso albero e sulla stessa
+GPU. Due delle tre condizioni di stop del protocollo sono soddisfatte: il
+residuo del goal richiede un ruling (item 22 blocca la riga 5), e l'ambiente
+rende l'iterazione non eseguibile in sicurezza.
+
+**Cosa resta, per chi riprende**: la tolleranza da spostare in
+`attnchunktol.ts` (T2 a mano sopra il codice di T1), la clausola (d) della riga
+2 da scrivere (censimento già fatto in it.17), le righe 4, 5, 6. E il ruling
+sull'item 22, senza il quale la riga 5 non può dichiarare i ratchet intatti.
