@@ -837,3 +837,54 @@ meccanismo che la fa finire. Forma meccanica applicata in it.20:
    intero lo ha, quello f32 no): senza, sarebbe un test che passa comunque.
 
 **Item 22 CHIUSO.** Il debito non è chiuso: è armato.
+
+## item 24 — il criterio di transizione NON passa, e il margine dice perché (io → PI, it.20)
+
+**MISURATO col criterio nuovo** (`results/engine/q35-prefillchunk-4b-it20-margine-2026-08-14.json`):
+
+    argmaxSame 63 / 64        maxAbs 2,3839   maxRel 2,0000
+    bitEqual   31 / 15.892.480
+
+**Il disaccordo è UNO, ed è al chunk 0:**
+
+    seqTok 11 · chunkTok 248046
+    seqTop2Gap  0,0179     il sequenziale preferiva il proprio vincitore di 0,018
+    swapMargin  0,0179     identico ⇒ il vincitore del chunk ERA il suo secondo
+    chunkTop2Gap 0,0814
+
+**LA TENTAZIONE ERA DICHIARARLO PAREGGIO, E I NUMERI NON LO CONSENTONO.**
+La casa ha già l'idioma giusto per i quasi-pareggi — il banco
+`router-top4-near-tie` conta i flip solo sopra una separazione dichiarata di
+**1e-5**. Applicando quella soglia, che è pre-esistente e non scelta da me su
+questi dati, il flip **conta lo stesso**: 0,0179 è **1.800×** la soglia di casa.
+Non è un pareggio, è un disaccordo con margine piccolo ma reale.
+
+**E il rapporto fra i due numeri è la cosa che conta davvero.** La
+quantizzazione int8 delle attivazioni perturba i logit fino a **2,38**, mentre
+il distacco fra primo e secondo qui è **0,018**: la perturbazione è ~130× il
+margine. In quel regime **qualunque** posizione con distacco sotto ~2,4 può
+ribaltarsi, e che 63 chunk su 64 abbiano tenuto dice più sulla distribuzione dei
+distacchi che sulla robustezza del kernel. Il campione è 64 chunk — e la
+landmine di questo progetto sul campione da 22 posizioni avverte esattamente di
+non concludere da un conteggio così.
+
+**NON DICHIARO IO LA SOGLIA.** Ho già visto il numero: sceglierla adesso sarebbe
+il difetto che l'AC3 della riga 3 esiste per impedire («dichiarare la tolleranza
+DOPO aver visto il numero»). E una soglia di gate è materia del PI.
+
+**Le opzioni, con la mia raccomandazione per prima:**
+
+(a) **Accettare 63/64 come stato di transizione dichiarato**, col margine nel
+    report, e trattare l'argmax come sorvegliato-non-vincolante finché la
+    migrazione a intero non è completa — che è il momento in cui il ruling
+    riaccende la bit-identità. È coerente con lo spirito del ruling: la fase di
+    transizione ha una correttezza più debole, dichiarata, e con la data di
+    scadenza già scritta nel test che suona da solo.
+(b) **Alzare l'asticella**: zero flip, e allora il gate è ROSSO oggi e la via
+    intera non è mergiabile com'è. Costa 1,745× sul moltiplicatore.
+(c) **Misurare prima di decidere**: rigirare il gate su più prompt (oggi è un
+    prompt, 64 chunk) per sapere se 63/64 è tipico o fortunato. È l'unica
+    opzione che aggiunge informazione invece di scegliere una soglia, e costa
+    una run.
+
+**RULING:** _

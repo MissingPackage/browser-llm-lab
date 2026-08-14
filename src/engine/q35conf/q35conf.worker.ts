@@ -369,8 +369,18 @@ async function main(cfg: Cfg): Promise<void> {
     // come informazione: `bitIdentical` continua a comparire nel report, e il
     // giorno in cui torna vera lo si vede senza rifare niente.
     let argmaxSame = 0;
+    // I DISACCORDI SI GUARDANO COL MARGINE, NON COL CONTEGGIO (landmine di
+    // HANDOFF: «un campione da 22 posizioni non distingue niente — guarda rango
+    // e log-prob, stessa informazione a varianza molto piu' bassa»). Un argmax
+    // diverso su un TESTA A TESTA fra due token separati da 1e-3 e' rumore che
+    // cade da una parte; lo stesso disaccordo con un margine largo e' un
+    // difetto. Senza questo dato il gate direbbe solo «63/64» e non si saprebbe
+    // quale dei due.
+    const argmaxDiffs: { chunk: number; seqTok: number; chunkTok: number;
+      seqTop2Gap: number; chunkTop2Gap: number; swapMargin: number }[] = [];
     for (let c = 0; c < nChunk; c++) {
-      let aBest = -Infinity, aArg = -1, bBest = -Infinity, bArg = -1;
+      let aBest = -Infinity, aArg = -1, aSecond = -Infinity;
+      let bBest = -Infinity, bArg = -1, bSecond = -Infinity;
       for (let i = 0; i < shape.vocab; i++) {
         const a = seqLogits[c][i], b = chunkLogits[c][i];
         cmp++;
@@ -381,10 +391,23 @@ async function main(cfg: Cfg): Promise<void> {
           const den = Math.max(Math.abs(a), Math.abs(b));
           if (den > 0) maxRel = Math.max(maxRel, d / den);
         }
-        if (a > aBest) { aBest = a; aArg = i; }
-        if (b > bBest) { bBest = b; bArg = i; }
+        if (a > aBest) { aSecond = aBest; aBest = a; aArg = i; } else if (a > aSecond) aSecond = a;
+        if (b > bBest) { bSecond = bBest; bBest = b; bArg = i; } else if (b > bSecond) bSecond = b;
       }
       if (aArg === bArg) argmaxSame++;
+      else {
+        argmaxDiffs.push({
+          chunk: c, seqTok: aArg, chunkTok: bArg,
+          // quanto il vincitore batte il secondo, su ciascun braccio: se
+          // entrambi i margini sono minuscoli, i due token erano appaiati e il
+          // disaccordo e' una moneta che cade
+          seqTop2Gap: aBest - aSecond, chunkTop2Gap: bBest - bSecond,
+          // di quanto il sequenziale preferiva il PROPRIO vincitore a quello
+          // scelto dal chunk: e' la distanza che la quantizzazione ha dovuto
+          // colmare per ribaltare la scelta
+          swapMargin: aBest - seqLogits[c][bArg],
+        });
+      }
     }
     // Il PRIMO chunk si scarta (docket item 10: il primo passaggio dopo il load
     // paga compilazione e prime allocazioni). Con due soli campioni la mediana
@@ -416,6 +439,7 @@ async function main(cfg: Cfg): Promise<void> {
           argmaxSame, chunks: nChunk, argmaxIdentical: argmaxSame === nChunk,
           // LA MISURA che il criterio di domani riprendera' in mano
           bitEqual, compared: cmp, bitIdentical: bitEqual === cmp, maxAbs, maxRel,
+          argmaxDiffs,
           criterion: "argmax",
           bitIdentitySuspendedBy: "it.15 — prefillQuantXQ8Wgsl, attivazioni int8 sul solo ramo a chunk",
           bitIdentityReturnsWhen: "il percorso sequenziale (`step`) passa anch'esso sulla via intera",
