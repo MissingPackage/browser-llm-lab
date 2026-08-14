@@ -295,6 +295,14 @@ GLM-4.7-Flash resta residency-bound
 - **Leggere i parametri di un runner prima di spenderci sopra minuti di GPU.**
   Due volte in una sessione ho lanciato run con flag sbagliati dedotti invece
   che letti.
+- **`q35-bench-run.mjs --prefill-m` NON attiva il gate di conformità: misura la
+  velocità.** Quel runner passa SEMPRE `?bench=`, e la pagina prende il ramo
+  bench prima di arrivare al gate. Il gate del prefill a chunk lo lancia
+  **`q35-conf-run.mjs --prefill-m 16`**. Ci sono cascato in it.20 e ho prodotto
+  un JSON il cui NOME diceva `q35-prefillchunk` e il cui `kind` era
+  `q35-bench-4b-fullresident` sul prompt-idx 4 — cioè le due landmine qui sopra
+  sommate. Rimosso in `9c04728`. **Prima di credere a un artefatto, leggi il suo
+  `kind`, non il suo nome di file.**
 - **UN `git checkout` DI UN RAMO VECCHIO PUÒ FAR NASCERE UN AGENTE FANTASMA nel
   tuo working tree.** Successo il 2026-08-14, ricostruito dal reflog e dal log
   del watchdog: alle 00:00:51 il checkout di
