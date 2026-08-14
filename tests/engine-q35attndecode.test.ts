@@ -6,6 +6,7 @@ import {
   attnDecodeLegacyBatchWgsl,
 } from "../src/engine/kernels/wgsl";
 import { q35AttnSplitPlan } from "../src/engine/q35attnsplit";
+import { ATTN_CHUNK_REL_TOL, ATTN_CHUNK_ABS_TOL } from "../src/engine/attnchunktol";
 
 interface LegacyShape { nHead: number; nKvHead: number; headDim: number; ctxMax: number }
 interface LegacyCase { opts: LegacyShape; batch: string; ref: string; batchStream: string }
@@ -305,11 +306,27 @@ describe("ktest `dense-batch-attn-chunk`: confronto a tolleranza e almeno due ti
       .not.toMatch(/bitCmp\(\s*["'`]dense-batch-attn-chunk/);
   });
 
-  it("la tolleranza e' DICHIARATA, non implicita in una costante sparsa nel corpo", () => {
-    const tols = [...bank.matchAll(/ATTN_CHUNK_(REL|ABS)_TOL\s*=\s*([\d.e+-]+)/g)];
-    expect(tols.map((m) => m[1]).sort(), "ATTN_CHUNK_REL_TOL e ATTN_CHUNK_ABS_TOL").toEqual(["ABS", "REL"]);
-    for (const t of tols) expect(Number(t[2]), `${t[1]} plausibile per f32`).toBeLessThan(1e-3);
+  it("la tolleranza e' DICHIARATA in una sede unica, e da li' ARRIVA al comparatore", () => {
+    // Prima questo controllo leggeva i due numeri dal SORGENTE del banco con una
+    // regex. Era piu' debole di quanto sembrasse: verificava che nel testo ci
+    // fosse una costante, non che il banco usasse QUELLA. Ora i valori arrivano
+    // dall'import — se qualcuno ne scrive una copia locale, il `not.toMatch`
+    // qui sotto lo vede.
+    expect(ATTN_CHUNK_REL_TOL, "banda relativa: >= 2,5x il caso peggiore simulato (4,26e-6), sotto un bug strutturale")
+      .toBeLessThan(1e-3);
+    expect(ATTN_CHUNK_ABS_TOL, "banda assoluta: per le componenti vicine a zero").toBeLessThan(1e-3);
+    expect(ATTN_CHUNK_REL_TOL).toBeGreaterThan(4.26e-6);
+    expect(ATTN_CHUNK_ABS_TOL).toBeGreaterThan(2.98e-8);
+
     expect(bank, "le due tolleranze devono ARRIVARE al comparatore").toMatch(/ATTN_CHUNK_REL_TOL,\s*ATTN_CHUNK_ABS_TOL/);
+    expect(bank, "e NON essere ridichiarate in loco: una soglia, un posto (docket item 23)")
+      .not.toMatch(/const\s+ATTN_CHUNK_(REL|ABS)_TOL\s*=/);
+  });
+
+  it("la sede unica e' importata dal worker, non ricopiata", () => {
+    const KTALL = readFileSync(join(process.cwd(), "src/engine/ktest/ktest.worker.ts"), "utf8");
+    expect(KTALL, "import da ../attnchunktol").toMatch(
+      /import\s*\{[^}]*ATTN_CHUNK_REL_TOL[^}]*ATTN_CHUNK_ABS_TOL[^}]*\}\s*from\s*["'`]\.\.\/attnchunktol["'`]/);
   });
 
   it("copre il rescale online FRA tile: almeno un caso con n > 64", () => {

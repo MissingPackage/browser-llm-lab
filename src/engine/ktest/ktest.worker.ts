@@ -18,6 +18,7 @@ import {
 import { MLA_CHUNK_P, mlaSMax, mlaPartialsLen } from "../mlasplit";
 import { q35AttnSplitPlan, q35AttnPartialsFloats } from "../q35attnsplit";
 import { KQUANT_FAST_Q5K_PAIR_REL_TOL, KQUANT_FAST_Q6K_REL_TOL } from "../kquantfast";
+import { ATTN_CHUNK_REL_TOL, ATTN_CHUNK_ABS_TOL } from "../attnchunktol";
 import { createGlmLayer0 } from "../glmforward";
 import {
   GlmDenseLayerRefF64, GlmMoeLayerRefF64, glmMoeFfnRefF64, type GlmMoeExpertWeights,
@@ -2973,18 +2974,12 @@ async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
     // legacy NON e' un errore: e' la definizione della forma nuova. Pretendere
     // `Object.is` qui sarebbe un gate rosso a prescindere dalla correttezza.
     //
-    // La banda NON e' un numero scelto a occhio: i due kernel sono stati
-    // simulati in f32 fedele (ogni operazione via `Math.fround`, 64 thread in
-    // lock-step) sugli STESSI due casi qui sotto, e la divergenza misurata e'
-    //   un tile   (n = 10..12):  max assoluto 2,98e-8, max relativo 4,26e-6
-    //   cinque tile (n = 301..303): max assoluto 1,68e-8, max relativo 3,95e-5
-    // La banda relativa sta 2,5x sopra il caso peggiore misurato, quella
-    // assoluta ~600x: stretta abbastanza da vedere un indice sbagliato o un tile
-    // perso, larga abbastanza da assorbire la fma della GPU vera (la simulazione
-    // e' su CPU e non la modella). `compare` passa se UNA delle due bande regge,
-    // e quella assoluta e' li' per le componenti vicine a zero, dove il relativo
-    // esplode senza significare niente.
-    const ATTN_CHUNK_REL_TOL = 1e-4, ATTN_CHUNK_ABS_TOL = 1e-5;
+    // La banda NON e' un numero scelto a occhio, e NON vive qui: sta in
+    // `../attnchunktol` con la sua derivazione per esteso (simulazione f32
+    // fedele in lock-step sugli STESSI due casi qui sotto). Una soglia, un
+    // posto — stessa forma di `KQUANT_FAST_Q5K_PAIR_REL_TOL`. Averla avuta
+    // locale qui e' stato il residuo del task T2 rimasto BLOCKED, docket
+    // item 23.
     // DUE casi, e il secondo non e' un lusso. Il tile e' da 64 posizioni: col
     // solo caso corto (n = 10..12) il ciclo fa UN giro, `rs` vale 0 per
     // costruzione (il massimo parte da -3e38) e il rescale online fra tile — che
