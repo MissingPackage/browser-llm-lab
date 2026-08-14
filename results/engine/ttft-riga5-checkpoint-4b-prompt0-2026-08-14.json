@@ -1,0 +1,56 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-bench-4b-fullresident",
+ "date": "2026-08-14",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "modelSha256": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
+ "declared": "orchestratore correttezza-prima; sui densi decode BATCHED (fase D fase 3: argmax su GPU, K=32 token/submit, un readback ogni K); sul MoE ancora un readback del router per layer",
+ "prompt": {
+  "idx": 0,
+  "file": "/home/neuromancer/Projects/browser-llm-lab/tools/oracle-moe/corpus/01-code-ts-review.txt",
+  "tokens": 6333
+ },
+ "loadMs": 10081,
+ "prefillPath": "chunked M=16 (395 chunk + coda 12 via step)",
+ "prefill": {
+  "tokens": 6332,
+  "ms": 32101,
+  "tokS": 197.25306724316636
+ },
+ "decode": {
+  "n": 64,
+  "msPerTokenP50": 20.770000003278255,
+  "tokS": 48.14636494184708,
+  "firstMs": 26
+ },
+ "ttftMs": 42207,
+ "dispatchesPerToken": 570,
+ "moe": null,
+ "decodeContext": {
+  "startPositions": 6333,
+  "endPositions": 6397,
+  "note": "ms/token cresce ~10,4 us per posizione (it.59): confrontare solo a contesto dichiarato"
+ },
+ "arenaGiB": null,
+ "vramTierGiB": 8,
+ "gpuErrors": [],
+ "hostState": {
+  "declared": "quiescent",
+  "before": {
+   "temperatureC": 34,
+   "smClockMHz": 210,
+   "powerW": 588.21,
+   "memUsedMiB": 627,
+   "utilizationPct": 0,
+   "throttleReasons": "0x0000000000000001"
+  },
+  "after": {
+   "temperatureC": 45,
+   "smClockMHz": 2265,
+   "powerW": 94.97,
+   "memUsedMiB": 635,
+   "utilizationPct": 69,
+   "throttleReasons": "0x0000000000000004"
+  }
+ }
+}

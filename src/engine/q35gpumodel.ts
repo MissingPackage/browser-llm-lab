@@ -279,6 +279,15 @@ export interface Q35GpuModel {
     dispatches: number; workgroupsTotal: number; sm: null;
     byCat: Record<string, { dispatches: number; workgroups: number; wgMin: number; wgMax: number }>;
   } | null;
+  /**
+   * TEMPO GPU DEL PREFILL PER SEGMENTO (riga 5), accumulato sui chunk gia'
+   * eseguiti. `null` se la sonda non e' accesa (`telemetryGpu`) o se il device
+   * non espone `timestamp-query`. Chi lo legge deve sapere che la sonda
+   * PERTURBA: un pass per segmento invece di uno solo aggiunge barriere.
+   */
+  prefillGpuTime: (() => {
+    chunks: number; overflow: number; byCat: Record<string, { ms: number; passes: number }>;
+  }) | null;
   /** DEBUG (it.17): dopo step(), hidden x a valle del layer indicato (solo MoE). */
   readTap(layer: number): Promise<Float32Array>;
   /** Esito dell'OMBRA del router GPU; `null` se non è stata accesa. */
@@ -2000,6 +2009,15 @@ export async function createQ35GpuModel(
   const TSQ_PASSES = 512;
   let tsqOverflow = 0;
   const canGpuTs = opts.telemetryGpu === true && device.features.has("timestamp-query");
+  /**
+   * SONDA DEL PREFILL PER SEGMENTO (riga 5). Stesso `tsqSet` della sonda del
+   * decode: i due path non girano mai nello stesso submit, quindi condividere
+   * il query set non li fa interferire e non raddoppia le risorse.
+   */
+  const pbTsOn = canGpuTs && PB !== null;
+  let pbTsIdx = 0, pbTsOverflow = 0, pbTsChunks = 0;
+  const pbTsCats: string[] = [];
+  const pbTsAcc: Record<string, { ms: number; passes: number }> = {};
   const tsqSet = canGpuTs ? device.createQuerySet({ type: "timestamp", count: TSQ_PASSES * 2 }) : null;
   const tsqResolve = canGpuTs
     ? device.createBuffer({ size: TSQ_PASSES * 2 * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC })
@@ -2478,6 +2496,9 @@ export async function createQ35GpuModel(
      *
      * `null` se il piano a chunk non esiste (M_MAX = 0).
      */
+    prefillGpuTime: pbTsOn
+      ? () => ({ chunks: pbTsChunks, overflow: pbTsOverflow, byCat: pbTsAcc })
+      : null,
     prefillPlanInventory(): {
       dispatches: number; workgroupsTotal: number; sm: null;
       byCat: Record<string, { dispatches: number; workgroups: number; wgMin: number; wgMax: number }>;
@@ -2539,16 +2560,54 @@ export async function createQ35GpuModel(
       perfAcc.tokens += M_MAX;
       device.pushErrorScope("validation");
       device.pushErrorScope("out-of-memory");
+      // SONDA DEL PREFILL PER SEGMENTO (riga 5 di engine-ttft). Stessa forma
+      // della sonda del decode: a sonda SPENTA resta UN pass per segmento —
+      // esattamente la forma che gira in produzione — e a sonda accesa se ne
+      // apre uno per categoria, cronometrato. Piu' pass = piu' barriere, quindi
+      // il chunk misurato e' un po' piu' lento di quello vero: la perturbazione
+      // si riporta (`probeMs` contro il totale a sonda spenta), non si assume
+      // trascurabile.
+      //
+      // Le categorie sono quelle che il costruttore del piano ha gia' timbrato
+      // su ogni step (`pbCat`), quindi qui non si decide niente: si raggruppa.
       const runSegB = (from: number, to: number, tail?: (e: GPUCommandEncoder) => void): void => {
         const e2 = device.createCommandEncoder();
-        const pz = e2.beginComputePass();
-        for (let i = from; i < to; i++) {
-          const st = PB.steps[i];
-          pz.setPipeline(st.pipe);
-          pz.setBindGroup(0, st.bind);
-          pz.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+        if (!pbTsOn) {
+          const pz = e2.beginComputePass();
+          for (let i = from; i < to; i++) {
+            const st = PB.steps[i];
+            pz.setPipeline(st.pipe);
+            pz.setBindGroup(0, st.bind);
+            pz.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+          }
+          pz.end();
+        } else {
+          let cur: GPUComputePassEncoder | null = null;
+          let curCat = "";
+          for (let i = from; i < to; i++) {
+            const st = PB.steps[i];
+            if (st.cat !== curCat) {
+              cur?.end();
+              curCat = st.cat;
+              if (pbTsIdx < TSQ_PASSES) {
+                pbTsCats[pbTsIdx] = st.cat;
+                cur = e2.beginComputePass({
+                  timestampWrites: {
+                    querySet: tsqSet!, beginningOfPassWriteIndex: pbTsIdx * 2, endOfPassWriteIndex: pbTsIdx * 2 + 1,
+                  },
+                });
+                pbTsIdx++;
+              } else {
+                pbTsOverflow++;
+                cur = e2.beginComputePass();
+              }
+            }
+            cur!.setPipeline(st.pipe);
+            cur!.setBindGroup(0, st.bind);
+            cur!.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
+          }
+          cur?.end();
         }
-        pz.end();
         tail?.(e2);
         device.queue.submit([e2.finish()]);
         perfAcc.submits++;
@@ -2616,6 +2675,27 @@ export async function createQ35GpuModel(
       staging.unmap();
       perfAcc.readbacks++;
       perfAcc.readbackMs += performance.now() - tRb;
+      // I timestamp si leggono DOPO il readback dei logit, cioe' quando la GPU
+      // ha gia' finito: nessuna attesa in piu' rispetto a quella che il chunk
+      // paga comunque. Si accumula per categoria e si azzera l'indice, cosi'
+      // ogni chunk riparte dal primo slot del query set.
+      if (pbTsOn && pbTsIdx > 0) {
+        const enc2 = device.createCommandEncoder();
+        enc2.resolveQuerySet(tsqSet!, 0, pbTsIdx * 2, tsqResolve!, 0);
+        enc2.copyBufferToBuffer(tsqResolve!, 0, tsqStaging!, 0, pbTsIdx * 2 * 8);
+        device.queue.submit([enc2.finish()]);
+        await tsqStaging!.mapAsync(GPUMapMode.READ);
+        const ts = new BigUint64Array(tsqStaging!.getMappedRange().slice(0, pbTsIdx * 2 * 8));
+        for (let k = 0; k < pbTsIdx; k++) {
+          const ms = Number(ts[k * 2 + 1] - ts[k * 2]) / 1e6;   // ns -> ms
+          const c = pbTsCats[k];
+          const e = pbTsAcc[c] ?? (pbTsAcc[c] = { ms: 0, passes: 0 });
+          e.ms += ms; e.passes++;
+        }
+        tsqStaging!.unmap();
+        pbTsIdx = 0;
+        pbTsChunks++;
+      }
       return lg;
     } : null,
     routerShadowStats: moe?.shadowStats ? () => moe!.shadowStats!() : null,

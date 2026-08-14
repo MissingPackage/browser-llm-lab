@@ -457,6 +457,11 @@ async function main(cfg: Cfg): Promise<void> {
         // gate perche' e' la stessa run a costruire quel piano — separarli
         // vorrebbe dire confrontare due piani che nessuno ha verificato uguali.
         plan: model.prefillPlanInventory(),
+        // TEMPO PER SEGMENTO (riga 5), presente solo con `?gputime=1`. Accanto
+        // c'e' SEMPRE il totale a sonda spenta (`msPerChunk` qui sotto, misurato
+        // nel braccio senza sonda), cosi' la perturbazione si vede invece di
+        // essere assunta trascurabile.
+        gpuTimeByCat: model.prefillGpuTime ? model.prefillGpuTime() : null,
         gate: {
           // IL CRITERIO che decide oggi
           argmaxSame, chunks: nChunk, argmaxIdentical: argmaxSame === nChunk,

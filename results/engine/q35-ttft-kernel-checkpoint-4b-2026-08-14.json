@@ -1,0 +1,237 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-ttft-kernel-checkpoint",
+ "date": "2026-08-14",
+ "goal": "engine-ttft",
+ "phase": "riga 5 — la discesa massima, contabilizzata",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "modelSha256": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
+ "deviceLabel": "4090-linux",
+ "declared": "orchestratore correttezza-prima; sui densi decode BATCHED (fase D fase 3: argmax su GPU, K=32 token/submit, un readback ogni K); sul MoE ancora un readback del router per layer",
+ "prompt": {
+  "idx": 0,
+  "file": "/home/neuromancer/Projects/browser-llm-lab/tools/oracle-moe/corpus/01-code-ts-review.txt",
+  "tokens": 6333
+ },
+ "chunkM": 16,
+ "chunks": 395,
+ "metrica": {
+  "ttftWarmMs": 32127,
+  "prefillMs": 32101,
+  "firstMs": 26,
+  "prefillTokS": 197.25306724316636,
+  "decodeTokS": 48.14636494184708,
+  "baselineWarmMs": 87618,
+  "barraContrattoMs": 21905,
+  "discesaSullaBaseline": 2.727,
+  "mancaAllaBarra": 1.467
+ },
+ "sonda": {
+  "nota": "un pass per segmento invece di uno solo aggiunge barriere, quindi il chunk cronometrato e' piu' lento del vero. Il confronto col totale a sonda SPENTA e' qui accanto e non si assume trascurabile.",
+  "chunkCronometrati": 64,
+  "overflow": 0,
+  "msPerChunkSondaAccesa": 57.607,
+  "msPerChunkSondaSpenta": 73.045
+ },
+ "doveFinisceIlTempo": {
+  "prefillMs": 32101,
+  "dentroIPassGpuMs": 22755,
+  "dentroIPassPct": 70.9,
+  "fuoriDaiPassMs": 9346,
+  "fuoriDaiPassPct": 29.1,
+  "fuoriDaiPassCosaE": "encode CPU (i bind group sono gia' costruiti al load, restano setPipeline/setBindGroup/dispatchWorkgroups), submit, e i buchi fra un submit e il successivo. NON e' attribuito piu' finemente: servirebbe una sonda CPU per dispatch che oggi non esiste, ed e' un lavoro suo."
+ },
+ "segmenti": [
+  {
+   "cat": "gemm:deltanet-out",
+   "msPerChunk": 30.8077,
+   "msTotale": 12169.1,
+   "quotaPrefillPct": 37.91,
+   "dispatches": 24,
+   "workgroupPerDispatch": 40960,
+   "wgMin": 40960,
+   "wgMax": 40960
+  },
+  {
+   "cat": "gemm:ffn-down",
+   "msPerChunk": 12.585,
+   "msTotale": 4971.1,
+   "quotaPrefillPct": 15.49,
+   "dispatches": 120,
+   "workgroupPerDispatch": 1739,
+   "wgMin": 72,
+   "wgMax": 40960
+  },
+  {
+   "cat": "deltanet:recurrence",
+   "msPerChunk": 4.0552,
+   "msTotale": 1601.8,
+   "quotaPrefillPct": 4.99,
+   "dispatches": 768,
+   "workgroupPerDispatch": 80,
+   "wgMin": 32,
+   "wgMax": 128
+  },
+  {
+   "cat": "gemm:ffn",
+   "msPerChunk": 3.1235,
+   "msTotale": 1233.8,
+   "quotaPrefillPct": 3.84,
+   "dispatches": 192,
+   "workgroupPerDispatch": 967,
+   "wgMin": 20,
+   "wgMax": 2304
+  },
+  {
+   "cat": "deltanet:gemm",
+   "msPerChunk": 2.4622,
+   "msTotale": 972.6,
+   "quotaPrefillPct": 3.03,
+   "dispatches": 192,
+   "workgroupPerDispatch": 613,
+   "wgMin": 20,
+   "wgMax": 2048
+  },
+  {
+   "cat": "attn:core",
+   "msPerChunk": 2.0368,
+   "msTotale": 804.6,
+   "quotaPrefillPct": 2.51,
+   "dispatches": 16,
+   "workgroupPerDispatch": 640,
+   "wgMin": 256,
+   "wgMax": 1024
+  },
+  {
+   "cat": "gemm:qkv",
+   "msPerChunk": 0.7989,
+   "msTotale": 315.6,
+   "quotaPrefillPct": 0.98,
+   "dispatches": 72,
+   "workgroupPerDispatch": 362,
+   "wgMin": 20,
+   "wgMax": 2048
+  },
+  {
+   "cat": "gemm:attn-out",
+   "msPerChunk": 0.3667,
+   "msTotale": 144.8,
+   "quotaPrefillPct": 0.45,
+   "dispatches": 24,
+   "workgroupPerDispatch": 277,
+   "wgMin": 32,
+   "wgMax": 640
+  },
+  {
+   "cat": "norm:attn",
+   "msPerChunk": 0.3365,
+   "msTotale": 132.9,
+   "quotaPrefillPct": 0.41,
+   "dispatches": 32,
+   "workgroupPerDispatch": 16,
+   "wgMin": 16,
+   "wgMax": 16
+  },
+  {
+   "cat": "norm:ffn",
+   "msPerChunk": 0.3356,
+   "msTotale": 132.6,
+   "quotaPrefillPct": 0.41,
+   "dispatches": 32,
+   "workgroupPerDispatch": 16,
+   "wgMin": 16,
+   "wgMax": 16
+  },
+  {
+   "cat": "ffn:act",
+   "msPerChunk": 0.2113,
+   "msTotale": 83.5,
+   "quotaPrefillPct": 0.26,
+   "dispatches": 32,
+   "workgroupPerDispatch": 2304,
+   "wgMin": 2304,
+   "wgMax": 2304
+  },
+  {
+   "cat": "resid",
+   "msPerChunk": 0.1813,
+   "msTotale": 71.6,
+   "quotaPrefillPct": 0.22,
+   "dispatches": 32,
+   "workgroupPerDispatch": 640,
+   "wgMin": 640,
+   "wgMax": 640
+  },
+  {
+   "cat": "deltanet:gates",
+   "msPerChunk": 0.1315,
+   "msTotale": 51.9,
+   "quotaPrefillPct": 0.16,
+   "dispatches": 24,
+   "workgroupPerDispatch": 16,
+   "wgMin": 16,
+   "wgMax": 16
+  },
+  {
+   "cat": "attn:prep",
+   "msPerChunk": 0.0973,
+   "msTotale": 38.4,
+   "quotaPrefillPct": 0.12,
+   "dispatches": 32,
+   "workgroupPerDispatch": 592,
+   "wgMin": 64,
+   "wgMax": 1024
+  },
+  {
+   "cat": "attn:rope+kv",
+   "msPerChunk": 0.0772,
+   "msTotale": 30.5,
+   "quotaPrefillPct": 0.1,
+   "dispatches": 32,
+   "workgroupPerDispatch": 168,
+   "wgMin": 32,
+   "wgMax": 256
+  }
+ ],
+ "calcolo": {
+  "flopPrefill": 50656000000000,
+  "tflopsSostenuti": 1.578,
+  "piccoFp32MisuratoRiga1": 9.26,
+  "quotaDelPiccoPct": 17,
+  "nota": "il picco e' fp32 su GEMM densa (riga 1, it.2). Il prefill gira su pesi QUANTIZZATI, quindi questa quota non e' un'efficienza: e' la distanza da un tetto che questo carico non tocca per costruzione. Serve a dire che il collo non e' l'ALU."
+ },
+ "ratchetCorrettezza": {
+  "ktest": "101 PASS / 0 FAIL",
+  "vitest": "680 passed | 10 skipped",
+  "tsc": "pulito",
+  "top1SequenzialeVsOracolo": "1012/1024 = 98,828%",
+  "top1PrefillAChunkVsOracolo": "1012/1024 = 98,828%",
+  "sequenzeGenerateIdentiche": "8/8 prompt",
+  "decodeTokS": 48.14636494184708,
+  "decodeSoglia": 45.5
+ },
+ "hostState": {
+  "declared": "quiescent",
+  "before": {
+   "temperatureC": 34,
+   "smClockMHz": 210,
+   "powerW": 588.21,
+   "memUsedMiB": 627,
+   "utilizationPct": 0,
+   "throttleReasons": "0x0000000000000001"
+  },
+  "after": {
+   "temperatureC": 45,
+   "smClockMHz": 2265,
+   "powerW": 94.97,
+   "memUsedMiB": 635,
+   "utilizationPct": 69,
+   "throttleReasons": "0x0000000000000004"
+  }
+ },
+ "repro": [
+  "node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --declared quiescent --prefill-m 16",
+  "node scripts/q35-conf-run.mjs --prefill-m 16 --gpu-time",
+  "node scripts/build-ttft-checkpoint.mjs <bench> <segmenti> <out>"
+ ]
+}

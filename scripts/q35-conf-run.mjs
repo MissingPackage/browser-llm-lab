@@ -79,6 +79,9 @@ if (prefillM) qs.set("prefillm", prefillM);
 // arrivare al replay golden.
 const confPrefillM = arg("conf-prefill-m", null);
 if (confPrefillM) qs.set("confprefillm", confPrefillM);
+// --gpu-time: accende la sonda per segmento del prefill (riga 5). PERTURBA:
+// un pass per segmento invece di uno solo aggiunge barriere.
+if (process.argv.includes("--gpu-time")) qs.set("gputime", "1");
 const tap = arg("tap", null);
 if (tap !== null) qs.set("tap", tap);
 

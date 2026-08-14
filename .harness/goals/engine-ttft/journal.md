@@ -1196,3 +1196,74 @@ sonda esistente (`telemetryGpu`) è solo per il decode e spezza i pass per layer
 non per segmento di prefill. Con quello si chiudono anche gli altri due numeri
 del done-when: banda efficace per segmento e TFLOP/s sostenuti contro il picco
 9,26 misurato in riga 1.
+
+---
+
+## it.25 (2026-08-14, riga 5) — IL CRONOMETRO RIBALTA IL CONTEGGIO: non è la ricorrenza, è un Q5_K sul percorso vecchio
+
+**RIGA 5 CHIUSA.** TTFT a caldo **32.127 ms**, discesa **2,727×** sulla
+baseline, **1,467× dalla barra**. Artefatto
+`results/engine/q35-ttft-kernel-checkpoint-4b-2026-08-14.json`.
+
+**E DEVO CORREGGERE ME STESSO DI DUE ITERAZIONI FA.** In it.23 avevo scritto «il
+quarto collo ha un nome: la ricorrenza DeltaNet, 47% del piano». Era il
+**conteggio dei dispatch**, non il tempo. Col cronometro la ricorrenza è il
+**5,0%** del prefill. Contare i dispatch non è misurare il tempo, e l'avevo
+presentato come se lo fosse.
+
+**LA VERITÀ, cronometrata per segmento** (sonda `timestamp-query` sul piano a
+chunk, un pass per categoria, 64 chunk, zero overflow):
+
+| segmento | ms totali | % prefill | disp | wg/disp |
+|---|---|---|---|---|
+| **`gemm:deltanet-out`** | **12.169** | **37,9** | 24 | 40.960 |
+| `gemm:ffn-down` | 4.971 | 15,5 | 120 | 1.739 |
+| `deltanet:recurrence` | 1.602 | 5,0 | 768 | 80 |
+| `gemm:ffn` | 1.234 | 3,8 | 192 | 967 |
+
+**24 dispatch su 24 layer DeltaNet fa UNO per layer — e la via veloce ne emette
+tre.** Da lì la diagnosi: quel sito **cade sul fallback legacy**. Il perché è
+scritto nel piano da sempre: `ssm_out` è **Q5_K**, la via veloce è q4_0-only per
+costruzione, quindi `planPrefillGemm` risponde «legacy» — M gemv replicate
+sull'asse z, **riuso dei pesi ZERO**, i pesi riletti 16 volte per chunk.
+
+**E QUESTO RI-INQUADRA IL RULING DEL RIUSO.** L'item 19 aveva abbassato la barra
+a 5,5× perché «l'11,54% dei byte resta sul percorso vecchio», e quel residuo era
+stato assegnato al goal K-quant come una coda. **L'11,54% dei byte è il 37,9%
+del tempo.** La quota di byte sottostimava massicciamente il peso, proprio
+perché la forma legacy rilegge i pesi M volte: è la stessa asimmetria che rende
+il riuso una leva. Il residuo non è una coda: è **la leva più grande rimasta sul
+tempo al primo token**.
+
+**LA CONTABILITÀ DEL TETTO, che è ciò che la riga 5 chiede:**
+
+- prefill **32.101 ms**, di cui **22.751 dentro i pass GPU (70,9%)** e
+  **9.350 fuori (29,1%)**: encode CPU, submit, e i buchi fra un submit e il
+  successivo. Non l'ho attribuito più finemente e lo dichiaro — servirebbe una
+  sonda CPU per dispatch che oggi non esiste.
+- **1,578 TFLOP/s sostenuti contro il picco fp32 misurato di 9,26 = 17%.** La
+  quota NON è un'efficienza: il prefill gira su pesi quantizzati e quel tetto
+  non lo tocca per costruzione. Serve a dire una cosa sola, ed è quella che
+  conta: **il collo non è l'ALU.**
+- Perturbazione della sonda dichiarata invece che assunta: 57,6 ms/chunk a sonda
+  accesa contro 73,0 a sonda spenta. La sonda somma il solo tempo *dentro* i
+  pass, il totale include CPU e buchi — i due numeri misurano cose diverse, ed è
+  esattamente la differenza che la riga 5 voleva vedere.
+
+**Perché la proiezione di riga 1 dava 8.665 ms**: contava le moltiplicazioni
+q4_0 e l'attenzione. Non contava — e lo dichiarava — i layer DeltaNet, e
+soprattutto non contava che il loro `ssm_out` **non è q4_0** e quindi non
+beneficia di nessuna delle leve montate. Non era ottimistica sul lavoro fatto:
+era cieca su un termine che il lavoro non poteva toccare.
+
+**Ratchet di correttezza, riportati coi numeri** (item 24 chiuso dal ruling):
+ktest 101/0 · vitest 680|10 · tsc pulito · top-1 contro l'oracolo **1012/1024 =
+98,828% su ENTRAMBI i bracci** · sequenze generate **identiche 8/8** · decode
+48,15 tok/s (≥ 45,5). Il bench è stato rilanciato **sul codice finale** dopo la
+sonda: 32.127 contro 32.265, −0,4%, dentro la banda.
+
+**Lo strumento del checkpoint è uno script** (`scripts/build-ttft-checkpoint.mjs`)
+e non un comando incollato qui: il checkpoint si rifà a ogni cambio di kernel, e
+un conto ricopiato a mano è un conto che la prossima volta nessuno ripete
+uguale. Ha la sentinella sul `kind` dei due artefatti che unisce — la landmine
+di HANDOFF nasce da un file il cui nome diceva una cosa e il contenuto un'altra.
