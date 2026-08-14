@@ -1007,3 +1007,21 @@ sarebbero 61.696 B). La strada vera non è stringere il buffer ma **dare al path
 portarcela.
 
 **RULING:** _
+
+**RULING (PI, 2026-08-14) sull'item 24 — il `declared` NON si tocca:** «Ottimo
+che l'oracolo confermi. Per la questione del declared bit-identico, io non la
+cambierei per ora se poi torneremo alla bit-identità per tutti. Siamo in una
+work in progress.»
+
+**Applicato: nessuna modifica.** Il testo del gate resta quello che promette la
+bit-identità. La ragione è la stessa che regge il promemoria di it.20: il ruling
+sulla bit-identità è una **sospensione con data di scadenza**, non un cambio di
+rotta, e riscrivere il `declared` oggi vorrebbe dire cancellare la promessa che
+si intende mantenere. Un gate che promette più di quanto oggi ottenga, **dentro
+una transizione dichiarata e con la sua scadenza armata in un test**, è più
+onesto di un gate riscritto attorno allo stato provvisorio.
+
+Restano scritti nell'artefatto i numeri veri (`argmaxSame`, `bitIdentical`,
+`maxAbs`, `maxRel`, `argmaxDiffs` col margine), e resta armato
+`tests/engine-bitidentity-debt.test.ts`, che suona quando il percorso
+sequenziale passerà anch'esso su intero. **Item 24 CHIUSO.**
