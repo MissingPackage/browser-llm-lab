@@ -327,7 +327,16 @@ async function main(cfg: Cfg): Promise<void> {
     // righe. Si confrontano i LOGITS dell'ultima posizione del chunk, che sono
     // gli unici che il prefill produce — e l'atteso e' bit per bit, non "vicino".
     const M = cfg.prefillM;
-    const p = golden.prompts[0];
+    // IL PROMPT NON E' PIU' CABLATO (it.20). Era `golden.prompts[0]`, quindi
+    // `--prompts N` non cambiava cio' che il gate misurava e chi lo passava
+    // credeva di aver variato qualcosa. Serve perche' il criterio argmax del
+    // ruling ha dato 63/64 su UN prompt, e un conteggio su un campione solo non
+    // distingue «tipico» da «fortunato» — e' la landmine del campione da 22
+    // posizioni. Qui si prende il primo dei prompt SELEZIONATI: `prompts` e'
+    // gia' la lista filtrata da `cfg.prompts`, quindi il default resta il
+    // prompt 0 e il comportamento storico non cambia.
+    const p = prompts[0];
+    if (!p) throw new Error("q35 prefillChunk gate: nessun prompt selezionato");
     const all = [...p.promptTokens, ...p.generated];
     // TETTO IN TOKEN, non in chunk (it.33): il guadagno del prefill a chunk
     // CRESCE col contesto — misurato 1,17x su 47 token e 2,02x su 6456 — quindi

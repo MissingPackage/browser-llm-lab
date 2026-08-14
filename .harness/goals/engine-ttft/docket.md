@@ -888,3 +888,37 @@ DOPO aver visto il numero»). E una soglia di gate è materia del PI.
     una run.
 
 **RULING:** _
+
+### OPZIONE (c) ESEGUITA (it.21) — 63/64 non era tipico, era il caso buono
+
+Prima serviva togliere un difetto: **il gate era cablato su `golden.prompts[0]`**,
+quindi `--prompts N` non cambiava ciò che misurava e chi lo passava credeva di
+aver variato qualcosa. Ora prende il primo dei prompt selezionati (default
+invariato).
+
+| prompt | argmax | maxAbs | distacchi dei disaccordi |
+|---|---|---|---|
+| 0 | 63/64 | 2,384 | 0,0179 |
+| 1 | **61/64** | **10,139** | 0,0525 · **0,2652** · 0,0056 |
+| 2 | 62/64 | 1,470 | 0,0302 · **0,3574** |
+| 3 | **64/64** | 0,851 | — |
+
+**Totale 250/256 = 97,66%.** Tre cose che il campione singolo non poteva dire:
+
+1. **63/64 stava sopra la media, non sulla media.** L'intervallo vero è 61-64, e
+   il peggiore è 95,3%. Concludere da un prompt sarebbe stato l'errore che la
+   landmine del campione da 22 posizioni descrive.
+2. **La perturbazione varia di 12×fra i prompt** (maxAbs 0,851 → 10,139). Sul
+   prompt 1 la quantizzazione int8 sposta un logit di **oltre 10**. Non è una
+   proprietà del kernel sola: dipende dai dati che ci passano.
+3. **E QUESTO CHIUDE LA QUESTIONE DEL «PAREGGIO».** I distacchi più grandi che
+   si sono ribaltati sono **0,2652** e **0,3574** — rispettivamente 26.500× e
+   35.700× la soglia di quasi-pareggio che la casa usa nel banco
+   `router-top4-near-tie` (1e-5). Non c'è nessuna soglia onesta sotto la quale
+   questi sei disaccordi diventino rumore: **sono cambi di predizione veri**.
+
+**Cosa cambia per le tre opzioni.** La (b) resta cara com'era. La (a) resta
+difendibile — è una fase di transizione dichiarata, con la scadenza già armata
+nel test — ma il numero onesto da scriverci accanto non è «63/64»: è **250/256,
+peggior prompt 61/64, con ribaltamenti fino a 0,36 di distacco**. Chi accetta
+la (a) accetta questo, non un arrotondamento.
