@@ -700,3 +700,61 @@ chiede per una leva scartata («ognuna in produzione o esclusa coi numeri»).
 
 Se il PI dissente, il costo del dissenso è basso: la fusione GQA si aggiunge
 dopo, ed è una modifica locale allo stesso kernel.
+
+## item 22 — la bit-identità del prefill a chunk è caduta in it.15, e nessuno se n'è accorto (io → PI, it.17)
+
+**IL GATE, MISURATO OGGI PER LA PRIMA VOLTA DALL'IT.14.**
+`q35-prefillchunk-4b` confronta i logit dell'ultima posizione di ogni chunk fra
+`prefillChunk` a M=16 e `step()` sequenziale. Il suo `declared` dice, alla
+lettera: «L'atteso e' la BIT-IDENTITA': ogni kernel batched e' ktestato
+bit-identico per riga.»
+
+    idot + attenzione streaming (HEAD)  bitIdentical false · maxAbs 2,3839
+    solo idot, attenzione legacy        bitIdentical false · maxAbs 1,8001
+    bitEqual 31 e 25 su 15.892.480 confronti
+
+**ATTRIBUZIONE, non congettura**: ho rigirato lo stesso gate riportando il solo
+`src/engine/kernels/wgsl.ts` a `HEAD~1` e lasciando la via intera in produzione.
+La rottura c'è già senza l'attenzione ⇒ **è stata la via intera di it.15**, che
+quantizza le attivazioni a int8 (`prefillQuantXQ8Wgsl`), a togliere la
+bit-identità. L'attenzione in streaming la peggiora del 32% (1,80 → 2,38), ma
+non è la causa.
+
+**PERCHÉ NON SE N'È ACCORTO NESSUNO, ed è la parte che conta.**
+Il gate non è un banco del ktest: vive in `q35conf.worker.ts:386` e si attiva
+con `--prefill-m` **senza** `--prompt-idx` (col `--prompt-idx` si prende il ramo
+bench alla riga 206 e si esce prima di arrivarci). Tutte le run di it.14-it.16
+passavano `--prompt-idx 0`, quindi misuravano la velocità e **non toccavano mai
+la conformità**. In it.16 ho segnato «(e) bit per bit ✓» leggendolo dalla prosa
+di PHASES invece di eseguirlo: è un errore mio, ed è la stessa classe della
+landmine «i JSON possono mentire in silenzio» — qui il silenzio era il mio.
+
+**COSA NON È IN DISCUSSIONE**: la via intera è una leva **autorizzata dal PI**
+(ruling 2026-08-13, punto 3) e la perdita di bit-identità è la sua conseguenza
+attesa, non un bug. Il difetto è di PROCESSO: la clausola (e) della riga 2 dava
+due strade — «resta bit per bit **oppure** la tolleranza si dichiara PRIMA con
+la ragione numerica» — e non ne è stata percorsa nessuna. La tolleranza va
+dichiarata a posteriori, che è esattamente ciò che la clausola voleva impedire.
+
+**DECISIONE CHE NON PRENDO IO: il criterio di superamento di un gate di
+conformità del motore.** Non è ordine né meccanismo, è un gate.
+
+Le opzioni, con la mia raccomandazione:
+
+- **(a) RACCOMANDATA — il criterio diventa l'argmax, la tolleranza è un
+  contorno.** Ciò che il prodotto deve garantire non è che due percorsi diano
+  gli stessi bit, ma che diano lo **stesso token**. Il gate va riscritto per
+  riportare l'accordo di argmax sulle posizioni confrontate (oggi non lo
+  riporta: dà solo `bitEqual` e `maxAbs`), e passa se l'argmax è identico al
+  100% con la banda numerica dichiarata accanto. Costo: una modifica a
+  `q35conf.worker.ts`, nessun kernel toccato.
+- **(b)** si dichiara una tolleranza numerica sui logit e basta, senza argmax.
+  Più debole: `maxAbs` non dice se un token è cambiato.
+- **(c)** si ripristina la bit-identità rinunciando alla via intera. Costa
+  l'1,119× di it.15 e contraddice il ruling del PI. La sconsiglio.
+
+**COSA FACCIO SE NON ARRIVA RISPOSTA**: la (a), perché è l'unica che misura la
+proprietà che interessa al prodotto — ma NON la eseguo prima del ruling, perché
+riscrivere il criterio di un gate mentre lo si sta violando è precisamente la
+mossa che un gate esiste per impedire. Fino ad allora la riga 2 resta con la
+clausola (e) **aperta e dichiarata rotta**, non spuntata.

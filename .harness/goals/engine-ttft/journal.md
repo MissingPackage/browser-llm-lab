@@ -856,3 +856,78 @@ sola softmax in streaming + vec4. Decisione presa e registrata, non escalata
 (test dello step 5: se non arrivasse mai risposta farei esattamente questo).
 Il vincolo negativo è scritto nella spec del conductor, col numero, e il review
 ha istruzione di bocciare qualunque task che proponga la fusione.
+
+---
+
+## it.17 (2026-08-14) — la riga 3 rende 1,59×, e il gate di conformità era rotto da due iterazioni senza che nessuno lo sapesse
+
+**Il conductor è arrivato quasi in fondo, e il veicolo REGGE.** `wf_991df002-d1d`
+ha prodotto il grafo, implementato T1 e T2, chiuso due round di review avversaria
+e integrato T1 con `git apply` pulito (nessun fuzz, nessun `--3way`). Poi il mio
+processo è uscito e il workflow è morto con lui — ma **non al confine di turno e
+non per la causa di ieri**: aveva già fatto il lavoro. La conclusione degli item
+15/17/18 («il veicolo non chiude un task di questa classe qui») è **da
+considerare confutata**: dopo il riavvio ha chiuso.
+
+**T2 NON è entrato**, per due bloccanti indipendenti che l'integrator ha
+diagnosticato bene: (1) la patch è arrivata monca di una riga di contesto —
+25.658 caratteri contro i 25.664 dichiarati, cioè lo scarto di una riga sola:
+difetto di canale, non di piano; (2) conflitto reale, perché T1 aveva **già**
+convertito lo stesso blocco di `ktest.worker.ts` a tolleranza, ma con costanti
+LOCALI (`ATTN_CHUNK_REL_TOL = 1e-4`) invece del modulo unico che T2 creava.
+Quindi la soglia oggi è dichiarata, ma **non ha una sede sola** — che era
+l'oggetto di T2.
+
+**LA MISURA, ed è la seconda volta in una notte che la metrica si muove davvero:**
+
+| | prefill | TTFT a caldo |
+|---|---|---|
+| baseline (it.1) | 72,30 tok/s | 87.618 ms |
+| split-K f32 (it.14) | 111,16 | 56.984 |
+| via intera (it.15) | 123,26 | 51.392 |
+| **+ attenzione streaming (it.17)** | **196,41** | **32.265** |
+
+**2,72× sulla baseline. Barra 21.905 ⇒ manca 1,47×.** Decode 47,89 tok/s, sopra
+il gate di 45,5. Gate: tsc pulito · vitest 660|10 (erano 645) · ktest **101 PASS
+/ 0 FAIL**, incluso il banco nuovo `dense-batch-attn-chunk-multitile` che
+attraversa il rescale online (maxRel 8,44e-5 contro banda dichiarata 1e-4).
+
+**IL RITROVAMENTO CHE VALE PIÙ DELLA MISURA — e nasce da un mio errore.**
+Il review del conductor aveva segnalato che dopo T1 la prosa di PHASES sulla
+bit-identità sarebbe diventata falsa. Sono andato a verificare invece di
+correggerla d'ufficio, e ho scoperto due cose peggiori:
+
+1. **`q35-prefillchunk-4b` non è un banco del ktest.** Vive in
+   `q35conf.worker.ts:386` e si attiva con `--prefill-m` **senza**
+   `--prompt-idx` — col `--prompt-idx` si prende il ramo bench alla riga 206 e
+   si esce prima. Tutte le run di it.14-it.16 passavano `--prompt-idx 0`:
+   misuravano la velocità e non toccavano mai la conformità.
+2. **In it.16 avevo scritto «(e) bit per bit ✓» senza eseguirlo**, leggendolo
+   dalla prosa di PHASES. Girandolo oggi: `bitIdentical: false`, bitEqual
+   **31 su 15.892.480**, maxAbs 2,38.
+
+**Non ho attribuito a naso.** Ho rigirato lo stesso gate riportando il solo
+`wgsl.ts` a `HEAD~1` — attenzione legacy, via intera in produzione:
+
+    idot + attenzione streaming   maxAbs 2,3839
+    solo idot                     maxAbs 1,8001
+
+**La rottura è di it.15**, la via intera, che quantizza le attivazioni a int8.
+L'attenzione la peggiora del 32%, non la causa. Ed era prevedibile: quantizzare
+le attivazioni NON può preservare i bit, e il ruling del PI che autorizza la via
+intera lo implicava. La clausola (e) della riga 2 dava due strade — «resta bit
+per bit **oppure** la tolleranza si dichiara PRIMA con la ragione numerica» — e
+**non ne è stata percorsa nessuna**.
+
+**Docket item 22, e non lo decido io**: il criterio di superamento di un gate di
+conformità è un gate, non ordine né meccanismo. La mia raccomandazione è che il
+criterio diventi l'**argmax** (stesso token, non stessi bit) con la banda
+numerica accanto — oggi il gate non riporta nemmeno l'argmax. Ma non la eseguo
+prima del ruling: riscrivere il criterio di un gate mentre lo si sta violando è
+esattamente la mossa che un gate esiste per impedire.
+
+**Clausola (d) della riga 2, censimento chiuso**: `gemvB` è l'unico imbuto dei
+GEMM quantizzati del prefill e chiede la rotta a `planPrefillGemm`. Eccezioni
+motivate: `gemvF32Wgsl` (`q35gpumodel.ts:448` e `960`, pesi f32) e i K-quant
+(`468-469`), fuori dalla via veloce perché è q4_0-only per costruzione. Coerente
+col 172/248 siti = 88,46% dei byte già pinnato nel test `[6c]`.
