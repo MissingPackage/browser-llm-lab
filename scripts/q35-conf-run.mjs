@@ -74,6 +74,11 @@ const vramGiB = arg("vram-gib", null);
 if (vramGiB) qs.set("vram", vramGiB);
 const prefillM = arg("prefill-m", null);
 if (prefillM) qs.set("prefillm", prefillM);
+// --conf-prefill-m 16: la CONFORMANCE golden prefilla il prompt a chunk (it.21).
+// Separato da --prefill-m, che attiva il gate dei due bracci ed esce senza mai
+// arrivare al replay golden.
+const confPrefillM = arg("conf-prefill-m", null);
+if (confPrefillM) qs.set("confprefillm", confPrefillM);
 const tap = arg("tap", null);
 if (tap !== null) qs.set("tap", tap);
 

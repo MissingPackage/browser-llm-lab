@@ -922,3 +922,48 @@ difendibile — è una fase di transizione dichiarata, con la scadenza già arma
 nel test — ma il numero onesto da scriverci accanto non è «63/64»: è **250/256,
 peggior prompt 61/64, con ribaltamenti fino a 0,36 di distacco**. Chi accetta
 la (a) accetta questo, non un arrotondamento.
+
+### LA RISPOSTA PRATICA (it.21) — l'effetto è ZERO, misurato nella metrica di casa
+
+Domanda del PI: «non so se nella pratica l'effetto è trascurabile o
+problematico». Il gate confronta i due bracci **fra loro**; non poteva
+rispondere. Serviva misurare contro l'**oracolo**, e non si poteva: la
+conformance golden prefillava sempre con `step()`. Aggiunto `--conf-prefill-m`
+(flag separato da `--prefill-m`, che attiva il gate ed esce prima del replay).
+
+**Due bracci full-corpus, stesso codice, stessa sessione:**
+
+| | top-1 vs oracolo | sequenza generata |
+|---|---|---|
+| prefill sequenziale | **1012/1024 = 98,828%** | — |
+| prefill a chunk M=16, via intera | **1012/1024 = 98,828%** | **identica su 8/8 prompt** |
+
+Non «equivalente entro tolleranza»: gli argmax generati sono gli **stessi
+token**, su tutti e 1024 le posizioni, su tutti e otto i prompt. E il
+sequenziale riproduce esattamente il ratchet storico 1012/1024, quindi il
+confronto è ancorato.
+
+**PERCHÉ I SEI DISACCORDI DEL GATE NON SI VEDONO.** Sono ai **confini dei
+chunk**, e quei logit **in produzione non li legge nessuno**: il prefill serve a
+riempire la KV cache, e l'unica cosa che esce è il primo token. La differenza
+nella cache c'è — ma non basta a spostare un solo token generato.
+
+**E IL SEGNO DELLA DOMANDA ERA ROVESCIATO.** L'oracolo **è llama.cpp**
+(`golden.oracle.impl = "llama.cpp-oracle"`), e llama.cpp quantizza le
+attivazioni a Q8_0 per **ogni** matmul q4_0, su ogni token, prefill e decode:
+
+    ggml/src/ggml-cpu/ggml-cpu.c
+    [GGML_TYPE_Q4_0] = { .vec_dot = ggml_vec_dot_q4_0_q8_0,
+                         .vec_dot_type = GGML_TYPE_Q8_0, ... }
+
+La nostra via intera fa **quello che fa il riferimento**. È il nostro percorso
+sequenziale in virgola mobile a essere *più preciso dell'oracolo* contro cui ci
+misuriamo. Chiamare «regressione» l'avvicinamento all'implementazione di
+riferimento era il verso sbagliato.
+
+**Conseguenza per l'item 24**: la scelta non è più fra tre opzioni al buio. La
+(a) è sostenuta da una misura diretta, e il numero da citare non è né 63/64 né
+250/256 — è **1012/1024 top-1 e 8/8 sequenze identiche**. Resta vero che i sei
+disaccordi non sono pareggi; è vero anche che non arrivano all'uscita.
+Il gate `q35-prefillchunk-4b` misura una quantità che **non è quella di
+prodotto**, e questo andrebbe scritto nel suo `declared`.

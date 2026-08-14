@@ -62,6 +62,15 @@ interface Cfg {
    * riga contro il suo per-riga (it.25-26-30-31).
    */
   prefillM?: number;
+  /**
+   * it.21: la CONFORMANCE golden prefilla il prompt a chunk invece che con
+   * `step()`. Flag SEPARATO da `prefillM` di proposito: quello attiva il gate
+   * dei due bracci ed esce, questo lascia girare il replay golden e cambia solo
+   * COME si riempie la KV cache. Serve a rispondere alla domanda pratica —
+   * quanto costa la via intera in token sbagliati contro l'oracolo — che il
+   * confronto fra bracci non puo' rispondere.
+   */
+  confPrefillM?: number;
   /** fase 5 (docket item 11): tetto VRAM, da cui il budget expert si DERIVA. */
   vramGiB?: number;
   /**
@@ -634,7 +643,32 @@ async function main(cfg: Cfg): Promise<void> {
     // dove ogni token vuole il proprio argmax: le posizioni generate.
     // Sul MoE `decodeBatch` e' null (routing su CPU per layer, docket item 8).
     const primaGen = P - 1; // la prima posizione di cui si legge l'argmax
-    for (let t = 0; t < primaGen; t++) await model.step(tokens[t], t, false);
+    // IL PROMPT SI PUO' PREFILLARE A CHUNK (it.21), e prima non si poteva.
+    //
+    // PERCHE' SERVE. Il gate `q35-prefillchunk-4b` confronta i due bracci fra
+    // LORO e dice 250/256 argmax uguali — ma non dice quanto conti in pratica,
+    // perche' i logit intermedi dei chunk in produzione NON LI LEGGE NESSUNO:
+    // il prefill serve a riempire la KV cache, e l'unica cosa che esce e' il
+    // primo token. La domanda vera e' un'altra: la cache costruita dalla via
+    // INTERA porta il motore a sbagliare piu' token contro l'oracolo?
+    //
+    // Qui la si puo' finalmente misurare nella metrica di casa — il top-1
+    // contro il golden llama.cpp, ratchet 4B 1012/1024 = 98,828% — con la
+    // generazione che resta su `step()`, cioe' esattamente lo scenario di
+    // prodotto: prompt a chunk, poi decode.
+    //
+    // NOTA CHE CAMBIA IL SEGNO DELLA DOMANDA: l'oracolo E' llama.cpp, e
+    // llama.cpp quantizza le attivazioni a Q8_0 per OGNI matmul q4_0
+    // (`ggml-cpu.c`: `[GGML_TYPE_Q4_0].vec_dot = ggml_vec_dot_q4_0_q8_0`,
+    // `vec_dot_type = GGML_TYPE_Q8_0`). La nostra via intera fa la stessa cosa
+    // del riferimento; e' il nostro percorso sequenziale, in virgola mobile, a
+    // essere piu' preciso dell'oracolo contro cui ci misuriamo.
+    const confChunkM = model.prefillChunk !== null && cfg.confPrefillM ? cfg.confPrefillM : 0;
+    const confChunks = confChunkM ? Math.floor(primaGen / confChunkM) : 0;
+    for (let c = 0; c < confChunks; c++) {
+      await model.prefillChunk!(tokens.slice(c * confChunkM, (c + 1) * confChunkM), c * confChunkM);
+    }
+    for (let t = confChunks * confChunkM; t < primaGen; t++) await model.step(tokens[t], t, false);
     const K = model.decodeBatch ? 32 : 1;
     for (let t = primaGen; t < tokens.length; t += K) {
       const n = Math.min(K, tokens.length - t);
