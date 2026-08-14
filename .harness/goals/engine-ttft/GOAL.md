@@ -1,3 +1,18 @@
+STATUS: CLOSED (2026-08-14) — ruling del PI in chat: «Ok chiudere il goal.
+Abbiamo fatto un ottimo lavoro. I prossimi sono i k quant e il 0.5B (non so
+ancora in che ordine). Per il 0.5B migreremo il possibile.»
+
+ESITO: TTFT a caldo 87.618 -> 32.127 ms = 2,727x. La barra meccanica del
+contratto (< 21.905 ms) NON e' stata raggiunta: manca 1,467x. Dieci clausole su
+dodici soddisfatte; le due che cadono sono la stessa — la barra e la sua gemella
+`prefill.tokS > 289`. La causa e' MISURATA e stava fuori dalla portata del goal:
+il 37,9% del prefill e' `gemm:deltanet-out`, che cade sul fallback legacy perche'
+`ssm_out` e' Q5_K mentre tutte le leve di questo goal sono q4_0-only PER
+CONTRATTO (v. i vincoli qui sotto).
+
+Consuntivo voce per voce: docs/engine/ttft-consuntivo-2026-08-14.md
+Checkpoint: results/engine/q35-ttft-kernel-checkpoint-4b-2026-08-14.json
+
 GOAL: Il Qwen3.5-4B in browser porta il tempo al primo token a modello caldo,
 su un prompt da >= 6000 token, il piu' in basso che questa macchina consenta —
 esaurendo le leve identificate dalla fase di sonde e dimostrando coi numeri, per

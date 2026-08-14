@@ -2,55 +2,64 @@
 
 ## 1. Next decidable
 
-**Goal `engine-ttft`: CONSUNTIVO PRONTO, chiusura formale al PI.** Il tempo al
-primo token a modello caldo sul prompt da 6333 token e' passato da **87.618 a
-32.127 ms — 2,727x**. La barra meccanica del contratto era **< 21.905 ms** e
-**NON e' stata raggiunta**: manca 1,467x. Consuntivo voce per voce, con
-l'artefatto accanto a ogni clausola, in
+**Goal `engine-ttft` CHIUSO** (2026-08-14, ruling del PI). Il tempo al primo
+token a modello caldo sul prompt da 6333 token: **87.618 -> 32.127 ms = 2,727x**.
+La barra meccanica del contratto (< 21.905 ms) **non e' stata raggiunta**: manca
+1,467x. Dieci clausole su dodici soddisfatte; le due che cadono sono la stessa —
+la barra e la sua gemella `prefill.tokS > 289` — e **la causa e' misurata e
+stava fuori dalla portata del goal**.
+
+Consuntivo voce per voce, con l'artefatto accanto a ogni clausola:
 `docs/engine/ttft-consuntivo-2026-08-14.md`.
 
-**Dieci clausole su dodici sono soddisfatte. Le due che cadono sono la stessa —
-la barra — e la causa e' MISURATA e stava fuori dalla portata di questo goal.**
+**I DUE GOAL SUCCESSIVI, decisi dal PI. L'ORDINE FRA LORO E' L'UNICA COSA
+APERTA** — e i due assi sono diversi, quindi non e' una preferenza ma una
+scelta:
 
-**LA SCOPERTA CHE CAMBIA IL PIANO, ed e' la cosa da leggere prima di
-prioritizzare qualunque cosa.** Il primo termine del prefill e'
-`gemm:deltanet-out`: **37,9% del tempo con soli 24 dispatch**, uno per layer
-DeltaNet, mentre la via veloce ne emette tre. Cade sul **fallback legacy**
-perche' `ssm_out` e' **Q5_K** e la via veloce e' q4_0-only per costruzione:
-riuso dei pesi zero, riletti 16 volte per chunk, **89,9 GB/s** su un motore che
-ne ha dimostrati ~300.
+1. **K-quant — vale il 37,9% del tempo del prefill.** `gemm:deltanet-out` e' il
+   primo termine con soli 24 dispatch, uno per layer DeltaNet, perche' `ssm_out`
+   e' **Q5_K** e cade sul fallback legacy: riuso dei pesi ZERO, riletti 16 volte
+   per chunk, **89,9 GB/s** su un motore che ne ha dimostrati ~300. **Il ruling
+   del riuso lo aveva registrato come una CODA** («l'11,54% dei byte resta sul
+   percorso vecchio»): la quota di byte sottostimava il peso proprio perche' la
+   forma legacy rilegge i pesi M volte. **E' la leva piu' grande rimasta sul
+   tempo al primo token.**
+2. **0.5B — non muove la metrica di prodotto, muove la RAGGIUNGIBILITA'.** E' il
+   path di conformita', e il suo valore e' girare su device che concedono il
+   minimo di spec WebGPU (16.384 B di memoria di gruppo). Scope fissato dal PI:
+   **«migreremo il possibile»** — tre siti su quattro adottano la forma
+   split-K esistente; il quarto (`gemvResidualFast`, down-proj del **decode** a
+   M=1) e' **non-migrabile per costruzione** e va dichiarato tale, non contato
+   come buco. Veicolo: workflow `pattern-migration`, che ora produce
+   `nonMigrable` + una lettura in chiaro invece di una percentuale.
 
-Quindi: **l'11,54% dei byte che il ruling del riuso aveva assegnato al goal
-K-quant COME CODA e' il 37,9% del TEMPO.** La quota di byte sottostimava il peso
-proprio perche' la forma legacy rilegge i pesi M volte. Il goal K-quant non e'
-un completamento: **e' la leva piu' grande rimasta sul tempo al primo token.**
+**PRIMA DI TOCCARE IL 0.5B, leggere questo**: i consumatori sopra la garanzia
+WebGPU sono **quattro**, non uno, e alimentano **un solo valore condiviso**
+(`QWEN_WORKGROUP_STORAGE_BYTES`, che il motore chiede come tetto del device).
+Migrarne un sottoinsieme fa SCENDERE quel massimo mentre gli altri chiedono il
+valore vecchio ⇒ `createComputePipeline` fallisce **su ogni device**. La
+costante e' gia' stata resa un `Math.max` **calcolato** dalle formule accanto ai
+kernel (it.24) proprio per questo: quella correzione e' il prerequisito, ed e'
+gia' in albero.
 
-**TRE COSE ASPETTANO IL PI** (docket item 27 le raccoglie):
-1. **La chiusura formale del goal con la barra mancata** — funzione obiettivo,
-   non la decido io.
-2. **item 25** — cosa promette il DONE WHEN sulla portabilita'.
-3. **item 26** — il porting del path 0.5B come goal suo: sono **quattro**
-   kernel, e uno (il down-proj del decode) **non e' raggiungibile dalla forma
-   multi-riga**, perche' gira a M=1 e non e' un GEMM di prefill.
-
-**Le leve, tutte in produzione e misurate prima/dopo**: moltiplicatore
-multi-riga `splitk` (34,36 -> 111,16 tok/s) · via intera `dot4I8Packed`
-(-> 123,26) · attenzione del prefill in streaming (-> 196,41).
+**LE LEVE DI `engine-ttft`, tutte in produzione e misurate prima/dopo**:
+moltiplicatore multi-riga `splitk` (prefill 34,36 -> 111,16 tok/s) · via intera
+`dot4I8Packed` (-> 123,26) · attenzione del prefill in streaming (-> 196,41).
 
 **ESCLUSE COI NUMERI — l'eredita' piu' utile per chi riprende:**
 - **fusione delle teste GQA sul prefill: PIU' LENTA** (2,0879 contro 1,8207 ms).
   Sul decode aveva funzionato: il verso e' opposto, e chi riprova deve saperlo.
 - **il tetto di memoria di gruppo negoziabile non e' una leva** (spread 0,1-2,3%).
 - **la ricorrenza DeltaNet NON e' il collo**: 5,0% del tempo contro il 47,3% dei
-  dispatch. **Contare i dispatch non e' misurare il tempo** — l'ho concluso in
-  it.23 dal solo conteggio, ed e' finito in un HANDOFF prima che il cronometro
-  lo smentisse in it.25.
+  dispatch. **Contare i dispatch non e' misurare il tempo** — l'avevo concluso
+  dal solo conteggio, ed era gia' finito in un HANDOFF prima che il cronometro
+  lo smentisse.
 
-**Dove finisce il tempo** (checkpoint
-`results/engine/q35-ttft-kernel-checkpoint-4b-2026-08-14.json`): 70,9% dentro i
-pass GPU, **29,1% fuori** (encode CPU, submit, buchi fra submit — non attribuito
-piu' finemente, e lo dichiaro). **1,578 TFLOP/s contro il picco fp32 misurato di
-9,26 = 17%**: non e' un'efficienza, e' la prova che **il collo non e' l'ALU**.
+**Dove finisce il tempo** (`results/engine/q35-ttft-kernel-checkpoint-4b-2026-08-14.json`):
+70,9% dentro i pass GPU, **29,1% fuori** (encode CPU, submit, buchi fra submit —
+non attribuito piu' finemente, e lo dichiaro). **1,578 TFLOP/s contro il picco
+fp32 misurato di 9,26 = 17%**: non e' un'efficienza, e' la prova che **il collo
+non e' l'ALU**.
 
 **Gate alla chiusura**: tsc pulito · vitest **680 | 10** · ktest **101 PASS /
 0 FAIL** · top-1 contro l'oracolo llama.cpp **1012/1024 = 98,828% su ENTRAMBI i

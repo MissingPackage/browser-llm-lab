@@ -1128,3 +1128,34 @@ K-quant non e' un completamento: e' **la leva piu' grande rimasta sul tempo al
 primo token**.
 
 **RULING:** _
+
+---
+
+**RULING (PI, 2026-08-14) — CHIUSURA DEL GOAL, e i due successivi:** «Ok
+chiudere il goal. Abbiamo fatto un ottimo lavoro. I prossimi sono i k quant e il
+0.5B (non so ancora in che ordine). Per il 0.5B migreremo il possibile.»
+
+**Applicato. Chiude tre item in un colpo:**
+
+- **item 27 — chiusura formale con la barra mancata: SI'.** Il goal chiude a
+  32.127 ms contro una barra di 21.905, con dieci clausole su dodici soddisfatte
+  e la causa delle due mancate misurata e fuori dalla sua portata. `GOAL.md`
+  porta `STATUS: CLOSED` con la citazione.
+- **item 26 — il porting 0.5B diventa un goal: SI'**, ed e' uno dei due
+  successivi. **Scope fissato dal PI: «migreremo il possibile»** — cioe' i tre
+  siti che una forma esistente puo' accogliere, con il quarto
+  (`gemvResidualFast`, down-proj del decode a M=1) **dichiarato non-migrabile**,
+  non contato come buco. E' esattamente la forma che il workflow
+  `pattern-migration` ora produce (`nonMigrable` + `reading`, harness `5180ff0`).
+- **item 25 — cosa promette il DONE WHEN sulla portabilita': RISOLTO PER
+  CONSEGUENZA**, e lo registro come mia lettura del ruling invece che come
+  risposta separata: il goal chiude con (e2a) dichiarata debito, e quel debito
+  **diventa il goal 0.5B**. Non resta implicito e non resta orfano.
+
+**APERTO, e il PI lo dice esplicitamente: l'ORDINE fra K-quant e 0.5B.** Non lo
+decido io. Il dato che gli serve, gia' misurato: **il K-quant vale il 37,9% del
+tempo del prefill** (`ssm_out` Q5_K sul percorso vecchio, riletto 16 volte per
+chunk, 89,9 GB/s su un motore che ne fa ~300), mentre il **0.5B non muove la
+metrica di prodotto** — e' il path di conformita', e il suo valore e' la
+portabilita' su device che concedono il minimo di spec. Due assi diversi:
+velocita' contro raggiungibilita'.

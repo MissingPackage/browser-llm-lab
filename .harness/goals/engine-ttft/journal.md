@@ -1319,3 +1319,39 @@ rimasta sul tempo al primo token.
 **Il loop si ferma qui, per esaurimento del lavoro decidibile**: tutto ciò che
 resta è una decisione del PI, e le tre sono in chat. Non invento scope per
 tenerlo vivo.
+
+---
+
+## it.27 (2026-08-14) — CHIUSURA. Il ruling del PI, applicato
+
+«Ok chiudere il goal. Abbiamo fatto un ottimo lavoro. I prossimi sono i k quant
+e il 0.5B (non so ancora in che ordine). Per il 0.5B migreremo il possibile.»
+
+**`GOAL.md` porta `STATUS: CLOSED` con la citazione e l'esito in testa**, così
+chi lo apre fra sei mesi legge il risultato prima del contratto.
+
+**Tre item chiusi da un ruling solo**: la chiusura formale con la barra mancata
+(sì), il porting 0.5B come goal (sì, con lo scope fissato dal PI: «il
+possibile»), e — **per conseguenza, e lo registro come mia lettura invece che
+come risposta separata** — cosa promette il DONE WHEN sulla portabilità: il goal
+chiude con (e2a) dichiarata debito, e **quel debito diventa il goal 0.5B**. Non
+resta implicito e non resta orfano.
+
+**Resta aperto l'ORDINE fra i due, e il PI lo dice esplicitamente.** Non lo
+decido io, ma gli lascio il dato: sono **due assi diversi**, non due priorità
+sulla stessa scala. Il K-quant vale il **37,9% del tempo del prefill**; il 0.5B
+**non muove la metrica di prodotto** — è il path di conformità, e il suo valore
+è la raggiungibilità su device che concedono il minimo di spec. Velocità contro
+portabilità: la scelta è sua perché è una scelta di prodotto.
+
+**Scritta la memoria `byte-share-is-not-time-share`**, che è la cosa che questo
+goal ha insegnato e che non vive nel repo: tre proxy del costo si sono rivelati
+sbagliati nello stesso giorno — la quota di byte (sottostima chi non ha riuso,
+perché la forma legacy rilegge i pesi M volte), il conteggio dei dispatch (47,3%
+contro un 5,0% di tempo), e i GB/s calcolati sui byte logici (738 su un device
+che ne fa 300: è cache, non banda). Solo il cronometro per segmento ha detto la
+verità, e gli strumenti per farlo ora esistono.
+
+**Il goal è chiuso e il loop è fermo.** Non ho invented scope per tenerlo vivo:
+il prossimo lavoro è un goal nuovo, e comincia da una decisione del PI
+sull'ordine.
