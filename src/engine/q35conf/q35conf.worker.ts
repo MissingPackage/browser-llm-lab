@@ -363,14 +363,28 @@ async function main(cfg: Cfg): Promise<void> {
       chunkMs.push(performance.now() - t0c);
       chunkLogits.push(lg);
     }
-    let bitEqual = 0, maxAbs = 0, cmp = 0;
+    let bitEqual = 0, maxAbs = 0, maxRel = 0, cmp = 0;
+    // L'ARGMAX E' IL CRITERIO DI TRANSIZIONE (ruling del PI, 2026-08-14, docket
+    // item 22). La bit-identita' resta MISURATA — si sospende come criterio, non
+    // come informazione: `bitIdentical` continua a comparire nel report, e il
+    // giorno in cui torna vera lo si vede senza rifare niente.
+    let argmaxSame = 0;
     for (let c = 0; c < nChunk; c++) {
+      let aBest = -Infinity, aArg = -1, bBest = -Infinity, bArg = -1;
       for (let i = 0; i < shape.vocab; i++) {
         const a = seqLogits[c][i], b = chunkLogits[c][i];
         cmp++;
         if (Object.is(a, b)) bitEqual++;
-        else maxAbs = Math.max(maxAbs, Math.abs(a - b));
+        else {
+          const d = Math.abs(a - b);
+          maxAbs = Math.max(maxAbs, d);
+          const den = Math.max(Math.abs(a), Math.abs(b));
+          if (den > 0) maxRel = Math.max(maxRel, d / den);
+        }
+        if (a > aBest) { aBest = a; aArg = i; }
+        if (b > bBest) { bBest = b; bArg = i; }
       }
+      if (aArg === bArg) argmaxSame++;
     }
     // Il PRIMO chunk si scarta (docket item 10: il primo passaggio dopo il load
     // paga compilazione e prime allocazioni). Con due soli campioni la mediana
@@ -388,8 +402,24 @@ async function main(cfg: Cfg): Promise<void> {
         model: MODELS[cfg.model ?? "4b"].file, chunkM: M, chunks: nChunk, tokens: nChunk * M,
         declared: "bracci sullo STESSO modello e sullo stesso prompt; si confrontano i logits " +
           "dell'ultima posizione di ogni chunk, che sono gli unici che il prefill produce. " +
-          "L'atteso e' la BIT-IDENTITA': ogni kernel batched e' ktestato bit-identico per riga.",
-        gate: { bitEqual, compared: cmp, bitIdentical: bitEqual === cmp, maxAbs },
+          "CRITERIO DI TRANSIZIONE (ruling PI 2026-08-14, docket item 22): l'atteso e' " +
+          "l'ARGMAX IDENTICO su ogni chunk, col numero accanto. La BIT-IDENTITA' — che era " +
+          "il criterio fino a it.14 — e' caduta in it.15, quando la via intera ha iniziato a " +
+          "quantizzare le attivazioni a int8 nel solo ramo a chunk: i due bracci fanno " +
+          "aritmetica diversa, quindi divergono per COSTRUZIONE e non per un difetto. " +
+          "E' una SOSPENSIONE, non un'abolizione: quando il percorso sequenziale sara' " +
+          "anch'esso su intero, i due bracci torneranno a fare la stessa aritmetica e la " +
+          "bit-identita' TORNA A ESSERE IL CRITERIO. Resta misurata qui sotto proprio " +
+          "perche' quel giorno si veda senza rifare niente.",
+        gate: {
+          // IL CRITERIO che decide oggi
+          argmaxSame, chunks: nChunk, argmaxIdentical: argmaxSame === nChunk,
+          // LA MISURA che il criterio di domani riprendera' in mano
+          bitEqual, compared: cmp, bitIdentical: bitEqual === cmp, maxAbs, maxRel,
+          criterion: "argmax",
+          bitIdentitySuspendedBy: "it.15 — prefillQuantXQ8Wgsl, attivazioni int8 sul solo ramo a chunk",
+          bitIdentityReturnsWhen: "il percorso sequenziale (`step`) passa anch'esso sulla via intera",
+        },
         msPerChunk: {
           sequential: med(seqMs), chunked: med(chunkMs), speedup: med(seqMs) / med(chunkMs),
           discardedFirst: true, samples: nChunk - 1,

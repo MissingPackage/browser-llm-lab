@@ -808,3 +808,32 @@ suo difetto. È la clausola (d)/AC6: la copertura dei call-site con worklist.
 sopra il codice di T1 (spostare le due costanti in `attnchunktol.ts` e importarle
 nei due consumatori), T4 è un censimento che ho già fatto in it.17 e che va solo
 scritto.
+
+**RULING (PI, 2026-08-14):** «Sulla bit-identità capisco che non sia fattibile
+in questa fase di transizione, ma dovrà esserci in futuro. Quando avremo migrato
+tutto su int.»
+
+**È UNA SOSPENSIONE, NON UN'ABOLIZIONE**, e la differenza è tutta nel
+meccanismo che la fa finire. Forma meccanica applicata in it.20:
+
+1. **Criterio di oggi: ARGMAX IDENTICO su ogni chunk**, col numero accanto —
+   `maxAbs` e `maxRel` restano nel report, o chi legge fra sei mesi non ha modo
+   di accorgersi che la divergenza sta crescendo. L'argmax è un criterio più
+   debole e va detto: può coincidere anche con logit visibilmente diversi.
+2. **La bit-identità resta MISURATA.** `bitIdentical` continua a comparire nel
+   report anche se non decide più: il giorno in cui torna vera lo si vede senza
+   rifare niente.
+3. **LA CONDIZIONE CHE LA RIACCENDE non è «riportare il chunk in virgola
+   mobile»** — sarebbe buttare via 1,745×. È l'opposto: **quando anche il
+   percorso sequenziale (`step`) passerà sulla via intera**, i due bracci
+   torneranno a fare la stessa aritmetica e la bit-identità tornerà esigibile.
+   Il report lo dichiara in `bitIdentityReturnsWhen`.
+4. **IL PROMEMORIA SUONA DA SOLO**: `tests/engine-bitidentity-debt.test.ts`.
+   Un debito scritto in un docket lo paga solo chi si ricorda di rileggere il
+   docket. Quel test invece **fallisce da solo** nell'istante in cui la
+   condizione del ruling si avvera — il segnale è l'intrinseco `dot4I8Packed`
+   che compare nel GEMV sequenziale — e il messaggio di errore cita il ruling e
+   dice cosa fare. Contiene anche la prova che il segnale discrimina (il kernel
+   intero lo ha, quello f32 no): senza, sarebbe un test che passa comunque.
+
+**Item 22 CHIUSO.** Il debito non è chiuso: è armato.
