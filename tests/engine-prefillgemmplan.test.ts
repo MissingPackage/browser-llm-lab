@@ -9,6 +9,8 @@ import {
   prefillQuantXQ8Wgsl, PREFILL_SPLITS_MEASURED, PREFILL_SPLITS_UNSPLIT,
 } from "../src/engine/kernels/wgsl";
 import { dispatchWeightBytes, type PrefillDispatch, type PrefillQuantKind } from "../src/engine/prefillbytes";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // PIANO del GEMM di prefill: quale via prende ogni sito, con quante fette, con
 // quanto scratch. Modulo PURO — nessuna GPU, nessun WGSL generato — come
@@ -502,5 +504,81 @@ describe("[7] prefillGemmScratchFor: UN solo set di buffer, quindi il MAX", () =
     expect(f.partialFloats).toBe(got.partialFloats);
     expect(f.xqU32).toBe(0);
     expect(f.xscF32).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLAUSOLA (d) DELLA RIGA 2 — la copertura della convenzione a livello di
+// CALL-SITE, non di byte.
+//
+// Il test [6c] qui sopra pesa i BYTE (172/248 siti = 88,46% dell'inventario
+// per-layer). Dice quanto traffico passa dalla via veloce, non quanti punti del
+// codice la chiedono al piano — e sono due domande diverse: un solo call-site
+// dimenticato che ri-derivi la condizione a mano vale zero byte in quel conto e
+// vale la riga 2 intera. E' esattamente cio' che e' successo in it.14, dove
+// `prefillgemmplan.ts` esisteva completo e NESSUNO lo importava.
+//
+// Censimento del 2026-08-14 (it.17), verificato a mano su q35gpumodel.ts:
+//
+//   COPERTI     tutti i GEMM quantizzati passano dall'UNICO imbuto `gemvB`,
+//               che chiede la rotta a `planPrefillGemm` invece di deciderla.
+//               Consumatori: le due fabbriche di peso (righe ~453, ~457) e i
+//               tre dispatch del blocco MoE (~932-935).
+//   ECCEZIONI   3 siti, tutte per la STESSA ragione strutturale — la via veloce
+//               e' q4_0-only per costruzione, come il GEMV del goal precedente:
+//                 q35gpumodel.ts:448  gemvF32Wgsl  pesi f32, non quantizzati
+//                 q35gpumodel.ts:468  gemvQ4KWgsl / Q5K / Q6K  -> goal K-quant
+//                 q35gpumodel.ts:960  gemvF32Wgsl  scalare dello shared expert
+//
+// NON e' un'eccezione l'attenzione (riga ~857, `attnDecodeWgsl`): non e' un
+// GEMM, ha la sua riga (la 3) ed e' gia' in streaming.
+// ---------------------------------------------------------------------------
+describe("[6f] CLAUSOLA (d): la copertura per CALL-SITE, con worklist ed eccezioni motivate", () => {
+  const SRC = readFileSync(join(process.cwd(), "src/engine/q35gpumodel.ts"), "utf8");
+
+  it("la rotta si chiede al piano da UN SOLO posto, e quel posto e' `gemvB`", () => {
+    expect(SRC, "q35gpumodel deve importare il piano").toMatch(
+      /import\s*\{[^}]*planPrefillGemm[^}]*\}\s*from\s*["'`]\.\/prefillgemmplan["'`]/);
+    const calls = [...SRC.matchAll(/planPrefillGemm\s*\(/g)];
+    expect(calls.length, "un solo sito decide la rotta: due posti che decidono la stessa cosa e' il difetto di it.7")
+      .toBe(1);
+  });
+
+  it("nessun call-site ri-deriva a mano la condizione della via veloce", () => {
+    // La firma del difetto di it.14: `kind === "q4_0" && k % 64 === 0` scritto
+    // a mano invece di chiesto al piano. Se ricompare, e' una seconda soglia
+    // che puo' divergere in silenzio.
+    expect(SRC, "condizione della via veloce ri-derivata a mano fuori dal piano")
+      .not.toMatch(/%\s*64\s*===\s*0/);
+  });
+
+  it("le eccezioni fuori dall'imbuto sono QUELLE, e la worklist e' esatta", () => {
+    // I GEMM batch emessi SENZA passare da `gemvB`. `attnDecodeWgsl` non conta:
+    // non e' un GEMM, ha la sua riga (la 3) ed e' gia' in streaming.
+    // `gemvQuantWgsl` non conta: e' il fallback DENTRO `gemvB`, cioe' la via
+    // legacy scelta DAL PIANO — coperto, non eccezione.
+    const batchSites = [...SRC.matchAll(/(\w+Wgsl)\(\{[^}]*batch:\s*true/g)].map((m) => m[1]);
+    const exceptions = batchSites.filter((n) => n !== "attnDecodeWgsl" && n !== "gemvQuantWgsl");
+    // CINQUE emissioni per QUATTRO siti logici: i tre K-quant stanno sullo
+    // stesso ternario (q35gpumodel.ts:468-469) e sono un sito solo, ma ognuno
+    // scrive il proprio `batch: true` e quindi conta cinque volte qui.
+    expect(exceptions.sort(), "worklist delle eccezioni").toEqual(
+      ["gemvF32Wgsl", "gemvF32Wgsl", "gemvQ4KWgsl", "gemvQ5KWgsl", "gemvQ6KWgsl"]);
+  });
+
+  it("i kind che restano legacy sono TRE, e q8_0 e' quello che si dimentica", () => {
+    // Coerenza fra i due conti: le eccezioni per call-site e l'11,54% di byte
+    // del test [6c] devono parlare degli stessi tensori.
+    //
+    // ATTENZIONE ALLA DISTINZIONE, che questo test esiste per tenere ferma:
+    // `q8_0` NON e' un'eccezione di COPERTURA — passa dall'imbuto `gemvB` e
+    // chiede la rotta al piano, come si deve. E' il PIANO a rispondergli
+    // "legacy", perche' la via veloce e' q4_0-only per costruzione. Coperto
+    // dalla convenzione, legacy per instradamento: due cose diverse, e
+    // confonderle e' come ho scritto il censimento sbagliato in it.17.
+    const { exceptions } = prefillPlanDispatches({ sites: sites4B(), M: 16, idot: true });
+    const kinds = new Set(exceptions.map((e) => e.kind));
+    expect([...kinds].sort(), "i kind che restano legacy").toEqual(["q4_1", "q5_K", "q8_0"]);
+    for (const e of exceptions) expect(e.reason.length, `${e.kind}`).toBeGreaterThanOrEqual(40);
   });
 });

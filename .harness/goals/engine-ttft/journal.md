@@ -1002,3 +1002,63 @@ rende l'iterazione non eseguibile in sicurezza.
 `attnchunktol.ts` (T2 a mano sopra il codice di T1), la clausola (d) della riga
 2 da scrivere (censimento già fatto in it.17), le righe 4, 5, 6. E il ruling
 sull'item 22, senza il quale la riga 5 non può dichiarare i ratchet intatti.
+
+---
+
+## it.19 (2026-08-14) — il watchdog è corretto, e i due residui delle righe 2 e 3 sono chiusi
+
+**IL BLOCCO AMBIENTALE È CADUTO.** La sessione harness ha corretto tutti e tre i
+difetti che le avevo riportato e ha committato in `2679491`. **Verificato da me
+leggendo il codice, non il suo riassunto**: `sidecar_mtime` con
+`act = max(tm, sc)` (il polso non è più il solo transcript, che è il difetto per
+cui aspettare un workflow garantiva la duplicazione); `headless_dead` legato al
+`session_id` e non più a `prev_unit`, con `idle_needed` che non salta il
+controllo di vita in nessun ramo; e le due sentinelle **prima** di tutto il
+resto, nell'ordine giusto — copia (`fmtime - upd > COPY_TOL_S`) e poi staleness
+(6h). Che la rilevazione della copia venga per prima è la cosa giusta: una copia
+fresca di uno stato vecchio non è staleness, ed è la firma esatta dei miei 19
+rami. `--dry-run --verbose` gira pulito. **Loop rimesso in moto.**
+
+**RESIDUO 1 CHIUSO — la tolleranza ha una sede unica** (`5ce2e2f`). T2 rifatto a
+mano sopra il codice di T1, che è quello in produzione: `attnchunktol.ts` con la
+derivazione per esteso, stessa forma di `KQUANT_FAST_Q5K_PAIR_REL_TOL`.
+**Spostate, non ritarate** — cambiare un numero è un'altra decisione e vuole
+un'altra misura. Il test non legge più i due valori dal sorgente con una regex:
+era più debole di quanto sembrasse, verificava che nel testo ci fosse *una*
+costante, non che il banco usasse *quella*.
+
+**E misurando ho trovato una cosa che la derivazione non diceva.** Sul caso
+multitile il device è **2,14× peggiore della simulazione CPU** da cui la banda
+era stata derivata: maxRel **8,44e-5** contro 3,95e-5 simulato. La banda
+relativa 1e-4 lascia il **18% di margine**, non il 2,5× che la derivazione
+lasciava sperare — il gate passa per la banda **assoluta**, larga ~565×. È
+scritto nella sede unica, che ora è il posto dove serve saperlo: chi stringe la
+relativa senza rimisurare la fa diventare rossa su un cambio di driver.
+
+**RESIDUO 2 CHIUSO — la clausola (d) della riga 2**, come test `[6f]` e non come
+prosa, così non marcisce. La copertura per **call-site**, che è una domanda
+diversa da quella per byte del test `[6c]`: un solo sito dimenticato che
+ri-derivi la condizione a mano vale zero byte in quel conto e vale la riga
+intera — è precisamente ciò che era successo in it.14.
+
+**E il test mi ha corretto un errore del mio censimento di it.17.** Avevo
+scritto che i kind legacy erano due (q4_1, K-quant): sono **tre**, perché avevo
+dimenticato i **24 `ssm` Q8_0**. La distinzione che avevo confuso e che il test
+ora tiene ferma: il Q8_0 **passa dall'imbuto** `gemvB` e chiede la rotta al
+piano, come si deve — è il piano a rispondergli «legacy», perché la via veloce è
+q4_0-only per costruzione. **Coperto dalla convenzione ≠ instradato sulla via
+veloce.** Due test scritti su una previsione sono andati rossi al primo giro, ed
+è esattamente il loro mestiere.
+
+**RIGA 2 COMPLETA. RIGA 3 COMPLETA.** Gate su questo albero: tsc pulito ·
+vitest **676 passed | 10 skipped** · ktest **101 PASS / 0 FAIL**. Metrica
+invariata (nessuna delle due modifiche tocca un kernel): TTFT a caldo
+**32.265 ms**, 2,72× sulla baseline, alla barra manca 1,47×.
+
+**Cosa resta**: la riga 4 è quasi fatta — (e2b) l'ha chiusa T1, che ha reso il
+ramo batch dell'attenzione il quinto consumatore dichiarato in `engineNeeds`,
+costante in ctxMax; resta (e2a), che per la C7-3 non tocca la metrica di questo
+goal e si dichiara debito. La riga 5 è il lavoro vero e **richiede strumentazione
+nuova**: i workgroup in volo per dispatch il motore non li misura da nessuna
+parte. E la riga 5 non può dichiarare i ratchet intatti finché non c'è il ruling
+sull'**item 22**.
