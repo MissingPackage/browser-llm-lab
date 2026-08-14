@@ -78,3 +78,20 @@ il goal e cosa e' in dubbio.
   vietato per costruzione). Quel numero vale per una shape su un braccio
   ipotetico, e la scheda di consegna lo dira' cosi'.
 - Metrica obiettivo ancora **32.127 ms**. La riga 2 e' la prima che la muove.
+
+## it.4 — riga 2 in produzione: il Q5_K non rilegge piu' i pesi (2026-08-15)
+
+- **Copertura del piano da 5,86x a 10,94x** sull'inventario per-layer intero del
+  4B: 196/248 siti, **96,9% dei byte** ora sulla forma multi-riga.
+- **Gate eseguiti da me, non dedotti dall'autoreport del workflow**: ktest
+  **103 PASS / 0 FAIL** (erano 101) coi due casi nuovi a maxRel 2,6e-7 e 4,3e-7,
+  vitest **779**, tsc pulito, e conformita' col golden llama.cpp sul prompt da
+  6333 token a chunk: **top1 62/64**.
+- **La trappola era reale**: `ssm_out` non passa dal bivio che sembrava ovvio
+  cablare. Chi avesse cablato `gemvB` non avrebbe cambiato niente, coi test di
+  copertura verdi lo stesso.
+- **Non ancora verificato, e dichiarato**: che il segmento sia sceso davvero. Il
+  piano non e' il cronometro — quella misura e' la riga 5, su codice finale.
+- Riga 3 (Q4_1) lanciata: `[6c]` deve salire a **≥ 15,5x**, e porta con se' una
+  categoria di misura propria per i quattro siti Q4_1, cosi' la riga 5
+  attribuisce quel tempo invece di dedurlo.
