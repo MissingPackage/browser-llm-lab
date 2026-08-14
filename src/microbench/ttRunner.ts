@@ -51,6 +51,9 @@ import {
 // legacy e il `prod` davvero il kernel di produzione. Qui resta il BANCO —
 // buffer, gate di checksum, celle — che e' lo stesso per tutti i bracci.
 import { TT_ATTN_SHAPE, TT_ATTN_M, prefillAttnVariants } from "./ttAttn";
+// FASE 0 del goal engine-kquant (sezione e): le famiglie non-q4_0. La lista dei
+// bracci vive accanto ai suoi kernel, come `prefillAttnVariants`.
+import { KQUANT_SHAPES, KQUANT_GEOM, KQUANT_SPLIT_K, kquantVariants } from "./ttKQuant";
 
 /** Shape della sonda del picco: quadrata + la shape reale del prefill del 4B. */
 export const DENSE_SHAPES: Array<{ M: number; K: number; N: number; label: string }> = [
@@ -599,6 +602,211 @@ export async function runTtftProbeBench(
       }
     }
     for (const b of [qsBuf, scBuf, xBuf, xqBuf, xscBuf, yBuf, partBuf]) b.destroy();
+  }
+
+  // =========================================================================
+  // (e) FASE 0 DEL GOAL engine-kquant — le famiglie che restano sul percorso
+  //     vecchio. Sezione GEMELLA della (b), non una sua variante: geometrie di
+  //     buffer diverse (un solo `blocks` per i K-quant, scale per blocco e non
+  //     ogni due per il q4_1) e braccio di paragone diverso (il GEMV di
+  //     PRODUZIONE di quella famiglia, importato).
+  //
+  //     La regola di stop del contratto si legge da qui: per ogni famiglia,
+  //     p50 del legacy / p50 della migliore multi-riga. Sotto 1,5x quella
+  //     famiglia non si cabla.
+  // =========================================================================
+  for (const shape of KQUANT_SHAPES) {
+    const { family, K, N, label } = shape;
+    const Mmax = Math.max(...shape.Ms);
+    onProgress(`kquant ${family} ${label.slice(0, 24)} K${K}xN${N}: allocazione…`);
+    const geom = KQUANT_GEOM[family];
+    const upr = K / geom.unit;
+
+    // --- pesi, nel layout ESATTO che il motore legge dopo il repack ---------
+    let wBuf: GPUBuffer;
+    let wScBuf: GPUBuffer | null = null;
+    let weightUnique: number;
+    if (family === "q5_K") {
+      const words = geom.words;
+      const host = new Uint32Array(N * upr * words);
+      fillRandomU32(host, 4242);
+      // SOLO la parola 0 va costruita: porta (d, dmin) come due f16, e byte
+      // casuali li' darebbero NaN/Inf, cioe' un checksum che non discrimina
+      // niente. Scale a 6 bit, qh e qs restano casuali: `get_scale_min_k4`
+      // produce comunque valori in [0,63] per costruzione delle sue maschere.
+      const r = new Uint32Array(N * upr);
+      fillRandomU32(r, 99);
+      for (let sb = 0; sb < N * upr; sb++) {
+        const d = 0.01 + ((r[sb] & 0xffff) / 65536) * 0.02;
+        const dmin = 0.005 + ((r[sb] >>> 16) / 65536) * 0.01;
+        host[sb * words] = (f32ToF16Bits(d) | (f32ToF16Bits(dmin) << 16)) >>> 0;
+      }
+      wBuf = device.createBuffer({ size: host.byteLength, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+      new Uint32Array(wBuf.getMappedRange()).set(host); wBuf.unmap();
+      weightUnique = N * upr * geom.deviceBytes;
+    } else {
+      const qsBytes = (N * K) / 2;
+      const scBytes = (N * K / 32) * 4;      // q4_1: UNA parola (d,m) per blocco
+      wBuf = device.createBuffer({ size: qsBytes, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+      fillRandomU32(new Uint32Array(wBuf.getMappedRange()), 4242); wBuf.unmap();
+      wScBuf = device.createBuffer({ size: scBytes, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+      {
+        const u = new Uint32Array(wScBuf.getMappedRange());
+        const r = new Uint32Array(u.length); fillRandomU32(r, 99);
+        for (let i = 0; i < u.length; i++) {
+          const d = 0.01 + ((r[i] & 0xffff) / 65536) * 0.02;
+          const m = -0.05 + ((r[i] >>> 16) / 65536) * 0.1;
+          u[i] = (f32ToF16Bits(d) | (f32ToF16Bits(m) << 16)) >>> 0;
+        }
+        wScBuf.unmap();
+      }
+      weightUnique = qsBytes + scBytes;
+    }
+
+    // --- attivazioni: f32 e la loro quantizzazione a i8, dallo STESSO seme --
+    const xBuf = device.createBuffer({ size: Mmax * K * 4, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+    fillRandomF32(new Float32Array(xBuf.getMappedRange()), 1337); xBuf.unmap();
+    const nBlk = K / 32;
+    const xHost = new Float32Array(Mmax * K);
+    fillRandomF32(xHost, 1337);
+    const xqHost = new Uint32Array(Mmax * nBlk * 8);
+    const xscHost = new Float32Array(Mmax * nBlk);
+    for (let m = 0; m < Mmax; m++) {
+      for (let b = 0; b < nBlk; b++) {
+        let amax = 0;
+        for (let i = 0; i < 32; i++) amax = Math.max(amax, Math.abs(xHost[m * K + b * 32 + i]));
+        const sc = amax / 127;
+        xscHost[m * nBlk + b] = sc;
+        const inv = sc > 0 ? 1 / sc : 0;
+        for (let i = 0; i < 32; i++) {
+          const q = Math.max(-127, Math.min(127, Math.round(xHost[m * K + b * 32 + i] * inv)));
+          xqHost[(m * nBlk + b) * 8 + (i >> 2)] |= (q & 0xff) << ((i & 3) * 8);
+        }
+      }
+    }
+    const xqBuf = device.createBuffer({ size: xqHost.byteLength, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+    new Uint32Array(xqBuf.getMappedRange()).set(xqHost); xqBuf.unmap();
+    const xscBuf = device.createBuffer({ size: xscHost.byteLength, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+    new Float32Array(xscBuf.getMappedRange()).set(xscHost); xscBuf.unmap();
+
+    const yBuf = device.createBuffer({ size: Mmax * N * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const partBuf = device.createBuffer({ size: KQUANT_SPLIT_K * Mmax * N * 4, usage: GPUBufferUsage.STORAGE });
+
+    for (const M of shape.Ms) {
+      const srcs = kquantVariants({ family, K, N, M });
+      const variants: VariantSpec[] = [];
+      const meta = new Map<string, { ops: Dispatch[]; ctx: string; wgs: number; emit: number; xEmit: number; disp: number; splits: number }>();
+      for (const s of srcs) {
+        const { pipeline, error } = await compile(device, s.code, `kquant-${family}-${s.id}-M${M}`);
+        if (!pipeline) {
+          skipped.push({ kernel: "gemm-kquant-multirow", variant: `${family}/${s.id}@M${M}`, shape: { K, N, M }, reason: `compilazione: ${error}` });
+          continue;
+        }
+        // I binding seguono la famiglia: Q5_K ha UN buffer di pesi, il q4_1 ne
+        // ha due (qs + scale), esattamente come il repack li produce.
+        const entries = family === "q5_K"
+          ? (s.idot
+            ? [
+              { binding: 0, resource: { buffer: wBuf } },
+              { binding: 1, resource: { buffer: xqBuf } },
+              { binding: 2, resource: { buffer: s.legacy ? yBuf : partBuf } },
+              { binding: 3, resource: { buffer: xscBuf } },
+            ]
+            : [
+              { binding: 0, resource: { buffer: wBuf } },
+              { binding: 1, resource: { buffer: xBuf } },
+              { binding: 2, resource: { buffer: s.legacy ? yBuf : partBuf } },
+            ])
+          : (s.idot
+            ? [
+              { binding: 0, resource: { buffer: wBuf } },
+              { binding: 1, resource: { buffer: wScBuf! } },
+              { binding: 2, resource: { buffer: xqBuf } },
+              { binding: 3, resource: { buffer: s.legacy ? yBuf : partBuf } },
+              { binding: 4, resource: { buffer: xscBuf } },
+            ]
+            : [
+              { binding: 0, resource: { buffer: wBuf } },
+              { binding: 1, resource: { buffer: wScBuf! } },
+              { binding: 2, resource: { buffer: xBuf } },
+              { binding: 3, resource: { buffer: s.legacy ? yBuf : partBuf } },
+            ]);
+        const bg = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries });
+        const ops: Dispatch[] = [{ pipeline, bindGroups: [bg], gx: s.grid[0], gy: s.grid[1], gz: s.grid[2] }];
+        if (!s.legacy) {
+          const c = await compile(device, splitKCombineWgsl({ K, N, M, splits: s.splits }), `kquant-${family}-${s.id}-combine-M${M}`);
+          if (!c.pipeline) {
+            skipped.push({ kernel: "gemm-kquant-multirow", variant: `${family}/${s.id}@M${M}`, shape: { K, N, M }, reason: `combine: ${c.error}` });
+            continue;
+          }
+          const cbg = device.createBindGroup({
+            layout: c.pipeline.getBindGroupLayout(0),
+            entries: [{ binding: 0, resource: { buffer: partBuf } }, { binding: 1, resource: { buffer: yBuf } }],
+          });
+          ops.push({ pipeline: c.pipeline, bindGroups: [cbg], gx: Math.ceil((M * N) / 64), gy: 1 });
+        }
+        meta.set(s.id, {
+          ops, ctx: s.ctx, wgs: workgroupStorageBytes(s.code),
+          emit: s.legacy ? M : 1, xEmit: s.legacy ? N : Math.ceil(N / 64), disp: ops.length, splits: s.splits,
+        });
+        variants.push({ id: s.id, ops, opsPerSample: GEMV_OPS_PER_SAMPLE, batched: false, rot: { i: 0 } });
+      }
+      if (variants.length === 0) continue;
+
+      onProgress(`kquant ${family} M=${M}: misura interleavata (${variants.length} varianti)…`);
+      const measured = await measureInterleaved(device, timer, variants, (m) => onProgress(`kquant ${family} M=${M} ${m}`));
+      const cks = new Map<string, Ck>();
+      for (const [id, m] of meta) {
+        await runOnce(device, m.ops);
+        cks.set(id, await readChecksum(device, yBuf, M * N));
+      }
+      const baseCk = cks.get("base-batch-z");
+      for (const [id, m] of meta) {
+        const mm = measured.get(id)!;
+        const ck = cks.get(id)!;
+        const relDiff = baseCk && baseCk.sum !== 0 ? Math.abs(ck.sum - baseCk.sum) / Math.abs(baseCk.sum) : null;
+        if (!Number.isFinite(ck.sum) || ck.sum === 0) {
+          skipped.push({ kernel: "gemm-kquant-multirow", variant: `${family}/${id}@M${M}`, shape: { K, N, M }, reason: `checksum sospetto (${ck.sum})` });
+          continue;
+        }
+        // Stessa postura della sezione (b): la via INTERA cambia l'aritmetica
+        // (attivazioni a 8 bit) e ha la tolleranza larga gia' pre-registrata in
+        // riga 1 di engine-ttft; le forme che riordinano solo le somme restano
+        // a 1e-3. Sopra la soglia la cella e' SBAGLIATA, non imprecisa, e viene
+        // scartata invece che pubblicata.
+        const tol = id === "splitk-idot" ? 2e-2 : 1e-3;
+        if (relDiff !== null && relDiff > tol) {
+          skipped.push({
+            kernel: "gemm-kquant-multirow", variant: `${family}/${id}@M${M}`, shape: { K, N, M },
+            reason: `checksum fuori tolleranza ${tol.toExponential(0)}: relDiff ${relDiff.toExponential(3)} (base ${baseCk!.sum}, variante ${ck.sum})`,
+          });
+          continue;
+        }
+        const st = stats(mm.gpu.length > 0 ? mm.gpu : mm.cpu);
+        const wEmitted = weightUnique * m.emit;
+        const xEmitted = m.xEmit * M * K * 4;
+        const emitted = wEmitted + xEmitted + M * N * 4;
+        const unique = weightUnique + M * K * 4 + M * N * 4;
+        cells.push({
+          kernel: "gemm-kquant-multirow", variant: `${family}/${id}`, shape: { K, N }, M,
+          context: `${label} — ${m.ctx}`,
+          dispatchesPerOp: m.disp, opsPerSample: GEMV_OPS_PER_SAMPLE, warmupDiscarded: WARMUP_SAMPLES,
+          timingSource: mm.gpu.length > 0 ? timingSource : "cpu",
+          msPerOp: st, cpuMsPerOp: stats(mm.cpu),
+          bytesUnique: unique, bytesEmitted: emitted,
+          effectiveGBps: unique / 1e6 / st.p50, emittedGBps: emitted / 1e6 / st.p50,
+          weightsPerSecond: (N * K * M) / (st.p50 / 1000),
+          weightBytesUnique: weightUnique, weightBytesEmitted: wEmitted, weightBytesPerToken: wEmitted / M,
+          tokensPerSecond: M / (st.p50 / 1000),
+          tflops: null,
+          workgroupStorageBytes: m.wgs,
+          checksum: ck.sum, checksumAbs: ck.abs, checksumRelDiff: relDiff,
+          hostState: o.hostState,
+          notes: `famiglia ${family}, ${m.splits > 0 ? `${m.splits} fette di K` : "nessuno split-K (forma legacy)"} — ${GEMV_OPS_PER_SAMPLE} op identiche per campione, p50 su ${st.n} campioni interleavati. weightBytesEmitted usa i byte DEVICE del formato (${geom.deviceBytes} B per ${geom.unit} pesi).`,
+        });
+      }
+    }
+    for (const b of [wBuf, wScBuf, xBuf, xqBuf, xscBuf, yBuf, partBuf]) b?.destroy();
   }
 
   // =========================================================================

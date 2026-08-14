@@ -4,7 +4,9 @@
 // run file in results/microbench/.
 //
 // Uso: BASE_URL=http://localhost:5199 node scripts/tt-microbench-run.mjs \
-//        [--label 4090-linux] [--host quiescent] [--ops 64]
+//        [--label 4090-linux] [--host quiescent] [--ops 64] [--tag ttft-riga1]
+// `--tag` decide sia il nome del file sia il `kind` dentro il JSON: chi misura
+// la fase 0 di un altro goal passa il proprio (es. --tag kquant-fase0).
 //
 // ATTENZIONE: due runner playwright sullo stesso profilo si bloccano a vicenda —
 // i bench browser vanno eseguiti UNO ALLA VOLTA. Il default di BASE_URL e' 5173:
@@ -19,6 +21,8 @@ const arg = (name, dflt) => {
 const LABEL = arg("label", "4090-linux");
 const HOST = arg("host", "quiescent");
 const SWEEP_OPS = Number(arg("ops", "64"));
+/** Prefisso del file E valore di `kind`: v. il commento accanto alla scrittura. */
+const TAG = arg("tag", "ttft-riga1");
 const PROFILE = process.env.E2E_PROFILE ?? "/tmp/blab-e2e-profile";
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist"];
@@ -202,9 +206,17 @@ if (status !== "done" || !report) {
 }
 
 report.limitSweep = sweep ?? null;
+// IL NOME E IL `kind` DEVONO DIRE LA STESSA COSA, e devono dire cosa c'e'
+// dentro. Il banco e' nato per la riga 1 di `engine-ttft` e da allora ha
+// acquisito le celle della fase 0 di `engine-kquant`: un file che si chiama
+// `ttft-riga1` e porta anche quelle mente per omissione, ed e' esattamente il
+// modo in cui questo repo si e' gia' fatto male una volta (landmine: «prima di
+// credere a un artefatto, leggi il suo kind, non il suo nome di file»).
+// `--tag` sposta ENTRAMBI, cosi' non possono divergere.
+report.kind = `microbench-${TAG}`;
 mkdirSync("results/microbench", { recursive: true });
 const ts = report.ts.replace(/[:.]/g, "-");
-const path = `results/microbench/ttft-riga1-${LABEL}-${ts}.json`;
+const path = `results/microbench/${TAG}-${LABEL}-${ts}.json`;
 writeFileSync(path, JSON.stringify(report, null, 2));
 console.log("[tt] scritto", path);
 

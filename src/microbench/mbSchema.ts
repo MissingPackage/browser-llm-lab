@@ -129,7 +129,7 @@ export interface KernelDecodeSkipped {
 // ===========================================================================
 
 export interface TtftCell {
-  kernel: "gemm-dense-f32" | "gemm-q4_0-multirow" | "attn-prefill-chunk";
+  kernel: "gemm-dense-f32" | "gemm-q4_0-multirow" | "attn-prefill-chunk" | "gemm-kquant-multirow";
   variant: string;
   shape: Record<string, number>;
   /** righe del chunk di prefill trattate insieme (1 = forma sequenziale) */
@@ -193,7 +193,17 @@ export interface TtftLimitSweep {
 
 export interface TtftRunFile {
   schemaVersion: typeof MICROBENCH_SCHEMA_VERSION;
-  kind: "microbench-ttft-riga1";
+  /**
+   * DUE goal scrivono questo schema, e il valore dice QUALE — perche' un
+   * artefatto si riconosce dal suo `kind`, non dal suo nome di file (landmine
+   * del progetto, pagata una volta). `--tag` del driver muove il nome e questo
+   * campo insieme, cosi' non possono divergere.
+   *   microbench-ttft-riga1   — engine-ttft riga 1: sonde del prefill q4_0
+   *   microbench-kquant-fase0 — engine-kquant riga 1: le famiglie non-q4_0
+   * L'insieme resta CHIUSO: un tag nuovo si aggiunge qui, non si inventa al
+   * volo sulla riga di comando.
+   */
+  kind: "microbench-ttft-riga1" | "microbench-kquant-fase0";
   goal: string;
   prereg: string;
   deviceLabel: string;

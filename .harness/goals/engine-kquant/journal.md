@@ -48,3 +48,70 @@ Segnalato al PI in chat; non entra nel contratto (nessuna baseline 9B esiste, e
 aggiungerlo raddoppierebbe le run di verifica).
 
 Prossima: riga 1, fase 0 al banco.
+
+## it.1 — riga 1: la fase 0 dice SI' a entrambe le famiglie cablabili (2026-08-14)
+
+**Comando esatto** (letto prima di spendere, come impone il protocollo):
+
+    setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
+    curl -s -o /dev/null -w "%{http_code}" http://localhost:5199/ttbench.html   # 200
+    BASE_URL=http://localhost:5199 node scripts/tt-microbench-run.mjs --label 4090-linux --host quiescent
+
+Artefatto: `results/microbench/ttft-riga1-4090-linux-2026-08-14T18-54-05-813Z.json`
+(18 celle `gemm-kquant-multirow`, **zero scartate**).
+
+**I NUMERI, a M=16 — che e' il punto di lavoro del prefill (`PREFILL_M`):**
+
+| famiglia | legacy (produzione) | splitk-idot | splitk-f32 |
+|---|---|---|---|
+| Q5_K `[4096, 2560]` | 1,2700 ms | **0,0452 ms = 28,07x** | 0,2058 ms = 6,17x |
+| Q4_1 `[9216, 2560]` | 2,3483 ms | **0,1040 ms = 22,58x** | 0,1412 ms = 16,63x |
+
+**La regola di stop (>= 1,5x) e' superata di un ordine di grandezza su
+entrambe: entrambe si cablano.** La via f32 e' sempre piu' lenta dell'intera ma
+sempre sopra la legacy a M >= 8: regge come fallback dichiarato.
+
+**IL CONTROLLO CHE VALE PIU' DEI NUMERI: il banco riproduce la produzione.** Il
+braccio legacy Q5_K misura **91 GB/s** di traffico pesi a M=16; il checkpoint di
+`engine-ttft` misura **89,9 GB/s** sul segmento `gemm:deltanet-out` in
+produzione. Due strumenti diversi, stessa cifra a meno dell'1,2%: il braccio di
+paragone non e' un'imitazione del percorso vecchio, e' il percorso vecchio.
+
+**PROIEZIONE sul segmento** (396 chunk = ceil(6333/16)):
+- Q5_K: 24 layer x 396 x 0,0452 = **430 ms** contro 12.169 ⇒ **−11,7 s**
+- Q4_1: 4 tensori x 396 x 0,1040 = **165 ms** contro ~3.720 (la quota Q4_1 dei
+  4.971 di `gemm:ffn-down`) ⇒ **−3,6 s**
+- TTFT 32.127 − 15,3 s ≈ **16,8 s**, cioe' sotto ANCHE la barra nice-to-have
+  (18.000). Con la penale di lettura fredda misurata sul q4_0 (+13% su
+  `splitk-coldw`) resta ~17,0 s.
+**Non e' un risultato: e' una proiezione da microbench.** Vale finche' non la
+smentisce il checkpoint della riga 5, ed e' li' che va verificata.
+
+**M=1 DICE UNA COSA CHE SERVIRA' AL CABLAGGIO**: a M=1 la forma split-K Q5_K in
+f32 e' PIU' LENTA della legacy (0,1491 contro 0,0829). Il combine dei parziali
+non si ammortizza su una riga sola. Il piano non deve instradare M=1 sulla forma
+multi-riga — oggi non lo fa per costruzione (la via veloce vive solo nel piano
+gemello del prefill), ma se un domani qualcuno la offrisse anche al decode,
+questo e' il numero che glielo vieta.
+
+**DIFETTO INCONTRATO SUL PERCORSO, TOLTO (non recintato)**: il driver del banco
+scriveva sempre `ttft-riga1-*` come nome file e `microbench-ttft-riga1` come
+`kind`, anche ora che il banco porta le celle di un ALTRO goal. E' la landmine
+del progetto («leggi il `kind`, non il nome del file») vista dal lato di chi
+PRODUCE l'artefatto. Aggiunto `--tag`, che muove nome e `kind` INSIEME cosi' non
+possono divergere, e l'unione dei `kind` in `mbSchema.ts` resta chiusa (un tag
+nuovo si aggiunge al tipo, non si inventa sulla riga di comando).
+**Conseguenza onesta**: l'artefatto di questa iterazione porta ancora il `kind`
+vecchio, perche' e' stato scritto prima della correzione. Non lo riscrivo a
+posteriori — un artefatto di misura ritoccato dopo il fatto non e' piu' una
+misura. La riga 1 si chiude in it.2 con una run che porta tutte e cinque le
+famiglie e il tag giusto, e QUELLA supersede questa.
+
+**Gate**: `npx tsc --noEmit` pulito · `npx vitest run` **695 passed | 10
+skipped** (erano 680, +15 dal test nuovo senza GPU). Nessun file di
+`src/engine/` toccato oltre a due union di tipo: questa riga non tocca il motore
+per contratto.
+
+Prossima: it.2 — Q4_K, Q6_K, Q8_0 al banco (shape 35B dall'header dump, celle a
+`splits` 1 o 2 dove il superblocco non si divide in 4) e run finale con
+`--tag kquant-fase0`.
