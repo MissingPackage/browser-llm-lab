@@ -2,204 +2,63 @@
 
 ## 1. Next decidable
 
-**Goal `engine-kernel-decode` CHIUSO: l'obiettivo di prodotto è superato sul
-4B.** Il decode a contesto realistico (6333 posizioni) è passato da **9,95 a
-47,93 token/s** — **4,82×**, contro una soglia di 30 — e il contesto ormai non
-si paga quasi più: 0,15 µs per posizione contro 10,4.
+**Goal `engine-ttft`: CONSUNTIVO PRONTO, chiusura formale al PI.** Il tempo al
+primo token a modello caldo sul prompt da 6333 token e' passato da **87.618 a
+32.127 ms — 2,727x**. La barra meccanica del contratto era **< 21.905 ms** e
+**NON e' stata raggiunta**: manca 1,467x. Consuntivo voce per voce, con
+l'artefatto accanto a ogni clausola, in
+`docs/engine/ttft-consuntivo-2026-08-14.md`.
 
-Due leve, entrambe scelte da una fase di sole misure che aveva il potere di
-chiudere il goal: l'**attenzione** col contesto spezzato su più gruppi di lavoro
-e softmax in streaming (2,72×), e i **moltiplicatori quantizzati** con letture
-vettoriali, due righe per gruppo e riduzione di sottogruppo dove è dimostrabile
-che è sicura (1,77× ulteriore). La stessa fase ha **escluso** la fusione delle
-teste GQA: misurata più lenta.
+**Dieci clausole su dodici sono soddisfatte. Le due che cadono sono la stessa —
+la barra — e la causa e' MISURATA e stava fuori dalla portata di questo goal.**
 
-**Goal `engine-ttft` APERTO e IN CORSO** (2026-08-13): portare il tempo al primo
-token **a modello caldo** — `prefill.ms + decode.firstMs` — sul prompt da 6333
-token **il più in basso che questa macchina consenta**. Righe 0 e 1 CHIUSE.
+**LA SCOPERTA CHE CAMBIA IL PIANO, ed e' la cosa da leggere prima di
+prioritizzare qualunque cosa.** Il primo termine del prefill e'
+`gemm:deltanet-out`: **37,9% del tempo con soli 24 dispatch**, uno per layer
+DeltaNet, mentre la via veloce ne emette tre. Cade sul **fallback legacy**
+perche' `ssm_out` e' **Q5_K** e la via veloce e' q4_0-only per costruzione:
+riuso dei pesi zero, riletti 16 volte per chunk, **89,9 GB/s** su un motore che
+ne ha dimostrati ~300.
 
-**IL BERSAGLIO DEI 4 SECONDI È STATO TOLTO DAL PI** (2026-08-13, dopo la riga 1):
-«va bene se non arriviamo a 4 secondi su questa macchina, scendiamo il più
-possibile». Poiché «il più possibile» non è graduabile da un verificatore, la
-forma meccanica è in tre clausole: TTFT a caldo **< 21.905 ms** (un quarto della
-baseline) · **esaurimento delle leve**, ognuna in produzione o esclusa coi numeri
-· **contabilità del tetto residuo** per segmento. Autorizzato anche il dot
-product intero come leva di questo goal.
+Quindi: **l'11,54% dei byte che il ruling del riuso aveva assegnato al goal
+K-quant COME CODA e' il 37,9% del TEMPO.** La quota di byte sottostimava il peso
+proprio perche' la forma legacy rilegge i pesi M volte. Il goal K-quant non e'
+un completamento: **e' la leva piu' grande rimasta sul tempo al primo token.**
 
-**Baseline (it.1)**: TTFT a caldo **87.618 ms**; la barra meccanica è 21.905 ⇒
-serve 4,0×. Scomposto: caricamento 10.892 · lettura del prompt 87.582 (6332
-token a 72,30 tok/s) · primo token 36 ms. Decode 47,79 tok/s a contesto 6333.
+**TRE COSE ASPETTANO IL PI** (docket item 27 le raccoglie):
+1. **La chiusura formale del goal con la barra mancata** — funzione obiettivo,
+   non la decido io.
+2. **item 25** — cosa promette il DONE WHEN sulla portabilita'.
+3. **item 26** — il porting del path 0.5B come goal suo: sono **quattro**
+   kernel, e uno (il down-proj del decode) **non e' raggiungibile dalla forma
+   multi-riga**, perche' gira a M=1 e non e' un GEMM di prefill.
 
-**LA METRICA SI È MOSSA — righe 2 e 3, it.14→it.18:**
+**Le leve, tutte in produzione e misurate prima/dopo**: moltiplicatore
+multi-riga `splitk` (34,36 -> 111,16 tok/s) · via intera `dot4I8Packed`
+(-> 123,26) · attenzione del prefill in streaming (-> 196,41).
 
-| | prefill | TTFT a caldo | decode |
-|---|---|---|---|
-| baseline (it.1) | 72,30 tok/s | 87.618 ms | 47,79 |
-| split-K f32 (it.14) | 110,19 | 57.485 | 49,59 |
-| via intera (it.15) | 123,26 | 51.392 | 48,00 |
-| **attenzione in streaming (it.17)** | **196,41** | **32.265** | 47,89 |
+**ESCLUSE COI NUMERI — l'eredita' piu' utile per chi riprende:**
+- **fusione delle teste GQA sul prefill: PIU' LENTA** (2,0879 contro 1,8207 ms).
+  Sul decode aveva funzionato: il verso e' opposto, e chi riprova deve saperlo.
+- **il tetto di memoria di gruppo negoziabile non e' una leva** (spread 0,1-2,3%).
+- **la ricorrenza DeltaNet NON e' il collo**: 5,0% del tempo contro il 47,3% dei
+  dispatch. **Contare i dispatch non e' misurare il tempo** — l'ho concluso in
+  it.23 dal solo conteggio, ed e' finito in un HANDOFF prima che il cronometro
+  lo smentisse in it.25.
 
-**2,72× sulla baseline; alla barra dei 21.905 manca 1,47×.** Gate verificati in
-it.18 da sessione indipendente, non ereditati: tsc pulito · vitest **671\|10** ·
-ktest **101 PASS / 0 FAIL** · decode in banda. Artefatto
-`results/engine/ttft-riga3-4b-attnstream-prompt0-2026-08-14.json`.
+**Dove finisce il tempo** (checkpoint
+`results/engine/q35-ttft-kernel-checkpoint-4b-2026-08-14.json`): 70,9% dentro i
+pass GPU, **29,1% fuori** (encode CPU, submit, buchi fra submit — non attribuito
+piu' finemente, e lo dichiaro). **1,578 TFLOP/s contro il picco fp32 misurato di
+9,26 = 17%**: non e' un'efficienza, e' la prova che **il collo non e' l'ALU**.
 
-**IL LOOP È FERMO, E NON PER FINE LAVORO.** Schedulare un risveglio **è**
-l'azione che arma la duplicazione della sessione da parte del watchdog: in tre
-ore ne ha generate quattro (v. Landmines). Il lavoro che resta è eseguibile, ma
-va fatto in una sessione con un umano presente, oppure dopo aver corretto
-`~/Projects/harness/tools/loop-watchdog.sh`.
+**Gate alla chiusura**: tsc pulito · vitest **680 | 10** · ktest **101 PASS /
+0 FAIL** · top-1 contro l'oracolo llama.cpp **1012/1024 = 98,828% su ENTRAMBI i
+bracci** · sequenze generate **identiche 8/8** · decode **48,15** tok/s (soglia
+45,5).
 
-**DUE COSE SERVONO AL PI PRIMA DELLA CHIUSURA:**
-1. **Il criterio del gate di conformità** (docket item 22): `q35-prefillchunk-4b`
-   pretende la BIT-IDENTITÀ, che è caduta in it.15 quando la via intera ha
-   iniziato a quantizzare le attivazioni a int8. Non è una regressione, è un
-   criterio diventato inapplicabile — ma **finché non c'è il ruling, la riga 5
-   non può dichiarare i ratchet intatti**. Raccomandazione già a docket: argmax
-   al posto dei bit, col numero accanto.
-2. **Se correggere il watchdog** (altro repo, non toccato).
-
-**RESIDUO TECNICO, piccolo e noto**: la tolleranza dell'attenzione vive come due
-costanti locali in `ktest.worker.ts:2987` invece che in `attnchunktol.ts` — T2
-del conductor è BLOCKED per ownership sovrapposta con T1 (docket item 23), si
-rifà a mano sopra il codice di T1. Più la clausola (d) della riga 2, il cui
-censimento è **già fatto** in it.17 e va solo scritto. Poi righe 4, 5, 6.
-
-**Il riavvio della macchina ha risolto i crash**: `ktest` fa 100 PASS / 0 FAIL
-sullo stesso codice che prima faceva morire la pagina. La causa era
-infrastrutturale, non il cablaggio — e **cade anche la conclusione sul
-`sdd-conductor`**: le sue 5 morti erano lo stesso segnale 144 che uccideva un
-ktest sano, non un limite del veicolo.
-
-**Il buco trovato in it.15 vale più del guadagno**: `prefillgemmplan.ts`
-esisteva già — completo, coi suoi test — e `q35gpumodel.ts` **non lo importava**
-(zero riferimenti). Il sito ri-derivava a mano la condizione e finiva sempre
-sulla via f32, che il kernel stesso documenta come fallback. È la stessa forma
-del difetto di it.7 del goal precedente («un terzo posto che decide la stessa
-cosa»), e il commento che la nomina era tre righe sotto il codice che la
-ripeteva. **Un piano non collegato non è un piano: è documentazione.**
-
-**LE DUE RISPOSTE DELLA FASE DI SONDE (it.2), verificate a mano contro
-l'artefatto**:
-
-1. **Le leve esistono, e sono grosse.** La regola di stop NON scatta: a M=16 il
-   moltiplicatore multi-riga passa da 2,6225 a **0,0609 ms = 43,1×** sulla forma
-   attuale; l'attenzione del prefill da 12,2993 a **1,8207 ms = 6,76×** a
-   contesto 6333. I byte di peso per token prefillato scendono da 13,27 MB a
-   0,83 = **16×**, cioè il massimo teorico a M=16 e il doppio di quanto il
-   done-when della riga 2 chiede.
-2. **Il bersaglio dei 4 secondi NON è raggiungibile su questa macchina.**
-   Proiezione dalla formula fissata prima di misurare, coi tempi misurati:
-   5.776 ms di moltiplicazioni + 2.888 di attenzione = **8.665 ms**, ed è un
-   PAVIMENTO — non conta i 24 layer DeltaNet, le norm, il RoPE, i dispatch. È
-   10,1× sulla baseline e 2,2× sopra i 4 s. **Dopo il ruling questo non è più un
-   fallimento**: la riga 5 non sceglie fra «raggiunto» ed «escluso», contabilizza
-   la discesa e il tetto. Il pavimento proiettato sta comodamente sotto la barra
-   dei 21.905.
-
-**IL MODELLO MENTALE DEL GOAL ERA SBAGLIATO, ed è la scoperta che conta** (docket
-item 10). Il piano diceva «il prefill è limitato dalla banda sui pesi, il riuso è
-la leva». Vero sulla forma attuale, **falso su tutte le forme candidate**: appena
-il riuso c'è, il collo si sposta sull'**occupancy** e la banda misurata crolla a
-108 GB/s su un device che ne fa 300+. Due conferme indipendenti: `splitk` batte
-`regs` di 2,13× a parità di corpo e di workgroup storage, solo con 576 workgroup
-invece di 144; e la fusione GQA taglia il traffico KV di 4× ed è **più lenta**,
-perché scende da 256 a 64 workgroup su 76 SM. **La riga 3 non deve adottare la
-fusione GQA "perché sul decode ha funzionato": sul prefill la misura dice il
-contrario.**
-
-**Il tetto negoziabile non è una leva**: spazzando il limite concesso su
-{16.384, 24.576, 32.768, 49.152} il throughput non si muove in modo utile. La
-riga 1 aveva concluso «piatto entro ±5%»; **rigirando lo sweep in it.4 lo spread
-è 7,6% e 8,6% su due forme su tre** — la conclusione regge nella sostanza ma è
-più debole di come è stata scritta, e chi la cita deve saperlo.
-La forma vincente chiede **4.096 B a M=16**, sotto il pavimento di spec — quindi
-il conflitto mMax-vs-shared del docket item 1 **non esiste** per la forma che
-vince, e la portabilità della riga 4 si ottiene gratis. Il legacy dell'attenzione
-invece non crea nemmeno la pipeline sotto i 32.768 B.
-
-**IL RIAVVIO HA RISPOSTO: ERA L'INFRASTRUTTURA** (it.14, 2026-08-14). Server
-avviato staccato, stesso ramo, stesso comando: **ktest 100 PASS · 0 FAIL ·
-exit 0**. Il cablaggio dell'assemblatore era sano; ciò che moriva ieri era il
-reaping al confine di turno. **Mergiato in main (`7bc6b55`).** Di conseguenza va
-riletta anche la conclusione «il conductor non chiude un task di questa classe
-qui»: 5 morti su 5 erano lo stesso segnale 144, non un limite del veicolo.
-
-**Stato della metrica: TTFT a caldo 87.618 → 56.984 ms = 1,54×.** Misurato col
-comando identico alla baseline (`--prompt-idx 0 --n-decode 64 --vram-gib 8
---declared quiescent --prefill-m 16`), artefatto
-`results/engine/ttft-riga2-4b-splitk-m16-prompt0-2026-08-14.json`:
-prefill **34,36 → 111,16 tok/s = 3,24×** sul braccio chunked M=16 (1,54× sul
-sequenziale, che era il path migliore di allora) · `prefill.ms` 56.961 ·
-`firstMs` 23 · decode 47,17 tok/s a ctx 6333 (−1,30% su 47,79: dentro la banda).
-Barra del contratto **< 21.905 ms** ⇒ **manca 2,60×**.
-
-**LA PROSSIMA COSA DA FARE, ED È UN BUCO DEL CABLAGGIO, NON UNA RIGA NUOVA.**
-Il done-when (a0) della riga 2 dice «se `idot` vince, è LEI la forma che va in
-produzione». `idot` ha vinto (1,745× sopra la f32, it.6). Ma
-`q35gpumodel.ts:746` chiama `prefillGemmQ4SplitKWgsl` — la via **f32**, che il
-commento del kernel stesso (`wgsl.ts:3795`) dichiara «FALLBACK DICHIARATO ...
-non come alternativa preferibile». `prefillGemmQ4SplitKIdotWgsl`
-(`wgsl.ts:3718`) è in albero, portata riga-per-riga dal banco, col suo test di
-divergenza testuale — **e nessun call-site la raggiunge**. `gpulimits.ts`
-conosce già il flag `prefillGemmIdot`: il punto d'innesto c'è, mancano la scelta
-a runtime sulla language feature e il ramo che la usa. Manca anche la clausola
-(d) della riga 2, la copertura dei siti con worklist.
-
-**Le tre leve sono tutte MISURATE**: moltiplicatore multi-riga `splitk` **38,0×**
-a pesi freddi — **IN PRODUZIONE da it.14**, ma nella variante f32 · via intera
-q4_0×q8_0 **1,745×** sopra di lui, quantizzazione delle attivazioni compresa
-(costa il 5,6%) — **in albero, non chiamata** · attenzione del prefill in
-streaming **6,76×** a contesto 6333 — **in albero, non chiamata** (riga 3:
-`attnDecodeWgsl` con `batch` instrada ancora al legacy).
-**Il divario fra i 43,1× del banco sul kernel e gli 1,54× end-to-end dice dove
-sta ora il tempo: il moltiplicatore non è più il termine dominante, lo è
-l'attenzione.** È l'argomento per fare la riga 3 prima o insieme all'idot.
-
-**Ruling del PI del 2026-08-13 sulla barra del riuso**: da ≥ 8× a **≥ 5,5×
-sull'inventario per-layer INTERO**. Il ≥ 8× era irraggiungibile a qualunque M
-praticabile (tetto 8,67×, servirebbe M ≥ 92) perché la forma nuova è q4_0-only e
-l'11,54% dei byte del 4B — 24 `ssm_out` Q5_K + 4 `ffn_down` Q4_1 — resta sul
-percorso vecchio. **Il residuo è scope del goal K-quant** e va nominato nel
-consuntivo di questo, non lasciato implicito.
-
-**Il modello mentale del goal era sbagliato, ed è la scoperta che vale più dei
-rapporti**: il piano diceva «il prefill è limitato dalla banda sui pesi». Vero
-sulla forma attuale, falso su tutte le candidate — appena il riuso c'è, il collo
-si sposta sull'**occupancy** e la banda misurata crolla a 108 GB/s su un device
-che ne fa 300+. Due conferme indipendenti: `splitk` batte `regs` di 2,13× a
-parità di corpo e di memoria condivisa, solo con 576 gruppi di lavoro invece di
-144; e la fusione GQA taglia il traffico KV di 4× ed è **più lenta**, perché
-scende da 256 a 64 gruppi su 76 processori. **La riga 3 non deve adottare la
-fusione GQA "perché sul decode ha funzionato": sul prefill la misura dice il
-contrario.**
-
-**Il veicolo `sdd-conductor`: la conclusione di ieri è SOSPESA, non confermata.**
-5 lanci, 5 morti, tutte al confine del turno — ma il riavvio ha dimostrato che
-quel confine uccideva anche un ktest sano. Il veicolo non è stato riprovato dopo
-il riavvio, quindi «non chiude un task di questa classe qui» oggi non ha
-evidenza: ha solo una causa alternativa più semplice. Il lavoro sincrono
-continua a reggere (tutte le misure GPU, tutti i gate, tutti i merge).
-
-**Il 35B non ha ricevuto nulla da questo goal, ed e' misurato**: non ha un solo
-tensore Q4_0 (Q8_0 251 · Q4_K 117 · Q6_K 4), e la forma nuova dei
-moltiplicatori e' q4_0-only per costruzione. Portarlo dove sono 4B e 9B vuol
-dire **dare alle famiglie K-quant e Q8_0 la stessa fase 0 che ha avuto la
-q4_0** — una misura loro, non un'estensione a intuito del kernel esistente. E'
-un goal suo, accanto a quello sul tempo al primo token. Nella chat del
-2026-08-13 il 35B ha reso 9,58 tok/s: numero a FREDDO (primo turno dopo il
-load, 13 GiB di tetto per un modello da 20,9), contro i 22,6 di riferimento a
-caldo — il divario e' paginazione, non kernel.
-
-**Cinque cose aperte che ho registrato e non deciso** (docket del goal chiuso):
-il conductor troncava le patch a 16 KB — **CORRETTO alla fonte dalla sessione
-harness** (`59e19d3`), installato qui · il done-when sulla portabilità chiede
-più di quanto quella fase potesse dare: ereditato da `engine-ttft` riga 4, e il
-suo senso cambia ora che il tetto WebGPU è verificato **negoziabile** · `--out`
-assoluto/relativo: erano **nove** runner con due convenzioni opposte, il primo
-(`q35-bench-run`) **corretto in it.1**, gli altri otto a docket · due call-site
-GLM nel ktest non congelati · `hostState.declared` è una promessa che nessun
-runner verifica.
+**Goal `engine-kernel-decode` CHIUSO** (2026-08-13): decode a contesto 6333 da
+9,95 a 47,93 tok/s, 4,82x, sopra la soglia di prodotto di 30.
 
 ## 2. Mappa
 
@@ -209,11 +68,14 @@ Il secondo termine è un'aspirazione di prodotto, non una promessa di questa
 macchina: su un prompt da 6k il 4B ha un pavimento misurato di ~9,4 s, e il PI
 ha riscritto l'obiettivo del goal in «il più in basso possibile» (2026-08-13).
 
-**Distanza adesso**: Qwen 4B **47,17 tok/s a contesto 6333** (era 9,95) —
+**Distanza adesso**: Qwen 4B **48,15 tok/s a contesto 6333** (era 9,95) —
 **sopra i 30 dell'obiettivo**. Il TTFT a caldo sul prompt da 6333 token è
-**57,0 s MISURATO** (it.14, era 87,6 in it.1) contro una barra di 21,9 s: manca
-2,60×, e il pavimento misurabile della macchina è ~9,4 s. È la metà
-dell'obiettivo di prodotto ancora aperta, ed è il goal `engine-ttft`.
+**32,1 s MISURATO** (it.25, era 87,6 in it.1) contro una barra di 21,9 s: manca
+**1,47×**. Il goal `engine-ttft` ha il consuntivo pronto e la barra NON
+raggiunta; la causa è misurata e sta **fuori dalla sua portata** — il 37,9% del
+prefill è un `ssm_out` **Q5_K** sul percorso vecchio, e le leve di questo goal
+sono q4_0-only per costruzione. **La prossima leva sul tempo al primo token è il
+goal K-quant**, che finora era registrato come una coda.
 GLM-4.7-Flash resta residency-bound
 (~13 tok/s, TTFT 14,7): nessuna delle leve di questo goal lo tocca. Il 35B non
 è stato rimisurato dopo i kernel nuovi.

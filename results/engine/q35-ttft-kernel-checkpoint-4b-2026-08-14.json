@@ -193,6 +193,28 @@
    "wgMax": 256
   }
  ],
+ "banda": [
+  {
+   "cat": "gemm:deltanet-out",
+   "forma": "legacy",
+   "tensori": "24 ssm_out Q5_K",
+   "bytePerPassata": 173015040,
+   "byteTotali": 1093455052800,
+   "msTotale": 12169.1,
+   "gbs": 89.9,
+   "nota": "89,9 GB/s su un device che ne ha dimostrati ~300 sulla scansione KV. Lento E con 16x i byte che servirebbero: e' la forma senza riuso."
+  },
+  {
+   "cat": "gemm:qkv",
+   "forma": "multirow",
+   "tensori": "80 attn Q4_0",
+   "bytePerPassata": 589824000,
+   "byteTotali": 232980480000,
+   "msTotale": 315.6,
+   "gbs": 738.2,
+   "nota": "738 GB/s e' SOPRA la banda DRAM di questo device: non e' traffico verso la memoria, e' la cache che serve i pesi fra un chunk e il successivo. Il numero dice che il riuso funziona, non che la DRAM vada cosi'."
+  }
+ ],
  "calcolo": {
   "flopPrefill": 50656000000000,
   "tflopsSostenuti": 1.578,

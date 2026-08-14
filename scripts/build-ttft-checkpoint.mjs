@@ -94,6 +94,30 @@ const out = {
 
   segmenti,
 
+  // BANDA EFFICACE PER SEGMENTO — la voce del done-when che chiede i GB/s.
+  // Attribuita SOLO dove i byte si possono legare all'inventario pinnato
+  // (tests/engine-prefillgemmplan.test.ts, HIST_4B): un GB/s inventato su una
+  // stima di byte direbbe una cosa per un'altra.
+  banda: [
+    {
+      cat: "gemm:deltanet-out", forma: "legacy", tensori: "24 ssm_out Q5_K",
+      bytePerPassata: 173_015_040,
+      // legacy = M gemv replicate: i pesi si rileggono M volte PER CHUNK
+      byteTotali: 173_015_040 * M * nChunk,
+      msTotale: segmenti.find((x) => x.cat === "gemm:deltanet-out")?.msTotale ?? null,
+      gbs: +((173_015_040 * M * nChunk) / 1e9 / ((segmenti.find((x) => x.cat === "gemm:deltanet-out")?.msTotale ?? 1) / 1000)).toFixed(1),
+      nota: "89,9 GB/s su un device che ne ha dimostrati ~300 sulla scansione KV. Lento E con 16x i byte che servirebbero: e' la forma senza riuso.",
+    },
+    {
+      cat: "gemm:qkv", forma: "multirow", tensori: "80 attn Q4_0",
+      bytePerPassata: 589_824_000,
+      byteTotali: 589_824_000 * nChunk,
+      msTotale: segmenti.find((x) => x.cat === "gemm:qkv")?.msTotale ?? null,
+      gbs: +((589_824_000 * nChunk) / 1e9 / ((segmenti.find((x) => x.cat === "gemm:qkv")?.msTotale ?? 1) / 1000)).toFixed(1),
+      nota: "738 GB/s e' SOPRA la banda DRAM di questo device: non e' traffico verso la memoria, e' la cache che serve i pesi fra un chunk e il successivo. Il numero dice che il riuso funziona, non che la DRAM vada cosi'.",
+    },
+  ],
+
   calcolo: {
     flopPrefill: FLOP,
     tflopsSostenuti: +(FLOP / (b.prefill.ms / 1000) / 1e12).toFixed(3),

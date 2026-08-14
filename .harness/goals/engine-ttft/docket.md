@@ -1089,3 +1089,42 @@ o un K diverso cambierebbero ramo in silenzio; il termine del decode non è
 nominato in nessun documento; e il test che scansiona il WGSL guarda i kernel
 d'attenzione ma mai la famiglia dei GEMM di chunk, che è il motivo per cui la
 svista non poteva cadere da sola.
+
+## item 27 — TRIAGE DI CHIUSURA: cosa resta aperto, e a chi (io → PI, it.26)
+
+Consuntivo in `docs/engine/ttft-consuntivo-2026-08-14.md`.
+
+**CHIUSI nel goal**: 1 (plan-check), 6 (tetto negoziabile: non e' una leva), 11
+(dot product intero: autorizzato, montato, 1,745x), 13 (il ktest usciva 0 senza
+girare), 14 (costo della quantizzazione delle attivazioni), 19 (barra del riuso),
+20 (cablaggio verificato), 21 (fusione GQA esclusa coi numeri), 22 (criterio del
+gate: sospensione con scadenza armata), 23 (il conductor regge), 24 (la costante
+era giusta per coincidenza).
+
+**SUPERATI DAI FATTI**: 15, 16, 17, 18 — le quattro diagnosi «il veicolo
+`sdd-conductor` non chiude un task di questa classe qui». Erano una diagnosi
+sbagliata di una causa infrastrutturale: le morti erano il segnale 144 al confine
+di turno, e dopo il riavvio il veicolo ha completato al primo tentativo (item
+23). **Non cancellati**: restano come storia di un'attribuzione sbagliata, che e'
+il loro valore.
+
+**APERTI, e sono tutti e tre del PI:**
+
+1. **La chiusura formale del goal con la barra mancata.** 32.127 ms contro
+   21.905. Dieci clausole su dodici sono soddisfatte, la causa delle due che
+   cadono e' misurata ed e' fuori dalla portata di questo goal (v. sotto). Non
+   la decido io: «cosa il DONE WHEN promette» e' funzione obiettivo, ed e' la
+   sola classe che il protocollo mi vieta.
+2. **item 25** — cosa promette il DONE WHEN sulla portabilita', ora informato
+   dall'item 26.
+3. **item 26** — il porting del path 0.5B come goal suo (quattro kernel, uno non
+   raggiungibile dalla forma multi-riga).
+
+**E UNA COSA CHE IL PI DEVE SAPERE PRIMA DI PRIORITIZZARE**, perche' ribalta un
+suo ruling precedente: l'11,54% dei byte che l'item 19 aveva assegnato al goal
+K-quant **come coda** e' il **37,9% del tempo** del prefill. La quota di byte
+sottostimava il peso perche' la forma legacy rilegge i pesi M volte. Il goal
+K-quant non e' un completamento: e' **la leva piu' grande rimasta sul tempo al
+primo token**.
+
+**RULING:** _

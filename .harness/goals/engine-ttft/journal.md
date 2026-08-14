@@ -1267,3 +1267,55 @@ e non un comando incollato qui: il checkpoint si rifà a ogni cambio di kernel, 
 un conto ricopiato a mano è un conto che la prossima volta nessuno ripete
 uguale. Ha la sentinella sul `kind` dei due artefatti che unisce — la landmine
 di HANDOFF nasce da un file il cui nome diceva una cosa e il contenuto un'altra.
+
+---
+
+## it.26 (2026-08-14, riga 6) — chiusura: dieci clausole su dodici, e la barra mancata ha una causa misurata
+
+**RIGA 6 CHIUSA. Il goal ha il consuntivo pronto e la chiusura formale è del
+PI.** Consuntivo in `docs/engine/ttft-consuntivo-2026-08-14.md`, DONE WHEN voce
+per voce con l'artefatto accanto a ognuna — non a memoria.
+
+**TTFT a caldo 87.618 → 32.127 ms = 2,727×. Barra < 21.905: NON raggiunta,
+manca 1,467×.**
+
+**Dieci clausole su dodici soddisfatte. Le due che cadono sono la stessa** — la
+barra, e la sua gemella `prefill.tokS > 289` (misurato 197,25), che è la stessa
+clausola vista dal lato del rate.
+
+**Non la chiamo un fallimento e non la chiamo un successo: la chiamo col suo
+numero, e dico perché.** Il primo termine del prefill è `gemm:deltanet-out`,
+37,9% del tempo con 24 dispatch, e cade sul fallback legacy perché `ssm_out` è
+Q5_K mentre tutte le leve di questo goal sono **q4_0-only per costruzione** —
+scritto nel contratto fra i vincoli, non scoperto adesso. Il goal ha esaurito le
+leve che poteva usare; quello che resta non era suo.
+
+**Ultima voce del done-when chiusa in questa iterazione: la banda per segmento.**
+`gemm:deltanet-out` muove **1.093 GB a 89,9 GB/s** su un motore che ne ha
+dimostrati ~300 — lento *e* con 16× i byte che servirebbero. `gemm:qkv` sta a
+**738 GB/s**, che è sopra la DRAM di questo device: non è traffico verso la
+memoria, è la cache che serve i pesi fra un chunk e il successivo. **Il numero
+dice che il riuso funziona, non che la memoria vada così**, e l'ho scritto
+nell'artefatto perché chi lo cita non lo prenda per una banda.
+L'ho attribuita **solo** ai due segmenti i cui byte si legano all'inventario
+pinnato: un GB/s calcolato su una stima di byte direbbe una cosa per un'altra.
+
+**TRIAGE DEL DOCKET** (item 27). Undici item chiusi. Quattro — le diagnosi
+«il conductor non regge» — marcati **superati dai fatti** e non cancellati:
+restano come storia di un'attribuzione sbagliata, che è il loro valore. Tre
+aperti, tutti del PI: la chiusura formale con la barra mancata, cosa promette il
+DONE WHEN sulla portabilità, e il porting del 0.5B come goal suo.
+
+**E una cosa che il PI deve sapere prima di prioritizzare**, perché ribalta un
+suo ruling: l'11,54% dei byte che l'item 19 aveva assegnato al goal K-quant
+**come coda** è il **37,9% del tempo**. La quota di byte sottostimava il peso
+perché la forma legacy rilegge i pesi M volte — la stessa asimmetria che rende
+il riuso una leva. Il goal K-quant non è un completamento: è la leva più grande
+rimasta sul tempo al primo token.
+
+**HANDOFF §1 riscritto e §2 corretta**: la Mappa era ferma a 57,0 s di it.14 ed
+è la sezione che qualcuno legge per prima.
+
+**Il loop si ferma qui, per esaurimento del lavoro decidibile**: tutto ciò che
+resta è una decisione del PI, e le tre sono in chat. Non invento scope per
+tenerlo vivo.
