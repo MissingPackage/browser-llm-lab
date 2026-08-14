@@ -428,16 +428,28 @@ describe("workgroup storage: il GEMM multi-riga del prefill", () => {
   // device non vede. A M=16 le due forme non si distinguono (4.096 < 30.848: il
   // max non cambia), quindi si SONDA l'aritmetica a un M in cui il GEMM domina.
   // Se il termine uscisse dal `Math.max`, questo test cadrebbe da solo.
+  //
+  // LA SONDA GIRA SULLA VIA f32, e da oggi non e' un dettaglio (task
+  // limits-q5k). Accanto a questo termine ne vive un secondo, il GEMM q5_K di
+  // `ssm_out`, e sul peggiore-delle-due-vie quello e' PIU' RIPIDO (320·M contro
+  // 256·M): a M=256 vincerebbe lui, e la sonda misurerebbe il vicino invece del
+  // termine che vuole isolare. Sulla via f32 il rapporto si inverte (256·M
+  // contro 128·M) ed e' di nuovo QUESTO termine a decidere il `value` — quindi
+  // la sonda torna a cadere da sola se il termine q4_0 uscisse dal `Math.max`.
+  // Il numero pinnato non cambia: `prefillGemmWorkgroupStorageBytes(GEMM(M))`
+  // senza via risponde gia' il peggiore, che per il q4_0 E' la f32.
   it("il termine entra nel value negoziato, non solo nel consumer", () => {
     const M = 256; // sonda: 256·16·16 = 65.536 B > 30.848 del path fuso
     expect(prefillGemmWorkgroupStorageBytes(GEMM(M))).toBe(65_536);
-    expect(storageNeed({ ctxMax: 6400, prefillM: M }).value)
+    expect(prefillGemmWorkgroupStorageBytes(GEMM(M), "f32"))
+      .toBe(prefillGemmWorkgroupStorageBytes(GEMM(M)));
+    expect(storageNeed({ ctxMax: 6400, prefillM: M, prefillGemmIdot: false }).value)
       .toBe(prefillGemmWorkgroupStorageBytes(GEMM(M)));
     // ...e a ogni M il value e' esattamente il maggiore fra il path fuso e il
     // termine dichiarato: ne' sotto (dichiarazione muta) ne' sopra (requisito
     // gonfiato). 121 e' il primo M in cui il GEMM supera i 30.848.
     for (const M2 of [8, 16, 32, 121]) {
-      const need = storageNeed({ ctxMax: 6400, prefillM: M2 });
+      const need = storageNeed({ ctxMax: 6400, prefillM: M2, prefillGemmIdot: false });
       expect(need.value, `M=${M2}`).toBe(
         Math.max(QWEN_WORKGROUP_STORAGE_BYTES, gemmTerm(need.consumer).bytes));
     }
@@ -553,5 +565,122 @@ describe("garanzia: il ramo batch dell'attenzione e' contato e non alza il requi
     expect(new Set(vals.map((v) => v[0])).size, "requisito HARD costante in ctxMax").toBe(1);
     expect(vals[0][0]).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
     expect(vals[0][1]).toBe(attnDecodeWorkgroupStorageBytes(6_400));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IL GEMM Q5_K DEL PREFILL (task limits-q5k).
+//
+// La riga 5 del goal engine-ttft ha misurato che il collo del prefill non era
+// la ricorrenza ma un Q5_K rimasto sul percorso vecchio: `ssm_out`. Il kernel
+// nuovo che lo copre e' un GEMM multi-riga come quello q4_0, e come quello
+// tiene le attivazioni della tile in memoria di gruppo — quindi e' un
+// consumatore di `maxComputeWorkgroupStorageSize`, e qui si asserisce che venga
+// DICHIARATO col suo valore DENTRO il `value` negoziato, non solo nel testo.
+//
+// Il fabbisogno non si ricopia: viene da `prefillGemmWorkgroupStorageBytes`,
+// la STESSA formula del termine q4_0, interrogata sulla shape q5_K. Le due vie
+// (intera e f32) hanno costi diversi e — al contrario del q4_0 — qui e' la via
+// INTERA la piu' cara: 320·M contro 128·M. Chi negozia i limiti prima di sapere
+// quale via girera' deve percio' dichiarare 320·M, ed e' quello che il default
+// (via omessa) fa.
+//
+// La shape e' scritta qui come in gpulimits.ts perche' il fabbisogno dipende
+// dal solo M — la shape serve solo a farsi validare dalla formula. E' la shape
+// VERA di `ssm_out` (K4096xN2560, 4 fette), non una qualsiasi.
+// ---------------------------------------------------------------------------
+describe("workgroup storage: il GEMM q5_K del prefill (ssm_out)", () => {
+  const storageNeed = (o: Parameters<typeof engineNeeds>[0]) =>
+    engineNeeds(o).find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
+  const Q5K = (M: number) => ({ kind: "q5_K" as const, K: 4096, N: 2560, M, splits: 4 });
+  /** il termine q5_K come lo dichiara il consumer: LETTO dal testo, non dedotto */
+  const q5kTerm = (consumer: string): { M: number; via: string; bytes: number } => {
+    const m = /prefillGemmQ5K \(ssm_out\) splitK M=(\d+) \(([^)]+)\) = (\d+) B/.exec(consumer);
+    if (!m) throw new Error(`il consumer non nomina il GEMM q5_K del prefill: ${consumer}`);
+    return { M: Number(m[1]), via: m[2], bytes: Number(m[3]) };
+  };
+  // il termine q4_0, per verificare che i due convivano senza confondersi
+  const gemmQ4Term = (consumer: string): number => {
+    const m = /prefillGemm splitK M=(\d+) \(([^)]+)\) = (\d+) B/.exec(consumer);
+    if (!m) throw new Error(`il consumer non nomina il GEMM q4_0 del prefill: ${consumer}`);
+    return Number(m[3]);
+  };
+
+  // (a) i due valori, pinnati UNA volta sola; ovunque altrove si confronta con
+  // la formula, mai con un letterale riscritto.
+  it("a M=16: 5.120 B via idot, 2.048 B via f32 — qui la via intera e' la piu' cara", () => {
+    expect(prefillGemmWorkgroupStorageBytes(Q5K(16), "idot")).toBe(5_120);
+    expect(prefillGemmWorkgroupStorageBytes(Q5K(16), "f32")).toBe(2_048);
+    // senza dire la via si dichiara il PEGGIORE, che qui e' l'intera
+    expect(prefillGemmWorkgroupStorageBytes(Q5K(16)))
+      .toBe(prefillGemmWorkgroupStorageBytes(Q5K(16), "idot"));
+  });
+
+  // (b) il consumer nomina il kernel col suo numero di byte, e quel numero e'
+  // esattamente quello che la formula produce — per ogni via e per ogni M.
+  it("il need NOMINA il GEMM q5_K col valore della formula, e segue M e la via", () => {
+    const need = storageNeed({ ctxMax: 6400 });
+    expect(need.consumer).toContain("prefillGemmQ5K");
+    expect(q5kTerm(need.consumer)).toEqual({
+      M: PREFILL_M, via: "peggiore fra idot e f32",
+      bytes: prefillGemmWorkgroupStorageBytes(Q5K(PREFILL_M)),
+    });
+    for (const [idot, via] of [[true, "via idot"], [false, "via f32"]] as const) {
+      for (const M of [8, 16, 32, 64]) {
+        const t = q5kTerm(storageNeed({ ctxMax: 6400, prefillM: M, prefillGemmIdot: idot }).consumer);
+        expect(t, `M=${M} idot=${idot}`).toEqual({
+          M, via, bytes: prefillGemmWorkgroupStorageBytes(Q5K(M), idot ? "idot" : "f32"),
+        });
+      }
+    }
+    // il legame e' quello lineare del kernel, non una coincidenza a M=16
+    expect(q5kTerm(storageNeed({ ctxMax: 6400, prefillM: 32 }).consumer).bytes)
+      .toBe(2 * q5kTerm(storageNeed({ ctxMax: 6400, prefillM: 16 }).consumer).bytes);
+    // e i due termini di prefill restano DISTINTI: stesso M, cifre diverse
+    const c = storageNeed({ ctxMax: 6400, prefillM: 16 }).consumer;
+    expect(q5kTerm(c).bytes).not.toBe(gemmQ4Term(c));
+  });
+
+  it("il termine q5_K e' COSTANTE in ctxMax", () => {
+    for (const idot of [undefined, true, false]) {
+      const vals = [525, 4096, 8192, 16384].map((ctxMax) =>
+        q5kTerm(storageNeed({ ctxMax, prefillGemmIdot: idot }).consumer).bytes);
+      expect(new Set(vals).size, `prefillGemmIdot=${idot}`).toBe(1);
+    }
+  });
+
+  // (c) DICHIARARE non e' ALZARE: sul percorso di prodotto il tetto non muove
+  // di un byte. Uguaglianza, non `<=`.
+  it("a ctxMax 6400 il valore complessivo resta 30.848 B", () => {
+    for (const idot of [undefined, true, false]) {
+      expect(storageNeed({ ctxMax: 6400, prefillGemmIdot: idot }).value, `prefillGemmIdot=${idot}`)
+        .toBe(30_848);
+    }
+    expect(storageNeed({ ctxMax: 6400 }).value).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(q5kTerm(storageNeed({ ctxMax: 6400 }).consumer).bytes)
+      .toBeLessThan(QWEN_WORKGROUP_STORAGE_BYTES);
+  });
+
+  // (d) la soglia in cui lo ALZEREBBE, pinnata come per il q4_0
+  // (GEMM(121)/GEMM(120)): il termine q5_K e' piu' ripido, quindi sfonda prima.
+  it("il termine entra nel value negoziato: soglia a M=97 (a 96 no)", () => {
+    expect(prefillGemmWorkgroupStorageBytes(Q5K(97))).toBeGreaterThan(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(prefillGemmWorkgroupStorageBytes(Q5K(96))).toBeLessThan(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(storageNeed({ ctxMax: 6400, prefillM: 97 }).value)
+      .toBeGreaterThan(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(storageNeed({ ctxMax: 6400, prefillM: 96 }).value).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+    // ...ed e' il termine q5_K a farlo salire, non quello q4_0: a M=97 il q4_0
+    // sta ancora sotto il tetto, e il value coincide col solo termine q5_K.
+    const need = storageNeed({ ctxMax: 6400, prefillM: 97 });
+    expect(gemmQ4Term(need.consumer)).toBeLessThan(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(need.value).toBe(q5kTerm(need.consumer).bytes);
+    expect(need.value).toBe(prefillGemmWorkgroupStorageBytes(Q5K(97)));
+    // a ogni M il value e' il maggiore fra il path fuso e i termini dichiarati:
+    // ne' sotto (dichiarazione muta) ne' sopra (requisito gonfiato)
+    for (const M of [8, 16, 32, 96, 97, 121, 256]) {
+      const n = storageNeed({ ctxMax: 6400, prefillM: M });
+      expect(n.value, `M=${M}`).toBe(Math.max(
+        QWEN_WORKGROUP_STORAGE_BYTES, gemmQ4Term(n.consumer), q5kTerm(n.consumer).bytes));
+    }
   });
 });

@@ -18,6 +18,8 @@ import {
   prefillGemmQ4SplitKWgsl, prefillSplitKCombineWgsl, prefillGemmGrid,
   PREFILL_SPLITS_MEASURED,
   prefillGemmQ4SplitKIdotWgsl, prefillQuantXQ8Wgsl,
+  prefillGemmQ5KSplitKWgsl, prefillGemmQ5KSplitKIdotWgsl,
+  prefillQuantXGrid, prefillCombineGrid,
 } from "./kernels/wgsl";
 import { planPrefillGemm, prefillGemmCapsFor } from "./prefillgemmplan";
 import { expertArenaBindings } from "./gpulimits";
@@ -496,10 +498,69 @@ export async function createQ35GpuModel(
       const codeB = t.type === GGML_TYPE.Q4_K
         ? gemvQ4KWgsl({ K: k, N: n, batch: true })
         : t.type === GGML_TYPE.Q5_K ? gemvQ5KWgsl({ K: k, N: n, batch: true }) : gemvQ6KWgsl({ K: k, N: n, batch: true });
+      /**
+       * Il kind REALE del tensore: e' quello che si chiede al piano, ed e' anche
+       * quello che si passa al kernel. L'annotazione NON e' cerimonia: senza,
+       * TypeScript allarga il letterale a `string` quando finisce in un oggetto,
+       * e il `kind` del kernel tornerebbe a essere un letterale scritto a mano.
+       */
+      const kkq: "q4_K" | "q5_K" | "q6_K" =
+        t.type === GGML_TYPE.Q4_K ? "q4_K" : t.type === GGML_TYPE.Q5_K ? "q5_K" : "q6_K";
       return {
         n, k,
         push: (src, dst) => push(code, [w.blocks, src, dst], gemvGrid(n)),
-        pushB: (src, dst) => pushB(codeB, [w.blocks, src, dst], [gemvGrid(n)[0], gemvGrid(n)[1], M_MAX]),
+        pushB: (src, dst) => {
+          // VIA VELOCE DEL PREFILL SUI K-QUANT (goal engine-kquant, riga 2).
+          // QUI, e non in `gemvB`: `gemvB` prende `{qs, scales}` e questo ramo
+          // ha `{blocks}` — `ssm_out` (Q5_K, 24 layer del 4B, 173 MB di pesi)
+          // non ci passa nemmeno per sbaglio. Cablare `gemvB` e basta avrebbe
+          // lasciato il consumatore vero del q5_K esattamente dov'era: M gemv
+          // replicate su `wid.z`, riuso dei pesi zero, 28,10x sul tavolo.
+          //
+          // LA ROTTA NON SI DECIDE QUI, come in `gemvB`: la si CHIEDE al piano,
+          // col kind vero (`kkq`) e non con un letterale. Sul q5_K l'unita' di
+          // taglio e' il SUPERBLOCCO da 256, non i 64 pesi del q4_0: una
+          // condizione ri-derivata a mano qui sarebbe pure la soglia sbagliata.
+          if (prefillPart !== null) {
+            const route = planPrefillGemm({ kind: kkq, K: k, N: n, M: M_MAX, idot: prefillIdot });
+            // DUE CONDIZIONI, non una. La rotta dice se la via veloce esiste per
+            // questa shape; `kkq === "q5_K"` dice che il KERNEL emesso qui sotto
+            // e' quello del formato che si sta caricando. Oggi le due coincidono
+            // perche' `PREFILL_GEMM_KINDS` = q4_0 + q5_K e fra i tre K-quant di
+            // questo ramo solo il q5_K ne fa parte — ma quella coincidenza vive
+            // in un ALTRO file e questo ramo non la controlla. Se domani il
+            // q4_K entra nell'elenco, senza questa seconda condizione un
+            // superblocco da 144 B verrebbe letto con il passo da 176 del q5_K:
+            // logit sbagliati, nessuna eccezione, nessun errore di validazione
+            // WebGPU. E' la forma di it.7 — due posti che tengono una decisione
+            // sola — e si chiude qui dove si emette, non con un commento.
+            if (route.via !== "legacy" && kkq === "q5_K") {
+              // `kind: kkq` e non un letterale: il formato del kernel E' quello
+              // con cui si e' chiesta la rotta, per costruzione e non per
+              // convenzione (il narrowing qui sopra lo fissa a "q5_K").
+              const o = { kind: kkq, K: k, N: n, M: M_MAX, splits: route.splits };
+              if (route.via === "idot" && prefillXq !== null && prefillXsc !== null) {
+                // Stesso quantizzatore delle attivazioni della via q4_0: i
+                // sotto-blocchi K-quant sono anch'essi da 32, otto per
+                // superblocco. Nessun secondo quantizzatore, nessun dispatch
+                // in piu' rispetto alla via gia' misurata.
+                pushB(prefillQuantXQ8Wgsl({ K: k, M: M_MAX }), [src, prefillXq, prefillXsc],
+                  prefillQuantXGrid({ K: k, M: M_MAX }));
+                pushB(prefillGemmQ5KSplitKIdotWgsl(o),
+                  [w.blocks, prefillXq, prefillPart, prefillXsc], prefillGemmGrid(o));
+              } else {
+                pushB(prefillGemmQ5KSplitKWgsl(o), [w.blocks, src, prefillPart], prefillGemmGrid(o));
+              }
+              pushB(prefillSplitKCombineWgsl({ N: n, M: M_MAX, splits: route.splits }),
+                [prefillPart, dst], prefillCombineGrid({ N: n, M: M_MAX }));
+              return;
+            }
+          }
+          // FALLBACK: il ternario di prima, byte per byte. Non e' un residuo:
+          // e' la via che il piano SCEGLIE per q4_K e q6_K (nessuna misura) e
+          // per il q5_K con K non multiplo di 256.
+          pushB(codeB, [w.blocks, src, dst], [gemvGrid(n)[0], gemvGrid(n)[1], M_MAX]);
+        },
       };
     }
     throw new Error(`q35gpumodel: loadW tipo ${t.type} non gestito (${name})`);
@@ -626,19 +687,31 @@ export async function createQ35GpuModel(
    * chiamata: i dispatch del piano gemello sono seriali dentro lo stesso pass,
    * e ciascuno riscrive il parziale prima che il proprio combine lo legga.
    *
-   * TAGLIA: il massimo su TUTTE le `n` che `gemvB` puo' ricevere, non su quella
-   * che capita per prima — un buffer corto darebbe scritture fuori range su una
-   * shape piu' grande incontrata dopo, e la validazione WebGPU non la vede
-   * perche' il binding e' l'intero buffer. Le `n` sono le stesse dimensioni per
-   * cui il piano alloca gli scratch a M righe qui sopra.
+   * TAGLIA: il massimo su TUTTE le `n` che i consumatori possono ricevere, non
+   * su quella che capita per prima — un buffer corto darebbe scritture fuori
+   * range su una shape piu' grande incontrata dopo, e la validazione WebGPU non
+   * la vede perche' il binding e' l'intero buffer. Le `n` sono le stesse
+   * dimensioni per cui il piano alloca gli scratch a M righe qui sopra.
+   *
+   * I CONSUMATORI ORA SONO DUE, non piu' il solo `gemvB` (goal engine-kquant,
+   * riga 3): anche il ramo K-quant di `loadW` scrive qui dentro, ed e' da dove
+   * passa `ssm_out` (Q5_K, K=4096, N=2560 sul 4B). RI-VERIFICATO a M=16 —
+   * `tests/engine-prefillwiring-q5k.test.ts`, clausola (d) — sulle shape che il
+   * piano instrada: il massimo NON cambia. `prefillMaxN` resta 9216 (la FFN),
+   * i parziali restano tetti dalla `ffn_gate/up` (q4_0 2560x9216, che il tetto
+   * lo raggiunge esatto) e `xq`/`xsc` dalla `ffn_down` (q4_0 9216x2560).
+   * `ssm_out` sta sotto entrambi — N 2560 < 9216, K 4096 < 9216 — quindi
+   * l'espressione qui sotto e' la stessa di prima per misura, non per inerzia.
    */
   const prefillMaxN = Math.max(d, qkvDim, inner, 2 * qDim, kvDim, S.linVHead,
     dFfn ?? 0, dE ?? 0, nE ?? 0);
   const prefillPart = prefillOn
     ? empty(PREFILL_SPLITS_MEASURED * M_MAX * prefillMaxN * 4)
     : null;
-  // VIA INTERA (q4_0 x q8_0): le attivazioni quantizzate a i8 per blocco da 32 e
-  // le loro scale. La capacita' si SONDA da `navigator.gpu.wgslLanguageFeatures`
+  // VIA INTERA (pesi x q8_0): le attivazioni quantizzate a i8 per blocco da 32 e
+  // le loro scale. Lo STESSO quantizzatore serve q4_0 e q5_K — i sotto-blocchi
+  // K-quant sono anch'essi da 32 — quindi il ramo K-quant riusa questi due
+  // buffer tali e quali. La capacita' si SONDA da `navigator.gpu.wgslLanguageFeatures`
   // — non da `device.features`, perche' `dot4I8Packed` e' una language feature
   // del WGSL e non un'estensione (costato una run in it.5). Se manca, il piano
   // instrada sulla via f32 e lo DICHIARA nel suo `reason`.
@@ -797,21 +870,34 @@ export async function createQ35GpuModel(
     // lo chiamava nessuno (it.14).
     if (prefillPart !== null) {
       const route = planPrefillGemm({ kind: kk, K: w.k, N: w.n, M: M_MAX, idot: prefillIdot });
-      if (route.via !== "legacy") {
-        const o = { kind: "q4_0" as const, K: w.k, N: w.n, M: M_MAX, splits: route.splits };
+      // La seconda condizione e' la stessa del ramo K-quant, e per la stessa
+      // ragione: il kernel emesso qui sotto e' quello del q4_0, e chi lo emette
+      // deve VERIFICARE il formato invece di dedurlo dall'elenco dei kind
+      // misurati, che vive in un altro file. Oggi `kk` non puo' essere altro
+      // (q4_1 e q8_0 li rifiuta il contorno del kernel e la rotta torna legacy):
+      // la condizione non cambia un dispatch, cambia CHI garantisce.
+      if (route.via !== "legacy" && kk === "q4_0") {
+        const o = { kind: kk, K: w.k, N: w.n, M: M_MAX, splits: route.splits };
         if (route.via === "idot" && prefillXq !== null && prefillXsc !== null) {
           // Un dispatch in piu': quantizza le M righe di attivazioni a i8 per
           // blocco. Misurato il 5,6% del moltiplicatore, ed e' gia' dentro
           // l'1,745x — non e' un costo nascosto (it.6).
+          //
+          // GRIGLIE DAGLI HELPER anche qui. Prima erano ricalcolate a mano —
+          // `Math.ceil((M*(K/32))/64)` e `Math.ceil((M*N)/64)` — e davano gli
+          // stessi numeri, ma erano una SECONDA copia della geometria di un
+          // kernel che sta in un altro file: la forma esatta di it.7. In piu'
+          // `prefillQuantXGrid` porta con se' il rifiuto di K non multiplo di
+          // 64, che la copia a mano non aveva.
           pushB(prefillQuantXQ8Wgsl({ K: w.k, M: M_MAX }), [src, prefillXq, prefillXsc],
-            [Math.ceil((M_MAX * (w.k / 32)) / 64), 1, 1]);
+            prefillQuantXGrid({ K: w.k, M: M_MAX }));
           pushB(prefillGemmQ4SplitKIdotWgsl(o),
             [w.qs, w.scales, prefillXq, prefillPart, prefillXsc], prefillGemmGrid(o));
         } else {
           pushB(prefillGemmQ4SplitKWgsl(o), [w.qs, w.scales, src, prefillPart], prefillGemmGrid(o));
         }
         pushB(prefillSplitKCombineWgsl({ N: w.n, M: M_MAX, splits: route.splits }), [prefillPart, dst],
-          [Math.ceil((M_MAX * w.n) / 64), 1, 1]);
+          prefillCombineGrid({ N: w.n, M: M_MAX }));
         return;
       }
     }

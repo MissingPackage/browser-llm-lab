@@ -3833,8 +3833,28 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
 // Layout: y[m*N + r]; part[(s*M + m)*N + r] — row-major per riga di chunk.
 // ---------------------------------------------------------------------------
 
+/**
+ * I FORMATI CHE LA VIA VELOCE DI PREFILL SA LEGGERE, in una sede sola.
+ *
+ * Non e' un'unione scritta a mano dentro `PrefillGemmOpts`: e' un array
+ * ESPORTATO, perche' il predicato di ammissibilita' (`prefillGemmCheck`) lo
+ * legge da qui e il messaggio di rifiuto lo NOMINA.
+ *
+ * q4_0 = riga 1 di engine-ttft (1,745x della via intera sulla f32).
+ * q5_K = riga 2 di engine-kquant (28,10x sulla legacy a M=16 su `ssm_out`).
+ *
+ * AGGIUNGERE UN KIND QUI NON BASTA, ED E' VOLUTO: ogni numero che dipende dal
+ * formato vive in `PREFILL_GEMM_SPEC`, che e' un `Record<PrefillGemmKind, …>`.
+ * Chi allunga questo array senza scrivere la riga corrispondente laggiu' non
+ * ottiene una geometria sbagliata in silenzio: ottiene un errore di
+ * compilazione. E' la lezione del cast `as "q4_0"` che stava nel piano —
+ * un formato che passa per un altro non fa rumore, fa numeri.
+ */
+export const PREFILL_GEMM_KINDS = ["q4_0", "q5_K"] as const;
+export type PrefillGemmKind = typeof PREFILL_GEMM_KINDS[number];
+
 export interface PrefillGemmOpts {
-  kind: "q4_0";
+  kind: PrefillGemmKind;
   K: number;
   N: number;
   M: number;
@@ -3876,26 +3896,131 @@ const PREFILL_DEQ_BLOCK = `
       hi[wi] = vec4<f32>((by >> vec4<u32>(4u)) & vec4<u32>(15u)) - vec4<f32>(8.0);
     }`;
 
+/** Le due vie del moltiplicatore, come le nomina chi negozia i limiti. */
+export type PrefillGemmWgVia = "idot" | "f32";
+
+/**
+ * TUTTO CIO' CHE DIPENDE DAL FORMATO, in una riga per formato.
+ *
+ * Non e' astrazione per gusto: e' l'unico modo perche' «un kind nuovo si
+ * aggiunge in un posto» sia vero e VERIFICATO DAL COMPILATORE. Le quattro cose
+ * che cambiano fra q4_0 e q5_K — l'unita' di taglio di K, quante unita' conta
+ * il kernel per riga, come si dividono in fette, quanti byte di workgroup
+ * storage servono per via — stavano altrimenti in quattro `if (kind ===
+ * "q5_K")` sparsi, tutti con un ramo `else` che dava per scontato il q4_0. Un
+ * terzo formato (il q4_1 della riga 3) sarebbe caduto in quegli `else`
+ * prendendosi la geometria di un altro: fette sbagliate, storage sbagliato,
+ * nessun errore. Qui invece `Record<PrefillGemmKind, …>` non compila finche' la
+ * riga non c'e'.
+ */
+interface PrefillGemmKindSpec {
+  /** Pesi per unita' INDIVISIBILE: K dev'essere multiplo di questo. */
+  kUnit: number;
+  /** Perche' e' quella l'unita' — finisce nel messaggio di rifiuto geometrico. */
+  kUnitWhy: string;
+  /** Che forma ha il formato: entra nel rifiuto dei kind fuori elenco. */
+  formatWhy: string;
+  /** Le unita' che il KERNEL conta per riga (e che scrive nel WGSL). */
+  unitsPerRow(K: number): number;
+  /** Vero se `splits` fette dividono `units` unita'. */
+  slices(units: number, splits: number): boolean;
+  /** Il rifiuto quando non dividono, con i nomi giusti per il formato. */
+  sliceWhy(units: number, splits: number): string;
+  /** La scala delle fette MISURATA per questo formato. */
+  splitsFor(units: number): number;
+  /** Workgroup storage per via, in byte, a M righe di chunk. */
+  wgBytes: Record<PrefillGemmWgVia, (M: number) => number>;
+}
+
+const PREFILL_GEMM_SPEC: Record<PrefillGemmKind, PrefillGemmKindSpec> = {
+  q4_0: {
+    // il loop avanza a BK = 2 blocchi da 32, quindi l'unita' di taglio e' 64
+    kUnit: 64,
+    kUnitWhy: "il loop avanza a BK = 2 blocchi da 32",
+    formatWhy: "q4_0 nibble a 4 bit + UNA scala f16 per blocco da 32, impacchettati in quartetti i8",
+    unitsPerRow: (K) => K / 32,
+    slices: (units, splits) => units % (splits * 2) === 0,
+    sliceWhy: (units, splits) => `${units} blocchi non divisibili in ${splits} fette da BK=2`,
+    // 4 fette se i blocchi si dividono a BK=2, altrimenti nessuno split-K. Il 2
+    // NON compare: sul q4_0 non e' stato misurato, e un numero di fette che
+    // appare senza misura e' un numero inventato.
+    splitsFor: (units) =>
+      units % (PREFILL_SPLITS_MEASURED * 2) === 0 ? PREFILL_SPLITS_MEASURED : PREFILL_SPLITS_UNSPLIT,
+    wgBytes: {
+      // `xs` M*16 u32 + `xsc` M*2 f32 = 72·M B (1.152 a M=16)
+      idot: (M) => M * 16 * 4 + M * 2 * 4,
+      // `xs` M*16 vec4<f32> = 256·M B (4.096 a M=16)
+      f32: (M) => M * 16 * 16,
+    },
+  },
+  q5_K: {
+    // il SUPERBLOCCO da 256: le scale a 6 bit sono condivise dagli otto
+    // sotto-blocchi, e una fetta che ne prendesse meta' dovrebbe rileggere
+    // l'header comunque — falsificando proprio il conto dei byte del goal.
+    kUnit: 256,
+    kUnitWhy: "il superblocco Q5_K e' l'unita' indivisibile: le sue scale a 6 bit "
+      + "sono condivise dagli otto sotto-blocchi",
+    formatWhy: "q5_K superblocco da 256 con le scale a 6 bit e il piano del 5o bit",
+    unitsPerRow: (K) => K / 256,
+    slices: (units, splits) => units % splits === 0,
+    sliceWhy: (units, splits) => `${units} superblocchi da 256 non divisibili in ${splits} fette`,
+    // La scala del banco (`kquantSplitsFor` in ttKQuant.ts). Il 2 c'e' e NON e'
+    // inventato: sui K-quant le unita' per riga sono otto volte meno numerose
+    // (K/256 invece di K/32), quindi il ripiego secco a 1 lascerebbe senza
+    // split-K shape che il banco ha misurato divise — `ssm_out` ha K=4096 = 16
+    // superblocchi, ma la down degli expert del 35B ne ha DUE (K=512), e li'
+    // l'alternativa e' fra 2 fette e nessuna.
+    splitsFor: (units) => {
+      if (units % PREFILL_SPLITS_MEASURED === 0) return PREFILL_SPLITS_MEASURED;
+      if (units % 2 === 0) return 2;
+      return PREFILL_SPLITS_UNSPLIT;
+    },
+    wgBytes: {
+      // `xs` M*64 u32 + `xss` M*8 f32 + `xsum` M*8 f32 = 320·M B (5.120 a M=16)
+      idot: (M) => M * 64 * 4 + M * 8 * 4 + M * 8 * 4,
+      // `xs` M*32 f32 = 128·M B (2.048 a M=16): UN sotto-blocco per volta, non
+      // il superblocco intero (che a M=16 sarebbe 16.384 B, il minimo di spec)
+      f32: (M) => M * 32 * 4,
+    },
+  },
+};
+
+/** Il restringimento al formato, letto dall'elenco esportato e non da una copia. */
+export function isPrefillGemmKind(k: string): k is PrefillGemmKind {
+  return (PREFILL_GEMM_KINDS as readonly string[]).includes(k);
+}
+
 /**
  * Contorni del kernel: si RIFIUTA quello che non e' stato misurato invece di
  * generare una forma inventata (la regola che regge gia' il GEMV veloce).
+ *
+ * UNA SEDE SOLA, e in QUEST'ORDINE: prima il FORMATO (il kind sta fra quelli
+ * misurati?), poi la GEOMETRIA (K si divide nell'unita' del formato? le unita'
+ * si dividono nelle fette?). L'ordine non e' estetico: su un kind non
+ * supportato con K storto, la ragione strutturale e' il kind — e' quella su cui
+ * si puo' agire, mentre il K sarebbe una risposta vera e inutile.
+ *
+ * `units` = le unita' che il kernel conta per riga (blocchi da 32 sul q4_0,
+ * superblocchi da 256 sul q5_K); `per` = quante ne tocca a ogni fetta.
  */
-function prefillGemmCheck(o: PrefillGemmOpts, who: string): { bpr: number; per: number } {
+function prefillGemmCheck(o: PrefillGemmOpts, who: string): { units: number; per: number } {
   const kind = o.kind as string;
-  if (kind !== "q4_0") {
+  if (!isPrefillGemmKind(kind)) {
     throw new Error(
-      `${who}: kind "${kind}" non supportato — la via veloce di prefill e' q4_0-only ` +
-      "per costruzione (nibble a 4 bit + UNA scala f16 per blocco da 32, e la via intera " +
-      "impacchetta quei nibble in quartetti i8), come il GEMV veloce");
+      `${who}: kind "${kind}" non supportato — le vie veloci di prefill sono ` +
+      `${PREFILL_GEMM_KINDS.join(" e ")} e basta: sono le sole forme MISURATE (` +
+      PREFILL_GEMM_KINDS.map((k) => PREFILL_GEMM_SPEC[k].formatWhy).join("; ") +
+      "), e ogni altra famiglia resta sulla via legacy finche' non ha la sua misura");
   }
-  if (o.K % 64 !== 0) {
-    throw new Error(`${who}: K=${o.K} non multiplo di 64 (il loop avanza a BK = 2 blocchi da 32)`);
+  const spec = PREFILL_GEMM_SPEC[kind];
+  if (o.K % spec.kUnit !== 0) {
+    throw new Error(`${who}: K=${o.K} non multiplo di ${spec.kUnit} (${spec.kUnitWhy})`);
   }
-  const bpr = o.K / 32;
-  if (bpr % (o.splits * 2) !== 0) {
-    throw new Error(`${who}: ${bpr} blocchi non divisibili in ${o.splits} fette da BK=2`);
+  const units = spec.unitsPerRow(o.K);
+  if (!spec.slices(units, o.splits)) {
+    throw new Error(`${who}: ${spec.sliceWhy(units, o.splits)}`);
   }
-  return { bpr, per: bpr / o.splits };
+  return { units, per: units / o.splits };
 }
 
 /**
@@ -3912,7 +4037,7 @@ function prefillGemmCheck(o: PrefillGemmOpts, who: string): { bpr: number; per: 
  */
 export function prefillGemmQ4SplitKIdotWgsl(o: PrefillGemmOpts): string {
   const { N, M } = o;
-  const { bpr, per } = prefillGemmCheck(o, "prefillGemmQ4SplitKIdotWgsl");
+  const { units: bpr, per } = prefillGemmCheck(o, "prefillGemmQ4SplitKIdotWgsl");
   return `@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
 @group(0) @binding(1) var<storage, read> scales: array<u32>;
 @group(0) @binding(2) var<storage, read> xq: array<u32>;
@@ -3997,7 +4122,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
  */
 export function prefillGemmQ4SplitKWgsl(o: PrefillGemmOpts): string {
   const { K, N, M } = o;
-  const { bpr, per } = prefillGemmCheck(o, "prefillGemmQ4SplitKWgsl");
+  const { units: bpr, per } = prefillGemmCheck(o, "prefillGemmQ4SplitKWgsl");
   return `@group(0) @binding(0) var<storage, read> qs4: array<vec4<u32>>;
 @group(0) @binding(1) var<storage, read> scales: array<u32>;
 @group(0) @binding(2) var<storage, read> x4: array<vec4<f32>>;
@@ -4044,6 +4169,245 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     }
     workgroupBarrier();
     b0 = b0 + 2u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+// ---------------------------------------------------------------------------
+// PREFILL GEMM q5_K SPLIT-K — port dal banco (src/microbench/ttKQuant.ts).
+//
+// Provenienza: riga 2 di engine-kquant, fase 0 chiusa in it.1-it.3. Le due
+// forme che arrivano qui sono quelle MISURATE su `blk.*.ssm_out` del 4B
+// (K=4096, N=2560, M=16): 1,2700 -> 0,0452 ms = 28,10x sulla legacy
+// (results/microbench/kquant-fase0-4090-linux-2026-08-14T19-29-20-014Z.json,
+// celle `gemm-kquant-multirow` `q5_K/*`).
+//
+// STESSA REGOLA DEL PORT q4_0: il testo WGSL e' quello del banco, riga per
+// riga, e ogni divergenza sta in `PREFILL_GEMM_PORT_DIFFS` con la sua ragione.
+//
+// ORDINE DEI BINDING (congelato — lo consumano il piano e il wiring):
+//   idot [0 blocks, 1 xq(u32), 2 part(rw), 3 xsc(f32)]
+//   f32  [0 blocks, 1 x(f32 row-major M x K), 2 part(rw)]
+// UN SOLO buffer di pesi: il superblocco GGUF copiato in parole. E' la
+// differenza strutturale col q4_0, dove `repackQ4_0` spezza in `qs` + `scales`.
+// Il quantizzatore delle attivazioni e la combine sono gli STESSI del q4_0
+// (`prefillQuantXQ8Wgsl`, `prefillSplitKCombineWgsl`): i sotto-blocchi K-quant
+// sono anch'essi da 32, otto per superblocco.
+// ---------------------------------------------------------------------------
+
+/**
+ * VIA INTERA q5_K x q8_0 (`dot4I8Packed`) — LA FORMA VINCENTE della riga 2.
+ *
+ * IL PUNTO, in una riga: il piano del 5o bit si somma IMPACCHETTATO. I 32 pesi
+ * di un sotto-blocco stanno in 32 nibble = 8 parole; il loro 5o bit sta in
+ * `qh`, un bit per elemento nella posizione `is` del proprio byte. Estrarlo
+ * elemento per elemento costerebbe 32 test; in forma impacchettata e'
+ * `((qhw >> is) & 0x01010101) << 4`, cioe' "+16 a ogni byte che ce l'ha", e i
+ * quattro pesi restano in una parola pronta per `dot4I8Packed`.
+ *
+ * IL TERMINE CHE LA q4_0 NON HA: Q5_K e' `w = d*sc_j*q - dmin*mn_j`, quindi al
+ * prodotto scalare va sottratto `dmin*mn_j` per la SOMMA delle attivazioni del
+ * sotto-blocco. Quella somma non dipende dalla riga di pesi: si calcola UNA
+ * volta in memoria di gruppo (`xsum`), non una per thread.
+ *
+ * NIENTE `enable packed_4x8_integer_dot_product;`: e' una LANGUAGE FEATURE, non
+ * un'estensione. Scriverlo fa fallire la compilazione con «expected extension».
+ */
+export function prefillGemmQ5KSplitKIdotWgsl(o: PrefillGemmOpts): string {
+  const { N, M } = o;
+  const { units: upr, per } = prefillGemmCheck(o, "prefillGemmQ5KSplitKIdotWgsl");
+  return `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> xq: array<u32>;
+@group(0) @binding(2) var<storage, read_write> part: array<f32>;
+@group(0) @binding(3) var<storage, read> xsc: array<f32>;
+const SBPR = ${upr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+const WORDS = 44u;
+var<workgroup> xs: array<u32, ${M * 64}>;
+var<workgroup> xss: array<f32, ${M * 8}>;
+var<workgroup> xsum: array<f32, ${M * 8}>;
+fn sbyte(base: u32, i: u32) -> u32 {
+  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let sbEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var sb = s * PER;
+  loop {
+    if (sb >= sbEnd) { break; }
+    // attivazioni del superblocco: M righe x 8 sotto-blocchi x 8 parole
+    for (var idx = t; idx < ${M * 64}u; idx = idx + 64u) {
+      let m = idx / 64u;
+      let jj = (idx % 64u) / 8u;
+      let ii = idx % 8u;
+      xs[idx] = xq[((m * SBPR + sb) * 8u + jj) * 8u + ii];
+    }
+    for (var idx = t; idx < ${M * 8}u; idx = idx + 64u) {
+      let m = idx / 8u;
+      let jj = idx % 8u;
+      xss[idx] = xsc[(m * SBPR + sb) * 8u + jj];
+    }
+    workgroupBarrier();
+    // Sigma(x) per (riga, sotto-blocco): non dipende dalla riga di PESI, quindi
+    // una volta per workgroup e non una per thread.
+    for (var idx = t; idx < ${M * 8}u; idx = idx + 64u) {
+      var sq = 0i;
+      for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+        sq = sq + dot4I8Packed(0x01010101u, xs[idx * 8u + ii]);
+      }
+      xsum[idx] = f32(sq) * xss[idx];
+    }
+    workgroupBarrier();
+    if (r < N_ROWS) {
+      let wb = (r * SBPR + sb) * WORDS;
+      let dm = unpack2x16float(blocks[wb]);
+      for (var g = 0u; g < 4u; g = g + 1u) {
+        let is = 2u * g;
+        // get_scale_min_k4, identico al GEMV di produzione (gemvQ5KWgsl)
+        var sc1: u32; var mn1: u32; var sc2: u32; var mn2: u32;
+        if (is < 4u) {
+          sc1 = sbyte(wb, 4u + is) & 63u;
+          mn1 = sbyte(wb, 4u + is + 4u) & 63u;
+          sc2 = sbyte(wb, 4u + is + 1u) & 63u;
+          mn2 = sbyte(wb, 4u + is + 5u) & 63u;
+        } else {
+          sc1 = (sbyte(wb, 4u + is + 4u) & 0xfu) | ((sbyte(wb, 4u + is - 4u) >> 6u) << 4u);
+          mn1 = (sbyte(wb, 4u + is + 4u) >> 4u) | ((sbyte(wb, 4u + is) >> 6u) << 4u);
+          sc2 = (sbyte(wb, 4u + is + 5u) & 0xfu) | ((sbyte(wb, 4u + is - 3u) >> 6u) << 4u);
+          mn2 = (sbyte(wb, 4u + is + 5u) >> 4u) | ((sbyte(wb, 4u + is + 1u) >> 6u) << 4u);
+        }
+        // gli 8+8 quartetti del gruppo, in registri: cosi' le M righe li
+        // riusano invece di rileggerli
+        var lo: array<u32, 8>;
+        var hi: array<u32, 8>;
+        for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+          let word = blocks[wb + 12u + g * 8u + ii];
+          let qhw = blocks[wb + 4u + ii];
+          lo[ii] = (word & 0x0f0f0f0fu) + (((qhw >> is) & 0x01010101u) << 4u);
+          hi[ii] = ((word >> 4u) & 0x0f0f0f0fu) + (((qhw >> (is + 1u)) & 0x01010101u) << 4u);
+        }
+        let d1 = dm.x * f32(sc1); let min1 = dm.y * f32(mn1);
+        let d2 = dm.x * f32(sc2); let min2 = dm.y * f32(mn2);
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          let bLo = m * 64u + is * 8u;
+          let bHi = bLo + 8u;
+          var i1 = 0i; var i2 = 0i;
+          for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+            i1 = i1 + dot4I8Packed(lo[ii], xs[bLo + ii]);
+            i2 = i2 + dot4I8Packed(hi[ii], xs[bHi + ii]);
+          }
+          acc[m] = acc[m]
+            + d1 * f32(i1) * xss[m * 8u + is] - min1 * xsum[m * 8u + is]
+            + d2 * f32(i2) * xss[m * 8u + is + 1u] - min2 * xsum[m * 8u + is + 1u];
+        }
+      }
+    }
+    workgroupBarrier();
+    sb = sb + 1u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+/**
+ * VIA f32 — FALLBACK DICHIARATO per i device senza
+ * `packed_4x8_integer_dot_product`. Stessa mappatura, attivazioni in virgola
+ * mobile lette DENSE (row-major M x K, binding 1).
+ *
+ * Il tile e' di UN SOTTO-BLOCCO da 32 per volta (M x 32 f32 = 2.048 B a M=16),
+ * non del superblocco intero: M x 256 f32 sarebbero 16.384 B a M=16, cioe'
+ * l'INTERO minimo di spec WebGPU per un solo array — e questa forma deve poter
+ * girare anche dove il tetto e' quello garantito.
+ *
+ * E' un fallback, non un'alternativa preferibile: si porta perche' senza di lui
+ * i device senza la language feature resterebbero sulla legacy.
+ */
+export function prefillGemmQ5KSplitKWgsl(o: PrefillGemmOpts): string {
+  const { N, M, K } = o;
+  const { units: upr, per } = prefillGemmCheck(o, "prefillGemmQ5KSplitKWgsl");
+  return `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> part: array<f32>;
+const SBPR = ${upr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+const K_DIM = ${K}u;
+const WORDS = 44u;
+var<workgroup> xs: array<f32, ${M * 32}>;
+fn sbyte(base: u32, i: u32) -> u32 {
+  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let sbEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var sb = s * PER;
+  loop {
+    if (sb >= sbEnd) { break; }
+    // UN SOTTO-BLOCCO DA 32 PER VOLTA, non un gruppo da 64: il tile scende a
+    // M x 32 f32 (2.048 B a M=16) e i pesi del sotto-blocco stanno in 32
+    // registri invece di 64. Il sotto-blocco is copre gli elementi
+    // [is*32, is*32+32) — contigui, perche' g*64 + h*32 = (2g+h)*32.
+    for (var is = 0u; is < 8u; is = is + 1u) {
+      let g = is >> 1u;
+      let hiHalf = (is & 1u) == 1u;
+      let base = sb * 256u + is * 32u;
+      for (var idx = t; idx < ${M * 32}u; idx = idx + 64u) {
+        let m = idx / 32u;
+        xs[idx] = x[m * K_DIM + base + (idx % 32u)];
+      }
+      workgroupBarrier();
+      if (r < N_ROWS) {
+        let wb = (r * SBPR + sb) * WORDS;
+        let dm = unpack2x16float(blocks[wb]);
+        var sc: u32; var mn: u32;
+        if (is < 4u) {
+          sc = sbyte(wb, 4u + is) & 63u;
+          mn = sbyte(wb, 4u + is + 4u) & 63u;
+        } else {
+          sc = (sbyte(wb, 4u + is + 4u) & 0xfu) | ((sbyte(wb, 4u + is - 4u) >> 6u) << 4u);
+          mn = (sbyte(wb, 4u + is + 4u) >> 4u) | ((sbyte(wb, 4u + is) >> 6u) << 4u);
+        }
+        let dsc = dm.x * f32(sc);
+        let dmn = dm.y * f32(mn);
+        var q: array<f32, 32>;
+        for (var l = 0u; l < 32u; l = l + 1u) {
+          let ql = sbyte(wb, 48u + g * 32u + l);
+          let qh = sbyte(wb, 16u + l);
+          var a: f32;
+          if (hiHalf) { a = f32(ql >> 4u); } else { a = f32(ql & 0xfu); }
+          if ((qh & (1u << is)) != 0u) { a = a + 16.0; }
+          q[l] = a;
+        }
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          var qx = 0.0; var sx = 0.0;
+          for (var l = 0u; l < 32u; l = l + 1u) {
+            let xv = xs[m * 32u + l];
+            qx = qx + q[l] * xv; sx = sx + xv;
+          }
+          acc[m] = acc[m] + dsc * qx - dmn * sx;
+        }
+      }
+      workgroupBarrier();
+    }
+    sb = sb + 1u;
   }
   if (r < N_ROWS) {
     for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
@@ -4146,18 +4510,32 @@ export function prefillCombineGrid(o: { N: number; M: number }): [number, number
  * dModel = 896, cioe' 28 blocchi, che in 4 fette da BK=2 non ci stanno; con il
  * rifiuto secco quel modello resterebbe senza prefill veloce per una divisione,
  * non per una misura.
+ *
+ * SUL q5_K LA SCALA E' UN'ALTRA, ed e' quella misurata al banco
+ * (`kquantSplitsFor` in ttKQuant.ts): 4 fette se le unita' per riga si dividono
+ * per 4, 2 se per 2, altrimenti 1. Il 2 non e' un'eccezione arbitraria: sui
+ * K-quant le unita' per riga sono otto volte meno numerose (K/256 invece di
+ * K/32), quindi il ripiego secco a 1 lascerebbe senza split-K shape che il
+ * banco ha misurato divise — la down degli expert del 35B ha K=512, cioe' DUE
+ * superblocchi, e li' l'alternativa e' fra 2 fette e nessuna.
+ *
+ * IL TERZO PARAMETRO E' IL FORMATO, ed e' OPZIONALE col default `q4_0`: i
+ * chiamanti scritti prima della riga 2 non cambiano una riga e non cambiano un
+ * numero. La scala vera vive in `PREFILL_GEMM_SPEC[kind].splitsFor` — qui non
+ * c'e' un secondo `if` per formato.
  */
-export function prefillGemmSplitsFor(K: number, N: number): number {
-  if (K % 64 !== 0) {
-    throw new Error(`prefillGemmSplitsFor: K=${K} non multiplo di 64 (passo BK = 2 blocchi da 32)`);
+export function prefillGemmSplitsFor(K: number, N: number, kind: PrefillGemmKind = "q4_0"): number {
+  const spec = PREFILL_GEMM_SPEC[kind];
+  if (K % spec.kUnit !== 0) {
+    throw new Error(
+      `prefillGemmSplitsFor: K=${K} non multiplo di ${spec.kUnit} (${spec.kUnitWhy})`);
   }
-  const bpr = K / 32;
   // N non entra nella scelta: le 4 fette sono state misurate su ENTRAMBE le
   // shape di riga 1 (N=9216 e N=2560), quindi non c'e' una soglia su N che sia
   // stata misurata. Resta nella firma perche' e' li' che andra' se un domani la
   // si misura.
   void N;
-  return bpr % (PREFILL_SPLITS_MEASURED * 2) === 0 ? PREFILL_SPLITS_MEASURED : PREFILL_SPLITS_UNSPLIT;
+  return spec.splitsFor(spec.unitsPerRow(K));
 }
 
 /** Taglia (in f32) del buffer dei parziali: part[(s*M + m)*N + r]. */
@@ -4170,25 +4548,30 @@ export function prefillPartialFloats(o: PrefillGemmOpts): number {
  * Workgroup storage del moltiplicatore, come formula chiusa accanto al kernel
  * che la consuma (stessa scelta di `attnDecodeWorkgroupStorageBytes`).
  *
- * Le due vie hanno fabbisogni DIVERSI — intera `M*16` u32 + `M*2` f32 = 72·M B
- * (1.152 a M=16), f32 `M*16` vec4 = 256·M B (4.096 a M=16) — e quale delle due
- * giri si decide a runtime sulla language feature. Percio' la via e' un
- * ARGOMENTO: chi ha gia' deciso di accendere la pipeline intera chiede 1.152 e
- * non 4.096, che sarebbero 3,55x lo storage che serve. Senza argomento si
- * risponde il PEGGIORE dei due, che e' il numero giusto per chi negozia i
- * limiti prima di sapere quale via avra'.
+ * Le due vie hanno fabbisogni DIVERSI e quale delle due giri si decide a
+ * runtime sulla language feature. Percio' la via e' un ARGOMENTO: chi ha gia'
+ * deciso di accendere la pipeline intera chiede il suo numero e non l'altro.
+ * Senza argomento si risponde il PEGGIORE dei due, che e' il numero giusto per
+ * chi negozia i limiti prima di sapere quale via avra'.
+ *
+ * q4_0 — intera 72·M B (1.152 a M=16), f32 256·M B (4.096 a M=16): il peggiore
+ *        e' la via f32, che sarebbe 3,55x lo storage della via intera.
+ * q5_K — intera 320·M B (5.120 a M=16), f32 128·M B (2.048 a M=16): qui il
+ *        peggiore e' la via INTERA, il contrario del q4_0. E' il motivo per cui
+ *        il `max` va CALCOLATO e non assunto.
+ *
+ * Le formule stanno in `PREFILL_GEMM_SPEC[kind].wgBytes`, una riga per formato:
+ * un formato nuovo senza il suo fabbisogno non compila.
  *
  * Il test confronta entrambi con la scansione del testo WGSL vero, cosi' la
  * formula non puo' derivare dal kernel.
  */
 export function prefillGemmWorkgroupStorageBytes(
   o: PrefillGemmOpts,
-  via?: "idot" | "f32",
+  via?: PrefillGemmWgVia,
 ): number {
   prefillGemmCheck(o, "prefillGemmWorkgroupStorageBytes");
-  const idotBytes = o.M * 16 * 4 + o.M * 2 * 4;
-  const f32Bytes = o.M * 16 * 16;
-  if (via === "idot") return idotBytes;
-  if (via === "f32") return f32Bytes;
-  return Math.max(idotBytes, f32Bytes);
+  const { wgBytes } = PREFILL_GEMM_SPEC[o.kind];
+  if (via !== undefined) return wgBytes[via](o.M);
+  return Math.max(wgBytes.idot(o.M), wgBytes.f32(o.M));
 }

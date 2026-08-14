@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  PREFILL_IDOT_FEATURE, prefillGemmCapsFor, planPrefillGemm,
+  PREFILL_IDOT_FEATURE, PREFILL_M1_LEGACY, prefillGemmCapsFor, planPrefillGemm,
   prefillGemmScratchFor, prefillPlanDispatches,
   type PrefillSite,
 } from "../src/engine/prefillgemmplan";
@@ -9,8 +9,6 @@ import {
   prefillQuantXQ8Wgsl, PREFILL_SPLITS_MEASURED, PREFILL_SPLITS_UNSPLIT,
 } from "../src/engine/kernels/wgsl";
 import { dispatchWeightBytes, type PrefillDispatch, type PrefillQuantKind } from "../src/engine/prefillbytes";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 // PIANO del GEMM di prefill: quale via prende ogni sito, con quante fette, con
 // quanto scratch. Modulo PURO — nessuna GPU, nessun WGSL generato — come
@@ -18,10 +16,16 @@ import { join } from "node:path";
 //
 // La tesi che questi test sorvegliano e' UNA: il piano NON ridecide niente che
 // sia gia' deciso accanto al kernel. Fette, parziali, workgroup storage e il
-// predicato di ammissibilita' (kind, K%64) arrivano da `kernels/wgsl.ts`, e i
-// confronti qui sotto sono SEMPRE contro la funzione importata, mai contro una
-// costante ricopiata — e' il bug di it.7 (due posti che decidevano le
+// predicato di ammissibilita' (quali kind, e per ognuno la sua unita' di taglio
+// — 64 sul q4_0, 256 sul q5_K) arrivano da `kernels/wgsl.ts`, e i confronti qui
+// sotto sono SEMPRE contro la funzione importata, mai contro una costante
+// ricopiata — e' il bug di it.7 (due posti che decidevano le
 // righe-per-workgroup, e le decidevano diverse) preso alla radice.
+//
+// La copertura per CALL-SITE (l'ex `[6f]`, che scansionava q35gpumodel.ts) NON
+// vive piu' qui: si e' SPOSTATA in tests/engine-prefillwiring-q5k.test.ts, dove
+// sta accanto al cablaggio che censisce. Questo file resta puro — nessun
+// `readFileSync` su un modulo del motore.
 
 /** M del prefill in produzione (PREFILL_M = 16, riga 2 dell'ondata TTFT). */
 const M = 16;
@@ -52,8 +56,41 @@ describe("[1] la via: idot dove si puo', f32 come fallback dichiarato, legacy co
     }
   });
 
-  it("kind != q4_0: legacy, con una ragione >= 40 caratteri che NOMINA il kind", () => {
-    const kinds: PrefillQuantKind[] = ["q8_0", "q4_K", "q5_K", "q6_K", "f32"];
+  it("q5_K con K%256==0: idot quando la feature c'e', f32 quando non c'e'", () => {
+    // La riga 2 di engine-kquant: `blk.*.ssm_out` del 4B (K=4096 = 16
+    // superblocchi, N=2560) esce dalla lista delle eccezioni ed entra nella via
+    // veloce. Le fette sono 4 — contate in SUPERBLOCCHI, non in blocchi da 32.
+    const yes = planPrefillGemm({ kind: "q5_K", K: 4096, N: 2560, M, idot: true });
+    const no = planPrefillGemm({ kind: "q5_K", K: 4096, N: 2560, M, idot: false });
+    expect(yes.via).toBe("idot");
+    expect(no.via).toBe("f32");
+    expect(yes.splits).toBe(4);
+    expect(no.splits).toBe(4);
+    expect(yes.splits).toBe(prefillGemmSplitsFor(4096, 2560, "q5_K"));
+    expect(yes.partialFloats).toBe(4 * M * 2560);
+    expect(no.partialFloats).toBe(4 * M * 2560);
+    // il kind REALE arriva al kernel: se il piano continuasse a passare "q4_0"
+    // i numeri sarebbero quelli dei blocchi da 32 (K/32 = 128 -> 4 fette da
+    // BK=2, e 1.152 B di storage invece di 5.120)
+    expect(yes.wgStorageBytes).toBe(5120);
+    expect(no.wgStorageBytes).toBe(2048);
+    expect(yes.wgStorageBytes).toBe(
+      prefillGemmWorkgroupStorageBytes({ kind: "q5_K", K: 4096, N: 2560, M, splits: 4 }, "idot"));
+    expect(no.wgStorageBytes).toBe(
+      prefillGemmWorkgroupStorageBytes({ kind: "q5_K", K: 4096, N: 2560, M, splits: 4 }, "f32"));
+    // la via intera Q5_K riusa `prefillQuantXQ8Wgsl` TALE E QUALE (sotto-blocchi
+    // da 32, correzione C0-2): stesse attivazioni, nessun secondo quantizzatore
+    const blocks = M * (4096 / 32);
+    expect(yes.xqU32).toBe(blocks * 8);
+    expect(yes.xscF32).toBe(blocks);
+    expect(no.xqU32).toBe(0);
+    expect(no.xscF32).toBe(0);
+    expect(no.reason).toContain("FALLBACK DICHIARATO");
+    for (const r of [yes, no]) expect(r.reason).toContain("q5_K");
+  });
+
+  it("kind fuori dalle vie veloci: legacy, con una ragione >= 40 caratteri che NOMINA il kind", () => {
+    const kinds: PrefillQuantKind[] = ["q8_0", "q4_K", "q6_K", "f32"];
     for (const kind of kinds) {
       for (const idot of [true, false]) {
         const r = planPrefillGemm({ kind, K: 2560, N: 9216, M, idot });
@@ -85,12 +122,18 @@ describe("[1] la via: idot dove si puo', f32 come fallback dichiarato, legacy co
     // il suo messaggio. Qui si verifica proprio quello — la ragione CONTIENE
     // alla lettera cio' che il kernel dice quando gli si chiede la shape.
     for (const bad of [
-      { kind: "q5_K" as PrefillQuantKind, K: 4096 },
+      { kind: "q4_K" as PrefillQuantKind, K: 4096 },
+      { kind: "q6_K" as PrefillQuantKind, K: 4096 },
       { kind: "q4_0" as PrefillQuantKind, K: 2592 },
+      // Q5_K con K non multiplo di 256: il formato ora e' AMMESSO, e' la
+      // geometria a non tornare (un superblocco non si taglia a meta').
+      { kind: "q5_K" as PrefillQuantKind, K: 2688 },
     ]) {
       let kernelMsg = "";
       try {
-        prefillPartialFloats({ kind: bad.kind as "q4_0", K: bad.K, N: 2560, M, splits: PREFILL_SPLITS_UNSPLIT });
+        prefillPartialFloats({
+          kind: bad.kind as "q4_0", K: bad.K, N: 2560, M, splits: PREFILL_SPLITS_UNSPLIT,
+        });
       } catch (e) {
         kernelMsg = (e as Error).message;
       }
@@ -100,23 +143,87 @@ describe("[1] la via: idot dove si puo', f32 come fallback dichiarato, legacy co
       expect(r.reason).toContain(kernelMsg);
     }
     // ...e l'ordine dei rifiuti e' quello del kernel: prima il formato, poi la
-    // geometria. Un `ssm_out` Q5_K con K non multiplo di 64 deve dire «Q5_K»,
-    // che e' la ragione strutturale e quella su cui si puo' agire.
-    const both = planPrefillGemm({ kind: "q5_K", K: 2592, N: 2560, M, idot: true });
-    expect(both.reason).toContain("q5_K");
-    expect(both.reason).not.toContain("2592");
+    // geometria. Su un kind ANCORA NON SUPPORTATO (q4_K, q6_K) con K storto, il
+    // messaggio deve dire il KIND — che e' la ragione strutturale e quella su
+    // cui si puo' agire — e non il K, che e' la seconda.
+    for (const kind of ["q4_K", "q6_K"] as const) {
+      const both = planPrefillGemm({ kind, K: 2592, N: 2560, M, idot: true });
+      expect(both.reason, kind).toContain(kind);
+      expect(both.reason, kind).not.toContain("2592");
+    }
+    // Il rifiuto GEOMETRICO del q5_K, invece, nomina K e 256: il formato e'
+    // buono, e' la shape che non si divide in superblocchi.
+    const geom = planPrefillGemm({ kind: "q5_K", K: 2592, N: 2560, M, idot: true });
+    expect(geom.via).toBe("legacy");
+    expect(geom.reason).toContain("2592");
+    expect(geom.reason).toContain("256");
   });
 
   it("sulla via legacy non si prenota nulla: fette e scratch a zero", () => {
     // Un parziale o uno storage NON nullo su una via che non accende la
     // pipeline veloce gonfierebbe lo scratch CONDIVISO (prefillGemmScratchFor
     // prende il max) per un buffer che nessun dispatch legge.
-    const r = planPrefillGemm({ kind: "q5_K", K: 4096, N: 2560, M, idot: true });
-    expect(r.splits).toBe(0);
-    expect(r.partialFloats).toBe(0);
-    expect(r.wgStorageBytes).toBe(0);
-    expect(r.xqU32).toBe(0);
-    expect(r.xscF32).toBe(0);
+    for (const r of [
+      planPrefillGemm({ kind: "q4_K", K: 4096, N: 2560, M, idot: true }),
+      planPrefillGemm({ kind: "q6_K", K: 4096, N: 2560, M, idot: true }),
+      // e anche a M=1, dove la via veloce non si prende su NESSUN kind
+      planPrefillGemm({ kind: "q5_K", K: 4096, N: 2560, M: 1, idot: true }),
+      planPrefillGemm({ kind: "q4_0", K: 2560, N: 9216, M: 1, idot: true }),
+    ]) {
+      expect(r.splits).toBe(0);
+      expect(r.partialFloats).toBe(0);
+      expect(r.wgStorageBytes).toBe(0);
+      expect(r.xqU32).toBe(0);
+      expect(r.xscF32).toBe(0);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // [1f] M=1 — la clausola 7 del done-when della riga 2, e la sua ONESTA'.
+  //
+  // La clausola dice: a M=1 si resta legacy su OGNI kind. Il test la sorveglia,
+  // MA sorveglia anche che la ragione non spacci il 0,56x per una legge
+  // generale — perche' non lo e': al banco a M=1 la forma multi-riga e' PIU'
+  // VELOCE della legacy su q4_0/idot (8,64x) e su q5_K/idot (3,47x), e piu'
+  // lenta soltanto su q5_K/f32 (0,56x). La clausola resta perche' e' di
+  // contratto e conservativa; la stringa deve dirlo, non nasconderlo.
+  // -------------------------------------------------------------------------
+  it("[1f] M=1 ⇒ legacy su OGNI kind, con la misura di banco ATTRIBUITA alla sua cella", () => {
+    const kinds: PrefillQuantKind[] = ["q4_0", "q4_1", "q8_0", "q4_K", "q5_K", "q6_K", "f32"];
+    for (const kind of kinds) {
+      for (const idot of [true, false]) {
+        // K scelto ammissibile su ENTRAMBE le scale (4096 = 128 blocchi da 32 =
+        // 16 superblocchi da 256): se il piano instradasse, instraderebbe qui.
+        const r = planPrefillGemm({ kind, K: 4096, N: 2560, M: 1, idot });
+        expect(r.via, `${kind} idot=${idot}`).toBe("legacy");
+        expect(r.reason, `${kind} idot=${idot}`).toContain("M=1");
+        expect(r.reason, `${kind} idot=${idot}`).toContain("0,56x");
+        // la cella e' NOMINATA, e le celle contrarie pure: una ragione che
+        // dicesse solo "0,56x" sarebbe una misura falsa in telemetria
+        expect(r.reason, `${kind}`).toContain("q5_K sulla via f32");
+        expect(r.reason, `${kind}`).toContain("3,47x");
+        expect(r.reason, `${kind}`).toContain("8,64x");
+        expect(r.reason, `${kind}`).toContain("CONTRATTO");
+      }
+    }
+    // e a M=16, con lo STESSO kind e lo STESSO K, la via veloce si prende: il
+    // rifiuto e' di M, non della shape
+    expect(planPrefillGemm({ kind: "q5_K", K: 4096, N: 2560, M: 16, idot: true }).via).toBe("idot");
+    expect(planPrefillGemm({ kind: "q4_0", K: 4096, N: 2560, M: 16, idot: true }).via).toBe("idot");
+  });
+
+  it("[1f] la cella pinnata nella costante e' quella del JSON, e il rapporto torna", () => {
+    // Il 0,56x non e' un numero scritto a mano dentro una stringa: viene da
+    // `PREFILL_M1_LEGACY.measured`, e qui si verifica che il rapporto dichiarato
+    // sia davvero legacy/veloce di quella cella
+    // (kquant-fase0-4090-linux-2026-08-14T19-29-20-014Z.json, q5_K/base-batch-z
+    // 0,08288 ms vs q5_K/splitk-f32 0,148992 ms).
+    const m = PREFILL_M1_LEGACY.measured;
+    expect(m.kind).toBe("q5_K");
+    expect(m.via).toBe("f32");
+    expect(m.legacyMs / m.fastMs).toBeCloseTo(0.5563, 4);
+    expect(m.ratio).toBe("0,56x");
+    expect(PREFILL_M1_LEGACY.M).toBe(1);
   });
 });
 
@@ -377,10 +484,21 @@ describe("[6] ACCETTAZIONE 2: il traffico pesi del prefill del 4B, prima e dopo"
     console.log(
       `[ACCETTAZIONE 2] Qwen3.5-4B, M=${M}: legacy ${(before / 1e9).toFixed(3)} GB → piano ` +
       `${(after / 1e9).toFixed(3)} GB = ${ratio.toFixed(4)}x sull'inventario per-layer INTERO ` +
-      `(barra del ruling PI 2026-08-13: >= 5,5x sull'inventario INTERO; teorico massimo M=${M}); ` +
+      `(barra della riga 2 di engine-kquant: >= 10,9x; teorico massimo M=${M}); ` +
       `copertura ${covered.length}/${sites.length} siti = ` +
       `${(100 * onePass(covered) / onePass(sites)).toFixed(3)}% dei byte; ` +
       `${exceptions.length} eccezioni = ${(100 * onePass(excepted) / onePass(sites)).toFixed(3)}% dei byte`);
+
+    // Le 24 `ssm_out` Q5_K sono la riga 2 di engine-kquant: erano il 37,9% del
+    // tempo del prefill sul fallback legacy, e ora stanno fra i `multirow`.
+    const ssmOut = sites.map((s, i) => ({ s, d: dispatches[i] })).filter((x) => x.s.site.endsWith("ssm_out"));
+    expect(ssmOut.length).toBe(24);
+    for (const { s, d } of ssmOut) {
+      expect(s.kind, s.site).toBe("q5_K");
+      expect(d.form, s.site).toBe("multirow");
+    }
+    // ...e nessuna di loro compare piu' fra le eccezioni
+    expect(exceptions.some((e) => e.site.endsWith("ssm_out"))).toBe(false);
 
     // -----------------------------------------------------------------------
     // IL GATE, e cosa lo fa fallire.
@@ -398,53 +516,43 @@ describe("[6] ACCETTAZIONE 2: il traffico pesi del prefill del 4B, prima e dopo"
     // Se un sito coperto scivolasse a legacy, `after` crescerebbe e queste due
     // uguaglianze fallirebbero; se un'eccezione sparisse dalla lista, anche.
     // -----------------------------------------------------------------------
-    const F = HIST_4B.attnQ4_0.bytes + HIST_4B.ffnQ4_0.bytes;          // via veloce
-    const L = HIST_4B.ffnQ4_1.bytes + HIST_4B.ssmQ8_0.bytes + HIST_4B.ssmQ5_K.bytes;
+    const F = HIST_4B.attnQ4_0.bytes + HIST_4B.ffnQ4_0.bytes + HIST_4B.ssmQ5_K.bytes;   // via veloce
+    const L = HIST_4B.ffnQ4_1.bytes + HIST_4B.ssmQ8_0.bytes;
+    expect(F).toBe(1_983_774_720);
+    expect(L).toBe(63_160_320);
     expect(before).toBe(M * (F + L));
     expect(after).toBe(F + M * L);
-    expect(covered.length).toBe(HIST_4B.attnQ4_0.n + HIST_4B.ffnQ4_0.n);   // 172
-    expect(excepted.length).toBe(HIST_4B.ffnQ4_1.n + HIST_4B.ssmQ8_0.n + HIST_4B.ssmQ5_K.n);   // 76
+    expect(covered.length).toBe(HIST_4B.attnQ4_0.n + HIST_4B.ffnQ4_0.n + HIST_4B.ssmQ5_K.n);   // 196
+    expect(covered.length).toBe(196);
+    expect(excepted.length).toBe(HIST_4B.ffnQ4_1.n + HIST_4B.ssmQ8_0.n);   // 52
+    expect(excepted.length).toBe(52);
     expect(exceptions.length).toBe(excepted.length);
     expect(onePass(covered)).toBe(F);
     expect(onePass(excepted)).toBe(L);
     for (const e of exceptions) expect(e.reason.length).toBeGreaterThanOrEqual(40);
 
-    // e il numero che ne esce, pinnato stretto perche' si legga nel goal
-    expect(ratio).toBeCloseTo(5.8593, 4);
+    // I kind che restano legacy sono DUE: il Q4_1 e' la riga 3 (stessa forma,
+    // misurata a parte perche' altrimenti non si sa quale leva ha prodotto
+    // quale pezzo del guadagno) e il Q8_0 e' l'eredita' del 35B, misurato e
+    // NON cablato (riga 4). Il Q5_K non e' piu' qui: e' la riga 2.
+    expect([...new Set(exceptions.map((e) => e.kind))].sort()).toEqual(["q4_1", "q8_0"]);
+
+    // e il numero che ne esce, pinnato stretto perche' si legga nel goal.
+    // La barra della riga 2 e' >= 10,9x sull'inventario per-layer INTERO.
+    expect(ratio).toBeGreaterThanOrEqual(10.9);
+    expect(ratio).toBeCloseTo(10.9376, 4);
   });
 
-  it("[6d] 5,86x sta fra la barra del ruling (5,5) e il testo originale del contratto (8)", () => {
-    // QUESTO TEST ESISTE PER NON NASCONDERE UNA DEVIAZIONE. Il contratto NASCEVA
-    // chiedendo sum(legacy)/sum(dispatches) >= 8 sulla lista pinnata; il valore
-    // reale e' 5,86. Non e' un errore di calcolo ne' un difetto del piano: e' la
-    // COPERTURA. Le 24 `ssm_out` Q5_K e le 4 `ffn_down` Q4_1 sono l'11,54% dei
-    // byte per-layer, restano legacy e quindi si pagano M volte ANCHE dopo.
-    //   rapporto = M·(F+L)/(F+M·L), con L/(F+L) = 0,11537 ⇒ 5,859
-    // Per arrivare a 8 servirebbe copertura >= 93,3% dei byte, cioe' una forma
-    // multi-riga per Q5_K e Q4_1 — che nessuno ha mai misurato: inventarla per
-    // far passare un'asserzione sarebbe il modo peggiore di chiudere la riga.
-    // RULING DEL PI, 2026-08-13: la barra scende da >= 8 a **>= 5,5
-    // sull'inventario per-layer INTERO**, e il residuo (le 24 Q5_K + 4 Q4_1)
-    // diventa scope del goal K-quant. Il >= 8 era irraggiungibile a qualunque M
-    // praticabile: tetto 8,67x, servirebbe M >= 92. Quindi 5,8593 PASSA la
-    // barra vigente — questo test non registra piu' un fallimento, registra la
-    // DISTANZA fra il testo originale del contratto e la barra che l'ha
-    // sostituito, perche' chi rilegge il goal non deduca il 5,86 dal 16 del
-    // banco. Se un giorno la copertura sale, questo test fallisce e va
-    // cancellato con la sua ragione: e' il promemoria, non un lasciapassare.
-    const sites = sites4B();
-    const { dispatches, legacy } = prefillPlanDispatches({ sites, M, idot: true });
-    const ratio = sum(legacy) / sum(dispatches);
-    expect(ratio).toBeLessThan(8);
-    expect(ratio).toBeGreaterThan(5);
-
-    // Dove la via veloce si applica il rapporto E' M — ma e' un'IDENTITA'
-    // (definizione di dispatchWeightBytes), non una misura: vale con qualunque
-    // copertura, e infatti la copertura la sorveglia [6c], non questa riga.
-    const covIdx = sites.map((_, i) => i).filter((i) => dispatches[i].form === "multirow");
-    const covRatio = sum(covIdx.map((i) => legacy[i])) / sum(covIdx.map((i) => dispatches[i]));
-    expect(covRatio).toBe(M);
-  });
+  // [6d] NON C'E' PIU', ed e' la sua stessa ragione ad averlo tolto. Registrava
+  // la DISTANZA fra il testo originale del contratto (>= 8) e la barra del
+  // ruling PI del 2026-08-13 (>= 5,5), e diceva a chiare lettere: «se un giorno
+  // la copertura sale, questo test fallisce e va cancellato con la sua
+  // ragione». La copertura e' salita — le 24 `ssm_out` Q5_K sono passate alla
+  // via veloce e il rapporto e' 10,94x, cioe' oltre l'8 che [6d] asseriva
+  // essere irraggiungibile. Cancellarlo e' eseguire la sua istruzione; tenerlo
+  // sarebbe stato un `expect(ratio).toBeLessThan(8)` rosso su un miglioramento.
+  // L'identita' `covRatio === M` che portava con se' era esplicitamente una
+  // definizione e non una misura, e resta sorvegliata da [6c].
 
   it("[6e] senza la feature intera il traffico non cambia: la via f32 muove gli stessi byte", () => {
     // Il fallback dichiarato costa in TEMPO (1,745x), non in byte: la forma
@@ -485,9 +593,11 @@ describe("[7] prefillGemmScratchFor: UN solo set di buffer, quindi il MAX", () =
 
   it("le eccezioni non prenotano nulla e non alzano il max", () => {
     const fast: PrefillSite[] = [{ site: "ffn_gate", kind: "q4_0", K: 2560, N: 9216 }];
+    // Le eccezioni di OGGI, dopo la riga 2: il Q5_K non e' piu' fra loro.
+    // Restano il Q4_1 (riga 3) e i K-quant del 35B, misurati e non cablati.
     const mixed: PrefillSite[] = [
       ...fast,
-      { site: "ssm_out", kind: "q5_K", K: 4096, N: 2560 },
+      { site: "moe_down", kind: "q4_K", K: 4096, N: 2560 },
       { site: "ffn_down_q41", kind: "q4_1", K: 9216, N: 2560 },
     ];
     expect(prefillGemmScratchFor({ sites: mixed, M, idot: true }))
@@ -504,81 +614,5 @@ describe("[7] prefillGemmScratchFor: UN solo set di buffer, quindi il MAX", () =
     expect(f.partialFloats).toBe(got.partialFloats);
     expect(f.xqU32).toBe(0);
     expect(f.xscF32).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// CLAUSOLA (d) DELLA RIGA 2 — la copertura della convenzione a livello di
-// CALL-SITE, non di byte.
-//
-// Il test [6c] qui sopra pesa i BYTE (172/248 siti = 88,46% dell'inventario
-// per-layer). Dice quanto traffico passa dalla via veloce, non quanti punti del
-// codice la chiedono al piano — e sono due domande diverse: un solo call-site
-// dimenticato che ri-derivi la condizione a mano vale zero byte in quel conto e
-// vale la riga 2 intera. E' esattamente cio' che e' successo in it.14, dove
-// `prefillgemmplan.ts` esisteva completo e NESSUNO lo importava.
-//
-// Censimento del 2026-08-14 (it.17), verificato a mano su q35gpumodel.ts:
-//
-//   COPERTI     tutti i GEMM quantizzati passano dall'UNICO imbuto `gemvB`,
-//               che chiede la rotta a `planPrefillGemm` invece di deciderla.
-//               Consumatori: le due fabbriche di peso (righe ~453, ~457) e i
-//               tre dispatch del blocco MoE (~932-935).
-//   ECCEZIONI   3 siti, tutte per la STESSA ragione strutturale — la via veloce
-//               e' q4_0-only per costruzione, come il GEMV del goal precedente:
-//                 q35gpumodel.ts:448  gemvF32Wgsl  pesi f32, non quantizzati
-//                 q35gpumodel.ts:468  gemvQ4KWgsl / Q5K / Q6K  -> goal K-quant
-//                 q35gpumodel.ts:960  gemvF32Wgsl  scalare dello shared expert
-//
-// NON e' un'eccezione l'attenzione (riga ~857, `attnDecodeWgsl`): non e' un
-// GEMM, ha la sua riga (la 3) ed e' gia' in streaming.
-// ---------------------------------------------------------------------------
-describe("[6f] CLAUSOLA (d): la copertura per CALL-SITE, con worklist ed eccezioni motivate", () => {
-  const SRC = readFileSync(join(process.cwd(), "src/engine/q35gpumodel.ts"), "utf8");
-
-  it("la rotta si chiede al piano da UN SOLO posto, e quel posto e' `gemvB`", () => {
-    expect(SRC, "q35gpumodel deve importare il piano").toMatch(
-      /import\s*\{[^}]*planPrefillGemm[^}]*\}\s*from\s*["'`]\.\/prefillgemmplan["'`]/);
-    const calls = [...SRC.matchAll(/planPrefillGemm\s*\(/g)];
-    expect(calls.length, "un solo sito decide la rotta: due posti che decidono la stessa cosa e' il difetto di it.7")
-      .toBe(1);
-  });
-
-  it("nessun call-site ri-deriva a mano la condizione della via veloce", () => {
-    // La firma del difetto di it.14: `kind === "q4_0" && k % 64 === 0` scritto
-    // a mano invece di chiesto al piano. Se ricompare, e' una seconda soglia
-    // che puo' divergere in silenzio.
-    expect(SRC, "condizione della via veloce ri-derivata a mano fuori dal piano")
-      .not.toMatch(/%\s*64\s*===\s*0/);
-  });
-
-  it("le eccezioni fuori dall'imbuto sono QUELLE, e la worklist e' esatta", () => {
-    // I GEMM batch emessi SENZA passare da `gemvB`. `attnDecodeWgsl` non conta:
-    // non e' un GEMM, ha la sua riga (la 3) ed e' gia' in streaming.
-    // `gemvQuantWgsl` non conta: e' il fallback DENTRO `gemvB`, cioe' la via
-    // legacy scelta DAL PIANO — coperto, non eccezione.
-    const batchSites = [...SRC.matchAll(/(\w+Wgsl)\(\{[^}]*batch:\s*true/g)].map((m) => m[1]);
-    const exceptions = batchSites.filter((n) => n !== "attnDecodeWgsl" && n !== "gemvQuantWgsl");
-    // CINQUE emissioni per QUATTRO siti logici: i tre K-quant stanno sullo
-    // stesso ternario (q35gpumodel.ts:468-469) e sono un sito solo, ma ognuno
-    // scrive il proprio `batch: true` e quindi conta cinque volte qui.
-    expect(exceptions.sort(), "worklist delle eccezioni").toEqual(
-      ["gemvF32Wgsl", "gemvF32Wgsl", "gemvQ4KWgsl", "gemvQ5KWgsl", "gemvQ6KWgsl"]);
-  });
-
-  it("i kind che restano legacy sono TRE, e q8_0 e' quello che si dimentica", () => {
-    // Coerenza fra i due conti: le eccezioni per call-site e l'11,54% di byte
-    // del test [6c] devono parlare degli stessi tensori.
-    //
-    // ATTENZIONE ALLA DISTINZIONE, che questo test esiste per tenere ferma:
-    // `q8_0` NON e' un'eccezione di COPERTURA — passa dall'imbuto `gemvB` e
-    // chiede la rotta al piano, come si deve. E' il PIANO a rispondergli
-    // "legacy", perche' la via veloce e' q4_0-only per costruzione. Coperto
-    // dalla convenzione, legacy per instradamento: due cose diverse, e
-    // confonderle e' come ho scritto il censimento sbagliato in it.17.
-    const { exceptions } = prefillPlanDispatches({ sites: sites4B(), M: 16, idot: true });
-    const kinds = new Set(exceptions.map((e) => e.kind));
-    expect([...kinds].sort(), "i kind che restano legacy").toEqual(["q4_1", "q5_K", "q8_0"]);
-    for (const e of exceptions) expect(e.reason.length, `${e.kind}`).toBeGreaterThanOrEqual(40);
   });
 });

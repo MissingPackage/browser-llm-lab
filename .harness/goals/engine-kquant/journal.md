@@ -328,3 +328,56 @@ intera verde. Zero file sotto `src/engine/`: la riga 1 non tocca il motore.
 
 **RIGA 1 CHIUSA.** Prossima: riga 2 — Q5_K in produzione, la prima che muove
 il TTFT (−11,7 s proiettati). Veicolo dichiarato in PHASES: `sdd-conductor`.
+
+## it.4 — riga 2: il Q5_K E' IN PRODUZIONE (2026-08-15)
+
+Veicolo: `sdd-conductor` (dichiarato in PHASES), spec in
+`docs/engine/kquant-riga2-spec.md`. Cinque task, **zero bloccati**, 25 agenti,
+~3,3 h. Il suo autoreport NON e' evidenza: sotto ci sono i gate che ho eseguito
+io.
+
+**LA TRAPPOLA DELLA RIGA, evitata perche' era scritta nella spec.** `ssm_out`
+**non passa da `gemvB`**: il ramo K-quant di `loadW`
+(`q35gpumodel.ts:487-505`) si costruisce da se' il proprio `pushB` con
+`gemvQ5KWgsl({batch: true})` e non tocca mai quel bivio. Cablare `gemvB` — la
+cosa che sembra ovvia — non avrebbe cambiato **una riga** del comportamento, e
+il test di copertura sarebbe passato lo stesso perche' conta i SITI, non i
+dispatch. Il cablaggio e' nel ramo K-quant, verificato nel diff.
+
+**GATE, eseguiti da me dopo il rientro del workflow:**
+- `npx tsc --noEmit` **pulito**
+- `npx vitest run` **779 passed | 10 skipped** (erano 699)
+- `node .harness/tools/engine-ktest.mjs` → **103 PASS / 0 FAIL** (erano 101), coi
+  due casi nuovi presenti e verdi: `prefill-gemm-q5k-multirow-idot` maxRel
+  **2,61e-7** e `prefill-gemm-q5k-multirow-f32` **4,28e-7**
+- copertura, test `[6c]`: **10,9376x** sull'inventario per-layer INTERO a M=16
+  (barra della riga: >= 10,9; era 5,8593). **196/248 siti = 96,914% dei byte**,
+  52 eccezioni = 3,086%
+- `[6d]` **cancellato con la sua ragione**, come chiedeva il suo stesso commento
+
+**CONTROLLO END-TO-END, e cosa dimostra davvero**: conformita' col golden
+llama.cpp sul prompt-idx 0 (6333 token) col prefill a chunk M=16 →
+**top1 62/64 = 96,875%** (`results/engine/q35-conf-4b-riga2-check-2026-08-15.json`).
+**Questo numero non e' il gate del contratto** (che e' >= 1012/1024 full-corpus,
+riga 6, su codice finale): su 64 posizioni ±1 colpo vale ±1,6 punti, ed e' la
+landmine del campione piccolo. **Cio' che dimostra e' l'unica cosa che serve
+adesso**: un cablaggio sbagliato darebbe spazzatura, non il 96,9% d'accordo con
+un oracolo esterno. La non-regressione fine si misura alla riga 6.
+
+**Il gate a due bracci NON e' stato usato, e non per pigrizia**: la
+bit-identita' fra prefill sequenziale e a chunk e' **caduta in it.15 del goal
+precedente** per via della quantizzazione delle attivazioni a int8 — leva
+autorizzata dal PI — ed e' **sospesa con ruling**, non abbandonata. Girarlo
+oggi direbbe `bitIdentical false` per una causa che non e' la mia.
+
+**NON ANCORA VERIFICATO, e lo dichiaro**: che il segmento `gemm:deltanet-out`
+sia davvero sceso. Il piano dice che 196 siti su 248 prendono la via veloce, ma
+il piano non e' il cronometro. La misura e' la riga 5, su codice finale — cioe'
+dopo la riga 3, come impone il vincolo «i bench costosi si eseguono su codice
+finale».
+
+Corretta un'etichetta lasciata dal workflow: due commenti dicevano «riga 3»
+dove il lavoro e' la riga 2.
+
+Prossima: riga 3 — il Q4_1. Piu' corta della 2: `ffn_down` passa da `gemvB`,
+che la rotta al piano la chiede gia'.

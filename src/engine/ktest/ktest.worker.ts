@@ -33,7 +33,18 @@ import {
   repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
   dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ4_K, dequantQ5_K, dequantQ6_K,
   Q4_1_BLOCK_BYTES, Q4_K_BLOCK_BYTES, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES,
+  Q5_K_BLOCK_WEIGHTS, Q8_0_BLOCK_WEIGHTS,
 } from "../quant";
+import {
+  prefillQuantXQ8Wgsl, prefillQuantXGrid, prefillSplitKCombineWgsl, prefillCombineGrid,
+  prefillGemmQ5KSplitKIdotWgsl, prefillGemmQ5KSplitKWgsl, prefillGemmGrid,
+  type PrefillGemmOpts,
+} from "../kernels/wgsl";
+import {
+  PREFILL_Q5K_KTEST_CASE,
+  PREFILL_GEMM_Q5K_IDOT_REL_TOL, PREFILL_GEMM_Q5K_IDOT_ABS_TOL,
+  PREFILL_GEMM_Q5K_F32_REL_TOL, PREFILL_GEMM_Q5K_F32_ABS_TOL,
+} from "../prefillkquant";
 import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 import { createEngineDevice } from "../gpudevice";
 import { planMoeChunk } from "../moeprefillplan";
@@ -3705,6 +3716,95 @@ async function testRouterResolveSlotTable(g: Gpu): Promise<KResult> {
   };
 }
 
+// --- GEMM di prefill multi-riga sui pesi Q5_K (goal K-quant): due bracci ---
+//
+// I 24 `ssm_out` Q5_K sono la parte del 4B che la via veloce q4_0-only lasciava
+// sul percorso vecchio. Qui i due bracci del moltiplicatore K-quant si misurano
+// contro lo STESSO riferimento f64 calcolato dal dequant di `quant.ts`:
+//
+//   idot — `prefillQuantXQ8Wgsl` quantizza le attivazioni a i8 per blocco da
+//          32, il moltiplicatore accumula in intero, `prefillSplitKCombineWgsl`
+//          somma le fette. Il riferimento usa le attivazioni GIA' QUANTIZZATE
+//          (amax/127 per blocco): la perdita della quantizzazione e' una scelta
+//          del percorso, non un errore del kernel, e mescolarla al residuo
+//          numerico renderebbe la tolleranza illeggibile.
+//   f32  — stessa mappatura, dequant in virgola mobile, attivazioni GREZZE:
+//          il riferimento e' la x non quantizzata.
+//
+// La convenzione dei due riferimenti e' congelata da `prefillkquant.ts`, che
+// tiene anche shape, seed e le due coppie di tolleranze: qui non si ricopia
+// nessun numero. I pesi passano dallo STESSO `repackKQuant` della produzione —
+// un banco che ri-impacchettasse i byte a modo suo proverebbe un kernel che in
+// produzione non gira. Stessa regola per le GRIGLIE: `prefillGemmGrid`,
+// `prefillQuantXGrid`, `prefillCombineGrid` sono gli helper che usa
+// `q35gpumodel`, non tre `Math.ceil` riscritti qui.
+async function testPrefillGemmQ5KMultiRow(g: Gpu): Promise<KResult[]> {
+  const { K, N, M, splits, seedBlocks, seedX } = PREFILL_Q5K_KTEST_CASE;
+  // `PrefillGemmOpts` per intero, `kind` COMPRESO: e' il campo che sceglie il
+  // passo del superblocco (176 B del q5_K, non i 64 pesi del q4_0) e senza di
+  // lui `prefillGemmCheck` rifiuta la shape prima ancora del dispatch.
+  const opts: PrefillGemmOpts = { kind: "q5_K", K, N, M, splits };
+  const nBlocks = (K / Q5_K_BLOCK_WEIGHTS) * N;
+  const src = randBytes(nBlocks * Q5_K_BLOCK_BYTES, seedBlocks);
+  fixScalesAt(src, Q5_K_BLOCK_BYTES, [1, 3]); // d, dmin: esponente sano, come gli altri banchi K-quant
+  const w = new Float32Array(nBlocks * Q5_K_BLOCK_WEIGHTS);
+  dequantQ5_K(src, 0, nBlocks, w);
+
+  // attivazioni: M righe da K. `xs` e' quella che vede il braccio f32.
+  const xs = randF32(M * K, seedX);
+  // e questa e' quella che vede il braccio intero: stessa aritmetica di
+  // `prefillQuantXQ8Wgsl` (amax/127 per blocco da 32, clamp a i8), ri-espansa.
+  const XB = Q8_0_BLOCK_WEIGHTS, XW = XB / 4; // 32 valori per blocco = 8 u32
+  const xq8 = new Float32Array(M * K);
+  for (let b = 0; b + XB <= xs.length; b += XB) {
+    let amax = 0;
+    for (let i = 0; i < XB; i++) amax = Math.max(amax, Math.abs(xs[b + i]));
+    const sc = amax / 127, inv = sc > 0 ? 1 / sc : 0;
+    for (let i = 0; i < XB; i++) {
+      xq8[b + i] = Math.max(-127, Math.min(127, Math.round(xs[b + i] * inv))) * sc;
+    }
+  }
+  // riferimento f64: y[m, r] = Σ_i w[r, i] · act[m, i] (layout della combine)
+  const refOf = (act: Float32Array): Float32Array => {
+    const out = new Float32Array(M * N);
+    for (let m = 0; m < M; m++) {
+      for (let r = 0; r < N; r++) {
+        let acc = 0;
+        for (let i = 0; i < K; i++) acc += w[r * K + i] * act[m * K + i];
+        out[m * N + r] = acc;
+      }
+    }
+    return out;
+  };
+  const refIdot = refOf(xq8), refF32 = refOf(xs);
+
+  const blocks = g.buf(repackKQuant(src, 0, nBlocks, Q5_K_BLOCK_BYTES));
+  const x = g.buf(xs);
+  const nxb = M * (K / XB); // blocchi di attivazione, tutte le righe
+  const xq = g.empty(nxb * XW * 4), xsc = g.empty(nxb * 4);
+  // `part` e `y` sono gli stessi per i due bracci: il secondo parte dopo che il
+  // primo e' stato LETTO (g.read attende la mappatura), quindi non si sovrappongono.
+  const part = g.empty(splits * M * N * 4), y = g.empty(M * N * 4);
+  const yBytes = M * N * 4;
+
+  await g.run(prefillQuantXQ8Wgsl({ K, M }), [x, xq, xsc], prefillQuantXGrid({ K, M }));
+  await g.run(prefillGemmQ5KSplitKIdotWgsl(opts), [blocks, xq, part, xsc], prefillGemmGrid(opts));
+  await g.run(prefillSplitKCombineWgsl({ N, M, splits }), [part, y], prefillCombineGrid({ N, M }));
+  const gotIdot = new Float32Array(await g.read(y, yBytes));
+
+  await g.run(prefillGemmQ5KSplitKWgsl(opts), [blocks, x, part], prefillGemmGrid(opts));
+  await g.run(prefillSplitKCombineWgsl({ N, M, splits }), [part, y], prefillCombineGrid({ N, M }));
+  const gotF32 = new Float32Array(await g.read(y, yBytes));
+
+  for (const b of [blocks, x, xq, xsc, part, y]) b.destroy();
+  return [
+    compare("prefill-gemm-q5k-multirow-idot", gotIdot, refIdot,
+      PREFILL_GEMM_Q5K_IDOT_REL_TOL, PREFILL_GEMM_Q5K_IDOT_ABS_TOL),
+    compare("prefill-gemm-q5k-multirow-f32", gotF32, refF32,
+      PREFILL_GEMM_Q5K_F32_REL_TOL, PREFILL_GEMM_Q5K_F32_ABS_TOL),
+  ];
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -3762,6 +3862,9 @@ async function main(): Promise<void> {
     results.push(await testPairGemvSiluQ5KFast(g));
     results.push(await testGemvQ6KFast(g, G.dFfnExpert, G.dModel)); // down shexp, K=1536 (6 superblocchi)
     results.push(await testGemvQ6KFast(g, G.dModel, 1024));         // output head, K=2048 (N ridotto)
+
+    // --- GEMM di prefill multi-riga sui pesi Q5_K: via intera e via f32 ---
+    results.push(...await testPrefillGemmQ5KMultiRow(g));
 
     // --- DeltaNet q35 (q1 fase 3): conv, gates, core, catena sul campione ---
     results.push(await testDeltaNetConv(g, 256));   // dims campione
