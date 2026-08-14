@@ -1122,3 +1122,77 @@ strumentazione **nuova** — banda per segmento, workgroup in volo per dispatch
 9,26 misurato in riga 1. È la misura che deve spiegare **perché siamo a 32.265
 ms mentre la proiezione della riga 1 dava un pavimento di ~8.665**: o esiste un
 quarto collo che nessuno ha nominato, o quella proiezione era ottimistica.
+
+---
+
+## it.23 (2026-08-14, riga 5) — IL QUARTO COLLO HA UN NOME: la ricorrenza DeltaNet, 47% del piano
+
+**La domanda della riga 5 era: siamo a 32.239 ms di prefill mentre la proiezione
+della riga 1 dava un pavimento di ~8.665. Quarto collo mai nominato, o proiezione
+ottimistica?** Risposta: **né l'uno né l'altro — la proiezione era INCOMPLETA PER
+COSTRUZIONE, e lo diceva.** Il suo stesso testo escludeva «i 24 layer DeltaNet,
+le norm, il RoPE, i dispatch». Il termine mancante non era nascosto: era
+dichiarato e mai misurato.
+
+**COSTRUITO L'INVENTARIO DEL PIANO**, che è il primo dei tre numeri che la riga
+5 chiede e quello che il motore non misurava da nessuna parte: i **workgroup in
+volo per dispatch**. Non è una misura GPU — è una proprietà **statica** del
+piano, già decisa quando i bind group sono stati costruiti, quindi si legge
+senza spendere un submit. Meccanismo: una categoria corrente (`pbCat`) che il
+costruttore muove ai confini dei segmenti, e che `pushB` timbra su ogni step.
+Sedici punti di assegnazione invece di 39 call-site toccati.
+
+**Il piano di UN chunk da 16 righe: 1.624 dispatch. Sul prompt da 6333 token
+sono 395 chunk ⇒ 641.480 dispatch.**
+
+| categoria | disp | % piano | wg/disp | min |
+|---|---|---|---|---|
+| **deltanet:recurrence** | **768** | **47,3** | 80 | 32 |
+| deltanet:gemm | 192 | 11,8 | 613 | 20 |
+| gemm:ffn | 192 | 11,8 | 967 | 20 |
+| gemm:ffn-down | 120 | 7,4 | 1.739 | 72 |
+| gemm:qkv | 72 | 4,4 | 362 | 20 |
+| norm:attn · norm:ffn | 64 | 4,0 | **16** | 16 |
+| attn:core | 16 | 1,0 | 640 | 256 |
+
+**LA RICORRENZA È QUASI META' DEL PIANO, e non è comprimibile col batch.** Emette
+`2·M` dispatch **per layer** — 32 a M=16 — e sono seriali **per definizione**:
+ognuno legge lo stato che il precedente ha scritto. Su 24 layer DeltaNet fanno
+768 dispatch. Il commento in loco lo diceva già da it.30 («la ricorrenza non si
+batcha, quindi restano M dispatch IN ORDINE»), ma nessuno aveva mai messo quel
+fatto accanto a un conteggio.
+
+**E l'occupancy la inchioda al pavimento**: 80 workgroup per dispatch di media,
+minimo 32, su una scheda con 76 processori. Un dispatch che mette in volo ~80
+workgroup riempie la scheda per **una sola ondata** e poi la svuota — e la riga
+1 aveva già stabilito che su questo device il collo è l'occupancy, non la banda
+(`splitk` batte `regs` di 2,13× solo per 576 workgroup invece di 144; la fusione
+GQA taglia il traffico di 4× ed è più LENTA perché scende a 64 workgroup).
+La ricorrenza sta esattamente nella zona che quella misura dichiara tossica,
+per il 47% dei dispatch del prefill.
+
+**Prima categoria separata di proposito**: `deltanet:recurrence` stava dentro
+`deltanet:gates` nella prima passata, e la tabella diceva «792 dispatch di
+gates», che è vero e inutile. Separarla è ciò che ha reso visibile il termine.
+
+**Due sotto-occupazioni minori, nominate perché non si perdano**: `norm:attn` e
+`norm:ffn` mettono in volo **16 workgroup** — il 21% dei 76 processori — per 64
+dispatch a chunk. Piccoli in numero, ma sono il tipo di dispatch che costa
+quanto il suo overhead e nient'altro.
+
+**`sm` resta `null` nell'artefatto, di proposito**: WebGPU non espone il numero
+di processori, e pinnare 76 dentro il motore significherebbe scrivere il valore
+di QUESTA scheda in un modulo che gira ovunque. Chi confronta lo porta da fuori,
+dichiarato.
+
+**Gate**: tsc pulito · vitest **681 | 10** · ktest **101 PASS / 0 FAIL**.
+Metrica invariata (32.265 ms) e doveva esserlo: questa iterazione misura, non
+ottimizza.
+
+**Cosa manca alla riga 5**, e non è poco: il tempo **per segmento**. L'inventario
+dice quanti dispatch e quanto sotto-occupati, non quanti millisecondi. Serve
+`timestamp-query` sul piano a chunk, raggruppando gli step per categoria — la
+sonda esistente (`telemetryGpu`) è solo per il decode e spezza i pass per layer,
+non per segmento di prefill. Con quello si chiudono anche gli altri due numeri
+del done-when: banda efficace per segmento e TFLOP/s sostenuti contro il picco
+9,26 misurato in riga 1.

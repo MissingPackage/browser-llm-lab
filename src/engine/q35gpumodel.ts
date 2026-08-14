@@ -43,7 +43,18 @@ export interface Q35RawReader {
   readRange?(name: string, off: number, len: number): Promise<Uint8Array>;
 }
 
-interface Step { pipe: GPUComputePipeline; bind: GPUBindGroup; wgs: [number, number, number] }
+interface Step {
+  pipe: GPUComputePipeline; bind: GPUBindGroup; wgs: [number, number, number];
+  /**
+   * SEGMENTO del piano di prefill a cui il dispatch appartiene (riga 5 di
+   * engine-ttft). Non e' decorazione: la riga 1 ha stabilito che su questo
+   * device il collo e' l'OCCUPANCY, cioe' quanti workgroup sono in volo, e
+   * senza una categoria per dispatch quel numero non e' attribuibile a niente.
+   * La imposta il costruttore del piano ai confini dei segmenti (`pbCat`), non
+   * i 39 call-site: un'etichetta per gruppo, scritta dove il gruppo comincia.
+   */
+  cat: string;
+}
 
 /**
  * Esito del confronto ROUTER GPU (in ombra) vs selezione CPU, sui layer VERI
@@ -259,6 +270,15 @@ export interface Q35GpuModel {
    * concessa dal device). `ms` e' la somma dei pass, `n` il numero di pass.
    */
   gpuTimeStats: (() => { tokens: number; overflow: number; byCat: Record<string, { ms: number; n: number }> }) | null;
+  /**
+   * Inventario STATICO del piano di prefill a chunk: dispatch, workgroup in
+   * volo per dispatch e per segmento (riga 5 di engine-ttft). `null` se il
+   * piano non esiste. Non spende GPU: legge il piano gia' costruito.
+   */
+  prefillPlanInventory: () => {
+    dispatches: number; workgroupsTotal: number; sm: null;
+    byCat: Record<string, { dispatches: number; workgroups: number; wgMin: number; wgMax: number }>;
+  } | null;
   /** DEBUG (it.17): dopo step(), hidden x a valle del layer indicato (solo MoE). */
   readTap(layer: number): Promise<Float32Array>;
   /** Esito dell'OMBRA del router GPU; `null` se non è stata accesa. */
@@ -653,7 +673,10 @@ export async function createQ35GpuModel(
     const entries: GPUBindGroupEntry[] = bufs.map((b, i) => ({ binding: i, resource: { buffer: b } }));
     if (withUni) entries.push({ binding: bufs.length, resource: { buffer: uni } });
     const bind = device.createBindGroup({ layout: p.getBindGroupLayout(0), entries });
-    stepTarget.push({ pipe: p, bind, wgs: typeof wgs === "number" ? [wgs, 1, 1] : [wgs[0], wgs[1], 1] });
+    // `cat` qui e' "seq": questo e' il piano SEQUENZIALE del decode, non quello
+    // di prefill che la riga 5 scompone. Un campo obbligatorio con un valore
+    // onesto batte un campo opzionale che si dimentica di essere vuoto.
+    stepTarget.push({ pipe: p, bind, wgs: typeof wgs === "number" ? [wgs, 1, 1] : [wgs[0], wgs[1], 1], cat: "seq" });
   };
   /**
    * ATTENTION DECODE in DUE dispatch (split sul contesto + combine log-sum-exp).
@@ -712,6 +735,11 @@ export async function createQ35GpuModel(
     push(gemvQuantWgsl(use), [w.qs, w.scales, src, dst], gemvQuantGrid(use));
   };
   // ---- gemelli a M righe (fase 4). `pushB` scrive SOLO nel piano gemello. ----
+  /**
+   * Categoria corrente del piano di prefill (riga 5). Il costruttore la muove
+   * ai confini dei segmenti; ogni `pushB` la timbra sul proprio step.
+   */
+  let pbCat = "altro";
   const pushB = (code: string, bufs: GPUBuffer[], wgs: [number, number, number]): void => {
     if (!PB) return;
     const p = pipe(code);
@@ -719,7 +747,7 @@ export async function createQ35GpuModel(
       layout: p.getBindGroupLayout(0),
       entries: bufs.map((b, i) => ({ binding: i, resource: { buffer: b } })),
     });
-    PB.steps.push({ pipe: p, bind, wgs });
+    PB.steps.push({ pipe: p, bind, wgs, cat: pbCat });
   };
   /**
    * La RICORRENZA: M step, uno per riga, IN ORDINE. Un bind group per riga, e
@@ -736,7 +764,7 @@ export async function createQ35GpuModel(
         { binding: bufs.length, resource: { buffer: PB.rowUni, offset: row * 256, size: 16 } },
       ],
     });
-    PB.steps.push({ pipe: p, bind, wgs: [wg, 1, 1] });
+    PB.steps.push({ pipe: p, bind, wgs: [wg, 1, 1], cat: pbCat });
   };
   const gemvB = (w: { qs: GPUBuffer; scales: GPUBuffer; k: number; n: number; kind?: "q4_0" | "q4_1" | "q8_0" }, src: GPUBuffer, dst: GPUBuffer, kind?: "q4_0" | "q4_1" | "q8_0"): void => {
     const kk = kind ?? w.kind ?? "q4_0";
@@ -810,6 +838,7 @@ export async function createQ35GpuModel(
     const postNorm = await f32buf(`${b}post_attention_norm.weight`);
     mark("norm");
     push(rmsnormWgsl(d, S.rmsEps), [x, attnNorm, xn], 1);
+    pbCat = "norm:attn";
     if (PB) pushB(rmsnormWgsl(d, S.rmsEps, true), [PB.x, attnNorm, PB.xn], [M_MAX, 1, 1]);
 
     if (q35IsFullAttn(S, l)) {
@@ -825,6 +854,7 @@ export async function createQ35GpuModel(
       wq.push(xn, qFull);
       wk.push(xn, kCur);
       wv.push(xn, vCur);
+      pbCat = "gemm:qkv";
       if (PB) { wq.pushB(PB.xn, PB.qFull); wk.pushB(PB.xn, PB.kCur); wv.pushB(PB.xn, PB.vCur); }
       push(stridedCopyWgsl({ nVec: S.nHead, len: hd, srcStride: 2 * hd, srcOffset: 0, dstStride: hd, dstOffset: 0 }), [qFull, qB], Math.ceil(qDim / 64));
       push(stridedCopyWgsl({ nVec: S.nHead, len: hd, srcStride: 2 * hd, srcOffset: hd, dstStride: hd, dstOffset: 0 }), [qFull, gateB], Math.ceil(qDim / 64));
@@ -835,6 +865,7 @@ export async function createQ35GpuModel(
         // (riga, head) sta all'indice riga*nVec + head. Si dispatchano nVec*M
         // vettori e l'aritmetica degli offset torna da sola — provato
         // bit-identico alla geometria vera.
+        pbCat = "attn:prep";
         pushB(stridedCopyWgsl({ nVec: S.nHead * M_MAX, len: hd, srcStride: 2 * hd, srcOffset: 0, dstStride: hd, dstOffset: 0 }), [PB.qFull, PB.qB], [Math.ceil((M_MAX * qDim) / 64), 1, 1]);
         pushB(stridedCopyWgsl({ nVec: S.nHead * M_MAX, len: hd, srcStride: 2 * hd, srcOffset: hd, dstStride: hd, dstOffset: 0 }), [PB.qFull, PB.gateB], [Math.ceil((M_MAX * qDim) / 64), 1, 1]);
         pushB(rmsnormWgsl(hd, S.rmsEps, true), [PB.qB, qNormW, PB.qN], [S.nHead * M_MAX, 1, 1]);
@@ -848,14 +879,17 @@ export async function createQ35GpuModel(
       push(sigmoidMulWgsl(qDim), [attnO, gateB], Math.ceil(qDim / 64));
       wo.push(attnO, attnY);
       if (PB) {
+        pbCat = "attn:rope+kv";
         pushB(ropeNeoxWgsl(S.nHead, hd, S.ropeFreqBase, S.ropeDims, true), [PB.qN, PB.rowPos], [Math.ceil((S.nHead * S.ropeDims / 2) / 64), M_MAX, 1]);
         pushB(ropeNeoxWgsl(S.nKvHead, hd, S.ropeFreqBase, S.ropeDims, true), [PB.kN, PB.rowPos], [Math.ceil((S.nKvHead * S.ropeDims / 2) / 64), M_MAX, 1]);
         pushB(kvAppendWgsl(kvDim, true), [PB.kN, kCache, PB.rowPos], [Math.ceil(kvDim / 64), M_MAX, 1]);
         pushB(kvAppendWgsl(kvDim, true), [PB.vCur, vCache, PB.rowPos], [Math.ceil(kvDim / 64), M_MAX, 1]);
         // l'append PRECEDE l'attenzione: e' cosi' che la riga m vede le righe
         // precedenti del chunk, e la causalita' non ha bisogno di maschere (it.26)
+        pbCat = "attn:core";
         pushB(attnDecodeWgsl({ nHead: S.nHead, nKvHead: S.nKvHead, headDim: hd, ctxMax, batch: true }), [PB.qN, kCache, vCache, PB.attnO, PB.rowPos], [S.nHead, M_MAX, 1]);
         pushB(sigmoidMulWgsl(qDim, true), [PB.attnO, PB.gateB], [Math.ceil(qDim / 64), M_MAX, 1]);
+        pbCat = "gemm:attn-out";
         wo.pushB(PB.attnO, PB.attnY);
       }
     } else {
@@ -878,13 +912,24 @@ export async function createQ35GpuModel(
       wb.push(xn, bRaw);
       wa.push(xn, aRaw);
       if (PB) {
+        pbCat = "deltanet:gemm";
         wqkv.pushB(PB.xn, PB.qkv);
         wz.pushB(PB.xn, PB.z);
         wb.pushB(PB.xn, PB.bRaw);
         wa.pushB(PB.xn, PB.aRaw);
+        pbCat = "deltanet:gates";
         pushB(deltaNetGatesWgsl(S.linVHead, true), [PB.bRaw, PB.aRaw, aBuf, dtBuf, PB.bSig, PB.gVal], [1, M_MAX, 1]);
         // LA RICORRENZA: M step IN ORDINE, riga da uniform. Lo stato non e' per
         // riga — e' la memoria che attraversa il chunk (it.30).
+        //
+        // CATEGORIA PROPRIA, e non e' pedanteria (riga 5, it.23): questo ciclo
+        // emette 2·M dispatch PER LAYER che il batch non puo' fondere — sono
+        // seriali per definizione, perche' ognuno legge lo stato che il
+        // precedente ha scritto. Su 24 layer DeltaNet fanno 768 dispatch, cioe'
+        // il 47% del piano, e tenerli dentro `deltanet:gates` nascondeva
+        // esattamente il termine che la proiezione della riga 1 aveva escluso
+        // per costruzione («non conta i 24 layer DeltaNet»).
+        pbCat = "deltanet:recurrence";
         for (let m = 0; m < M_MAX; m++) {
           pushBRows1(deltaNetConvWgsl(qkvDim, S.linConvK, true), [convSt, PB.qkv, convW, PB.convOut], Math.ceil(qkvDim / 64), m);
           pushBRows1(deltaNetCoreWgsl({ hd: S.linHeadDim, nK: S.linKHead, nV: S.linVHead, eps: S.rmsEps }, true), [PB.convOut, stateS, PB.bSig, PB.gVal, PB.z, nrmBuf, PB.gated], S.linVHead, m);
@@ -911,10 +956,12 @@ export async function createQ35GpuModel(
       push(deltaNetCoreWgsl({ hd: S.linHeadDim, nK: S.linKHead, nV: S.linVHead, eps: S.rmsEps }), [convOut, stateS, bSig, gVal, z, nrmBuf, gated], S.linVHead);
       mark("ssmOut");
       wOut.push(gated, attnY);
+      pbCat = "gemm:deltanet-out";
       if (PB) wOut.pushB(PB.gated, PB.attnY);
     }
     mark("resid");
     push(addInPlaceWgsl(d), [x, attnY], Math.ceil(d / 64));
+    pbCat = "resid";
     if (PB) pushB(addInPlaceWgsl(d, true), [PB.x, PB.attnY], [Math.ceil(d / 64), M_MAX, 1]);
 
     if (!isMoe) {
@@ -928,10 +975,14 @@ export async function createQ35GpuModel(
       gemv(wd, gateF, attnY);
       push(addInPlaceWgsl(d), [x, attnY], Math.ceil(d / 64));
       if (PB) {
+        pbCat = "norm:ffn";
         pushB(rmsnormWgsl(d, S.rmsEps, true), [PB.x, postNorm, PB.xn], [M_MAX, 1, 1]);
+        pbCat = "gemm:ffn";
         gemvB(wg, PB.xn, PB.gateF);
         gemvB(wu, PB.xn, PB.upF);
+        pbCat = "ffn:act";
         pushB(siluMulWgsl(dFfn, true), [PB.gateF, PB.upF], [Math.ceil(dFfn / 64), M_MAX, 1]);
+        pbCat = "gemm:ffn-down";
         gemvB(wd, PB.gateF, PB.attnY);
         pushB(addInPlaceWgsl(d, true), [PB.x, PB.attnY], [Math.ceil(d / 64), M_MAX, 1]);
       }
@@ -2410,6 +2461,41 @@ export async function createQ35GpuModel(
       for (let i = 0; i < S.vocab; i++) if (lg[i] > best) { best = lg[i]; bi = i; }
       perfAcc.argmaxMs += performance.now() - tAm;
       return bi;
+    },
+    /**
+     * INVENTARIO DEL PIANO DI PREFILL (riga 5 di engine-ttft) — i workgroup in
+     * volo per dispatch, che il motore non misurava da nessuna parte.
+     *
+     * Non e' una misura GPU: e' una proprieta' STATICA del piano, gia' decisa
+     * quando i bind group sono stati costruiti, e per questo si legge senza
+     * spendere un submit. Serve perche' la riga 1 ha stabilito che su questo
+     * device il collo NON e' la banda ma l'OCCUPANCY: `splitk` batte `regs` di
+     * 2,13x a parita' di corpo, con 576 workgroup invece di 144; e la fusione
+     * GQA, che taglia il traffico KV di 4x, e' PIU' LENTA perche' scende da 256
+     * a 64 workgroup su 76 processori. Con 76 SM, un dispatch che ne mette in
+     * volo meno di ~76 lascia la scheda a mezzo servizio per tutta la sua
+     * durata, e nessun conteggio di byte lo direbbe.
+     *
+     * `null` se il piano a chunk non esiste (M_MAX = 0).
+     */
+    prefillPlanInventory(): {
+      dispatches: number; workgroupsTotal: number; sm: null;
+      byCat: Record<string, { dispatches: number; workgroups: number; wgMin: number; wgMax: number }>;
+    } | null {
+      if (!PB) return null;
+      const byCat: Record<string, { dispatches: number; workgroups: number; wgMin: number; wgMax: number }> = {};
+      let workgroupsTotal = 0;
+      for (const st of PB.steps) {
+        const wg = st.wgs[0] * st.wgs[1] * st.wgs[2];
+        workgroupsTotal += wg;
+        const e = byCat[st.cat] ?? (byCat[st.cat] = { dispatches: 0, workgroups: 0, wgMin: Infinity, wgMax: 0 });
+        e.dispatches++; e.workgroups += wg;
+        e.wgMin = Math.min(e.wgMin, wg); e.wgMax = Math.max(e.wgMax, wg);
+      }
+      // `sm` resta null DI PROPOSITO: il numero di processori non e' esposto da
+      // WebGPU, e inventarlo qui vorrebbe dire pinnare 76 (il valore di QUESTA
+      // scheda) dentro il motore. Chi confronta lo porta da fuori, dichiarato.
+      return { dispatches: PB.steps.length, workgroupsTotal, sm: null, byCat };
     },
     async readTap(layer: number): Promise<Float32Array> {
       if (optimisticOn) {

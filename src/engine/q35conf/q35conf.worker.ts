@@ -452,6 +452,11 @@ async function main(cfg: Cfg): Promise<void> {
           "anch'esso su intero, i due bracci torneranno a fare la stessa aritmetica e la " +
           "bit-identita' TORNA A ESSERE IL CRITERIO. Resta misurata qui sotto proprio " +
           "perche' quel giorno si veda senza rifare niente.",
+        // INVENTARIO DEL PIANO (riga 5): dispatch e workgroup in volo per
+        // segmento. Statico, costa zero submit, e va nello stesso artefatto del
+        // gate perche' e' la stessa run a costruire quel piano — separarli
+        // vorrebbe dire confrontare due piani che nessuno ha verificato uguali.
+        plan: model.prefillPlanInventory(),
         gate: {
           // IL CRITERIO che decide oggi
           argmaxSame, chunks: nChunk, argmaxIdentical: argmaxSame === nChunk,
