@@ -1025,3 +1025,67 @@ Restano scritti nell'artefatto i numeri veri (`argmaxSame`, `bitIdentical`,
 `maxAbs`, `maxRel`, `argmaxDiffs` col margine), e resta armato
 `tests/engine-bitidentity-debt.test.ts`, che suona quando il percorso
 sequenziale passerà anch'esso su intero. **Item 24 CHIUSO.**
+
+## item 26 — «l'unico termine che sfora» era FALSO: sono quattro, e il numero era giusto per coincidenza (io, it.24)
+
+Il PI ha bocciato la mia scelta di dichiarare (e2a) come debito invece di
+sistemarla: «stai aggiungendo regole, check, controlli ed eccezioni varie che
+sporcano il codice ... Piuttosto dovresti lanciare uno o più subagent per
+adeguare anche il modello 0.5B. Questo è il tipo di comportamento che mi aspetto
+da te. Che migliori le cose che incontri strada facendo.» Ruling accettato e
+scritto in memoria (`fix-dont-fence`).
+
+**Il subagent si è fermato PRIMA di scrivere codice, ed è stata la cosa giusta**:
+la premessa del lavoro era falsa. Verificato da me generando il WGSL di ogni
+pipeline che `gpuforward.ts` crea e sommando le `var<workgroup>`:
+
+| B | pipeline | era dichiarato? |
+|---|---|---|
+| 30.848 | `rmsPairGemmSiluChunkFast` K=896 m=8 | **sì**, era `QWEN_WORKGROUP_STORAGE_BYTES` |
+| 30.720 | `rmsGemmQkvChunkFast` K=896 m=8 | no |
+| 30.720 | `gemmResidChunkFast` K=896 m=8 | no |
+| 19.712 | `gemvResidualFast` K=4864 M=1 | no — ed è il **DECODE** |
+
+**IL PERICOLO NON ERA IL VALORE, ERA LA DERIVAZIONE.** I 30.848 erano il massimo
+dei quattro, per caso. `limitsFor` usa quella costante come `requiredLimits`,
+cioè come **tetto** del device: bastava portare `pairSilu` alla forma multi-riga
+perché la costante scendesse a ~4.096 mentre `rmsQkv` continuava a chiederne
+30.720, e `createComputePipeline` sarebbe fallito in validazione **su ogni
+device, 4090 compreso**. Cioè: il lavoro che stavo per commissionare avrebbe
+rotto il motore, e il recinto che avevo costruito non l'avrebbe visto — perché
+sorvegliava la cosa sbagliata.
+
+**FATTO SUBITO** (`it.24`): la costante non è più scritta a mano, è un
+`Math.max` **calcolato** dalle formule che vivono accanto ai kernel
+(`qwenFusedChunkWorkgroupStorageBytes`, `qwenGemvResidualWorkgroupStorageBytes`).
+Stesso valore, 30.848, ma per costruzione invece che per fortuna: un massimo
+calcolato non può scendere sotto un consumatore vivo. Tolto il test-recinto
+`(e2a)`, corretta l'asserzione **falsa** di `gpulimits.test.ts` che diceva «ciò
+che resta sopra i 16 KB è UN consumatore solo».
+
+**IL LAVORO VERO È GOAL-SIZED, e va nominato invece che stipato in una riga.**
+Sono quattro porting, non uno, e uno è sul path caldo del decode:
+
+1. `pairSiluC` → rms di chunk + quantX + 2 split-K + 2 combine + siluMul
+2. `rmsQkvC` → rms di chunk + quantX + split-K + combine + bias
+3. `oResidC` → split-K + combine + residual **oppure** una riga sola: la soglia
+   `useShared = mMax*K*4 <= 28672` (`wgsl.ts`) è centrata **esattamente** su
+   8·896·4 = 28.672, e abbassarla manda `x` in storage facendo crollare il
+   termine a 2.048 B
+4. `gemvResidualFast` (decode): mette `x` in shared **senza soglia**. Non è
+   raggiungibile dalla forma multi-riga — gira a M=1 e non è un GEMM di
+   prefill. **Finché c'è lui, nessun porting del prefill porta il 0.5B sotto i
+   16.384 B.**
+
+Tutti e quattro spostano kernel misurati (TTFT del prefill, tok/s del decode) e
+cambiano `dispatchesPerToken`: sotto il ruling di non-regressione vogliono una
+passata GPU + conformance prima del merge. **Proposta: goal suo**, accanto a
+quello sul tempo al primo token, non una coda di questa riga.
+
+**Tre difetti minori visti e NON sistemati** (perché fuori dal percorso, e
+inseguirli sarebbe la deriva che il protocollo vieta): `gemmResidChunkFast` sta
+esattamente sul confine della sua soglia shared (28.672 = 28.672), quindi mMax=9
+o un K diverso cambierebbero ramo in silenzio; il termine del decode non è
+nominato in nessun documento; e il test che scansiona il WGSL guarda i kernel
+d'attenzione ma mai la famiglia dei GEMM di chunk, che è il motivo per cui la
+svista non poteva cadere da sola.

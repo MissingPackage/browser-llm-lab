@@ -9,8 +9,10 @@
 import {
   attnDecodeWgsl, attnDecodeLegacyBatchWgsl, attnDecodeWorkgroupStorageBytes, attnPrefillChunkWgsl,
   prefillGemmWorkgroupStorageBytes,
+  qwenFusedChunkWorkgroupStorageBytes, qwenGemvResidualWorkgroupStorageBytes,
 } from "../src/engine/kernels/wgsl";
 import { PREFILL_M, PREFILL_M_DENSE05B } from "../src/engine/prefillplan";
+import { QWEN25_05B } from "../src/engine/shape";
 import { GLM_PREFILL_M } from "../src/engine/moeprefillplan";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -202,37 +204,21 @@ describe("requisiti derivati", () => {
     const vals = [64, 4096, 65536, 1_000_000].map((ctxMax) =>
       engineNeeds({ ctxMax, mlaAttention: false }).find((x) => x.limit === "maxComputeWorkgroupStorageSize")!.value);
     expect(new Set(vals).size).toBe(1);
-    // e cio' che resta sopra i 16 KB e' UN consumatore solo, nominato: se un
-    // domani sparisce anche quello, questo test va aggiornato di proposito
+    // cio' che resta sopra i 16 KB e' il path 0.5B. NON e' "un consumatore
+    // solo": quella frase stava qui ed era FALSA (it.24). Misurando il WGSL
+    // generato, i kernel del 0.5B sopra la garanzia sono QUATTRO — i tre di
+    // chunk a 30.848/30.720 B e il down-proj del DECODE a 19.712 — e i 30.848
+    // erano il massimo dei quattro, non l'unico. Ora la costante e' un
+    // `Math.max` calcolato dalle formule accanto ai kernel, quindi non puo'
+    // piu' scendere sotto un consumatore vivo.
     expect(vals[0]).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
     expect(QWEN_WORKGROUP_STORAGE_BYTES).toBeGreaterThan(WEBGPU_GUARANTEED);
-  });
-
-  // (e2a) della riga 4 di engine-ttft — IL DEBITO DICHIARATO, reso falsificabile.
-  //
-  // I 30.848 B stanno sopra i 16.384 garantiti da WebGPU e non scendono (il
-  // termine e' 4·K·mMax con K=896 fisso: servirebbe mMax <= 4, e alzare mMax e'
-  // la leva opposta). La riga 4 li dichiara DEBITO invece di bloccare il goal, e
-  // la dichiarazione regge su UN fatto: il consumatore e' il path di conformita'
-  // Qwen2.5-0.5B, non il percorso di prodotto del 4B.
-  //
-  // Quel fatto e' (C7-3), scritto in it.0 e verificato a mano in it.22 — ma una
-  // verifica a mano vale il giorno in cui la fai. Qui diventa un sensore: se
-  // qualcuno cabla il kernel fuso nell'assemblatore del 4B, il debito smette di
-  // essere "solo 0.5B", lo scoping della riga 4 diventa falso, e questo test lo
-  // dice invece di lasciarlo scoprire a un utente su un device da 16 KB.
-  it("(e2a) il debito sopra la garanzia WebGPU appartiene al path 0.5B, NON al 4B", () => {
-    const q35 = readFileSync(join(process.cwd(), "src/engine/q35gpumodel.ts"), "utf8");
-    expect(q35, "se il 4B usa il kernel fuso, (C7-3) e lo scoping della riga 4 vanno rifatti")
-      .not.toContain("rmsPairGemmSiluChunkFast");
-    const fwd = readFileSync(join(process.cwd(), "src/engine/gpuforward.ts"), "utf8");
-    expect(fwd, "il consumatore dichiarato e' l'assemblatore 0.5B").toContain("rmsPairGemmSiluChunkFast");
-    // ...e il debito e' esattamente quello nominato nel consumer di engineNeeds,
-    // non un numero che gli somiglia
-    const need = engineNeeds({ ctxMax: 6400, mlaAttention: false })
-      .find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
-    expect(need.consumer).toContain("rmsPairGemmSiluChunkFast");
-    expect(need.value).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+    // il massimo e' DAVVERO il massimo: il down-proj del decode sta sotto i
+    // kernel di chunk, e se un domani lo superasse la costante deve seguirlo
+    expect(QWEN_WORKGROUP_STORAGE_BYTES).toBeGreaterThanOrEqual(
+      qwenGemvResidualWorkgroupStorageBytes(QWEN25_05B.dFfn));
+    expect(QWEN_WORKGROUP_STORAGE_BYTES).toBeGreaterThanOrEqual(
+      qwenFusedChunkWorkgroupStorageBytes({ K: QWEN25_05B.dModel, mMax: PREFILL_M_DENSE05B }));
   });
 
   it("l'arena alza binding size e storage per stage, col suo consumatore", () => {

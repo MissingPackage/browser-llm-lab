@@ -23,11 +23,12 @@
 
 import {
   attnDecodeWorkgroupStorageBytes, prefillGemmWorkgroupStorageBytes,
+  qwenFusedChunkWorkgroupStorageBytes, qwenGemvResidualWorkgroupStorageBytes,
   type PrefillGemmOpts,
 } from "./kernels/wgsl";
 import { mlaPartialsLen } from "./mlasplit";
-import { PREFILL_M } from "./prefillplan";
-import { GLM47_FLASH } from "./shape";
+import { PREFILL_M, PREFILL_M_DENSE05B } from "./prefillplan";
+import { GLM47_FLASH, QWEN25_05B } from "./shape";
 
 // ---------------------------------------------------------------------------
 // Costanti derivate dall'inventario del parco kernel (C3a it.6).
@@ -63,37 +64,37 @@ export const ARENA_BUFFERS_MAX = 8;
 export const expertArenaBindings = (nBuf: number): number => nBuf + 3;
 
 /**
- * Workgroup storage del path Qwen FUSO, indipendente dal contesto:
- * rmsPairGemmSiluChunkFast con K = dModel 896 e mMax = PREFILL_M_DENSE05B 8
- *   4·K·mMax + 256·mMax + 16·mMax = 30 848 B.
- * NOTA: il commento storico in gpuforward.ts cita 19,7 KB (il down-proj), ma
- * il consumatore massimo è questo — i 32 768 richiesti a mano lasciavano
- * appena 1 920 B di margine senza che nessuno lo sapesse.
+ * Workgroup storage del path Qwen2.5-0.5B: il MASSIMO fra i suoi consumatori,
+ * CALCOLATO dalle formule che vivono accanto ai kernel.
  *
- * ⚠ DEBITO DI PORTABILITÀ, DICHIARATO — clausola (e2a) della riga 4 del goal
- * `engine-ttft`, it.22. Questi 30.848 B stanno **sopra i 16.384 garantiti da
- * WebGPU**, e sono l'unico termine del motore che lo faccia: su un device che
- * concede solo il minimo di spec, questa pipeline non si crea.
+ * ERA UN 30_848 SCRITTO A MANO, e il numero era giusto per COINCIDENZA (it.24).
+ * Il commento diceva «il consumatore massimo è questo», al singolare; misurando
+ * il WGSL generato di ogni pipeline che `gpuforward.ts` crea, i consumatori
+ * sopra i 16.384 B garantiti da WebGPU sono QUATTRO:
  *
- * NON SCENDE, e la ragione è aritmetica: il termine è `4·K·mMax + …` con
- * K = 896 fisso, quindi per stare sotto 16.384 servirebbe mMax ≤ 4 — e alzare
- * mMax è la leva opposta, quella che il prefill vuole. Le due tirano in
- * direzioni contrarie (a mMax 16 sarebbero 61.696 B).
+ *   30.848  rmsPairGemmSiluChunkFast  K=896  mMax=8   (l'unico che era dichiarato)
+ *   30.720  rmsGemmQkvChunkFast       K=896  mMax=8
+ *   30.720  gemmResidChunkFast        K=896  mMax=8
+ *   19.712  gemvResidualFast          K=4864 M=1      — path di DECODE
  *
- * PERCHÉ RESTA DEBITO INVECE DI BLOCCARE QUESTO GOAL: il consumatore è
- * `gpuforward.ts`, l'assemblatore di **Qwen2.5-0.5B**, cioè il path di
- * CONFORMITÀ — verificato in it.22 sul codice di oggi, non ereditato da (C7-3):
- * `q35gpumodel.ts` non importa né il kernel né `prefillplan.ts`. Il percorso di
- * prodotto del 4B non lo tocca, quindi **non muove la metrica del goal** e non
- * può esserne il criterio di chiusura.
+ * I 30.848 erano semplicemente il massimo dei quattro. Il pericolo non era il
+ * valore di oggi: era che bastasse portare `pairSilu` alla forma multi-riga
+ * perché la costante scendesse mentre `rmsQkv` continuava a chiederne 30.720.
+ * Il motore avrebbe **sotto-chiesto** `maxComputeWorkgroupStorageSize` — che
+ * `limitsFor` usa come `requiredLimits`, cioè come TETTO del device — e
+ * `createComputePipeline` sarebbe fallito in validazione su ogni device, 4090
+ * compreso. Un massimo calcolato non può sbagliarsi così.
  *
- * CHI LO PAGHERÀ deve sapere due cose: che il conto è questo e non i 19,7 KB
- * del commento storico, e che la strada non è stringere il buffer ma dare al
- * path 0.5B la stessa forma multi-riga del 4B, il cui workgroup storage **non
- * scala con M** (1.152 B via idot, 4.096 via f32 a M=16). Il goal `engine-ttft`
- * riga 1 quella forma l'ha già trovata: qui manca solo di portarcela.
+ * L'ultimo termine non è raggiungibile dalla forma multi-riga: è il down-proj
+ * del DECODE, gira a M=1 e non è un GEMM di prefill. Finché c'è lui, nessun
+ * porting del prefill può portare questo path sotto la garanzia WebGPU.
  */
-export const QWEN_WORKGROUP_STORAGE_BYTES = 30_848;
+export const QWEN_WORKGROUP_STORAGE_BYTES = Math.max(
+  // i tre kernel di chunk (K = dModel) e il down-proj del decode (K = dFfn):
+  // le shape arrivano da `QWEN25_05B`, non da due numeri ricopiati qui
+  qwenFusedChunkWorkgroupStorageBytes({ K: QWEN25_05B.dModel, mMax: PREFILL_M_DENSE05B }),
+  qwenGemvResidualWorkgroupStorageBytes(QWEN25_05B.dFfn),
+);
 
 /**
  * Shape con cui si INTERROGA `prefillGemmWorkgroupStorageBytes` — quella che la

@@ -508,6 +508,35 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * (goal engine-kernel-decode, docket item 2). Una formula sola, dove sta il
  * consumatore.
  */
+/**
+ * Workgroup storage dei kernel FUSI del path Qwen2.5-0.5B, accanto ai kernel che
+ * lo consumano — stessa regola di `attnDecodeWorkgroupStorageBytes`: una formula
+ * sola, dove sta il consumatore.
+ *
+ * SERVIVANO PERCHE' `gpulimits.ts` PORTAVA UN NUMERO SCRITTO A MANO, e quel
+ * numero era giusto per COINCIDENZA (it.24). Dichiarava un solo consumatore
+ * sopra i 16.384 B garantiti da WebGPU; misurandoli sono QUATTRO, e i 30.848
+ * erano semplicemente il massimo dei quattro. Bastava portare `pairSilu` alla
+ * forma multi-riga perche' la costante scendesse mentre `rmsQkv` continuava a
+ * chiederne 30.720: il motore avrebbe SOTTO-chiesto il limite, e
+ * `createComputePipeline` sarebbe fallito in validazione su OGNI device — 4090
+ * compreso. Un massimo calcolato non puo' sbagliarsi cosi'.
+ *
+ * `x` in memoria di gruppo e' il termine che domina: 4·K·mMax.
+ *
+ * E' il MAGGIORANTE DELLA FAMIGLIA, non la misura esatta di ciascuno: sul
+ * WGSL generato a K=896 e mMax=8 `rmsPairGemmSiluChunkFast` usa 30.848 B
+ * mentre `rmsGemmQkvChunkFast` e `gemmResidChunkFast` ne usano 30.720 (128 B
+ * in meno, una riduzione in meno). Un limite si chiede al massimo, quindi
+ * maggiorare e' corretto e sotto-stimare no — ma chi legge deve sapere che
+ * questi 128 B sono margine, non consumo.
+ */
+export const qwenFusedChunkWorkgroupStorageBytes = (o: { K: number; mMax: number }): number =>
+  4 * o.K * o.mMax + 256 * o.mMax + 16 * o.mMax;
+
+/** `gemvResidualFast`: x in memoria di gruppo a M=1, piu' la riduzione. */
+export const qwenGemvResidualWorkgroupStorageBytes = (K: number): number => 4 * K + 256;
+
 export const attnDecodeWorkgroupStorageBytes = (_ctxMax: number, headDim = 256): number =>
   16 * Math.ceil(headDim / 4) + 512;
 
