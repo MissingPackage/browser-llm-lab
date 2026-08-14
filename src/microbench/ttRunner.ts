@@ -53,7 +53,7 @@ import {
 import { TT_ATTN_SHAPE, TT_ATTN_M, prefillAttnVariants } from "./ttAttn";
 // FASE 0 del goal engine-kquant (sezione e): le famiglie non-q4_0. La lista dei
 // bracci vive accanto ai suoi kernel, come `prefillAttnVariants`.
-import { KQUANT_SHAPES, KQUANT_GEOM, KQUANT_SPLIT_K, kquantVariants } from "./ttKQuant";
+import { KQUANT_SHAPES, KQUANT_GEOM, KQUANT_SPLIT_K, kquantVariants, kquantSingleBuffer } from "./ttKQuant";
 
 /** Shape della sonda del picco: quadrata + la shape reale del prefill del 4B. */
 export const DENSE_SHAPES: Array<{ M: number; K: number; N: number; label: string }> = [
@@ -626,27 +626,38 @@ export async function runTtftProbeBench(
     let wBuf: GPUBuffer;
     let wScBuf: GPUBuffer | null = null;
     let weightUnique: number;
-    if (family === "q5_K") {
+    if (kquantSingleBuffer(family)) {
       const words = geom.words;
       const host = new Uint32Array(N * upr * words);
       fillRandomU32(host, 4242);
-      // SOLO la parola 0 va costruita: porta (d, dmin) come due f16, e byte
-      // casuali li' darebbero NaN/Inf, cioe' un checksum che non discrimina
-      // niente. Scale a 6 bit, qh e qs restano casuali: `get_scale_min_k4`
-      // produce comunque valori in [0,63] per costruzione delle sue maschere.
+      // SOLE le parole che portano f16 vanno costruite: byte casuali li'
+      // darebbero NaN/Inf, cioe' un checksum che non discrimina niente. Scale a
+      // 6 bit, qh e qs restano casuali — `get_scale_min_k4` produce comunque
+      // valori in [0,63] per costruzione delle sue maschere, e le scale int8
+      // del Q6_K sono valide per qualunque byte.
+      //   q5_K/q4_K: parola 0 = (d, dmin)
+      //   q6_K:      parola 52 = (d, _) — l'header sta in FONDO al superblocco
+      const dWord = family === "q6_K" ? 52 : 0;
       const r = new Uint32Array(N * upr);
       fillRandomU32(r, 99);
       for (let sb = 0; sb < N * upr; sb++) {
         const d = 0.01 + ((r[sb] & 0xffff) / 65536) * 0.02;
         const dmin = 0.005 + ((r[sb] >>> 16) / 65536) * 0.01;
-        host[sb * words] = (f32ToF16Bits(d) | (f32ToF16Bits(dmin) << 16)) >>> 0;
+        host[sb * words + dWord] = (f32ToF16Bits(d) | (f32ToF16Bits(dmin) << 16)) >>> 0;
       }
       wBuf = device.createBuffer({ size: host.byteLength, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
       new Uint32Array(wBuf.getMappedRange()).set(host); wBuf.unmap();
       weightUnique = N * upr * geom.deviceBytes;
     } else {
-      const qsBytes = (N * K) / 2;
-      const scBytes = (N * K / 32) * 4;      // q4_1: UNA parola (d,m) per blocco
+      // q4_1 e q8_0: il repack spezza in qs + scales. Le due famiglie
+      // differiscono per quante scale stanno in una parola — il q4_1 ne ha UNA
+      // (d,m), il q8_0 DUE (come il q4_0) — e quel numero decide la taglia del
+      // buffer: sbagliarlo darebbe un binding valido e un kernel che legge le
+      // scale della riga sbagliata.
+      const perBlockWords = family === "q8_0" ? 8 : 4;
+      const nBlocks = (N * K) / 32;
+      const qsBytes = nBlocks * perBlockWords * 4;
+      const scBytes = family === "q8_0" ? Math.ceil(nBlocks / 2) * 4 : nBlocks * 4;
       wBuf = device.createBuffer({ size: qsBytes, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
       fillRandomU32(new Uint32Array(wBuf.getMappedRange()), 4242); wBuf.unmap();
       wScBuf = device.createBuffer({ size: scBytes, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
@@ -654,9 +665,13 @@ export async function runTtftProbeBench(
         const u = new Uint32Array(wScBuf.getMappedRange());
         const r = new Uint32Array(u.length); fillRandomU32(r, 99);
         for (let i = 0; i < u.length; i++) {
-          const d = 0.01 + ((r[i] & 0xffff) / 65536) * 0.02;
-          const m = -0.05 + ((r[i] >>> 16) / 65536) * 0.1;
-          u[i] = (f32ToF16Bits(d) | (f32ToF16Bits(m) << 16)) >>> 0;
+          const a = 0.01 + ((r[i] & 0xffff) / 65536) * 0.02;
+          // q4_1: la seconda meta' della parola e' il MIN del blocco (puo'
+          // essere negativo). q8_0: e' la scala del blocco successivo.
+          const b = family === "q8_0"
+            ? 0.01 + ((r[i] >>> 16) / 65536) * 0.02
+            : -0.05 + ((r[i] >>> 16) / 65536) * 0.1;
+          u[i] = (f32ToF16Bits(a) | (f32ToF16Bits(b) << 16)) >>> 0;
         }
         wScBuf.unmap();
       }
@@ -704,7 +719,7 @@ export async function runTtftProbeBench(
         }
         // I binding seguono la famiglia: Q5_K ha UN buffer di pesi, il q4_1 ne
         // ha due (qs + scale), esattamente come il repack li produce.
-        const entries = family === "q5_K"
+        const entries = kquantSingleBuffer(family)
           ? (s.idot
             ? [
               { binding: 0, resource: { buffer: wBuf } },
@@ -914,6 +929,12 @@ export async function runTtftProbeBench(
   return {
     runFile: {
       schemaVersion: MICROBENCH_SCHEMA_VERSION,
+      // PROVENIENZA — i tre campi si muovono INSIEME o non si muovono.
+      // Il driver li riscrive tutti e tre da `--tag` (scripts/tt-microbench-run.mjs):
+      // qui stanno i valori del tag di default. Erano tre costanti indipendenti e
+      // it.2 ha prodotto un artefatto col `kind` giusto e goal/prereg del goal
+      // PRECEDENTE — la stessa forma di difetto che questo repo insegue da it.7
+      // (due posti che dicono la stessa cosa, e la dicono diversa).
       kind: "microbench-ttft-riga1",
       goal: "engine-ttft riga 1 (sonde e varianti del prefill)",
       prereg: "docs/deep-dive/ttft-riga1-prereg-2026-08-13.md",

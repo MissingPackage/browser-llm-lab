@@ -214,6 +214,25 @@ report.limitSweep = sweep ?? null;
 // credere a un artefatto, leggi il suo kind, non il suo nome di file»).
 // `--tag` sposta ENTRAMBI, cosi' non possono divergere.
 report.kind = `microbench-${TAG}`;
+// `goal` e `prereg` viaggiano col `kind`: un artefatto che dichiara il kind
+// giusto e la provenienza di un altro goal e' peggio di uno sbagliato in modo
+// coerente, perche' passa il filtro e mente nel contenuto (trovato in it.2).
+const PROV = {
+  "ttft-riga1": {
+    goal: "engine-ttft riga 1 (sonde e varianti del prefill)",
+    prereg: "docs/deep-dive/ttft-riga1-prereg-2026-08-13.md",
+  },
+  "kquant-fase0": {
+    goal: "engine-kquant riga 1 (fase 0: le famiglie non-q4_0)",
+    prereg: "docs/deep-dive/kquant-fase0-prereg-2026-08-14.md",
+  },
+}[TAG];
+if (!PROV) {
+  console.error(`[tt] tag sconosciuto "${TAG}": aggiungilo a PROV con il suo goal e la sua pre-registrazione, invece di scrivere un artefatto senza provenienza`);
+  process.exit(2);
+}
+report.goal = PROV.goal;
+report.prereg = PROV.prereg;
 mkdirSync("results/microbench", { recursive: true });
 const ts = report.ts.replace(/[:.]/g, "-");
 const path = `results/microbench/${TAG}-${LABEL}-${ts}.json`;

@@ -160,3 +160,171 @@ era byte-identico, ma l'ordine era sbagliato: da it.2 il commit segue il gate.
 Prossima: it.2 — Q4_K, Q6_K, Q8_0 al banco (shape 35B dall'header dump, celle a
 `splits` 1 o 2 dove il superblocco non si divide in 4) e run finale con
 `--tag kquant-fase0`.
+
+## it.2 — riga 1 CHIUSA: cinque famiglie misurate, tre previsioni cadute (2026-08-14)
+
+Pre-registrazione scritta PRIMA della run:
+`docs/deep-dive/kquant-fase0-prereg-2026-08-14.md` (P1..P5, regola di stop per
+famiglia, e la decisione registrata di misurare le tre non cablate sulla sola
+via intera).
+
+    BASE_URL=http://localhost:5199 node scripts/tt-microbench-run.mjs \
+      --label 4090-linux --host quiescent --tag kquant-fase0
+
+Artefatto: `results/microbench/kquant-fase0-4090-linux-2026-08-14T19-14-34-680Z.json`
+— `kind: microbench-kquant-fase0`, **26 celle, zero scartate**.
+
+**LA TABELLA DELLA REGOLA DI STOP (M=16, barra 1,5x):**
+
+| famiglia | shape | legacy | multi-riga intera | rapporto |
+|---|---|---|---|---|
+| Q5_K | `[4096, 2560]` | 1,2700 ms | 0,0453 ms | **28,03x** |
+| Q4_1 | `[9216, 2560]` | 2,3474 ms | 0,1040 ms | **22,57x** |
+| Q8_0 | `[2048, 4096]` | 1,0468 ms | 0,0302 ms | **34,65x** |
+| Q4_K | `[2048, 512]` | 0,0700 ms | 0,0168 ms | **4,16x** |
+| Q4_K | `[512, 2048]` | 0,0496 ms | 0,0095 ms | **5,20x** |
+| Q6_K | `[512, 2048]` | 0,0494 ms | 0,0092 ms | **5,36x** |
+
+**Tutte e cinque le famiglie superano la regola di stop.** Le due del 4B si
+cablano (righe 2 e 3); le tre del 35B restano misurate e non cablate, ed e'
+quello il loro scopo.
+
+### Il consuntivo delle previsioni — e vale piu' dei numeri
+
+- **P1 (>= 10x su tutte e tre le ereditate): CADUTA.** Q4_K sta a 4,16-5,20x e
+  Q6_K a 5,36x. Solo Q8_0 la rispetta.
+- **P2 (Q8_0 la meno migliorata): CADUTA, ed e' rovesciata** — e' la PIU'
+  migliorata delle sei (34,65x).
+- **P3 (K=512 rende meno di K=2048, stessa famiglia): CADUTA.** Q4_K a K=512 fa
+  5,20x contro 4,16x, ed e' anche piu' veloce in assoluto (0,0095 contro
+  0,0168 ms).
+- **P4 (nessuna cella scartata): CONFERMATA.** Zero, su 26.
+- **P5 (memoria di gruppo sotto i 16.384 B garantiti): CONFERMATA.** Il massimo
+  e' 5.632 B (Q6_K, che ha un array in piu' per le somme a mezzo sotto-blocco).
+
+**COSA HANNO SBAGLIATO LE TRE PREVISIONI CADUTE, ed e' la stessa cosa: avevo
+attribuito il guadagno al FORMATO, e il guadagno e' una proprieta' della
+SHAPE.** La leva non e' l'unpack: e' quante volte la forma legacy rilegge la
+matrice, e quanto costa rileggerla. I tensori grandi (7-15 MB) rendono 22-35x;
+quelli degli expert del 35B sono da **0,59-0,87 MB**, entrano in cache, e le
+riletture della forma legacy se le serve la L2 quasi gratis — da cui 4-5x.
+P3 in particolare ragionava sulle fette e si dimenticava di N: a K=512 la shape
+ha N=2048, cioe' 32 workgroup x 2 fette = 64, contro gli 8 x 4 = 32 dell'altra.
+Occupancy, di nuovo — la stessa causa che in `engine-ttft` aveva fatto perdere
+la fusione GQA.
+
+**CONSEGUENZA PER IL GOAL 35B, e va scritta adesso perche' e' contro-intuitiva:
+il 4-5x misurato qui e' un LIMITE INFERIORE, non una stima.** Il banco misura
+UN tensore da 0,59 MB in isolamento, quindi caldo in L2. In produzione il 35B
+ha 117 tensori di expert per 17,67 GB: nessuno di quei pesi e' in cache quando
+serve, e li' la rilettura M volte costa il prezzo pieno. Chi riprende quel goal
+non deve leggere "4x" come il tetto del guadagno.
+
+**Gate**: `npx tsc --noEmit` pulito · test senza GPU **18 passed** (erano 15:
+tre nuovi inchiodano la decisione «due famiglie cablate con entrambe le vie,
+tre con la sola intera» e il pad da 212 byte del Q6_K).
+
+### Verificatore indipendente (it.2): FAIL — e aveva ragione
+
+**Il rilievo che conta: ho chiuso una riga su un done-when che avevo ristretto
+io.** Due restrizioni, nessuna registrata dove andava:
+1. le tre famiglie ereditate misurate senza il fallback f32 — e il contratto
+   dice, alla lettera, «ogni via intera nuova va accompagnata dal suo fallback
+   f32 DICHIARATO». E' un CONSTRAINT del PI, non una preferenza di meccanismo:
+   il test «se non arrivasse mai un ruling farei cosi'» **non si applica a cio'
+   che il contratto copre in senso opposto**;
+2. quelle tre misurate al solo M=16, mentre il done-when dice «a M = 1, 8, 16,
+   su TUTTE le famiglie» — restrizione che non stava nemmeno nel prereg.
+
+**Correzione presa in it.3: non escalo, eseguo.** Chiedere il permesso di
+saltare tre kernel costava piu' che scriverli (mezza iterazione). La riga 1
+resta aperta fino a li'.
+
+**E tre affermazioni di it.2 erano sbagliate:**
+- **«il relDiff del Q6_K e' il piu' alto di tutti»: FALSO.** Il piu' alto e'
+  il **q8_0** (1,376e-2 contro 1,123e-2) — cioe' il kernel senza unpack, senza
+  offset e senza termine costante, quello di cui avevo scritto «se sbaglia lei
+  sbaglia il banco». Il residuo scala col numero di termini accumulati
+  (K·N = 8,4 M prodotti contro 1,05 M), non con la complessita' del formato.
+  Il numero che assolveva il Q6_K era nell'artefatto e non l'ho guardato.
+- **P2 non era falsificabile come l'avevo scritta**: confronta «chi migliora di
+  piu'» fra formati misurati su shape che differiscono di 10x in byte. Il
+  rovesciamento e' del disegno dell'esperimento, non del mondo. L'ho graduata
+  come scoperta ed era rumore metodologico.
+- **P5 e' confermata a M=16 soltanto** per le tre famiglie nuove, mentre il
+  prereg diceva «a ogni M ≤ 16». Ora e' vera come scritta (it.3 le misura a
+  tutti e tre gli M).
+
+## it.3 — riga 1 CHIUSA sul done-when SCRITTO, non su uno ristretto (2026-08-14)
+
+Il FAIL di it.2 si chiude eseguendo, non negoziando: tre fallback f32 scritti
+(Q4_K, Q6_K, Q8_0) e tutte le famiglie misurate a **M = 1, 8, 16** come il
+contratto chiede. Piu' i tre difetti trovati dal verificatore, tolti.
+
+    BASE_URL=http://localhost:5199 node scripts/tt-microbench-run.mjs \
+      --label 4090-linux --host quiescent --tag kquant-fase0
+
+Artefatto: `results/microbench/kquant-fase0-4090-linux-2026-08-14T19-29-20-014Z.json`
+— **54 celle, zero scartate**, e `kind`/`goal`/`prereg` ora dicono tutti e tre
+`engine-kquant` (v. sotto).
+
+**LA MATRICE COMPLETA — rapporto legacy/veloce, `idot | f32`, barra 1,5x:**
+
+| famiglia, shape | M=1 | M=8 | M=16 |
+|---|---|---|---|
+| Q8_0 `[2048,4096]` | 3,26 \| 3,21 | 22,68 \| 13,66 | **35,20 \| 17,63** |
+| Q5_K `[4096,2560]` | 3,47 \| 0,56 | 19,85 \| 3,88 | **28,10 \| 6,17** |
+| Q4_1 `[9216,2560]` | 4,51 \| 4,55 | 21,94 \| 14,45 | **22,57 \| 16,63** |
+| Q6_K `[512,2048]` | 1,29 \| 0,41 | 4,38 \| 1,36 | **6,13 \| 1,66** |
+| Q4_K `[512,2048]` | 1,38 \| 0,57 | 3,95 \| 1,53 | **5,23 \| 1,85** |
+| Q4_K `[2048,512]` | 0,91 \| 0,20 | 3,20 \| 0,88 | **4,16 \| 1,14** |
+
+**IL REPERTO CHE I FALLBACK HANNO COMPRATO, e che senza di loro non avrei
+avuto: sul Q4_K la via f32 NON supera la regola di stop.** 1,14x sulla shape
+gate/up e 1,85x sulla down, contro l'1,5x della barra. Su un device senza
+`packed_4x8_integer_dot_product` la forma multi-riga, su quelle shape, **non
+vale la pena**. E' esattamente il tipo di cosa che si scopre solo scrivendo il
+fallback che si era deciso di saltare — il verificatore aveva ragione due
+volte, non una.
+
+**A M=1 la forma multi-riga PERDE** (0,91x sul Q4_K gate/up, 0,56x sul Q5_K
+f32): il combine dei parziali non si ammortizza su una riga sola. Vale come
+divieto per il cablaggio: il piano non deve offrire questa forma al decode.
+
+**Cosa e' stato tolto (difetti, non note):**
+1. `ttRunner.ts:933-934` — l'artefatto dichiarava `kind` giusto e `goal`/
+   `prereg` del goal PRECEDENTE. Era la correzione di it.1 fatta a meta': ora i
+   tre campi si muovono insieme dal `--tag`, e un tag senza provenienza
+   dichiarata fa uscire il driver con exit 2 invece di scrivere un artefatto
+   orfano.
+2. `GOAL.md` — le shape del 35B nel done-when dicevano `K=2560`, che e' il
+   dModel del **4B**. Refuso corretto contro l'header dump.
+3. Il test che inchiodava la decisione ritirata ora inchioda il vincolo vero:
+   **ogni** famiglia ha entrambe le vie, e **ogni** famiglia ha M = 1, 8, 16.
+
+**LA RITRATTAZIONE PIU' IMPORTANTE — «il 4-5x del 35B e' un limite inferiore»:
+NON LO REGGONO I DATI.** Tre ragioni indipendenti, tutte del verificatore:
+- il crollo da 28x a 5x ha **due** cause di peso simile, non una: il legacy e'
+  ~2,2x piu' veloce per peso sulle shape piccole (cache), ma la forma veloce e'
+  ~2,3x piu' LENTA (32-64 workgroup su 128 SM: fame di parallelismo). 2,2 x 2,3
+  ≈ 5. Solo la prima migliora in produzione;
+- il legacy a `[512,2048]` legge 9,44 MB in 49,6 µs = **190 GB/s** su una
+  scheda che ne fa ~1.000: quella cella non e' limitata dalla banda, quindi
+  «in produzione la rilettura costa il prezzo pieno» presuppone un regime che
+  la misura non mostra;
+- **e la piu' seria**: per Q4_K e Q6_K il braccio legacy che ho misurato **non
+  e' il percorso di produzione**. Il motore instrada gli expert in regime
+  d'ARENA con `accum` (`q35gpumodel.ts`), e `wgsl.ts:2175`/`:2359` vietano per
+  costruzione la combinazione `batch && arena`. La GEMV `batch: true` su
+  binding diretto, su quei 117 tensori, il motore non la emette e non puo'
+  emetterla. In piu', nel prefill MoE la premessa stessa della leva cade: token
+  diversi selezionano expert diversi, quindi la "stessa matrice riletta M
+  volte" non c'e'.
+**Il 4-5x non e' ne' un tetto ne' un pavimento: e' valido per una shape su un
+braccio ipotetico.** La scheda di consegna della riga 4 lo dira' cosi'.
+
+**Gate**: `npx tsc --noEmit` pulito · test senza GPU **19 passed** · suite
+intera verde. Zero file sotto `src/engine/`: la riga 1 non tocca il motore.
+
+**RIGA 1 CHIUSA.** Prossima: riga 2 — Q5_K in produzione, la prima che muove
+il TTFT (−11,7 s proiettati). Veicolo dichiarato in PHASES: `sdd-conductor`.

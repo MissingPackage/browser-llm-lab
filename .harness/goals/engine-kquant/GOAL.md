@@ -76,8 +76,13 @@ DONE WHEN (all measurable):
   variante, a M = 1, 8, 16, su TUTTE E QUATTRO le famiglie e sulle shape REALI:
     Q5_K  K=4096 N=2560   (4B `ssm_out`)
     Q4_1  K=9216 N=2560   (4B `ffn_down` dei layer 0-3)
-    Q4_K  K=2560 N=… e Q6_K  (35B, shape degli expert dall'header dump)
-    Q8_0  K=2560 N=… (35B `attn`, 1,09 GB: e' la seconda famiglia per byte la')
+    Q4_K  [2048, 512] e [512, 2048] — expert gate/up e down del 35B
+    Q6_K  [512, 2048] — expert down di 3 layer del 35B
+    Q8_0  [2048, 4096] — attn q-proj del 35B (1,09 GB: la seconda famiglia
+          per byte la' dentro)
+    (Le shape del 35B vengono dall'header dump 2026-08-10: dModel 2048,
+     dFfnExpert 512, nExpert 256. Il contratto scriveva "K=2560", che e' il
+     dModel del 4B — refuso corretto in it.2, non una modifica di scope.)
   REGOLA DI STOP, ereditata testuale dai due goal precedenti: se per una
   famiglia nessuna variante supera la forma legacy attuale di >= 1,5×, quella
   famiglia si chiude col numero e non si cabla. Una famiglia sotto la regola di

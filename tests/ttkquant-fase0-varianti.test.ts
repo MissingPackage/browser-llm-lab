@@ -18,7 +18,7 @@
 //      compilazione (costo' una run intera in it.5 del goal precedente).
 import { describe, it, expect } from "vitest";
 import {
-  KQUANT_GEOM, KQUANT_SHAPES, KQUANT_SPLIT_K, kquantSplitsFor, kquantVariants,
+  KQUANT_GEOM, KQUANT_SHAPES, KQUANT_SPLIT_K, KQUANT_WIRED, kquantSplitsFor, kquantVariants,
   kquantQ5KMultiRowSplitKIdotWgsl, kquantQ41MultiRowSplitKIdotWgsl,
 } from "../src/microbench/ttKQuant";
 import { gemvQ5KWgsl, gemvQuantWgsl } from "../src/engine/kernels/wgsl";
@@ -84,6 +84,41 @@ describe("[b] C0-4: lo split-K non si applica dove la shape non lo consente", ()
         if (!v.legacy) expect(v.splits, `${s.family}/${v.id}`).toBe(want);
       }
     }
+  });
+});
+
+describe("[b2] cosa si cabla e cosa si misura soltanto — la decisione, resa meccanica", () => {
+  it("OGNI famiglia ha entrambe le vie — e' un CONSTRAINT del contratto, non una scelta", () => {
+    // GOAL.md §CONSTRAINTS: «Ogni via intera nuova va accompagnata dal suo
+    // fallback f32 DICHIARATO, come la q4_0». In it.2 avevo saltato i tre
+    // fallback delle famiglie non cablate con una decisione mia; il
+    // verificatore l'ha bocciata perche' restringere un vincolo del contratto
+    // non e' autorita' dell'agente. Questo test e' la forma meccanica del
+    // vincolo: adesso non si puo' piu' saltare per distrazione.
+    for (const s of KQUANT_SHAPES) {
+      for (const M of s.Ms) {
+        const ids = kquantVariants({ family: s.family, K: s.K, N: s.N, M }).map((v) => v.id);
+        expect(ids, `${s.family}@M${M}`).toContain("splitk-idot");
+        expect(ids, `${s.family}@M${M}`).toContain("splitk-f32");
+      }
+    }
+  });
+
+  it("il done-when copre M = 1, 8, 16 su TUTTE le famiglie", () => {
+    // Anche questa era stata ristretta a M=16 sulle tre ereditate, e anche
+    // questa e' testo del contratto («a M = 1, 8, 16»).
+    for (const s of KQUANT_SHAPES) expect([...s.Ms].sort((a, b) => a - b), s.family).toEqual([1, 8, 16]);
+  });
+
+  it("le famiglie cablate sono ESATTAMENTE quelle che il 4B ha sul percorso vecchio", () => {
+    // 24 ssm_out Q5_K + 4 ffn_down Q4_1: e' l'inventario pinnato del 4B, e i 48
+    // siti Q8_0 restano esclusi coi numeri (N=32, 0,204% dei byte).
+    expect([...KQUANT_WIRED].sort()).toEqual(["q4_1", "q5_K"]);
+  });
+
+  it("q6_K: 212 byte sul device, non i 210 del file — il pad e' del kernel", () => {
+    expect(KQUANT_GEOM.q6_K.deviceBytes).toBe(KQUANT_GEOM.q6_K.words * 4);
+    expect(weightBytesPerRow("q6_K", 512)).toBe((512 / 256) * 212);
   });
 });
 

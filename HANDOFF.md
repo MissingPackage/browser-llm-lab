@@ -2,18 +2,34 @@
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-kquant`, riga 1 in corso (fase 0 al banco).** Chartered
+**GOAL ATTIVO: `engine-kquant`, riga 1 CHIUSA — prossima la riga 2.** Chartered
 2026-08-14. Contratto e spina: `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
 
-**it.1: LA FASE 0 HA DETTO SI' A ENTRAMBE LE FAMIGLIE CABLABILI.** A M=16, sulle
-shape vere, contro il kernel di produzione importato: **Q5_K 28,07x** (1,2700 →
-0,0452 ms) e **Q4_1 22,58x** (2,3483 → 0,1040). La regola di stop chiedeva 1,5x.
-Zero celle scartate dal gate del banco. Artefatto:
-`results/microbench/ttft-riga1-4090-linux-2026-08-14T18-54-05-813Z.json`
-(⚠ porta ancora il `kind` del goal precedente: scritto prima della correzione
-`--tag`, e sara' superseduto dalla run di it.2 — non l'ho ritoccato a posteriori).
-**Il banco riproduce il segmento vero in millisecondi**: 24 x 395 x 1,2700 =
-12.039 contro i 12.169 misurati. Proiezione **−15,2 s ⇒ ~16,9 s**.
+**LA FASE 0 HA DETTO SI' A TUTTE E CINQUE LE FAMIGLIE** (it.1-it.2). A M=16,
+sulle shape vere, contro il kernel di produzione importato — barra: 1,5x.
+Artefatto: `results/microbench/kquant-fase0-4090-linux-2026-08-14T19-14-34-680Z.json`
+(`kind: microbench-kquant-fase0`, 26 celle, **zero scartate**). Prereg:
+`docs/deep-dive/kquant-fase0-prereg-2026-08-14.md`.
+
+| famiglia | shape | legacy → multi-riga | rapporto |
+|---|---|---|---|
+| Q8_0 | `[2048, 4096]` | 1,0468 → 0,0302 ms | **34,65x** |
+| Q5_K | `[4096, 2560]` | 1,2700 → 0,0453 ms | **28,03x** |
+| Q4_1 | `[9216, 2560]` | 2,3474 → 0,1040 ms | **22,57x** |
+| Q6_K | `[512, 2048]` | 0,0494 → 0,0092 ms | **5,36x** |
+| Q4_K | `[2048,512]` / `[512,2048]` | 0,0700 → 0,0168 / 0,0496 → 0,0095 | **4,16x / 5,20x** |
+
+**Il banco riproduce il segmento vero in millisecondi**: 24 × 395 × 1,2700 =
+12.039 contro i **12.169 ms** misurati su `gemm:deltanet-out`. Proiezione
+**−15,2 s ⇒ TTFT ~16,9 s**.
+
+**LA LEZIONE DELLA FASE 0, e ribalta l'intuizione**: il guadagno e' una
+proprieta' della **shape**, non del formato. Tre previsioni su cinque sono
+cadute perche' attribuivo la leva all'unpack. Conta quanto costa rileggere la
+matrice M volte: i tensori grandi rendono 22-35x, quelli piccoli degli expert
+del 35B (0,6 MB, che stanno in cache) 4-5x — **e quel 4-5x e' un limite
+inferiore**, perche' in produzione i 17,67 GB di expert in cache non ci stanno.
+
 **Da misurare, non dedurre**: la quota Q4_1 di `gemm:ffn-down` oggi e' stimata
 dal banco; la riga 3 non chiude senza un `pbCat` proprio per quei quattro siti.
 
