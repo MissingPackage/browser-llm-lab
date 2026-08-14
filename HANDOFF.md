@@ -2,6 +2,26 @@
 
 ## 1. Next decidable
 
+**GOAL ATTIVO: `engine-kquant`, riga 1 (fase 0 al banco).** Chartered
+2026-08-14. Contratto e spina: `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
+
+Toglie ai pesi non-q4_0 le M riletture per chunk: `ssm_out` **Q5_K** (37,9% del
+prefill) e `ffn_down` **Q4_1** (il 71% dei byte del segmento `gemm:ffn-down`)
+passano alla forma multi-riga. **Barra: TTFT a caldo < 22.500 ms** (oggi
+32.127), **nice to have < 18.000**; copertura del piano da 5,86× a **≥ 15,5×**;
+`gemm:deltanet-out` e `gemm:ffn-down` entrambi **≤ 2.000 ms**. Proiezione
+−14,7 s ⇒ ~17,4 s, e quel numero e' anche il **pavimento**: sotto i ~9,4 s
+(il tempo fuori dai pass GPU) non si scende togliendo byte ai pesi.
+
+**Il 35B e' il goal SUCCESSIVO, deciso dal PI.** Le forme di kernel che gli
+servono (Q4_K, Q6_K, Q8_0) nascono qui — misurate al banco e verificate col
+ktest — ma **non vengono cablate**: il 35B non ha un byte di q4_0 (expert Q4_K
+17,67 GB), pero' il suo collo e' la **residency**, non il kernel, e non ha una
+baseline fresca. Sara' wiring + residency. **Il 9B ha la stessa identica
+struttura del 4B**: questa leva vale li' senza una riga di codice in piu'.
+
+---
+
 **Goal `engine-ttft` CHIUSO** (2026-08-14, ruling del PI). Il tempo al primo
 token a modello caldo sul prompt da 6333 token: **87.618 -> 32.127 ms = 2,727x**.
 La barra meccanica del contratto (< 21.905 ms) **non e' stata raggiunta**: manca
