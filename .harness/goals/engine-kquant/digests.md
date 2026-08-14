@@ -22,3 +22,20 @@ il goal e cosa e' in dubbio.
 - In dubbio: niente, per ora. Il plan-check e' registrato come approvato in
   modo implicito («procedi in loop»), e il primo digest e' il momento per
   cambiarlo.
+
+## it.1 — la fase 0 autorizza entrambe le famiglie (2026-08-14)
+
+- **Metrica obiettivo ferma a 32.127 ms per costruzione**: la riga 1 non tocca
+  il motore. Ha pero' potere di veto, e non l'ha esercitato.
+- **Q5_K 28,07x · Q4_1 22,58x** sulla forma di produzione, a M=16, con zero
+  celle scartate dal gate del banco. La regola di stop chiedeva 1,5x.
+- **Il banco riproduce il segmento vero in millisecondi**: `24 x 395 x 1,2700 =
+  12.039` contro i **12.169 ms** misurati in produzione, 1,1% di scarto. Il
+  termine di paragone e' il percorso vecchio, non una sua imitazione.
+- Proiezione **−15,2 s ⇒ TTFT ~16,9 s**, sotto anche la barra nice-to-have. E'
+  una proiezione da microbench: la conferma sta nella riga 5.
+- **In dubbio, e ora ha un'azione**: la quota Q4_1 del segmento `gemm:ffn-down`
+  e' DEDOTTA, non misurata (il mio confronto era banco contro banco). La riga 3
+  non chiude senza una categoria di misura propria per quei quattro siti.
+- Verificatore indipendente: **PASS** con sei correzioni, tutte applicate —
+  fra cui `396 → 395` chunk, che stava anche nel contratto.

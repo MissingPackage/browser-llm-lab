@@ -2,8 +2,20 @@
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-kquant`, riga 1 (fase 0 al banco).** Chartered
+**GOAL ATTIVO: `engine-kquant`, riga 1 in corso (fase 0 al banco).** Chartered
 2026-08-14. Contratto e spina: `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
+
+**it.1: LA FASE 0 HA DETTO SI' A ENTRAMBE LE FAMIGLIE CABLABILI.** A M=16, sulle
+shape vere, contro il kernel di produzione importato: **Q5_K 28,07x** (1,2700 →
+0,0452 ms) e **Q4_1 22,58x** (2,3483 → 0,1040). La regola di stop chiedeva 1,5x.
+Zero celle scartate dal gate del banco. Artefatto:
+`results/microbench/ttft-riga1-4090-linux-2026-08-14T18-54-05-813Z.json`
+(⚠ porta ancora il `kind` del goal precedente: scritto prima della correzione
+`--tag`, e sara' superseduto dalla run di it.2 — non l'ho ritoccato a posteriori).
+**Il banco riproduce il segmento vero in millisecondi**: 24 x 395 x 1,2700 =
+12.039 contro i 12.169 misurati. Proiezione **−15,2 s ⇒ ~16,9 s**.
+**Da misurare, non dedurre**: la quota Q4_1 di `gemm:ffn-down` oggi e' stimata
+dal banco; la riga 3 non chiude senza un `pbCat` proprio per quei quattro siti.
 
 Toglie ai pesi non-q4_0 le M riletture per chunk: `ssm_out` **Q5_K** (37,9% del
 prefill) e `ffn_down` **Q4_1** (il 71% dei byte del segmento `gemm:ffn-down`)

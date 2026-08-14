@@ -36,7 +36,10 @@ sotto la barra che `engine-ttft` ha mancato.
          + tutti e tre      16,000×    (copertura 100%)
 
      E IN TEMPO, dai due segmenti misurati nel checkpoint del 2026-08-14:
-       gemm:deltanet-out  12.169 ms — 1.093 GB (396 chunk × 173.015.040 × 16)
+       gemm:deltanet-out  12.169 ms — 1.093 GB (395 chunk × 173.015.040 × 16)
+         395 e non 396: ceil(6333/16) darebbe 396, ma il checkpoint dichiara
+         "chunks": 395 (6320 token). Il numero si legge dall'artefatto, non si
+         ricalcola — correzione del verificatore, it.1.
          a multirow: 68,5 GB. ALLA STESSA banda misurata oggi (89,9 GB/s, cioe'
          senza assumere NESSUN miglioramento per byte) ~760 ms ⇒ −11,4 s
        gemm:ffn-down       4.971 ms — 520,9 GB, di cui 373,7 (il 71%) sono le 4

@@ -77,10 +77,21 @@ braccio legacy Q5_K misura **91 GB/s** di traffico pesi a M=16; il checkpoint di
 produzione. Due strumenti diversi, stessa cifra a meno dell'1,2%: il braccio di
 paragone non e' un'imitazione del percorso vecchio, e' il percorso vecchio.
 
-**PROIEZIONE sul segmento** (396 chunk = ceil(6333/16)):
-- Q5_K: 24 layer x 396 x 0,0452 = **430 ms** contro 12.169 ⇒ **−11,7 s**
-- Q4_1: 4 tensori x 396 x 0,1040 = **165 ms** contro ~3.720 (la quota Q4_1 dei
-  4.971 di `gemm:ffn-down`) ⇒ **−3,6 s**
+**PROIEZIONE sul segmento** (395 chunk — il numero si LEGGE dal checkpoint
+(`"chunks": 395`, 6320 token), non si ricalcola da ceil(6333/16) = 396):
+- Q5_K: 24 layer x 395 x 0,0452 = **429 ms** contro 12.169 ⇒ **−11,7 s**
+- Q4_1: 4 tensori x 395 x 0,1040 = **164 ms** contro ~3.710 ⇒ **−3,5 s**
+  ⚠ **QUESTO SECONDO NUMERO E' CIRCOLARE, e il verificatore ha ragione**: i
+  3.710 ms sono `4 x 395 x 2,3483`, cioe' il MIO braccio di banco, non una
+  misura di produzione. L'unica ancora vera e' che 3.710 < 4.971 (il segmento
+  misurato), il che lascia 1.261 ms ai 28 tensori q4_0 gia' multi-riga — cioe'
+  117 GB/s contro i 738 GB/s che lo stesso checkpoint misura sul q4_0 di
+  `gemm:qkv`. Sei volte di scarto, e nessuno l'ha spiegato: o quei dispatch
+  sono limitati dal lancio (120 dispatch con 72 workgroup minimi), o
+  l'attribuzione al Q4_1 e' troppo generosa e il −3,5 s e' gonfiato.
+  **AZIONE, non nota**: la riga 3 non chiude senza una categoria di misura
+  PROPRIA per i quattro siti Q4_1 (`pbCat` separato in `q35gpumodel.ts`), cosi'
+  il checkpoint della riga 5 attribuisce quel tempo invece di dedurlo.
 - TTFT 32.127 − 15,3 s ≈ **16,8 s**, cioe' sotto ANCHE la barra nice-to-have
   (18.000). Con la penale di lettura fredda misurata sul q4_0 (+13% su
   `splitk-coldw`) resta ~17,0 s.
@@ -108,9 +119,43 @@ misura. La riga 1 si chiude in it.2 con una run che porta tutte e cinque le
 famiglie e il tag giusto, e QUELLA supersede questa.
 
 **Gate**: `npx tsc --noEmit` pulito · `npx vitest run` **695 passed | 10
-skipped** (erano 680, +15 dal test nuovo senza GPU). Nessun file di
-`src/engine/` toccato oltre a due union di tipo: questa riga non tocca il motore
-per contratto.
+skipped** (erano 680, +15 dal test nuovo senza GPU). **Zero file sotto
+`src/engine/`**: le due union di tipo allargate stanno in
+`src/microbench/mbSchema.ts` (la frase precedente diceva `src/engine/` ed era
+sbagliata — correzione del verificatore). Questa riga non tocca il motore per
+contratto, e il diff lo dimostra.
+
+### Verificatore indipendente (it.1): PASS, con sei correzioni — tutte applicate
+
+Le tre che cambiano qualcosa:
+
+1. **Avevo scelto l'evidenza piu' debole.** Invece del confronto fra bande
+   (91 contro 89,9 GB/s) c'e' un controllo diretto IN MILLISECONDI che non
+   avevo fatto: `24 x 395 x 1,2700 = 12.039 ms` contro i **12.169 ms** misurati
+   sul segmento in produzione — **1,1% di scarto**. E' la grandezza che il mio
+   stesso ruling dice di guardare («quota di byte ≠ quota di tempo»): il banco
+   riproduce il segmento nel tempo, non solo nella banda.
+2. **Il gate di checksum confronta la somma CON SEGNO** (`ck.sum`); `ck.abs` e'
+   registrato e mai confrontato. Una permutazione di righe o un errore
+   simmetrico ci passerebbe attraverso. Per una fase 0 va bene — la correttezza
+   vera sta nel ktest delle righe 2-4 — ma il messaggio di commit di it.1 dice
+   «entrambi verificati dal gate di checksum» e **avrebbe dovuto dire "non
+   smentiti da"**. Lo correggo qui perche' un messaggio di commit non si
+   riscrive.
+3. **Un termine che la proiezione non modella**: la forma veloce emette DUE
+   dispatch dove la legacy ne emette uno (+~9.480 sul deltanet, +~1.580 su
+   ffn-down). Quel costo cade nei 9.346 ms «fuori dai pass GPU» che la
+   proiezione tratta come invarianti. Sono decine di ms, non secondi — ma
+   appartengono al conto, non alle note.
+
+E una che mi RAFFORZA: la penale di lettura fredda e' quantificabile e
+innocua. Il braccio veloce legge 7,21 MB in 0,0452 ms = 159 GB/s, il 16% del
+tetto DRAM di questa scheda; anche serializzando del tutto la lettura fredda
+(7,15 µs su 45,2) si arriva a 497 ms contro una barra di 2.000.
+
+Rilievo di processo, giusto: **ho committato prima che il verificatore
+rientrasse**, invertendo i passi 4 e 6 del protocollo. Il contenuto verificato
+era byte-identico, ma l'ordine era sbagliato: da it.2 il commit segue il gate.
 
 Prossima: it.2 — Q4_K, Q6_K, Q8_0 al banco (shape 35B dall'header dump, celle a
 `splits` 1 o 2 dove il superblocco non si divide in 4) e run finale con
