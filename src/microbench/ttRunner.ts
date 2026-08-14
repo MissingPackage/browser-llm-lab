@@ -15,7 +15,10 @@
 // device distinti con `requiredLimits` espliciti, e src/ ha un punto unico di
 // creazione device che negozia (tests/gpudevice.test.ts lo impone).
 
-import { attnDecodeWgsl, gemvQuantWgsl, gemvGrid } from "../engine/kernels/wgsl";
+// `attnDecodeLegacyBatchWgsl` e non `attnDecodeWgsl({ batch: true })`: dal task
+// T1-kernel-batch-streaming quest'ultimo emette la forma in STREAMING, cioe' la
+// CANDIDATA. Usarlo qui farebbe misurare alla sonda streaming contro streaming.
+import { attnDecodeLegacyBatchWgsl, gemvQuantWgsl, gemvGrid } from "../engine/kernels/wgsl";
 import { createEngineDevice } from "../engine/gpudevice";
 import { grantedLimits } from "../engine/gpulimits";
 import { probeWebGPU } from "../probe";
@@ -495,7 +498,7 @@ export async function runTtftProbeBench(
         meta.set(s.id, { ops, ctx: s.ctx, wgs: workgroupStorageBytes(s.code), emit: s.weightEmitFactor, xEmit: s.xEmitFactor, disp: ops.length });
         variants.push({ id: s.id, ops, opsPerSample: GEMV_OPS_PER_SAMPLE, batched: false, rot: { i: 0 } });
         if (K === 2560 && M === 16 && (s.id === "regs" || s.id === "shared" || s.id === "splitk")) {
-          const legacyCode = attnDecodeWgsl({ ...TT_ATTN_SHAPE, batch: true });
+          const legacyCode = attnDecodeLegacyBatchWgsl(TT_ATTN_SHAPE);
           sweepPlan ??= {
             forms: [], K, N, M,
             qsBytes, scalesBytes: scBytes, xBytes: M * K * 4, yBytes: M * N * 4,
@@ -604,11 +607,11 @@ export async function runTtftProbeBench(
     const outBuf = device.createBuffer({ size: M * nHead * headDim * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const rowPastBuf = device.createBuffer({ size: M * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
 
-    const legacyCode = attnDecodeWgsl({ nHead, nKvHead, headDim, ctxMax, batch: true });
+    const legacyCode = attnDecodeLegacyBatchWgsl({ nHead, nKvHead, headDim, ctxMax });
     const attnSrcs: Array<{ id: string; code: string; grid: [number, number, number]; kvEmit: number; ctx: string }> = [
       {
         id: "legacy", code: legacyCode, grid: [nHead, M, 1], kvEmit: (nHead / nKvHead) * M,
-        ctx: `FORMA ATTUALE importata da src/engine/kernels/wgsl.ts (attnDecodeWgsl con batch: true -> attnDecodeLegacyWgsl, switch a wgsl.ts:530): scores[ctxMax=${ctxMax}] in workgroup memory, letture scalari, un workgroup per (head, riga) — la riga KV si rilegge una volta per ognuna delle ${nHead / nKvHead} head del gruppo GQA e una volta per ognuna delle ${M} righe.`,
+        ctx: `BASELINE importata da src/engine/kernels/wgsl.ts (attnDecodeLegacyBatchWgsl): scores[ctxMax=${ctxMax}] in workgroup memory, letture scalari, un workgroup per (head, riga) — la riga KV si rilegge una volta per ognuna delle ${nHead / nKvHead} head del gruppo GQA e una volta per ognuna delle ${M} righe. Era la forma di PRODUZIONE del prefill a chunk fino al task T1-kernel-batch-streaming; da li' in poi e' il fallback dichiarato, e resta il termine di paragone di questa sonda con lo stesso testo byte per byte.`,
       },
       {
         id: "stream", code: attnPrefillStreamWgsl({ headsPerWg: 1, rowsPerWg: 1 }),

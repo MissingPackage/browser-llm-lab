@@ -2961,29 +2961,67 @@ async function testDenseBatchSweep(g: Gpu): Promise<KResult[]> {
     // caso vero del prefill — la riga m vede se stessa e le righe precedenti
     // dello stesso chunk, e NON quelle dopo. La cache si riempie PRIMA, come
     // nell'encoder.
-    const nHead = 4, nKvHead = 2, headDim = 32, ctxMax = 64;
+    //
+    // NON PIU' BIT A BIT, E LA TOLLERANZA E' DICHIARATA PRIMA (riga 3 (d) di
+    // PHASES del goal engine-ttft). Il riferimento resta il template LEGACY
+    // per-riga (`attnDecodeRefWgsl`), che e' l'unico riferimento indipendente
+    // che questo banco abbia; ma il ramo `batch` non ne e' piu' il gemello
+    // strutturale. Dal task T1-kernel-batch-streaming e' softmax in STREAMING:
+    // il massimo e la somma si riscalano online a ogni tile di 64 posizioni, e
+    // il prodotto scalare passa da 32 somme scalari a 8 `dot()` su vec4. Sono
+    // due riassociazioni della stessa somma, quindi la differenza dai bit del
+    // legacy NON e' un errore: e' la definizione della forma nuova. Pretendere
+    // `Object.is` qui sarebbe un gate rosso a prescindere dalla correttezza.
+    //
+    // La banda NON e' un numero scelto a occhio: i due kernel sono stati
+    // simulati in f32 fedele (ogni operazione via `Math.fround`, 64 thread in
+    // lock-step) sugli STESSI due casi qui sotto, e la divergenza misurata e'
+    //   un tile   (n = 10..12):  max assoluto 2,98e-8, max relativo 4,26e-6
+    //   cinque tile (n = 301..303): max assoluto 1,68e-8, max relativo 3,95e-5
+    // La banda relativa sta 2,5x sopra il caso peggiore misurato, quella
+    // assoluta ~600x: stretta abbastanza da vedere un indice sbagliato o un tile
+    // perso, larga abbastanza da assorbire la fma della GPU vera (la simulazione
+    // e' su CPU e non la modella). `compare` passa se UNA delle due bande regge,
+    // e quella assoluta e' li' per le componenti vicine a zero, dove il relativo
+    // esplode senza significare niente.
+    const ATTN_CHUNK_REL_TOL = 1e-4, ATTN_CHUNK_ABS_TOL = 1e-5;
+    // DUE casi, e il secondo non e' un lusso. Il tile e' da 64 posizioni: col
+    // solo caso corto (n = 10..12) il ciclo fa UN giro, `rs` vale 0 per
+    // costruzione (il massimo parte da -3e38) e il rescale online fra tile — che
+    // e' TUTTO il codice nuovo della riscrittura — non verrebbe eseguito mai. Il
+    // primo comportamento non banale compare a n >= 65.
+    const CASES = [
+      { ctxMax: 64, basePast: 9, tag: "" },              // n = 10..12: UN tile
+      { ctxMax: 320, basePast: 300, tag: "-multitile" }, // n = 301..303: 5 tile
+    ];
+    const nHead = 4, nKvHead = 2, headDim = 32;
     const kvDim = nKvHead * headDim, qDim = nHead * headDim;
-    const basePast = 9; // la riga m guarda 0..basePast+m
-    const kC = g.buf(randF32(ctxMax * kvDim, 31_600, 0.4));
-    const vC = g.buf(randF32(ctxMax * kvDim, 31_610, 0.4));
-    const qs = Array.from({ length: M }, (_, m) => randF32(qDim, 31_620 + m, 0.6));
-    const refs: Float32Array[] = [];
-    for (let m = 0; m < M; m++) {
-      const o = g.empty(qDim * 4);
-      const uni = g.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-      g.device.queue.writeBuffer(uni, 0, new Uint32Array([basePast + m, basePast + m, 0, 0]) as unknown as BufferSource);
-      // riferimento per-riga: il template LEGACY, non lo split. Il confronto e'
-      // BIT-A-BIT contro il ramo `batch: true`, e solo il legacy ne e' il
-      // gemello strutturale (stesso testo, stesso ordine di accumulo).
-      await g.run(attnDecodeRefWgsl({ nHead, nKvHead, headDim, ctxMax }), [g.buf(qs[m]), kC, vC, o, uni], nHead);
-      refs.push(new Float32Array(await g.read(o, qDim * 4)));
+    for (const C of CASES) {
+      const { ctxMax, basePast } = C; // la riga m guarda 0..basePast+m
+      const kC = g.buf(randF32(ctxMax * kvDim, 31_600, 0.4));
+      const vC = g.buf(randF32(ctxMax * kvDim, 31_610, 0.4));
+      const qs = Array.from({ length: M }, (_, m) => randF32(qDim, 31_620 + m, 0.6));
+      const ref = new Float32Array(M * qDim);
+      for (let m = 0; m < M; m++) {
+        const o = g.empty(qDim * 4);
+        const uni = g.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        g.device.queue.writeBuffer(uni, 0, new Uint32Array([basePast + m, basePast + m, 0, 0]) as unknown as BufferSource);
+        await g.run(attnDecodeRefWgsl({ nHead, nKvHead, headDim, ctxMax }), [g.buf(qs[m]), kC, vC, o, uni], nHead);
+        ref.set(new Float32Array(await g.read(o, qDim * 4)), m * qDim);
+      }
+      const oM = g.empty(M * qDim * 4);
+      const pastB = g.empty(M * 4);
+      g.device.queue.writeBuffer(pastB, 0, Uint32Array.from({ length: M }, (_, m) => basePast + m) as unknown as BufferSource);
+      await g.run(attnDecodeWgsl({ nHead, nKvHead, headDim, ctxMax, batch: true }),
+        [rowsBuf(qs), kC, vC, oM, pastB], [nHead, M, 1]);
+      const got = new Float32Array(await g.read(oM, M * qDim * 4));
+      const r = compare(`dense-batch-attn-chunk${C.tag}`, got, ref, ATTN_CHUNK_REL_TOL, ATTN_CHUNK_ABS_TOL);
+      const tiles = Math.ceil((basePast + M) / 64);
+      out.push({
+        ...r,
+        note: `streaming vs riferimento per-riga legacy su ${M} righe, n = ${basePast + 1}..${basePast + M} => ${tiles} tile da 64 (rescale online ${tiles > 1 ? "ATTRAVERSATO" : "non attraversato"}). NON bit-identico per costruzione; banda dichiarata rel ${ATTN_CHUNK_REL_TOL} / abs ${ATTN_CHUNK_ABS_TOL}`,
+      });
     }
-    const oM = g.empty(M * qDim * 4);
-    const pastB = g.empty(M * 4);
-    g.device.queue.writeBuffer(pastB, 0, Uint32Array.from({ length: M }, (_, m) => basePast + m) as unknown as BufferSource);
-    await g.run(attnDecodeWgsl({ nHead, nKvHead, headDim, ctxMax, batch: true }),
-      [rowsBuf(qs), kC, vC, oM, pastB], [nHead, M, 1]);
-    out.push(bitCmp("dense-batch-attn-chunk", new Float32Array(await g.read(oM, M * qDim * 4)), refs, qDim));
   }
   { // deltanet conv+core con la RIGA da uniform (fase 4, it.30): la ricorrenza
     // non si batcha, quindi restano M dispatch IN ORDINE — qui si prova che

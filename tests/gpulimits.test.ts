@@ -7,7 +7,7 @@
 // diversi senza niente in mezzo (prima costanti difensive inventate, poi il
 // massimo dell'adapter chiesto senza consumatore).
 import {
-  attnDecodeWgsl, attnDecodeWorkgroupStorageBytes, attnPrefillChunkWgsl,
+  attnDecodeWgsl, attnDecodeLegacyBatchWgsl, attnDecodeWorkgroupStorageBytes, attnPrefillChunkWgsl,
   prefillGemmWorkgroupStorageBytes,
 } from "../src/engine/kernels/wgsl";
 import { PREFILL_M, PREFILL_M_DENSE05B } from "../src/engine/prefillplan";
@@ -312,16 +312,20 @@ describe("grantedLimits", () => {
 // dichiarato — e non il test.
 // ---------------------------------------------------------------------------
 
-// I due kernel dell'attenzione che questo modulo NON dichiara (vedi il describe
-// del debito, in fondo). Le loro formule non si ricopiano nemmeno qui: si
-// LEGGONO dal WGSL che i generatori producono, sommando le `array<f32, N>` di
-// memoria di gruppo. `attnDecodeLegacyWgsl` e' privata e per quei due kernel non
-// esiste una formula esportata come `attnDecodeWorkgroupStorageBytes`; scriverla
-// vuol dire toccare wgsl.ts, che e' fuori da questo task e va con le righe 3-4
-// di PHASES. Fino ad allora il testo generato e' la sorgente di verita' piu'
-// vicina leggibile da qui: se domani uno dei due guadagna o perde un
-// `var<workgroup>`, il pareggio e il tetto si spostano QUI invece di restare
-// asseriti su numeri vecchi.
+// I kernel dell'attenzione col `scores[ctxMax]` in memoria di gruppo. Le loro
+// formule non si ricopiano nemmeno qui: si LEGGONO dal WGSL che i generatori
+// producono, sommando le `array<f32, N>` di memoria di gruppo. Se domani uno
+// dei due guadagna o perde un `var<workgroup>`, il pareggio e il tetto si
+// spostano QUI invece di restare asseriti su numeri vecchi.
+//
+// DEI DUE, UNO SOLO E' ANCORA IN PRODUZIONE. Il ramo batch dell'attenzione non
+// instrada piu' al legacy (task T1-kernel-batch-streaming): la sua forma e'
+// quella in streaming, costante in ctxMax, e questo modulo la DICHIARA (vedi il
+// describe in fondo, che era il sensore del debito ed e' diventato la garanzia).
+// `attnDecodeLegacyBatchWgsl` resta esportata come fallback dichiarato e come
+// termine di paragone: e' cio' che si misura qui sotto per dire quanto valeva
+// il debito. Quello ancora scoperto e' `attnPrefillChunkWgsl` (path di
+// conformita' 0.5B), che la clausola e2a della riga 4 tiene fuori scope.
 const ATTN = { nHead: 16, nKvHead: 2, headDim: 256 };
 const workgroupF32Bytes = (code: string, decls: number): number => {
   const found = [...code.matchAll(/var<workgroup>\s+\w+\s*:\s*array<f32,\s*(\d+)>/g)];
@@ -330,9 +334,9 @@ const workgroupF32Bytes = (code: string, decls: number): number => {
   expect(found.length, "var<workgroup> array<f32> nel WGSL generato").toBe(decls);
   return found.reduce((s, m) => s + Number(m[1]) * 4, 0);
 };
-/** ramo `batch` legacy di attnDecodeWgsl (q35gpumodel): scores[ctxMax] + red[64]. */
+/** ramo `batch` LEGACY (fallback dichiarato, non piu' instradato): scores[ctxMax] + red[64]. */
 const legacyBatchBytes = (ctxMax: number): number =>
-  workgroupF32Bytes(attnDecodeWgsl({ ...ATTN, ctxMax, batch: true }), 2);
+  workgroupF32Bytes(attnDecodeLegacyBatchWgsl({ ...ATTN, ctxMax }), 2);
 /** attnPrefillChunkWgsl a headDim 256: qh[headDim] + scores[ctxMax] + red[64]. */
 const prefillChunkAttnBytes = (ctxMax: number): number =>
   workgroupF32Bytes(attnPrefillChunkWgsl({ ...ATTN, ctxMax, mMax: PREFILL_M }), 3);
@@ -454,10 +458,11 @@ describe("workgroup storage: il GEMM multi-riga del prefill", () => {
     expect(Math.max(PREFILL_M_DENSE05B, GLM_PREFILL_M)).toBe(PREFILL_M);
   });
 
-  // Il rapporto con la sotto-dichiarazione legacy scritto come ASSERZIONE e non
-  // come commento: il termine che questo file NON dichiara sta un ordine di
-  // grandezza sopra quello che dichiara. E' la misura del debito.
-  it("il termine non dichiarato del ramo legacy vale >= 6x quello nuovo (>= 22x via idot)", () => {
+  // Il rapporto col legacy scritto come ASSERZIONE e non come commento: il
+  // termine che il ramo batch chiedeva FINO A IERI sta un ordine di grandezza
+  // sopra quello del GEMM. E' la misura di quanto valeva il debito — oggi
+  // chiuso, perche' quel ramo non instrada piu' li'.
+  it("il termine del ramo legacy vale >= 6x quello del GEMM (>= 22x via idot)", () => {
     const legacyBatch = legacyBatchBytes(6400);
     expect(legacyBatch).toBe(25_856); // 4·6400 + 256
     expect(legacyBatch / 4_096).toBeGreaterThanOrEqual(6);
@@ -465,51 +470,75 @@ describe("workgroup storage: il GEMM multi-riga del prefill", () => {
   });
 });
 
-// IL DEBITO, INCHIODATO. Non un promemoria: un sensore.
+// IL DEBITO, CHIUSO. Era un sensore su cio' che non si dichiarava; ora e' una
+// GARANZIA su cio' che si dichiara.
 //
-// Il ramo `batch` legacy di `attnDecodeWgsl` (q35gpumodel) chiede
-// `4·ctxMax + 256` B di memoria di gruppo, e questo file NON lo dichiara. La
-// scelta e' deliberata e ha una data di scadenza: la riga 3 di PHASES del goal
-// engine-ttft ("Attenzione a chunk del prefill") toglie quel ramo dal legacy e
-// rende il fabbisogno costante; la riga 4 lo dichiara. Dichiararlo OGGI
-// alzerebbe il requisito HARD sopra i 49.152 B che il device di riferimento
-// concede, e `limitsFor` fallirebbe dove oggi passa.
+// Fino a ieri il ramo `batch` di `attnDecodeWgsl` (q35gpumodel) chiedeva
+// `4·ctxMax + 256` B di memoria di gruppo e questo file NON lo dichiarava:
+// dichiararlo avrebbe alzato il requisito HARD sopra i 49.152 B del device di
+// riferimento, e `limitsFor` sarebbe fallita dove passava. Il task
+// T1-kernel-batch-streaming toglie quel ramo dal legacy: la sua forma e' in
+// streaming e il fabbisogno e' `attnDecodeWorkgroupStorageBytes` — 1.536 B
+// COSTANTI. Ora si dichiara, ed e' il requisito HARD a NON muoversi.
 //
-// Questo test cade in entrambe le direzioni: se qualcuno dichiara il termine
-// senza toccare il test, e se i numeri di pareggio cambiano sotto i piedi (le
-// due formule sono LETTE dal WGSL generato, non ricopiate).
-describe("debito: il ramo batch legacy dell'attenzione non e' contato", () => {
-  const CHIUSO_DA = "lo chiude la riga 3 di PHASES (engine-ttft): attenzione a chunk del prefill, " +
-    "`attnDecodeWgsl` con batch smette di instradare al legacy; la riga 4 lo dichiara";
+// Il test cade in entrambe le direzioni: se il ramo batch torna a una forma che
+// lega la memoria al contesto (i numeri sono LETTI dal WGSL generato, non
+// ricopiati), e se il declarare ricomincia ad alzare il requisito.
+describe("garanzia: il ramo batch dell'attenzione e' contato e non alza il requisito", () => {
+  const CHIUSO_DA = "T1-kernel-batch-streaming: il ramo batch di `attnDecodeWgsl` non instrada " +
+    "piu' al legacy — softmax in streaming, workgroup storage costante in ctxMax";
+  const storageNeed = (o: Parameters<typeof engineNeeds>[0]) =>
+    engineNeeds(o).find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
+  /** il termine del ramo batch come lo dichiara il consumer: LETTO, non dedotto */
+  const batchTerm = (consumer: string): number => {
+    const m = /attnDecode batch \(prefill a chunk, streaming, costante in ctxMax\) = (\d+) B/.exec(consumer);
+    if (!m) throw new Error(`il consumer non nomina il ramo batch dell'attenzione: ${consumer}`);
+    return Number(m[1]);
+  };
 
-  it("il ctxMax di pareggio col termine fuso e' 7.392, e a 12.224 sfonda i 49.152", () => {
-    // PAREGGIO: sotto quel contesto la sotto-dichiarazione non morde, perche'
-    // il termine fuso (che SI dichiara) copre gia' quello che non si dichiara.
-    // Il primo dei due a pareggiare e' l'attenzione a chunk del prefill.
+  it("il ctxMax di pareggio del LEGACY era 7.648, e a 12.224 sfondava i 49.152", () => {
+    // I numeri del debito restano asseriti — sul fallback, che e' ancora
+    // generabile. Sono la misura di cio' che la riscrittura ha tolto.
     expect(prefillChunkAttnBytes(7_392)).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
     expect(prefillChunkAttnBytes(7_393)).toBeGreaterThan(QWEN_WORKGROUP_STORAGE_BYTES);
-    expect(legacyBatchBytes(7_648)).toBe(QWEN_WORKGROUP_STORAGE_BYTES); // il ramo batch, poco dopo
-    // TETTO: oltre 12.224 dichiarare il ramo legacy renderebbe il requisito
-    // HARD non servibile sul device di riferimento — ed e' la ragione per cui
-    // il debito resta debito finche' la riga 3 non cambia il kernel.
+    expect(legacyBatchBytes(7_648)).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
     expect(legacyBatchBytes(12_224)).toBe(ADAPTER_4090.maxComputeWorkgroupStorageSize);
     expect(legacyBatchBytes(12_225)).toBeGreaterThan(ADAPTER_4090.maxComputeWorkgroupStorageSize);
+    // ...e la forma di oggi, allo STESSO contesto, non ci si avvicina nemmeno
+    expect(attnDecodeWorkgroupStorageBytes(12_225)).toBeLessThan(16_384);
   });
 
-  it("SENSORE: oggi non e' dichiarato, e per questo limitsFor passa dove fallirebbe", () => {
-    const ctxMax = 12_225; // il primo contesto in cui dichiararlo sfonderebbe
+  it("[f] a ctxMax 12.225 il ramo batch e' DICHIARATO e limitsFor non lancia", () => {
+    const ctxMax = 12_225; // il contesto in cui il debito, dichiarato, sfondava
     const legacy = legacyBatchBytes(ctxMax);
+    expect(legacy, CHIUSO_DA).toBeGreaterThan(ADAPTER_4090.maxComputeWorkgroupStorageSize);
     const needs = engineNeeds({ ctxMax, mlaAttention: false });
     const storage = needs.find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
+    // dichiarare non alza il requisito HARD: il value resta il termine fuso
     expect(storage.value, CHIUSO_DA).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
-    expect(storage.value, CHIUSO_DA).toBeLessThan(legacy);
-    expect(storage.consumer, CHIUSO_DA).not.toMatch(/legacy/i);
-    // il motore negozia e ottiene...
+    // il consumer NOMINA il ramo batch, col suo valore costante
+    expect(batchTerm(storage.consumer), CHIUSO_DA).toBe(attnDecodeWorkgroupStorageBytes(ctxMax));
+    // ...e quel valore descrive il kernel VERO: nel suo testo non c'e' piu'
+    // nessun array di memoria di gruppo dimensionato sul contesto
+    expect(attnDecodeWgsl({ ...ATTN, ctxMax, batch: true }), CHIUSO_DA)
+      .not.toContain(`array<f32, ${ctxMax}>`);
+    // e il motore negozia dove il debito, dichiarato, avrebbe fatto fallire
     expect(() => limitsFor(fakeAdapter(ADAPTER_4090), needs), CHIUSO_DA).not.toThrow();
-    // ...mentre lo STESSO requisito, dichiarato, non sarebbe servibile
+    // ...mentre lo STESSO requisito nella forma legacy resterebbe non servibile
     expect(() => limitsFor(fakeAdapter(ADAPTER_4090), [{
       limit: "maxComputeWorkgroupStorageSize", value: legacy, hard: true,
-      consumer: "ramo batch legacy di attnDecodeWgsl (q35gpumodel)",
+      consumer: "ramo batch legacy di attnDecodeWgsl (fallback, non instradato)",
     }]), CHIUSO_DA).toThrow(UnmetLimitError);
+  });
+
+  it("[f] il termine del ramo batch e' costante in ctxMax e non muove il value", () => {
+    const vals = [525, 6_400, 12_225, 65_536, 1_000_000].map((ctxMax) => {
+      const need = storageNeed({ ctxMax, mlaAttention: false });
+      return [need.value, batchTerm(need.consumer)] as const;
+    });
+    expect(new Set(vals.map((v) => v[1])).size, "termine batch costante in ctxMax").toBe(1);
+    expect(new Set(vals.map((v) => v[0])).size, "requisito HARD costante in ctxMax").toBe(1);
+    expect(vals[0][0]).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(vals[0][1]).toBe(attnDecodeWorkgroupStorageBytes(6_400));
   });
 });

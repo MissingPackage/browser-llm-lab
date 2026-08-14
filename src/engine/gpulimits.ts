@@ -203,6 +203,14 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
     ? undefined : o.prefillGemmIdot ? "idot" as const : "f32" as const;
   const prefillGemmBytes = prefillGemmWorkgroupStorageBytes(prefillGemmShape(prefillM), prefillGemmVia);
   const prefillGemmViaLabel = prefillGemmVia ? `via ${prefillGemmVia}` : "peggiore fra idot e f32";
+  // I DUE rami di `attnDecodeWgsl` — decode e batch (prefill a chunk) — hanno
+  // la STESSA formula dal task T1-kernel-batch-streaming. Un solo termine, letto
+  // una volta sola dal file del kernel: due chiamate identiche nel `Math.max`
+  // sarebbero una la copia dell'altra, e il giorno in cui una delle due forme si
+  // scostasse la copia non se ne accorgerebbe comunque. Il ramo batch si vede
+  // nel `consumer`, che e' dove un consumatore si DICHIARA; il `Math.max` e'
+  // dove si CONTA, e contarlo due volte non cambia un byte.
+  const attnDecodeBytes = attnDecodeWorkgroupStorageBytes(o.ctxMax);
   const needs: LimitNeed[] = [
     {
       limit: "maxComputeInvocationsPerWorkgroup", value: MAX_WORKGROUP_SIZE, hard: true,
@@ -233,30 +241,35 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
       // nessuno sta guardando. Entra comunque nel `Math.max`, ed e' li' che il
       // test lo verifica: `limitsFor` legge `value`, non `consumer`.
       //
-      // DEBITO, esplicito e con la sua aritmetica: un `scores[ctxMax]` in
-      // workgroup memory esiste ancora, in produzione e fuori dall'MLA, e NON
-      // e' contato qui. Lo dichiarano `attnPrefillChunkWgsl` (qh[headDim] +
-      // quel `scores` + red[64] = 4·ctxMax + 1.280 B a headDim 256), che
-      // gpuforward.ts istanzia dallo STESSO path che qui passa
-      // `mlaAttention: false`, e il ramo batch legacy di `attnDecodeWgsl`
-      // (q35gpumodel), che ne chiede 4·ctxMax + 256 B.
-      // Il pareggio col termine fuso e' a ctxMax 7.392 (4·7.392 + 1.280 =
-      // 30.848); e a ctxMax 12.224 quel termine tocca i 49.152 B che il device
-      // di riferimento concede, quindi dichiararlo OGGI farebbe fallire
-      // `limitsFor` dove oggi passa. Lo chiude la riga 3 di PHASES del goal
-      // engine-ttft (attenzione a chunk del prefill: il ramo batch smette di
-      // instradare al legacy), e la riga 4 lo dichiara. Fino ad allora il
-      // debito non vive in questo commento: vive nel describe "debito: il ramo
-      // batch legacy dell'attenzione non e' contato" di tests/gpulimits.test.ts,
-      // che cade se qualcuno lo dichiara senza toccarlo.
+      // QUINTO consumatore, DICHIARATO DA OGGI: il ramo `batch` di
+      // `attnDecodeWgsl` — l'attenzione a chunk del prefill di q35gpumodel.
+      // Chiedeva 4·ctxMax + 256 B (`scores[ctxMax]` in memoria di gruppo) e per
+      // questo NON si dichiarava: a ctxMax 12.224 quel termine toccava i 49.152
+      // B che il device di riferimento concede, e dichiararlo avrebbe fatto
+      // fallire `limitsFor` dove passava. Il task T1-kernel-batch-streaming ha
+      // tolto quel ramo dal legacy: softmax in streaming, stessa
+      // `attnDecodeWorkgroupStorageBytes` del decode, COSTANTE in ctxMax. Ora
+      // si conta — e contarlo non alza di un byte il requisito HARD, che e'
+      // esattamente il punto: la garanzia sta nel describe "garanzia: il ramo
+      // batch dell'attenzione e' contato e non alza il requisito" di
+      // tests/gpulimits.test.ts, dove prima stava il sensore del debito.
+      //
+      // DEBITO CHE RESTA, esplicito e con la sua aritmetica: un `scores[ctxMax]`
+      // in workgroup memory esiste ancora, in produzione e fuori dall'MLA, e NON
+      // e' contato qui. Lo dichiara `attnPrefillChunkWgsl` (qh[headDim] + quel
+      // `scores` + red[64] = 4·ctxMax + 1.280 B a headDim 256), che gpuforward.ts
+      // istanzia dallo STESSO path che qui passa `mlaAttention: false` — il path
+      // di conformita' 0.5B. Il pareggio col termine fuso e' a ctxMax 7.392
+      // (4·7.392 + 1.280 = 30.848). Lo tiene fuori scope la clausola e2a della
+      // riga 4; il suo pareggio resta asserito nei test.
       value: Math.max(
         QWEN_WORKGROUP_STORAGE_BYTES,
         prefillGemmBytes,
-        attnDecodeWorkgroupStorageBytes(o.ctxMax),
+        attnDecodeBytes, // decode E batch: una formula sola (vedi sopra)
         o.mlaAttention === false ? 0 : mlaWorkgroupStorageBytes(o.ctxMax),
       ),
       hard: true,
-      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, prefillGemm splitK M=${prefillM} (${prefillGemmViaLabel}) = ${prefillGemmBytes} B, attnDecode (streaming, costante in ctxMax) = ${attnDecodeWorkgroupStorageBytes(o.ctxMax)} B${o.mlaAttention === false ? "" : `, mlaAttnDecode ${mlaWorkgroupStorageBytes(o.ctxMax)} B`} a ctxMax ${o.ctxMax})`,
+      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, prefillGemm splitK M=${prefillM} (${prefillGemmViaLabel}) = ${prefillGemmBytes} B, attnDecode (streaming, costante in ctxMax) = ${attnDecodeBytes} B, attnDecode batch (prefill a chunk, streaming, costante in ctxMax) = ${attnDecodeBytes} B${o.mlaAttention === false ? "" : `, mlaAttnDecode ${mlaWorkgroupStorageBytes(o.ctxMax)} B`} a ctxMax ${o.ctxMax})`,
     },
   ];
   if (o.arenaBuffers !== undefined) {

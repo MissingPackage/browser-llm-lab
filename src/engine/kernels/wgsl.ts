@@ -461,21 +461,40 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 //
 // Il decode e' `attnDecodeWgsl` senza `batch`: split sul contesto + softmax in
 // STREAMING (nessun array di workgroup dimensionato su ctxMax). Il prefill e'
-// lo stesso nome con `batch: true` ed e' rimasto il kernel a chunk di prima,
-// testo identico byte per byte.
+// lo stesso nome con `batch: true` — e dal task T1-kernel-batch-streaming e'
+// anche lui in streaming, a tile di 64 posizioni e con letture vec4.
 //
-// PERCHE' IL PREFILL NON E' STATO PORTATO. Il prefill vive nel goal TTFT, non
-// in questo: il suo collo non e' la workgroup memory ne' la banda sulla KV
-// (legge la cache una volta per M righe), ed e' l'unico consumatore della
-// `scores[ctxMax]` rimasta. Portarlo qui vorrebbe dire pagare il rischio di
-// una riscrittura senza la misura che la giustifica. La scelta e' deliberata e
-// il suo testo e' inchiodato da un golden (tests/fixtures/attn-decode-legacy.golden.json):
-// se qualcuno lo tocca per sbaglio, il test lo dice.
+// PERCHE' IL PREFILL E' STATO PORTATO ADESSO E NON PRIMA. Prima mancava la
+// misura: il collo del prefill non e' ovvio come quello del decode, e una
+// riscrittura senza sonda e' rischio puro. Le sonde della riga 1 di engine-ttft
+// (src/microbench/ttAttn.ts, banco `attn-prefill-chunk`) l'hanno data, e
+// hanno detto anche cio' che NON va fatto: fondere le teste del gruppo GQA per
+// leggere la KV una volta sola PEGGIORA (2,0879 contro 1,8207 ms a ctx 6333),
+// perche' taglia il traffico 4x ma porta i workgroup da 256 a 64 su 76 SM.
+// Quindi: streaming e vec4 SI, un workgroup per (head, riga) resta (docket
+// item 21).
+//
+// IL LEGACY NON SI CANCELLA. `attnDecodeLegacyBatchWgsl` resta esportata come
+// fallback dichiarato e come termine di paragone: e' la BASELINE della sonda
+// (src/microbench/ttRunner.ts) e cio' su cui gpulimits.test.ts misura quanto
+// valeva il debito. `attnDecodeRefWgsl` e' il riferimento per-riga del ktest.
+// Il testo di entrambi e' inchiodato da un golden
+// (tests/fixtures/attn-decode-legacy.golden.json): se qualcuno li tocca per
+// sbaglio, il test lo dice.
+//
+// COSA IL CAMBIO COSTA A CHI VERIFICA. Il ramo batch non e' piu' bit-identico
+// al riferimento per-riga — riassocia le somme (rescale online fra tile,
+// `dot()` su vec4) — quindi il banco `dense-batch-attn-chunk` del ktest e'
+// passato al confronto a TOLLERANZA DICHIARATA, come previsto dalla riga 3 (d)
+// di PHASES del goal engine-ttft, e ha guadagnato un caso a n > 64 senza il
+// quale il rescale fra tile non verrebbe mai eseguito.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Workgroup storage di `attnDecodeWgsl` (ramo decode): `qsh[HD4]` vec4 +
- * `sc[64]` + `red[64]` f32 = 16·ceil(headDim/4) + 512 byte.
+ * Workgroup storage di `attnDecodeWgsl` — di ENTRAMBI i rami, decode e batch:
+ * `qsh[HD4]` vec4 + `sc[64]` + `red[64]` f32 = 16·ceil(headDim/4) + 512 byte.
+ * Dal task T1-kernel-batch-streaming anche il ramo batch ha questa forma, e
+ * questa resta LA formula: non ne esiste una seconda da nessun'altra parte.
  *
  * COSTANTE IN ctxMax — ed e' il punto dello split: prima era `4·ctxMax + 256`
  * (gli score dell'intero contesto in shared), quindi il limite del device
@@ -522,21 +541,46 @@ export function attnDecodeWgsl(opts: {
    * non vede quelle dopo. Non serve una maschera: serve che l'append preceda
    * l'attenzione, e nell'encoder e' cosi'.
    *
-   * `scores` e `red` sono di workgroup, e i workgroup sono (head, riga): ogni
-   * riga ha i suoi.
+   * `sc` e `red` sono di workgroup, e i workgroup sono (head, riga): ogni riga
+   * ha i suoi.
+   *
+   * FIRMA INVARIATA, forma nuova (T1-kernel-batch-streaming): questo ramo non
+   * instrada piu' a `attnDecodeLegacyWgsl`. Cio' che l'assemblatore vede non
+   * cambia — binding [q, kCache, vCache, out, rowPast], `@workgroup_size(64)`,
+   * griglia [nHead, M, 1] con wid.x = head e wid.y = riga — quindi
+   * q35gpumodel.ts non si tocca.
    */
   batch?: boolean;
 }): string {
-  return opts.batch === true ? attnDecodeLegacyWgsl(opts, true) : attnDecodeStreamWgsl(opts);
+  return opts.batch === true ? attnDecodeBatchStreamWgsl(opts) : attnDecodeStreamWgsl(opts);
+}
+
+/**
+ * Il ramo batch di IERI: `scores[ctxMax]` in workgroup memory, letture scalari.
+ * NON e' piu' cio' che `attnDecodeWgsl({ batch: true })` emette — e' il
+ * FALLBACK dichiarato e il termine di paragone (AC2 del task
+ * T1-kernel-batch-streaming): se un device rifiutasse la forma nuova, o se si
+ * volesse rimisurare quanto valeva il debito di workgroup storage, il testo di
+ * ieri si genera da qui, byte per byte. Per questo non si cancella.
+ */
+export function attnDecodeLegacyBatchWgsl(opts: {
+  nHead: number; nKvHead: number; headDim: number; ctxMax: number;
+}): string {
+  return attnDecodeLegacyWgsl(opts, true);
 }
 
 /**
  * Il ramo NON-batch di IERI: `scores[ctxMax]` in workgroup memory, un workgroup
  * per head, letture scalari. Non lo usa piu' il motore — e' il RIFERIMENTO
  * per-riga del ktest `dense-batch-attn-chunk`, che confronta il prefill a chunk
- * con M esecuzioni del kernel per-riga. Esce dallo STESSO template del ramo
- * batch, quindi l'identita' strutturale fra i due e' garantita dal codice, non
- * da una coincidenza fra due copie.
+ * con M esecuzioni del kernel per-riga. Esce dallo STESSO template di
+ * `attnDecodeLegacyBatchWgsl`, quindi fra quei due l'identita' strutturale e'
+ * garantita dal codice e non da una coincidenza fra due copie.
+ *
+ * Col ramo batch DI OGGI quella parentela non c'e' piu': il confronto del ktest
+ * e' a tolleranza dichiarata, non bit a bit. Ed e' proprio per questo che il
+ * riferimento resta indipendente — se seguisse la riscrittura non verificherebbe
+ * piu' niente.
  */
 export function attnDecodeRefWgsl(opts: {
   nHead: number; nKvHead: number; headDim: number; ctxMax: number;
@@ -744,6 +788,128 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     partMS[row * 2u] = m;
     partMS[row * 2u + 1u] = s;
   }
+}`;
+}
+
+/**
+ * PREFILL A CHUNK (ramo `batch` di `attnDecodeWgsl`): softmax in STREAMING a
+ * tile di 64 posizioni, letture vec4, UN workgroup per (head, riga).
+ *
+ * Griglia [nHead, M, 1]: `wid.x` = head, `wid.y` = RIGA del chunk. Il modello
+ * di riga 1 (src/microbench/ttAttn.ts) usa `wid.z` per la riga; qui si tiene
+ * `wid.y` perche' e' cio' che l'assemblatore di q35gpumodel gia' dispatcha, e
+ * questo task non tocca il cablaggio.
+ *
+ * CAUSALITA': dalla sola `rowPast`, come nel legacy. La riga m guarda le
+ * posizioni [0, rowPast[m]] — vede se stessa e tutto cio' che la precede,
+ * comprese le righe precedenti dello STESSO chunk che `kvAppend` ha gia'
+ * scritto in cache. Nessuna maschera: serve solo che l'append preceda
+ * l'attenzione, e nell'encoder e' cosi'.
+ *
+ * PERCHE' UN WORKGROUP PER (head, riga) E NON UNO PER GRUPPO GQA. Misurato
+ * (docket item 21, banco `attn-prefill-chunk` di src/microbench/ttRunner.ts,
+ * bracci `stream` contro `gqa-stream`): fondere le 4 teste del
+ * gruppo per leggere la KV una volta sola fa 2,0879 ms contro 1,8207 a ctx
+ * 6333. Taglia il traffico 4x ma porta i workgroup da 256 a 64 su 76 SM, e a
+ * quel punto la GPU e' mezza vuota. E' un vincolo NEGATIVO: non si fondono le
+ * teste, non si legge la KV una volta per gruppo.
+ *
+ * Workgroup storage: `qsh[HD4]` vec4 + `sc[64]` + `red[64]` — la stessa
+ * `attnDecodeWorkgroupStorageBytes` del ramo decode, COSTANTE in ctxMax (era
+ * 4·ctxMax + 256).
+ *
+ * Con HD4 < 64 (shape del ktest, headDim 32) valgono le stesse regole del ramo
+ * decode: i thread t ≥ HD4 non possiedono una componente vec4, quindi non
+ * leggono ne' scrivono `qsh`/`out`/`vCache`, ma attraversano TUTTE le barriere
+ * — che restano in control flow uniforme. Nella fase score restano pieni
+ * partecipanti: li' i 64 thread sono 64 POSIZIONI, non 64 componenti.
+ */
+function attnDecodeBatchStreamWgsl(opts: {
+  nHead: number; nKvHead: number; headDim: number; ctxMax: number;
+}): string {
+  const { nHead, nKvHead, headDim } = opts;
+  const hd4 = attnHd4(headDim);
+  return `
+@group(0) @binding(0) var<storage, read> q: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> kCache: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> vCache: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> out: array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read> rowPast: array<u32>;
+// dispatch (${nHead}, M, 1): X = head, Y = riga del chunk
+const HD4 = ${hd4}u;
+const KV4 = ${(nKvHead * headDim) / 4}u;
+const ROWQ4 = ${(nHead * headDim) / 4}u;
+const GROUPS = ${nHead / nKvHead}u;
+const SCALE = ${1 / Math.sqrt(headDim)};
+const NEG = -3.0e38;
+var<workgroup> qsh: array<vec4<f32>, ${hd4}>;
+var<workgroup> sc: array<f32, 64>;
+var<workgroup> red: array<f32, 64>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let h = wid.x;
+  let t = lid.x;
+  let row = wid.y;
+  let kvBase = (h / GROUPS) * HD4;
+  let qOff = row * ROWQ4 + h * HD4;
+  let n = rowPast[row] + 1u;
+  // q della (head, riga) in memoria di gruppo: il ciclo sulle posizioni la rilegge
+  if (t < HD4) { qsh[t] = q[qOff + t]; }
+  workgroupBarrier();
+  var m = NEG;
+  var s = 0.0;
+  var acc = vec4<f32>(0.0);
+  var tile = 0u;
+  loop {
+    if (tile >= n) { break; }
+    let p = tile + t;
+    var d = NEG; // ri-azzerato a OGNI giro: una var dichiarata nel loop non lo e'
+    if (p < n) {
+      let kOff = p * KV4 + kvBase;
+      d = 0.0;
+      for (var i = 0u; i < HD4; i = i + 1u) { d = d + dot(qsh[i], kCache[kOff + i]); }
+      d = d * SCALE;
+    }
+    sc[t] = d;
+    red[t] = d;
+    workgroupBarrier();
+    // max del tile
+    var stride = 32u;
+    while (stride > 0u) {
+      if (t < stride) { red[t] = max(red[t], red[t + stride]); }
+      workgroupBarrier();
+      stride = stride >> 1u;
+    }
+    let tm = red[0];
+    workgroupBarrier();
+    // rescale online: il massimo corrente sale, i vecchi contributi si sgonfiano
+    let nm = max(m, tm);
+    let rs = exp(m - nm);
+    m = nm;
+    let e = exp(sc[t] - nm);
+    sc[t] = e;
+    red[t] = e;
+    workgroupBarrier();
+    stride = 32u;
+    while (stride > 0u) {
+      if (t < stride) { red[t] = red[t] + red[t + stride]; }
+      workgroupBarrier();
+      stride = stride >> 1u;
+    }
+    s = s * rs + red[0];
+    workgroupBarrier();
+    acc = acc * rs;
+    let cnt = min(64u, n - tile);
+    // ogni thread una componente vec4 di headDim: letture di V coalescenti
+    if (t < HD4) {
+      for (var j = 0u; j < cnt; j = j + 1u) {
+        acc = acc + sc[j] * vCache[(tile + j) * KV4 + kvBase + t];
+      }
+    }
+    workgroupBarrier();
+    tile = tile + 64u;
+  }
+  if (t < HD4) { out[qOff + t] = acc / s; }
 }`;
 }
 

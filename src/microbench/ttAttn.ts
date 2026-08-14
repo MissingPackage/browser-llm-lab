@@ -2,17 +2,27 @@
 //
 // Pre-registrazione: docs/deep-dive/ttft-riga1-prereg-2026-08-13.md (P5).
 //
-// La forma attuale non vive qui: si importa `attnDecodeWgsl({ batch: true })` da
-// src/engine/kernels/wgsl.ts, che instrada su `attnDecodeLegacyWgsl` (switch a
-// wgsl.ts:530) — `scores: array<f32, ctxMax>` in workgroup memory, letture
-// scalari, un workgroup per (head, riga) e quindi la riga KV riletta una volta
-// per head del gruppo GQA. Sono gli stessi tre difetti gia' chiusi sul decode e
-// mai portati al prefill.
+// La BASELINE non vive qui: si importa da src/engine/kernels/wgsl.ts, cosi' il
+// termine di paragone e' un kernel vero e non una sua imitazione. Fino al task
+// T1-kernel-batch-streaming quel kernel era `attnDecodeWgsl({ batch: true })`,
+// cioe' la forma che il prefill del 4B usava DAVVERO — `scores: array<f32,
+// ctxMax>` in workgroup memory, letture scalari, un workgroup per (head, riga) e
+// quindi la riga KV riletta una volta per head del gruppo GQA: gli stessi tre
+// difetti gia' chiusi sul decode e mai portati al prefill.
+//
+// DA OGGI QUELLA FORMA E' IN PRODUZIONE, e la baseline si importa da
+// `attnDecodeLegacyBatchWgsl` — lo stesso testo di prima, byte per byte, sotto
+// il nome che dichiara cos'e' diventato: un fallback. Il cambio di nome NON e'
+// cosmetico: chiamare ancora `attnDecodeWgsl({ batch: true })` farebbe misurare
+// alla sonda streaming contro streaming, e il numero uscirebbe lo stesso — solo
+// falso. Lo tiene fermo tests/ttprobe.test.ts («il braccio `legacy` fabbrica
+// DAVVERO il legacy»), perche' questo file gira solo su GPU.
 //
 // Qui vivono le candidate: softmax in STREAMING (workgroup storage costante in
 // ctxMax), letture vec4, KV letta UNA volta per gruppo GQA, e la fusione su piu'
 // RIGHE del chunk (che sul decode non esisteva: e' la leva specifica del
-// prefill, dove M righe guardano quasi la stessa KV).
+// prefill, dove M righe guardano quasi la stessa KV). La vincitrice misurata e'
+// `headsPerWg: 1, rowsPerWg: 1` — la fusione GQA PEGGIORA (occupancy).
 
 export const TT_ATTN_SHAPE = {
   nHead: 16,
