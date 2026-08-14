@@ -2,33 +2,44 @@
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-kquant`, riga 1 CHIUSA — prossima la riga 2.** Chartered
-2026-08-14. Contratto e spina: `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
+**GOAL ATTIVO: `engine-kquant`, riga 1 CHIUSA (it.1-it.3) — prossima la riga 2.**
+Chartered 2026-08-14. `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
 
-**LA FASE 0 HA DETTO SI' A TUTTE E CINQUE LE FAMIGLIE** (it.1-it.2). A M=16,
-sulle shape vere, contro il kernel di produzione importato — barra: 1,5x.
-Artefatto: `results/microbench/kquant-fase0-4090-linux-2026-08-14T19-14-34-680Z.json`
-(`kind: microbench-kquant-fase0`, 26 celle, **zero scartate**). Prereg:
+**LA FASE 0 HA DETTO SI' A TUTTE E CINQUE LE FAMIGLIE.** Rapporto legacy/veloce
+a M=16, `idot | f32`, barra 1,5x. Artefatto:
+`results/microbench/kquant-fase0-4090-linux-2026-08-14T19-29-20-014Z.json`
+(54 celle, **zero scartate**). Prereg:
 `docs/deep-dive/kquant-fase0-prereg-2026-08-14.md`.
 
-| famiglia | shape | legacy → multi-riga | rapporto |
-|---|---|---|---|
-| Q8_0 | `[2048, 4096]` | 1,0468 → 0,0302 ms | **34,65x** |
-| Q5_K | `[4096, 2560]` | 1,2700 → 0,0453 ms | **28,03x** |
-| Q4_1 | `[9216, 2560]` | 2,3474 → 0,1040 ms | **22,57x** |
-| Q6_K | `[512, 2048]` | 0,0494 → 0,0092 ms | **5,36x** |
-| Q4_K | `[2048,512]` / `[512,2048]` | 0,0700 → 0,0168 / 0,0496 → 0,0095 | **4,16x / 5,20x** |
+| famiglia | shape | M=16 |
+|---|---|---|
+| Q8_0 | `[2048, 4096]` | **35,20 \| 17,63** |
+| Q5_K | `[4096, 2560]` | **28,10 \| 6,17** |
+| Q4_1 | `[9216, 2560]` | **22,57 \| 16,63** |
+| Q6_K | `[512, 2048]` | **6,13 \| 1,66** |
+| Q4_K | `[512,2048]` / `[2048,512]` | **5,23 \| 1,85** e **4,16 \| 1,14** |
 
 **Il banco riproduce il segmento vero in millisecondi**: 24 × 395 × 1,2700 =
 12.039 contro i **12.169 ms** misurati su `gemm:deltanet-out`. Proiezione
-**−15,2 s ⇒ TTFT ~16,9 s**.
+**−15,2 s ⇒ TTFT ~16,9 s** (proiezione da microbench: la conferma e' la riga 5).
 
-**LA LEZIONE DELLA FASE 0, e ribalta l'intuizione**: il guadagno e' una
-proprieta' della **shape**, non del formato. Tre previsioni su cinque sono
-cadute perche' attribuivo la leva all'unpack. Conta quanto costa rileggere la
-matrice M volte: i tensori grandi rendono 22-35x, quelli piccoli degli expert
-del 35B (0,6 MB, che stanno in cache) 4-5x — **e quel 4-5x e' un limite
-inferiore**, perche' in produzione i 17,67 GB di expert in cache non ci stanno.
+**TRE COSE DA SAPERE PRIMA DI USARE QUESTI NUMERI:**
+1. **Il guadagno e' una proprieta' della SHAPE, non del formato.** Tre
+   previsioni su cinque sono cadute perche' lo attribuivo all'unpack. Conta
+   quanto costa rileggere la matrice M volte: tensori grandi 22-35x, tensori
+   piccoli 4-6x. E il crollo ha DUE cause di peso simile — la cache (il legacy
+   e' 2,2x piu' veloce per peso sulle shape piccole) e l'occupancy (la forma
+   veloce e' 2,3x piu' lenta: 32-64 workgroup su 128 SM).
+2. **Il 4-6x del 35B NON e' un limite inferiore** (affermazione ritrattata in
+   it.3): per Q4_K e Q6_K il braccio legacy misurato **non e' il percorso di
+   produzione** — gli expert girano in regime d'ARENA, dove `batch` e' vietato
+   per costruzione (`wgsl.ts:2175`, `:2359`). Vale per una shape su un braccio
+   ipotetico. Il goal 35B parta da qui, non dal numero nudo.
+3. **Sul Q4_K la via f32 non passa la regola di stop** (1,14x su `[2048,512]`):
+   senza `packed_4x8_integer_dot_product`, li', la forma multi-riga non paga.
+
+**A M=1 la forma multi-riga PERDE** (0,91x sul Q4_K): il piano non deve mai
+offrirla al decode.
 
 **Da misurare, non dedurre**: la quota Q4_1 di `gemm:ffn-down` oggi e' stimata
 dal banco; la riga 3 non chiude senza un `pbCat` proprio per quei quattro siti.
