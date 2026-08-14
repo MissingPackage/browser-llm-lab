@@ -30,17 +30,40 @@ product intero come leva di questo goal.
 serve 4,0×. Scomposto: caricamento 10.892 · lettura del prompt 87.582 (6332
 token a 72,30 tok/s) · primo token 36 ms. Decode 47,79 tok/s a contesto 6333.
 
-**LA METRICA SI È MOSSA — riga 2, it.14 e it.15.** È la prima volta da quando il
-goal è aperto:
+**LA METRICA SI È MOSSA — righe 2 e 3, it.14→it.18:**
 
 | | prefill | TTFT a caldo | decode |
 |---|---|---|---|
 | baseline (it.1) | 72,30 tok/s | 87.618 ms | 47,79 |
 | split-K f32 (it.14) | 110,19 | 57.485 | 49,59 |
-| **via intera (it.15)** | **123,26** | **51.392** | 48,00 |
+| via intera (it.15) | 123,26 | 51.392 | 48,00 |
+| **attenzione in streaming (it.17)** | **196,41** | **32.265** | 47,89 |
 
-**1,70× sulla baseline; alla barra manca 2,35×**, e la leva che resta è
-l'attenzione del prefill (**6,76×** misurata) — la riga 3.
+**2,72× sulla baseline; alla barra dei 21.905 manca 1,47×.** Gate verificati in
+it.18 da sessione indipendente, non ereditati: tsc pulito · vitest **671\|10** ·
+ktest **101 PASS / 0 FAIL** · decode in banda. Artefatto
+`results/engine/ttft-riga3-4b-attnstream-prompt0-2026-08-14.json`.
+
+**IL LOOP È FERMO, E NON PER FINE LAVORO.** Schedulare un risveglio **è**
+l'azione che arma la duplicazione della sessione da parte del watchdog: in tre
+ore ne ha generate quattro (v. Landmines). Il lavoro che resta è eseguibile, ma
+va fatto in una sessione con un umano presente, oppure dopo aver corretto
+`~/Projects/harness/tools/loop-watchdog.sh`.
+
+**DUE COSE SERVONO AL PI PRIMA DELLA CHIUSURA:**
+1. **Il criterio del gate di conformità** (docket item 22): `q35-prefillchunk-4b`
+   pretende la BIT-IDENTITÀ, che è caduta in it.15 quando la via intera ha
+   iniziato a quantizzare le attivazioni a int8. Non è una regressione, è un
+   criterio diventato inapplicabile — ma **finché non c'è il ruling, la riga 5
+   non può dichiarare i ratchet intatti**. Raccomandazione già a docket: argmax
+   al posto dei bit, col numero accanto.
+2. **Se correggere il watchdog** (altro repo, non toccato).
+
+**RESIDUO TECNICO, piccolo e noto**: la tolleranza dell'attenzione vive come due
+costanti locali in `ktest.worker.ts:2987` invece che in `attnchunktol.ts` — T2
+del conductor è BLOCKED per ownership sovrapposta con T1 (docket item 23), si
+rifà a mano sopra il codice di T1. Più la clausola (d) della riga 2, il cui
+censimento è **già fatto** in it.17 e va solo scritto. Poi righe 4, 5, 6.
 
 **Il riavvio della macchina ha risolto i crash**: `ktest` fa 100 PASS / 0 FAIL
 sullo stesso codice che prima faceva morire la pagina. La causa era
@@ -297,3 +320,21 @@ GLM-4.7-Flash resta residency-bound
   scritti. `ListAgents` mostra la sessione peer; `git log -1 --format=%h
   .harness/loop-state.json` contro `updated_epoch` dice se il file è stato
   riscritto da un checkout invece che dall'hook.
+- **ASPETTARE UN WORKFLOW IN BACKGROUND FA DUPLICARE LA TUA SESSIONE. Sempre, e
+  allungare il risveglio non serve.** Il watchdog usa il silenzio del transcript
+  come test di morte; una sessione che aspetta un workflow è silenziosa **per
+  costruzione**, perché il workflow non scrive sul transcript di chi l'ha
+  lanciato. Misurato tre volte il 2026-08-14: 00:56:05 («transcript fermo da 28
+  min») e 02:03:28 («fermo da 62 min») hanno duplicato la stessa sessione
+  `ae3ad6a9`, la seconda volta **nonostante il risveglio fosse stato allungato a
+  60 minuti apposta**. Allungare sposta l'istante, non toglie la condizione: il
+  ramo `headless_dead` del watchdog **salta del tutto** il controllo «transcript
+  fresco ⇒ sta lavorando», e quel ramo è vero per sempre una volta che il
+  watchdog ha spinto una prima volta su quella directory.
+  I duplicati **non sono innocui e non sono inutili**: hanno committato lavoro
+  buono (l'integrazione di it.17 e l'attribuzione del gate rotto sono pulite),
+  ma nessuno li coordina, lavorano sullo stesso albero e sulla stessa GPU, e
+  chi li ha generati non può verificarli mentre corrono.
+  **Finché il watchdog non è corretto: niente `/loop` con workflow in volo.**
+  Il lavoro lungo va fatto con un umano presente, o `ScheduleWakeup{stop:true}`
+  prima di lanciare il workflow — al prezzo che il loop poi non riparte da solo.
