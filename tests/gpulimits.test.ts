@@ -208,6 +208,33 @@ describe("requisiti derivati", () => {
     expect(QWEN_WORKGROUP_STORAGE_BYTES).toBeGreaterThan(WEBGPU_GUARANTEED);
   });
 
+  // (e2a) della riga 4 di engine-ttft — IL DEBITO DICHIARATO, reso falsificabile.
+  //
+  // I 30.848 B stanno sopra i 16.384 garantiti da WebGPU e non scendono (il
+  // termine e' 4·K·mMax con K=896 fisso: servirebbe mMax <= 4, e alzare mMax e'
+  // la leva opposta). La riga 4 li dichiara DEBITO invece di bloccare il goal, e
+  // la dichiarazione regge su UN fatto: il consumatore e' il path di conformita'
+  // Qwen2.5-0.5B, non il percorso di prodotto del 4B.
+  //
+  // Quel fatto e' (C7-3), scritto in it.0 e verificato a mano in it.22 — ma una
+  // verifica a mano vale il giorno in cui la fai. Qui diventa un sensore: se
+  // qualcuno cabla il kernel fuso nell'assemblatore del 4B, il debito smette di
+  // essere "solo 0.5B", lo scoping della riga 4 diventa falso, e questo test lo
+  // dice invece di lasciarlo scoprire a un utente su un device da 16 KB.
+  it("(e2a) il debito sopra la garanzia WebGPU appartiene al path 0.5B, NON al 4B", () => {
+    const q35 = readFileSync(join(process.cwd(), "src/engine/q35gpumodel.ts"), "utf8");
+    expect(q35, "se il 4B usa il kernel fuso, (C7-3) e lo scoping della riga 4 vanno rifatti")
+      .not.toContain("rmsPairGemmSiluChunkFast");
+    const fwd = readFileSync(join(process.cwd(), "src/engine/gpuforward.ts"), "utf8");
+    expect(fwd, "il consumatore dichiarato e' l'assemblatore 0.5B").toContain("rmsPairGemmSiluChunkFast");
+    // ...e il debito e' esattamente quello nominato nel consumer di engineNeeds,
+    // non un numero che gli somiglia
+    const need = engineNeeds({ ctxMax: 6400, mlaAttention: false })
+      .find((n) => n.limit === "maxComputeWorkgroupStorageSize")!;
+    expect(need.consumer).toContain("rmsPairGemmSiluChunkFast");
+    expect(need.value).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+  });
+
   it("l'arena alza binding size e storage per stage, col suo consumatore", () => {
     const window = 390 * SLAB.bytes; // finestra da 2 GiB, classe q4_1
     const needs = engineNeeds({ ...GLM_NEEDS, arenaBuffers: 7, arenaWindowBytes: window });

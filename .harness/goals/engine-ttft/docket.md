@@ -967,3 +967,43 @@ riferimento era il verso sbagliato.
 disaccordi non sono pareggi; è vero anche che non arrivano all'uscita.
 Il gate `q35-prefillchunk-4b` misura una quantità che **non è quella di
 prodotto**, e questo andrebbe scritto nel suo `declared`.
+
+## item 25 — (e2a): il debito è dichiarato, ma il done-when del CONTRATTO va deciso (io → PI, it.22)
+
+La riga 4 dice: `rmsPairGemmSiluChunkFast` «o scende sotto 16.384 B, o la
+clausola si dichiara **debito del path 0.5B** con la ragione, **e il done-when
+del contratto va a docket per un ruling**». Ho fatto la seconda: il debito è
+dichiarato in `gpulimits.ts` con l'aritmetica, la ragione e la via d'uscita, ed
+è ora **falsificabile** — `tests/gpulimits.test.ts` fallisce se qualcuno cabla
+il kernel fuso nell'assemblatore del 4B, perché in quel caso (C7-3) diventa
+falsa e il debito smette di essere «solo 0.5B».
+
+**Quello che resta è il testo del contratto, e non lo tocco io.** Il DONE WHEN
+del goal elenca la portabilità fra le sue voci. Con (e2a) dichiarata debito, il
+goal può chiudere lasciando **un termine sopra la garanzia WebGPU di 16.384 B** —
+l'unico del motore. Su un device che concede solo il minimo di spec, la pipeline
+del path di conformità 0.5B non si crea.
+
+**Perché non lo decido io** (test dello step 5): se non arrivasse mai risposta
+dichiarerei il debito e chiuderei — che è ciò che ho fatto. Ma **cosa il DONE
+WHEN del goal promette** è la funzione obiettivo, non il meccanismo: è la sola
+cosa che il protocollo mi vieta di decidere.
+
+**Le opzioni, con la mia raccomandazione per prima:**
+
+(a) **Il DONE WHEN della portabilità si legge come soddisfatto**, perché
+    (C7-3) — ratificata nel plan-check, item 1 — scopa quella clausola fuori dal
+    percorso di prodotto del 4B. Il debito resta scritto, falsificabile, e
+    diventa scope del goal che porterà il path 0.5B alla forma multi-riga.
+(b) Il goal **non chiude** finché il termine non scende sotto 16.384. Costa un
+    lavoro che (C7-3) dice non muovere la metrica di questo goal.
+
+**Il conto, per decidere con un numero e non a sensazione**: il termine è
+`4·K·mMax` con K = 896 fisso ⇒ sotto 16.384 servirebbe **mMax ≤ 4**. Alzare mMax
+è la leva del prefill, quindi le due tirano in direzioni opposte (a mMax 16
+sarebbero 61.696 B). La strada vera non è stringere il buffer ma **dare al path
+0.5B la forma multi-riga del 4B, il cui workgroup storage non scala con M**
+(1.152 B via idot, 4.096 via f32 a M=16). Quella forma esiste già: manca solo
+portarcela.
+
+**RULING:** _

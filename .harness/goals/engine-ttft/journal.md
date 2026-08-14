@@ -1062,3 +1062,63 @@ goal e si dichiara debito. La riga 5 è il lavoro vero e **richiede strumentazio
 nuova**: i workgroup in volo per dispatch il motore non li misura da nessuna
 parte. E la riga 5 non può dichiarare i ratchet intatti finché non c'è il ruling
 sull'**item 22**.
+
+---
+
+## it.22 (2026-08-14, riga 4) — la portabilità era già mezza fatta, e l'altra metà è un debito reso falsificabile
+
+**Riga 4 CHIUSA. Metrica invariata e doveva esserlo**: questa riga non tocca
+kernel. TTFT a caldo **32.265 ms**, 2,72× sulla baseline.
+
+**(e2b) l'aveva già chiusa T1**, e verificarlo è costato meno che rifarlo — è la
+ragione per cui il primo passo di una riga è leggere, non scrivere. Il ramo
+`batch` dell'attenzione è il **quinto consumatore dichiarato** in `engineNeeds`,
+col fabbisogno **costante in ctxMax** e uguale a quello del decode. Il pezzo che
+mi ha convinto è il `describe` in fondo a `gpulimits.test.ts`: si chiama
+«garanzia: il ramo batch dell'attenzione e' contato e non alza il requisito» ed
+è **letteralmente il vecchio sensore del debito, rovesciato**. Prima provava che
+il fabbisogno cresceva col contesto — cioè che la frase «path Qwen indipendente
+dal contesto» era falsa; ora prova il contrario. Il test non è stato cancellato:
+è stato girato, e resta a guardia del fatto nuovo.
+
+**(e2a) dichiarata debito, che è la seconda delle due strade che la riga
+ammette.** Prima ho ri-verificato (C7-3) **sul codice di oggi invece di
+ereditarla da it.0**: `q35gpumodel.ts` non importa né `rmsPairGemmSiluChunkFast`
+né `prefillplan.ts`. Il consumatore è `gpuforward.ts`, l'assemblatore di
+Qwen2.5-0.5B — path di conformità, non di prodotto.
+
+Il debito è scritto con l'aritmetica invece che con l'aggettivo: il termine è
+`4·K·mMax + …` con K = 896 **fisso**, quindi per scendere sotto i 16.384 B
+garantiti da WebGPU servirebbe **mMax ≤ 4** — e alzare mMax è la leva che il
+prefill vuole. Le due tirano in direzioni opposte (a mMax 16 sarebbero 61.696
+B). La via d'uscita vera non è stringere il buffer: è **dare al path 0.5B la
+forma multi-riga del 4B**, il cui workgroup storage non scala con M (1.152 B via
+idot, 4.096 via f32 a M=16). Quella forma la riga 1 l'ha già trovata.
+
+**E QUI STA IL PEZZO CHE VALE PIÙ DELLA RIGA.** Una dichiarazione di debito è
+una frase, e una frase invecchia in silenzio. (C7-3) è vera **oggi**; se domani
+qualcuno cabla il kernel fuso nell'assemblatore del 4B, il debito smette di
+essere «solo 0.5B», lo scoping dell'intera riga 4 diventa falso, e **nessuno se
+ne accorge finché un utente non apre la pagina su un device che concede i 16 KB
+di spec**. Ora c'è un sensore: il test `(e2a)` legge `q35gpumodel.ts` e fallisce
+se ci trova quel kernel. È la stessa forma del promemoria della bit-identità di
+it.20 — un debito che suona da solo invece di aspettare che qualcuno rilegga il
+docket.
+
+**Item 25 al PI**, ed è l'unica cosa che non ho deciso: non *se* dichiarare il
+debito (l'ho fatto, ed è la strada che la riga stessa ammette), ma **cosa
+promette il DONE WHEN del contratto** sulla portabilità. Con (e2a) a debito il
+goal chiuderebbe lasciando un termine sopra la garanzia WebGPU — l'unico del
+motore. Quello è funzione obiettivo, non meccanismo, ed è la sola classe che il
+protocollo mi vieta di decidere.
+
+**Gate**: tsc pulito · vitest **681 passed | 10 skipped** (erano 676) ·
+`gpulimits.test.ts` 32/32. **ktest NON rieseguito, e lo dichiaro**: questa riga
+ha toccato solo commenti e un test, nessun kernel e nessun worker.
+
+**Resta la riga 5**, che è il lavoro vero e non è burocrazia: serve
+strumentazione **nuova** — banda per segmento, workgroup in volo per dispatch
+(il motore non li misura da nessuna parte), TFLOP/s sostenuti contro il picco
+9,26 misurato in riga 1. È la misura che deve spiegare **perché siamo a 32.265
+ms mentre la proiezione della riga 1 dava un pavimento di ~8.665**: o esiste un
+quarto collo che nessuno ha nominato, o quella proiezione era ottimistica.
