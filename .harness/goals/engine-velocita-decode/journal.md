@@ -472,3 +472,99 @@ costruzione e c'è il test che lo dimostra.
 3. **Il floor test FMA** e i casi ktest di indirizzamento.
 4. **La misura su GLM E 35B** — la regola delle ≥ 2 famiglie. Il GLM fa
    `gemvAccumFast` k=0..3: stessa struttura, stesso collasso.
+
+---
+
+## it.7 — la combine legge i pesi dalla Sel; il cablaggio è specificato e NON iniziato
+
+### Fatto: `moeCombineWgsl({ weightsFromSel: true })`
+
+Il kfan scrive gli slot; qualcuno deve sommarli. La combine esistente prende i
+pesi da un `wBuf: array<f32>` esplicito — che sul 35B **non esiste**: i pesi di
+mixing stanno già in VRAM dentro la `Sel` che il motore scrive per ogni layer.
+Costruire il `wBuf` costerebbe **una `writeBuffer` per layer nel ciclo caldo, 40
+per token**, per ricopiare dati già sul device.
+
+La variante li legge da lì: `selBuf[moeIdx.selIdx + k].w`. Diff completo contro
+la versione a `wBuf`: le due struct, due binding (`selBuf` a 3, `moeIdx` a 4) e
+il termine del peso. **Nient'altro** — caso [8], per normalizzazione.
+
+**È M = 1 per costruzione, ed è dichiarato**: l'indirizzo `selIdx + k` copre i
+topK contigui di UN (riga, layer); per M > 1 servirebbe `nMoeLayer` per saltare
+di riga in riga e il kernel non ce l'ha. Chi dispaccia usa `y = 1`. Il prefill a
+chunk continua col `wBuf` esplicito — caso [9]: il default è invariato e il GLM
+non cambia.
+
+**EVIDENZA**: `npx vitest run` **1062 passed | 10 skipped** (+4 casi) ·
+`npx tsc --noEmit` exit 0.
+
+### NON fatto, e la ragione: il cablaggio non entra in questa iterazione
+
+*Pre-limit hand-back del protocollo, con il dubbio concreto invece che
+generico.* Ho letto la zona (`q35gpumodel.ts:1441-1490`, `:1852-1857`,
+`:2150-2160`, `:2830-2835`) e il cablaggio **non è il `for k2` da solo**:
+
+1. i buffer `gateE`/`upE`/`moeAcc` sono **condivisi da TRE path di encode** —
+   il one-pass (`:1852`), `encodeExperts` del decode (`:2154`) e il prefill per
+   riga (`:2832`). Il kfan ne vuole versioni per-k (`topK × dE` e `topK × d`);
+   allargare quelli condivisi tocca anche i due path che non devono cambiare;
+2. servono **tre pipeline nuove per classe di expert** (`mkExpertClass`,
+   `:1450-1461`) più i bind group;
+3. il `pSilu` va dispacciato su `topK × dE` invece che `dE`;
+4. e nulla di tutto ciò è verificabile senza GPU.
+
+**Un cablaggio a metà lascerebbe l'albero rotto per la prossima iterazione**, ed
+è il caso in cui il protocollo dice di fermarsi sul confine pulito. L'albero è
+verde e committato.
+
+### LA SPECIFICA DEL CABLAGGIO, perché la prossima iterazione esegua e non ri-derivi
+
+**Additivo**: buffer e pipeline NUOVI accanto agli esistenti, i tre path
+attuali intoccati finché la misura non promuove il kfan.
+
+    buffer nuovi (per il solo path decode)
+      gateK   topK * dE * 4      (8 * 512 * 4  =  16 KB)
+      upK     topK * dE * 4      (16 KB)
+      ySlots  topK * d  * 4      (8 * 2048 * 4 =  64 KB)
+      — trascurabili accanto agli 11,17 GB d'arena
+
+    in mkExpertClass (`:1450`), per ogni classe:
+      pGateK = gemvQ4KWgsl({ K: d,  N: dE, arena: kar(L.gate), kfan: {nUsed: topK} })
+      pUpK   = gemvQ4KWgsl({ K: d,  N: dE, arena: kar(L.up),   kfan: {nUsed: topK} })
+      pDownK = (dk === "q6_K" ? gemvQ6KWgsl : gemvQ4KWgsl)
+               ({ K: dE, N: d, arena: kar(L.down), kfan: {nUsed: topK} })
+      bgGateK = bg(xn, gateK) · bgUpK = bg(xn, upK) · bgDownK = bg(gateK, ySlots)
+      — NB: `bg()` (`:1436`) prende (src, dst) e lega arena+selBuf+moeIdx: la
+        firma regge così com'è, cambia solo il buffer di destinazione
+
+    pSiluK    = pipe(siluMulWgsl(topK * dE))     // elementwise: basta la taglia
+    bgSiluK   = mkBg(pSiluK, [gateK, upK])
+    pCombine  = pipe(moeCombineWgsl({ D: d, nUsed: topK, weightsFromSel: true }))
+    bgCombine = mkBg(pCombine, [x, moeAcc, ySlots,
+                                selBuf, {buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES}])
+      — `sM` = `moeAcc`, che a quel punto contiene GIÀ lo shexp (l'axpy di
+        `:1184`); `xM` = `x`. La combine fa `x += moeAcc + Σ_k w·y`, che è
+        esattamente ciò che oggi fanno il down accumulante + `pAdd`.
+
+    encodeExperts, versione kfan — da 33 dispatch per layer a 5:
+      disp(E.pGateK, E.bgGateK, [dE, 1, topK], dyn0)
+      disp(E.pUpK,   E.bgUpK,   [dE, 1, topK], dyn0)
+      disp(pSiluK,   bgSiluK,   [ceil(topK*dE/64), 1, 1])
+      disp(E.pDownK, E.bgDownK, [gg2[0], gg2[1], topK], dyn0)
+      disp(pCombine, bgCombine, [ceil(d/64), 1, 1])
+      — `dyn0` = l'offset dinamico di **k = 0** del layer: il kernel ci somma
+        `wid.z`. Oggi `dyn` è calcolato per ogni k2 (`:2152`); qui serve solo
+        quello di k2 = 0.
+      — 5 × 40 = **200 dispatch/token** contro i 1.320 di adesso.
+
+**Il gate che questo cablaggio deve passare**: `pAdd` sparisce dal path (la
+combine fa anche il `+=`), quindi **`bgAddRes` non va più dispacciato nel ramo
+kfan** — dispacciarlo sommerebbe `moeAcc` due volte. È il primo errore da
+cercare se il primo run dà numeri doppi.
+
+### Cosa resta della riga 2c
+
+1. Il cablaggio qui sopra.
+2. Il floor test FMA (rischio isolato in it.3).
+3. I casi ktest di indirizzamento su GPU vera.
+4. La misura su GLM E 35B — la regola delle ≥ 2 famiglie.

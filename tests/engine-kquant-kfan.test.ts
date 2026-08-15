@@ -131,3 +131,51 @@ describe("GEMV K-quant — il modo kfan non tocca l'aritmetica", () => {
     expect(gath).not.toContain("selBuf");
   });
 });
+
+// ————————————————————————————————————————————————————————————————————————
+// La combine che il kfan consuma (goal engine-velocita-decode, riga 2c).
+//
+// Il kfan scrive gli slot; qualcuno deve sommarli. Sul 35B i pesi di mixing
+// stanno GIA' in VRAM dentro la `Sel` che il motore scrive per ogni layer:
+// farli ricopiare in un `wBuf` a parte costerebbe una `writeBuffer` per layer
+// nel ciclo caldo — 40 per token — per dati che sono gia' sul device.
+// La variante `weightsFromSel` li legge da li'.
+import { moeCombineWgsl } from "../src/engine/kernels/wgsl";
+
+describe("moeCombine — la variante che legge i pesi dalla Sel", () => {
+  it("[8] l'unica differenza aritmetica e' DA DOVE viene il peso", () => {
+    const wbuf = moeCombineWgsl({ D: 2048, nUsed: 8 });
+    const sel = moeCombineWgsl({ D: 2048, nUsed: 8, weightsFromSel: true });
+    // normalizzata, la variante sel E' quella a wBuf
+    const norm = sel
+      .replace("struct Sel { id: u32, slot: u32, w: f32, flags: u32 }\nstruct MoeIdx { selIdx: u32, tableBase: u32, moeLayer: u32, pad: u32 }\n@group(0) @binding(3) var<storage, read> selBuf: array<Sel>;\n@group(0) @binding(4) var<uniform> moeIdx: MoeIdx;",
+        "@group(0) @binding(3) var<storage, read> wBuf: array<f32>;")
+      .replace("selBuf[moeIdx.selIdx + k].w", "wBuf[m * N_USED + k]");
+    expect(norm).toBe(wbuf);
+  });
+
+  it("[9] il default e' invariato: il GLM continua a usare il wBuf esplicito", () => {
+    expect(moeCombineWgsl({ D: 64, nUsed: 4 })).toBe(moeCombineWgsl({ D: 64, nUsed: 4, weightsFromSel: false }));
+    expect(moeCombineWgsl({ D: 64, nUsed: 4 })).toContain("wBuf");
+    expect(moeCombineWgsl({ D: 64, nUsed: 4 })).not.toContain("selBuf");
+  });
+
+  it("[10] l'ORDINE delle somme resta k crescente — e' il gate di bit-identita'", () => {
+    // il decode di oggi (encodeExperts, `for k2` ascendente) somma i k in
+    // quest'ordine: se la combine lo cambiasse, i near-tie dell'argmax
+    // potrebbero flippare e la bit-identita' salterebbe
+    for (const sel of [false, true]) {
+      const src = moeCombineWgsl({ D: 2048, nUsed: 8, weightsFromSel: sel });
+      expect(src).toContain("for (var k = 0u; k < N_USED; k = k + 1u)");
+      expect(src).toContain("var t = sM[m * D + i];"); // si parte dallo shexp
+    }
+  });
+
+  it("[11] la variante sel indicizza i topK CONTIGUI di un (riga, layer)", () => {
+    const sel = moeCombineWgsl({ D: 2048, nUsed: 8, weightsFromSel: true });
+    // stesso indirizzo che il kfan usa per la Sel: selIdx + k
+    expect(sel).toContain("selBuf[moeIdx.selIdx + k].w");
+    // ed e' M=1 per costruzione: chi dispaccia usa y = 1 (documentato)
+    expect(sel).toContain("@group(0) @binding(4) var<uniform> moeIdx: MoeIdx;");
+  });
+});

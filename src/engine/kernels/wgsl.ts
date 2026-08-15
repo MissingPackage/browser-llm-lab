@@ -3529,14 +3529,32 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 
 // combine per riga: xM[m] += shexp[m] + Σ_k w[m][k]·y[m][k], somme in ordine k
 // — la stessa catena del decode (v. commento di famiglia). grid: (ceil(D/64), M).
-export function moeCombineWgsl(opts: { D: number; nUsed?: number }): string {
-  const { D } = opts;
+export function moeCombineWgsl(opts: { D: number; nUsed?: number; weightsFromSel?: boolean }): string {
+  const { D, weightsFromSel } = opts;
   const nUsed = opts.nUsed ?? 4;
+  // VARIANTE `weightsFromSel` (goal engine-velocita-decode, riga 2c): il peso
+  // arriva dalla `Sel` che il motore ha GIA' scritto in VRAM per il layer,
+  // invece che da un `wBuf` a parte. Serve al kfan del decode: senza, ogni
+  // layer pagherebbe una `writeBuffer` in piu' nel ciclo caldo — 40 per token
+  // — per ricopiare pesi che stanno gia' sul device.
+  //
+  // SOLO M = 1 (il decode). L'indirizzo e' `moeIdx.selIdx + k`, cioe' i topK
+  // contigui di UN (riga, layer) (`selIdx = (row*nMoeLayer + m)*topK + k`,
+  // `q35gpumodel.ts:1377`). Per M > 1 servirebbe anche `nMoeLayer` per saltare
+  // di riga in riga, e il kernel non ce l'ha: chi dispaccia questa variante usa
+  // `y = 1`. Il prefill a chunk continua a usare il `wBuf` esplicito.
+  const wTerm = weightsFromSel ? "selBuf[moeIdx.selIdx + k].w" : "wBuf[m * N_USED + k]";
+  const wBind = weightsFromSel
+    ? `${SEL_STRUCT_WGSL}
+${MOE_IDX_STRUCT_WGSL}
+@group(0) @binding(3) var<storage, read> selBuf: array<Sel>;
+@group(0) @binding(4) var<uniform> moeIdx: MoeIdx;`
+    : "@group(0) @binding(3) var<storage, read> wBuf: array<f32>;";
   return `
 @group(0) @binding(0) var<storage, read_write> xM: array<f32>;
 @group(0) @binding(1) var<storage, read> sM: array<f32>;
 @group(0) @binding(2) var<storage, read> ySlots: array<f32>;
-@group(0) @binding(3) var<storage, read> wBuf: array<f32>;
+${wBind}
 const D = ${D}u;
 const N_USED = ${nUsed}u;
 @compute @workgroup_size(64)
@@ -3546,7 +3564,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   let m = wid.y;
   var t = sM[m * D + i];
   for (var k = 0u; k < N_USED; k = k + 1u) {
-    t = t + wBuf[m * N_USED + k] * ySlots[(m * N_USED + k) * D + i];
+    t = t + ${wTerm} * ySlots[(m * N_USED + k) * D + i];
   }
   xM[m * D + i] = xM[m * D + i] + t;
 }`;
