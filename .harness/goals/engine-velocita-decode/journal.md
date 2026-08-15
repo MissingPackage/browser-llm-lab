@@ -855,3 +855,84 @@ la funzione obiettivo. Va al PI.
 - Primo termine misurato: `ssmGemv` 6,98 ms/token (era `expert`).
 - Secondo reperto non toccato: `router` 2,88 ms/token per un top-8 su 256,
   72 µs a layer — sproporzionato.
+
+---
+
+## it.13 — riga 2d, verifica di riuso: **il kernel non va scritto, va instradato**
+
+Il done-when della riga pretende il riuso PRIMA della scrittura. La risposta è
+netta e viene dagli artefatti, non dalla prosa della consegna (che su un punto
+si è già rivelata sbagliata, §4.4c in it.3).
+
+### Cos'è `ssmGemv`
+
+`q35gpumodel.ts:1071`, `mark("ssmGemv")` copre **quattro GEMV per layer
+DeltaNet**: `attn_qkv`, `attn_gate`, `ssm_beta`, `ssm_alpha`. Il 35B ha 30 layer
+DeltaNet su 40 (`full_attention_interval: 4`) — coerente col contatore della
+sonda, 30 pass/token. **120 GEMV per token, 6,98 ms = ~58 µs l'una.** Non è
+overhead di dispatch (8,65 µs): è lavoro vero, fatto male.
+
+### La forma veloce ESISTE, è in produzione, ed è misurata — non è wired
+
+Dal banco della fase 0 di `engine-kquant`
+(`results/microbench/kquant-fase0-4090-linux-2026-08-14T19-29-20-014Z.json`),
+**Q8_0 `[2048, 4096]`, M = 1** — cioè esattamente il regime del decode:
+
+    base-batch-z (cio' che la produzione emette)   0,2278 ms
+    splitk-idot                                    0,0698 ms   = 3,26x
+    splitk-f32                                     0,0710 ms   = 3,21x
+
+Il kernel è **già portato in produzione** (`wgsl.ts`, sezione «PREFILL GEMM …
+SPLIT-K — port dal banco») e **ktest-ato su GPU vera** dalla riga 4 di
+`engine-kquant`. Non c'è aritmetica da scrivere.
+
+**Perché il decode non lo usa**: in `gemvB` (`q35gpumodel.ts:900`) tutta la
+rotta veloce sta dentro `if (prefillPart !== null)` — **è una via di prefill per
+costruzione**. Il decode cade sul ramo dopo, che è la forma lenta e giusta.
+Il piano (`prefillgemmplan.ts`) è già la sede unica della rotta, e già dichiara
+che `q8_0` non è instradato con la sua ragione.
+
+**Quindi la riga 2d non è un lavoro di kernel: è estendere al decode una rotta
+che esiste, con il piano che già la decide.** È il riuso nella forma più pura
+disponibile, ed è globale per costruzione — la rotta serve 4B, 9B e 35B insieme
+perché è il piano a sceglierla, non il chiamante.
+
+### Il vincolo, e va sulla SHAPE non sulla famiglia
+
+Verificato sull'header dump del 35B (`q35-header-dump-2026-08-10.json`,
+`meta`) e sul codice (`q35gpumodel.ts:439`, `:615`):
+
+    attn_qkv    N = qkvDim = (2·linKHead + linVHead)·linHeadDim   GRANDE
+    attn_gate   N = ssm.inner_size = 4096                          GRANDE
+    ssm_beta    N = linVHead                                       PICCOLO
+    ssm_alpha   N = linVHead                                       PICCOLO
+
+**Due dei quattro sono degeneri per la forma split-K**, che ha 64 righe per
+workgroup: con N piccolo il kernel gira quasi a vuoto. È lo stesso reperto che
+la consegna §4.1 aveva registrato per il 4B (48 siti `ssm_alpha`/`ssm_beta` con
+N=32) — **e ora si vede che vale anche sul 35B**, cioè non era una peculiarità
+di un modello: è la shape di quei due tensori in questa architettura.
+
+**Conseguenza operativa**: il predicato va sulla **shape**, e girare `wired` per
+famiglia romperebbe il 4B. `prefillGemmCheck` oggi guarda kind, K e fette ma
+**non N** — è la prima trappola dell'HANDOFF, e questa riga la incontra per
+davvero invece che in teoria.
+
+**E la buona notizia sui byte**: i due tensori grandi sono ~tutto il peso dei
+quattro; i due piccoli sono trascurabili. Coprire i due ammissibili cattura
+quasi tutti i 6,98 ms.
+
+### Cosa fa la prossima iterazione
+
+1. `prefillGemmCheck` impara a guardare **N** (il predicato mancante).
+2. `q8_0` instradato, con il predicato di shape che esclude i siti a N piccolo —
+   e un test che lo verifica **sul 4B**, dove l'esclusione è quella che conta.
+3. La rotta esce da `if (prefillPart !== null)`: il decode chiede al piano
+   come fa il prefill. **Questo è il pezzo globale**: una sede sola, tre
+   famiglie.
+4. Misura su 35B, 4B e 9B — ereditata, non riscritta.
+
+**EVIDENZA**: nessun codice, nessun test nuovo, albero invariato e verde
+(1069 passed, tsc exit 0 da it.11). Questa iterazione ha prodotto la verifica
+di riuso che il done-when chiedeva, e ha evitato di scrivere un kernel che
+esisteva già.
