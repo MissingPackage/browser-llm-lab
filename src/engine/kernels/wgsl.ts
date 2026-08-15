@@ -2158,11 +2158,57 @@ export function kquantWorkSplit(sbPerRow: number, groupsPerSb: number): {
  */
 export interface KGatherOpts { nUsed: number }
 
+/**
+ * KFAN (goal engine-velocita-decode, riga 2c): `wid.z` = **il k del top-K**,
+ * non la riga. Un dispatch solo copre tutti gli expert selezionati dal token
+ * invece di uno per expert.
+ *
+ * PERCHE' ESISTE, con i numeri che l'hanno chiesto. Sul token pulito del 35B
+ * (`q35-optimistic-35b-cleantoken-2026-08-15.json`) il decode fa **1.320
+ * dispatch** — (8 expert x 4 op) + 1 add, per 40 layer — in **40,753 ms**, cioe'
+ * ~31 us l'uno e **13,9 GB/s effettivi** sui 566 MB di pesi expert per token.
+ * A 576 GB/s quegli stessi byte costerebbero **0,98 ms**: il decode e' **41x
+ * sopra il pavimento di banda**, e non e' ne' compute- ne' bandwidth-bound —
+ * e' dispatch/occupancy-bound (32-64 workgroup su 128 SM). Col kfan i dispatch
+ * scendono a **200** e l'occupazione per dispatch va x8.
+ *
+ * NON e' `batch`, ed e' per questo che e' un modo A SE' invece di un
+ * allentamento del divieto `batch && arena`: `batch` mette le RIGHE su `wid.z`
+ * (x e y diventano matrici [M,K] e [M,N]) e in regime d'arena resta vietato,
+ * perche' la `Sel` e' per (riga, layer, k) e una sola non basterebbe. Il kfan
+ * tiene UNA riga e mette i k su `wid.z`, che e' l'asse per cui le entry di
+ * `Sel` sono gia' contigue (`selIdx = (row*nMoeLayer + m)*topK + k`,
+ * `q35gpumodel.ts:1377`) — quindi `selBuf[moeIdx.selIdx + wid.z]`.
+ *
+ * SCRIVE NELLO SLOT, non accumula, e non e' un'alternativa: 8 dispatch che
+ * facessero `y[r] += w*partial` nello stesso dispatch **corrono**. Col
+ * contratto a slot ogni k scrive il suo, e `moeCombineWgsl` somma `w*y` in
+ * ordine k — che a M=1 con `nUsed = topK` e' **esattamente** la catena di somme
+ * del decode di oggi (`encodeExperts`, `for k2` ascendente): bit-identico per
+ * costruzione, non "atteso identico".
+ *
+ * IL MISS. Il ramo d'arena normale esce con `if (!ok) { return; }`, e col
+ * peso-in-accumulo e' giusto: un expert mancante contribuisce zero. Con gli
+ * slot **no**: uscire lascerebbe lo slot con il valore del token precedente e
+ * la combine lo sommerebbe. Nel kfan non si esce — si scrive **zero**
+ * (`select(0.0, partial[0], ok)`), che e' lo stesso contributo nullo ma
+ * DICHIARATO. E' la stessa filosofia del degrado definito di `arenaSlotWgsl`.
+ */
+export interface KFanOpts { nUsed: number }
+
 /** le combinazioni di modi che non esistono, con la ragione nel messaggio */
 function assertGatherCombo(
   fam: string,
-  o: { arena: boolean; accum?: boolean; batch?: boolean; gather?: KGatherOpts },
+  o: { arena: boolean; accum?: boolean; batch?: boolean; gather?: KGatherOpts; kfan?: KFanOpts },
 ): void {
+  if (o.gather && o.kfan) throw new Error(`${fam}: gather e kfan non si combinano — userebbero entrambi wid.z (righe l'uno, k l'altro)`);
+  if (o.kfan) {
+    if (!o.arena) throw new Error(`${fam}: kfan esige il regime d'arena — l'expert di ogni k lo risolve Sel, e senza arena non c'e' Sel`);
+    if (o.batch === true) throw new Error(`${fam}: kfan e batch non si combinano — userebbero entrambi wid.z`);
+    if (o.accum === true) throw new Error(`${fam}: kfan e accum non si combinano — 8 k nello stesso dispatch che accumulano su y[r] CORRONO; il contratto a slot esiste per questo`);
+    const n = o.kfan.nUsed;
+    if (!Number.isInteger(n) || n < 1) throw new Error(`${fam}: kfan.nUsed non valido (${n})`);
+  }
   if (!o.gather) return;
   if (o.arena) {
     throw new Error(`${fam}: gather e arena non si combinano — nel gather l'expert lo fissa il dispatch (bindings a sotto-range), l'arena lo risolve da Sel`);
@@ -2213,12 +2259,13 @@ function assertGatherCombo(
  * confrontando il corpo generato con quello del kernel senza gather.
  */
 export function gemvQ4KWgsl(opts: {
-  K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean; gather?: KGatherOpts;
+  K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean;
+  gather?: KGatherOpts; kfan?: KFanOpts;
 }): string {
-  const { K, N, arena, accum, batch, gather } = opts;
+  const { K, N, arena, accum, batch, gather, kfan } = opts;
   if (batch === true && arena) throw new Error("q4K: batch e arena non si combinano (l'arena e' il path expert, il batch il prefill)");
   if (accum === true && !arena) throw new Error("q4K: accum esige il regime d'arena (il peso viene da Sel)");
-  assertGatherCombo("q4K", { arena: arena !== undefined, accum, batch, gather });
+  assertGatherCombo("q4K", { arena: arena !== undefined, accum, batch, gather, kfan });
   if (K % 256 !== 0) throw new Error("gemvQ4K: K non multiplo di 256");
   const sbPerRow = K / 256;
   // OCCUPAZIONE (fase 4-bis, it.22). Prima l'unita' di lavoro era il
@@ -2255,10 +2302,10 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`
 fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   // preambolo di main: nel regime d'arena lo slot di `Sel` diventa (binding, base)
   const pre = arena
-    ? `${arenaSlotWgsl}
+    ? `${arenaSlotWgsl(kfan ? "moeIdx.selIdx + wid.z" : undefined)}
   gBi = bi;
-  gBase = base + ${arena.tensorWords}u;
-  if (!ok) { return; }`
+  gBase = base + ${arena.tensorWords}u;${kfan ? "" : `
+  if (!ok) { return; }`}`
     : "";
   // batch (fase 4): wid.z = riga; x e y sono matrici [M, K] e [M, N].
   // gather (engine-velocita-decode riga 2): wid.z indicizza `gather`, che porta
@@ -2272,9 +2319,15 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   const xRowPre = gather
     ? `\n  let gk = gather[wid.z];\n  let mRow = gk & 0xffffu;\n  let kslot = gk >> 16u;\n  let xR = mRow * ${K}u;`
     : batch ? `\n  let xR = wid.z * ${K}u;` : "";
-  const tailAcc = accum === true
-    ? `y[${YR}r] = y[${YR}r] + sel.w * partial[0];`
-    : `y[${YR}r] = partial[0];`;
+  const tailAcc = kfan
+    // slot `wid.z` della riga 0 (il decode e' M=1): stesso layout che
+    // `moeCombineWgsl` legge, `(m*nUsed + k)*N + r` con m = 0. Sul miss si
+    // scrive ZERO invece di uscire: uscire lascerebbe lo slot col valore del
+    // token precedente e la combine lo sommerebbe.
+    ? `y[wid.z * ${N}u + r] = select(0.0, partial[0], ok);`
+    : accum === true
+      ? `y[${YR}r] = y[${YR}r] + sel.w * partial[0];`
+      : `y[${YR}r] = partial[0];`;
   return `
 ${head}
 const SB_PER_ROW = ${sbPerRow}u;
@@ -2416,12 +2469,13 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 // Q6_K: 53 word/superblocco (210 B + 2 pad) = [ql 128 B][qh 64 B][scales int8
 // 16 B][d f16]. w = d·sc_int8·(q6 − 32), q6 = nibble | 2 bit alti.
 export function gemvQ6KWgsl(opts: {
-  K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean; gather?: KGatherOpts;
+  K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean;
+  gather?: KGatherOpts; kfan?: KFanOpts;
 }): string {
-  const { K, N, arena, accum, batch, gather } = opts;
+  const { K, N, arena, accum, batch, gather, kfan } = opts;
   if (batch === true && arena) throw new Error("q6K: batch e arena non si combinano (l'arena e' il path expert, il batch il prefill)");
   if (accum === true && !arena) throw new Error("q6K: accum esige il regime d'arena (il peso viene da Sel)");
-  assertGatherCombo("q6K", { arena: arena !== undefined, accum, batch, gather });
+  assertGatherCombo("q6K", { arena: arena !== undefined, accum, batch, gather, kfan });
   // OCCUPAZIONE (fase 4-bis, it.22): stessa correzione del q4_K. Qui il
   // superblocco si divide in 2 gruppi da 128 e ogni giro di `l` copre 4 quant;
   // l'unita' diventa un pezzo da `lpu6` valori di l dentro un gruppo, scelto
@@ -2454,10 +2508,10 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`
 fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   // preambolo di main: nel regime d'arena lo slot di `Sel` diventa (binding, base)
   const pre = arena
-    ? `${arenaSlotWgsl}
+    ? `${arenaSlotWgsl(kfan ? "moeIdx.selIdx + wid.z" : undefined)}
   gBi = bi;
-  gBase = base + ${arena.tensorWords}u;
-  if (!ok) { return; }`
+  gBase = base + ${arena.tensorWords}u;${kfan ? "" : `
+  if (!ok) { return; }`}`
     : "";
   // batch (fase 4): wid.z = riga; x e y sono matrici [M, K] e [M, N].
   // gather (engine-velocita-decode riga 2): wid.z indicizza `gather`, che porta
@@ -2471,9 +2525,15 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   const xRowPre = gather
     ? `\n  let gk = gather[wid.z];\n  let mRow = gk & 0xffffu;\n  let kslot = gk >> 16u;\n  let xR = mRow * ${K}u;`
     : batch ? `\n  let xR = wid.z * ${K}u;` : "";
-  const tailAcc = accum === true
-    ? `y[${YR}r] = y[${YR}r] + sel.w * partial[0];`
-    : `y[${YR}r] = partial[0];`;
+  const tailAcc = kfan
+    // slot `wid.z` della riga 0 (il decode e' M=1): stesso layout che
+    // `moeCombineWgsl` legge, `(m*nUsed + k)*N + r` con m = 0. Sul miss si
+    // scrive ZERO invece di uscire: uscire lascerebbe lo slot col valore del
+    // token precedente e la combine lo sommerebbe.
+    ? `y[wid.z * ${N}u + r] = select(0.0, partial[0], ok);`
+    : accum === true
+      ? `y[${YR}r] = y[${YR}r] + sel.w * partial[0];`
+      : `y[${YR}r] = partial[0];`;
   return `
 ${head}
 const SB_PER_ROW = ${sbPerRow}u;
@@ -3086,8 +3146,8 @@ function arenaHeadWgsl(a: Pick<ArenaOpts, "nBuf" | "slabWords" | "slabsPerBuf">,
  * CPU fa `ensure` prima di riempire Sel); esiste perche' il degrado sia
  * DEFINITO — niente uscita, non un indirizzo a caso.
  */
-const arenaSlotWgsl = `
-  let sel = selBuf[moeIdx.selIdx];
+const arenaSlotWgsl = (selIdx = "moeIdx.selIdx"): string => `
+  let sel = selBuf[${selIdx}];
   let ok = sel.slot != 0xffffffffu;
   let slot = select(0u, sel.slot, ok);
   let bi = slot / SLABS_PER_BUF;
@@ -3114,7 +3174,7 @@ export function pairGemvSiluFastWgsl(opts: { K: number; N: number; arena?: Arena
 @group(0) @binding(4) var<storage, read> x: array<f32>;
 @group(0) @binding(5) var<storage, read_write> out: array<f32>;`;
   const pre = arena
-    ? `${arenaSlotWgsl}
+    ? `${arenaSlotWgsl()}
   let gQ4 = (base + ${arena.gateQsWords}u) >> 2u;
   let gSc = base + ${arena.gateScWords}u;
   let uQ4 = (base + ${arena.upQsWords}u) >> 2u;
@@ -3217,7 +3277,7 @@ export function gemvAccumFastWgsl(opts: { kind: "q4_0" | "q4_1"; K: number; N: n
 @group(0) @binding(3) var<storage, read_write> y: array<f32>;
 @group(0) @binding(4) var<storage, read> accScale: array<f32>;`;
   const pre = arena
-    ? `${arenaSlotWgsl}
+    ? `${arenaSlotWgsl()}
   let qsW4 = (base + ${arena.qsWords}u) >> 2u;
   let scW = base + ${arena.scalesWords}u;`
     : "";

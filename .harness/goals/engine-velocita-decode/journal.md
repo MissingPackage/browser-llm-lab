@@ -406,3 +406,69 @@ misurati, prima del codice.*
 
 **EVIDENZA**: nessun test nuovo (nessun codice). `vitest` 1043 passed e `tsc`
 exit 0 restano quelli di it.4, albero invariato.
+
+---
+
+## it.6 — riga 2c: `kfan` esiste, tre righe di differenza e zero di aritmetica
+
+Modo `kfan` nei due GEMV K-quant in regime d'arena. **Introdotto come modo A SÉ,
+non allentando il divieto `batch && arena`** — che per le righe resta giusto: in
+`batch` x e y diventano matrici [M,K] e [M,N] e una `Sel` sola non basterebbe,
+mentre il kfan tiene UNA riga e mette i k su `wid.z`, che è l'asse per cui le
+entry di `Sel` sono già contigue.
+
+Diff generato, accumulante contro kfan (q4_K, arena, K=2048 N=512) — **per
+intero**:
+
+    let sel = selBuf[moeIdx.selIdx];       →  selBuf[moeIdx.selIdx + wid.z]
+    if (!ok) { return; }                    →  (rimosso: v. il miss)
+    y[r] = y[r] + sel.w * partial[0];       →  y[wid.z*512u + r]
+                                               = select(0.0, partial[0], ok)
+
+**Nient'altro.** `tests/engine-kquant-kfan.test.ts` (15 casi) lo pretende con la
+normalizzazione di it.4: si riporta il kfan alla forma accumulante e si chiede
+uguaglianza **esatta**; una quarta riga di differenza fa cadere il test.
+
+### Il punto di correttezza che il kfan introduce, e che non era ovvio
+
+Il ramo d'arena esce con `if (!ok) { return; }` sul miss, ed **è giusto quando
+il contributo si accumula**: un expert mancante somma zero. **Con gli slot no.**
+Uscire lascerebbe lo slot col valore del **token precedente**, e `moeCombine` lo
+sommerebbe: nessun crash, nessun NaN, nessun accesso fuori range — solo il
+modello sbagliato, e solo sui token che hanno avuto un miss. È la classe di
+difetto che un gate a tolleranza non vede.
+
+Il kfan quindi **non esce**: scrive `select(0.0, partial[0], ok)`. Stesso
+contributo nullo, ma DICHIARATO — la stessa filosofia del degrado definito di
+`arenaSlotWgsl`. Il caso [3] del test lo verifica in tre modi (niente uscita
+anticipata, la `select` c'è, `ok` resta definito).
+
+### Perché la bit-identità qui è pretesa ESATTA e non a tolleranza
+
+A M=1 con `nUsed = topK`, `moeCombineWgsl` somma `Σ_k w[k]·y[k]` in ordine k
+crescente partendo da `sM` — che è **letteralmente** la catena di
+`encodeExperts` (`for k2 = 0..topK` ascendente, ogni down accumula il suo
+`sel.w * partial`). Stessi valori, stesso ordine, stessi f32. Resta il solo
+rischio di contrazione FMA, isolato in it.3, che ha il suo floor test.
+
+### Refactor incontrato sul path, fatto e non recintato
+
+`arenaSlotWgsl` era una costante con `selBuf[moeIdx.selIdx]` cablato. È
+diventata una funzione con l'indice come parametro (default invariato), e i
+quattro call site sono passati a `arenaSlotWgsl()`. Il testo emesso dai
+non-kfan è **identico** — caso [2] del test.
+
+**EVIDENZA**: `npx vitest run` **1058 passed | 10 skipped** (80 file, +15 casi)
+· `npx tsc --noEmit` exit 0. Nessuna GPU: il path in produzione è invariato per
+costruzione e c'è il test che lo dimostra.
+
+### Cosa resta della riga 2c
+
+1. **Il cablaggio**: `encodeExperts` (`q35gpumodel.ts:2090-2109`) emette oggi
+   `for k2` × 4 dispatch; deve diventare 4 dispatch con `z = topK` + la
+   combine. Serve il buffer degli slot (`topK × N` f32 per layer) e il bind
+   group con `y` = slot invece di `moeAcc`.
+2. **`moeCombineWgsl` cablata sul 35B** con `nUsed = 8`, M = 1.
+3. **Il floor test FMA** e i casi ktest di indirizzamento.
+4. **La misura su GLM E 35B** — la regola delle ≥ 2 famiglie. Il GLM fa
+   `gemvAccumFast` k=0..3: stessa struttura, stesso collasso.
