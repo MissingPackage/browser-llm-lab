@@ -25,7 +25,8 @@
 // il test la riverifica CONTRO quel testo, non contro se stessa.
 import {
   prefillGemmSplitsFor, prefillPartialFloats, prefillGemmWorkgroupStorageBytes,
-  PREFILL_SPLITS_UNSPLIT, PREFILL_GEMM_KINDS, isPrefillGemmKind, type PrefillGemmKind,
+  PREFILL_SPLITS_UNSPLIT, PREFILL_GEMM_KINDS, isPrefillGemmKind, prefillGemmWiring,
+  type PrefillGemmKind,
 } from "./kernels/wgsl";
 import type { PrefillDispatch, PrefillQuantKind } from "./prefillbytes";
 
@@ -95,8 +96,10 @@ export function prefillGemmCapsFor(s: PrefillGemmCapsSource): PrefillGemmCaps {
  *   legacy = M gemv replicate su `wid.z`, riuso dei pesi ZERO. E' cio' che il
  *            motore emette oggi, e resta l'unica via possibile dove il kernel
  *            veloce non c'e' (kind fuori da `PREFILL_GEMM_KINDS`), non si
- *            applica (K non multiplo dell'unita' del formato), o dove il
- *            contratto lo impone (M=1: vedi `PREFILL_M1_LEGACY`).
+ *            applica (K non multiplo dell'unita' del formato), NON E' CABLATO
+ *            (kind con `wired: false`: il kernel esiste ed e' misurato, ma
+ *            nessun sito di produzione ci passa), o dove il contratto lo impone
+ *            (M=1: vedi `PREFILL_M1_LEGACY`).
  */
 export type PrefillGemmVia = "idot" | "f32" | "legacy";
 
@@ -191,10 +194,36 @@ function checkGeom(o: { K: number; N: number; M: number }, who: string): void {
  * Il messaggio del kernel viene riportato COME STA dentro la ragione: e' gia'
  * scritto per essere letto da un umano, e riscriverlo qui sarebbe la stessa
  * duplicazione, spostata dalle soglie alle parole.
+ *
+ * DUE DOMANDE, NON UNA (da riga 4 del goal K-quant). «Esiste un kernel per
+ * questo formato?» e «quel kernel e' INSTRADATO in produzione?» erano la stessa
+ * domanda finche' ogni forma portata veniva anche cablata. Non lo sono piu': i
+ * kernel q4_K, q6_K e q8_0 stanno in `PREFILL_GEMM_KINDS` — sono portati,
+ * misurati e verificati — ma nessun sito ci passa, e chi lo dice e' il flag
+ * `wired` di `PREFILL_GEMM_SPEC`, che si legge QUI e in nessun altro posto.
+ * Sta qui e non nel kernel per la ragione di sempre: un secondo predicato di
+ * ammissibilita' fuori da questo file e' esattamente il difetto che i gate
+ * strutturali sorvegliano.
  */
 function kernelVerdict(o: {
   kind: PrefillQuantKind; K: number; N: number; M: number;
-}): { splits: number; kind: PrefillGemmKind } | { rejected: string } {
+}): { splits: number; kind: PrefillGemmKind }
+  | { rejected: string; from: "kernel" | "wiring" } {
+  // IL CABLAGGIO PRIMA DELLA GEOMETRIA, e nello stesso ordine con cui il kernel
+  // mette il formato prima del K: su un formato non cablato con K storto la
+  // ragione strutturale e' il cablaggio — il K sarebbe una risposta vera e
+  // inutile, perche' anche con K buono quel sito resterebbe legacy.
+  if (isPrefillGemmKind(o.kind)) {
+    const w = prefillGemmWiring(o.kind);
+    if (!w.wired) {
+      return {
+        from: "wiring",
+        rejected: `il formato "${o.kind}" ha il suo moltiplicatore multi-riga in produzione ed e' `
+          + `MISURATO, ma NON e' cablato: il piano instrada solo i kind con \`wired: true\` in `
+          + `PREFILL_GEMM_SPEC (kernels/wgsl.ts), e questo non lo e' — «${w.why}»`,
+      };
+    }
+  }
   // IL KIND CHE ARRIVA AL KERNEL E' QUELLO VERO. Prima qui c'era `o.kind as
   // "q4_0"`: una bugia innocua finche' il kernel accettava un formato solo, ma
   // appena ne accetta due quel cast fa contare blocchi da 32 dove l'unita' e'
@@ -206,7 +235,7 @@ function kernelVerdict(o: {
       kind: o.kind as PrefillGemmKind, K: o.K, N: o.N, M: o.M, splits: PREFILL_SPLITS_UNSPLIT,
     });
   } catch (e) {
-    return { rejected: e instanceof Error ? e.message : String(e) };
+    return { from: "kernel", rejected: e instanceof Error ? e.message : String(e) };
   }
   // Il kernel NON ha rifiutato ⇒ il kind e' uno dei suoi. Il type guard non e'
   // cerimonia: e' cio' che permette di passare il kind REALE a
@@ -214,6 +243,7 @@ function kernelVerdict(o: {
   // ESPORTATO dal kernel, non una copia locale.
   if (!isPrefillGemmKind(o.kind)) {
     return {
+      from: "kernel",
       rejected: `kind "${o.kind}" accettato dal contorno del kernel ma assente da `
         + `PREFILL_GEMM_KINDS (${PREFILL_GEMM_KINDS.join(", ")}): il predicato e l'elenco `
         + "sono usciti dal passo, e instradare qui vorrebbe dire indovinare la geometria",
@@ -246,12 +276,22 @@ export function planPrefillGemm(o: {
 
   const verdict = kernelVerdict(o);
   if ("rejected" in verdict) {
+    // DUE RIFIUTI DIVERSI, due ragioni diverse. Quello del KERNEL dice «questa
+    // shape non si moltiplica cosi'»; quello del CABLAGGIO dice «questa shape si
+    // moltiplicherebbe benissimo, ma in produzione non ci si passa». Dare a
+    // entrambi la stessa frase manderebbe in telemetria una diagnosi falsa: si
+    // leggerebbe un problema di geometria dove il kernel non c'entra niente.
     return {
       via: "legacy",
-      reason: `il moltiplicatore multi-riga di prefill NON accetta questa shape ⇒ si resta su legacy `
-        + `(M gemv replicate, riuso pesi zero) invece di inventare una forma non misurata. `
-        + `Il rifiuto arriva dal contorno del kernel — kernels/wgsl.ts, prefillGemmCheck, `
-        + `l'unico posto dove kind e geometria sono decisi: «${verdict.rejected}»`,
+      reason: verdict.from === "wiring"
+        ? `la via veloce di prefill NON e' cablata su questo formato ⇒ si resta su legacy `
+          + `(M gemv replicate, riuso pesi zero), che e' cio' che il motore emette oggi. `
+          + `Il rifiuto arriva dal FLAG DI CABLAGGIO, non dal contorno del kernel: la forma `
+          + `esiste ed e' misurata, semplicemente nessun sito ci passa — «${verdict.rejected}»`
+        : `il moltiplicatore multi-riga di prefill NON accetta questa shape ⇒ si resta su legacy `
+          + `(M gemv replicate, riuso pesi zero) invece di inventare una forma non misurata. `
+          + `Il rifiuto arriva dal contorno del kernel — kernels/wgsl.ts, prefillGemmCheck, `
+          + `l'unico posto dove kind e geometria sono decisi: «${verdict.rejected}»`,
       splits: 0, partialFloats: 0, wgStorageBytes: 0, xqU32: 0, xscF32: 0,
     };
   }

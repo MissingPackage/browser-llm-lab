@@ -33,12 +33,16 @@ import {
   repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
   dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ4_K, dequantQ5_K, dequantQ6_K,
   Q4_1_BLOCK_BYTES, Q4_K_BLOCK_BYTES, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES,
-  Q5_K_BLOCK_WEIGHTS, Q8_0_BLOCK_WEIGHTS, Q4_1_BLOCK_WEIGHTS,
+  Q5_K_BLOCK_WEIGHTS, Q8_0_BLOCK_WEIGHTS, Q4_1_BLOCK_WEIGHTS, Q4_K_BLOCK_WEIGHTS,
+  Q6_K_BLOCK_WEIGHTS, Q8_0_BLOCK_BYTES,
 } from "../quant";
 import {
   prefillQuantXQ8Wgsl, prefillQuantXGrid, prefillSplitKCombineWgsl, prefillCombineGrid,
   prefillGemmQ5KSplitKIdotWgsl, prefillGemmQ5KSplitKWgsl, prefillGemmGrid,
   prefillGemmQ41SplitKIdotWgsl, prefillGemmQ41SplitKWgsl,
+  prefillGemmQ4KSplitKIdotWgsl, prefillGemmQ4KSplitKWgsl,
+  prefillGemmQ6KSplitKIdotWgsl, prefillGemmQ6KSplitKWgsl,
+  prefillGemmQ80SplitKIdotWgsl, prefillGemmQ80SplitKWgsl,
   type PrefillGemmOpts,
 } from "../kernels/wgsl";
 import {
@@ -48,6 +52,15 @@ import {
   PREFILL_Q41_KTEST_CASE,
   PREFILL_GEMM_Q41_IDOT_REL_TOL, PREFILL_GEMM_Q41_IDOT_ABS_TOL,
   PREFILL_GEMM_Q41_F32_REL_TOL, PREFILL_GEMM_Q41_F32_ABS_TOL,
+  PREFILL_Q4K_KTEST_CASE,
+  PREFILL_GEMM_Q4K_IDOT_REL_TOL, PREFILL_GEMM_Q4K_IDOT_ABS_TOL,
+  PREFILL_GEMM_Q4K_F32_REL_TOL, PREFILL_GEMM_Q4K_F32_ABS_TOL,
+  PREFILL_Q6K_KTEST_CASE,
+  PREFILL_GEMM_Q6K_IDOT_REL_TOL, PREFILL_GEMM_Q6K_IDOT_ABS_TOL,
+  PREFILL_GEMM_Q6K_F32_REL_TOL, PREFILL_GEMM_Q6K_F32_ABS_TOL,
+  PREFILL_Q80_KTEST_CASE,
+  PREFILL_GEMM_Q80_IDOT_REL_TOL, PREFILL_GEMM_Q80_IDOT_ABS_TOL,
+  PREFILL_GEMM_Q80_F32_REL_TOL, PREFILL_GEMM_Q80_F32_ABS_TOL,
 } from "../prefillkquant";
 import { QWEN25_05B as S, GLM47_FLASH as G } from "../shape";
 import { createEngineDevice } from "../gpudevice";
@@ -3888,6 +3901,257 @@ async function testPrefillGemmQ41MultiRow(g: Gpu): Promise<KResult[]> {
   ];
 }
 
+/**
+ * BANCO DEL PREFILL GEMM Q4_K (riga 4 di engine-kquant) — gemello di
+ * `testPrefillGemmQ5KMultiRow`, e non per analogia: il q4_K E' il q5_K senza il
+ * piano del quinto bit. Stesso header (`d`, `dmin`, 12 byte di scale a 6 bit),
+ * stessa `get_scale_min_k4`, stessa aritmetica `d*sc*q - dmin*mn`, UN solo
+ * buffer di pesi (`repackKQuant`, come tutti i K-quant) e quindi le stesse due
+ * liste di binding: idot [blocks, xq, part, xsc], f32 [blocks, x, part].
+ *
+ * QUELLO CHE CAMBIA, e che questo banco esiste per misurare sul device:
+ *  - il superblocco e' da 144 B / 36 parole invece che 176 B / 44, e `qs` sta a
+ *    byte 16 — dove il q5_K tiene il suo `qh`. Un port che tenesse l'offset 48
+ *    leggerebbe dentro il superblocco successivo e compilerebbe lo stesso;
+ *  - i nibble sono i pesi INTERI, non la meta' bassa di un peso a 5 bit.
+ *
+ * IL KERNEL NON E' CABLATO (`wired: false` in `PREFILL_GEMM_SPEC`): il piano non
+ * ci instrada un dispatch e il 4B non ha un byte di q4_K. Questo banco e'
+ * l'unica cosa che dice se la forma che il goal 35B erediterà da' i numeri
+ * giusti su una GPU vera, e gira per quello — non perche' qualcosa ci passi.
+ *
+ * `fixScalesAt(src, Q4_K_BLOCK_BYTES, [1, 3])` sana gli esponenti f16 di `d` e
+ * `dmin` come fanno gia' `testGemvC2` e il banco q5_K per questo stesso header:
+ * byte casuali darebbero NaN/Inf e un confronto che non discrimina niente.
+ */
+async function testPrefillGemmQ4KMultiRow(g: Gpu): Promise<KResult[]> {
+  const { K, N, M, splits, seedBlocks, seedX } = PREFILL_Q4K_KTEST_CASE;
+  const opts: PrefillGemmOpts = { kind: "q4_K", K, N, M, splits };
+  const nBlocks = (K / Q4_K_BLOCK_WEIGHTS) * N;
+  const src = randBytes(nBlocks * Q4_K_BLOCK_BYTES, seedBlocks);
+  fixScalesAt(src, Q4_K_BLOCK_BYTES, [1, 3]); // d, dmin
+  const w = new Float32Array(nBlocks * Q4_K_BLOCK_WEIGHTS);
+  dequantQ4_K(src, 0, nBlocks, w);
+
+  const xs = randF32(M * K, seedX);
+  // Le attivazioni che vede il braccio INTERO: stessa aritmetica di
+  // `prefillQuantXQ8Wgsl` (amax/127 per blocco da 32), ri-espansa in f32 — cosi'
+  // il caso misura il KERNEL e non la quantizzazione.
+  const XB = Q8_0_BLOCK_WEIGHTS, XW = XB / 4;
+  const xq8 = new Float32Array(M * K);
+  for (let b = 0; b + XB <= xs.length; b += XB) {
+    let amax = 0;
+    for (let i = 0; i < XB; i++) amax = Math.max(amax, Math.abs(xs[b + i]));
+    const sc = amax / 127, inv = sc > 0 ? 1 / sc : 0;
+    for (let i = 0; i < XB; i++) {
+      xq8[b + i] = Math.max(-127, Math.min(127, Math.round(xs[b + i] * inv))) * sc;
+    }
+  }
+  const refOf = (act: Float32Array): Float32Array => {
+    const out = new Float32Array(M * N);
+    for (let m = 0; m < M; m++) {
+      for (let r = 0; r < N; r++) {
+        let acc = 0;
+        for (let i = 0; i < K; i++) acc += w[r * K + i] * act[m * K + i];
+        out[m * N + r] = acc;
+      }
+    }
+    return out;
+  };
+  const refIdot = refOf(xq8), refF32 = refOf(xs);
+
+  const blocks = g.buf(repackKQuant(src, 0, nBlocks, Q4_K_BLOCK_BYTES));
+  const x = g.buf(xs);
+  const nxb = M * (K / XB);
+  const xq = g.empty(nxb * XW * 4), xsc = g.empty(nxb * 4);
+  const part = g.empty(splits * M * N * 4), y = g.empty(M * N * 4);
+  const yBytes = M * N * 4;
+
+  await g.run(prefillQuantXQ8Wgsl({ K, M }), [x, xq, xsc], prefillQuantXGrid({ K, M }));
+  await g.run(prefillGemmQ4KSplitKIdotWgsl(opts), [blocks, xq, part, xsc], prefillGemmGrid(opts));
+  await g.run(prefillSplitKCombineWgsl({ N, M, splits }), [part, y], prefillCombineGrid({ N, M }));
+  const gotIdot = new Float32Array(await g.read(y, yBytes));
+
+  await g.run(prefillGemmQ4KSplitKWgsl(opts), [blocks, x, part], prefillGemmGrid(opts));
+  await g.run(prefillSplitKCombineWgsl({ N, M, splits }), [part, y], prefillCombineGrid({ N, M }));
+  const gotF32 = new Float32Array(await g.read(y, yBytes));
+
+  for (const b of [blocks, x, xq, xsc, part, y]) b.destroy();
+  return [
+    compare("prefill-gemm-q4k-multirow-idot", gotIdot, refIdot,
+      PREFILL_GEMM_Q4K_IDOT_REL_TOL, PREFILL_GEMM_Q4K_IDOT_ABS_TOL),
+    compare("prefill-gemm-q4k-multirow-f32", gotF32, refF32,
+      PREFILL_GEMM_Q4K_F32_REL_TOL, PREFILL_GEMM_Q4K_F32_ABS_TOL),
+  ];
+}
+
+/**
+ * BANCO DEL PREFILL GEMM Q6_K (riga 4 di engine-kquant) — il piu' diverso dei
+ * sei, e per tre ragioni che stanno tutte nel formato:
+ *
+ *  - le scale sono 16 int8 PER SOTTO-BLOCCO DA 16, e `d` e' UN f16 IN CODA
+ *    (byte 208 del superblocco da 210). Da qui `fixScalesAt(src, ..., [209])` e
+ *    non `[1, 3]`: sanare gli offset dei due K-quant precedenti qui vorrebbe
+ *    dire sanare due byte di `ql` e lasciare `d` casuale, cioe' NaN/Inf;
+ *  - i pesi sono CENTRATI SU -32, e le due vie portano quell'offset in due
+ *    forme algebriche diverse (fattorizzato in `- 32*Sigma(x)` sulla via intera,
+ *    sottratto dal peso su quella f32);
+ *  - le due META' di un blocco da 32 hanno scale di peso diverse ma condividono
+ *    la scala delle attivazioni, che `prefillQuantXQ8Wgsl` produce per 32.
+ *
+ * La geometria invece e' quella dei K-quant: UN buffer di pesi (`repackKQuant`,
+ * col pad a parola — 210 B diventano 212, 53 parole) e le stesse due liste di
+ * binding del q4_K e del q5_K. K=512 sono DUE superblocchi per riga in DUE
+ * fette: e' l'unico dei sei casi che esercita il ramo `splits = 2`.
+ *
+ * NON E' CABLATO (`wired: false`): il 4B non ha un byte di q6_K nei GEMM di
+ * prefill. Questo banco e' l'unica cosa che dice se la forma gira sul device.
+ */
+async function testPrefillGemmQ6KMultiRow(g: Gpu): Promise<KResult[]> {
+  const { K, N, M, splits, seedBlocks, seedX } = PREFILL_Q6K_KTEST_CASE;
+  const opts: PrefillGemmOpts = { kind: "q6_K", K, N, M, splits };
+  const nBlocks = (K / Q6_K_BLOCK_WEIGHTS) * N;
+  const src = randBytes(nBlocks * Q6_K_BLOCK_BYTES, seedBlocks);
+  fixScalesAt(src, Q6_K_BLOCK_BYTES, [209]); // `d` in coda; le 16 scale sono int8
+  const w = new Float32Array(nBlocks * Q6_K_BLOCK_WEIGHTS);
+  dequantQ6_K(src, 0, nBlocks, w);
+
+  const xs = randF32(M * K, seedX);
+  const XB = Q8_0_BLOCK_WEIGHTS, XW = XB / 4;
+  const xq8 = new Float32Array(M * K);
+  for (let b = 0; b + XB <= xs.length; b += XB) {
+    let amax = 0;
+    for (let i = 0; i < XB; i++) amax = Math.max(amax, Math.abs(xs[b + i]));
+    const sc = amax / 127, inv = sc > 0 ? 1 / sc : 0;
+    for (let i = 0; i < XB; i++) {
+      xq8[b + i] = Math.max(-127, Math.min(127, Math.round(xs[b + i] * inv))) * sc;
+    }
+  }
+  const refOf = (act: Float32Array): Float32Array => {
+    const out = new Float32Array(M * N);
+    for (let m = 0; m < M; m++) {
+      for (let r = 0; r < N; r++) {
+        let acc = 0;
+        for (let i = 0; i < K; i++) acc += w[r * K + i] * act[m * K + i];
+        out[m * N + r] = acc;
+      }
+    }
+    return out;
+  };
+  const refIdot = refOf(xq8), refF32 = refOf(xs);
+
+  const blocks = g.buf(repackKQuant(src, 0, nBlocks, Q6_K_BLOCK_BYTES));
+  const x = g.buf(xs);
+  const nxb = M * (K / XB);
+  const xq = g.empty(nxb * XW * 4), xsc = g.empty(nxb * 4);
+  const part = g.empty(splits * M * N * 4), y = g.empty(M * N * 4);
+  const yBytes = M * N * 4;
+
+  await g.run(prefillQuantXQ8Wgsl({ K, M }), [x, xq, xsc], prefillQuantXGrid({ K, M }));
+  await g.run(prefillGemmQ6KSplitKIdotWgsl(opts), [blocks, xq, part, xsc], prefillGemmGrid(opts));
+  await g.run(prefillSplitKCombineWgsl({ N, M, splits }), [part, y], prefillCombineGrid({ N, M }));
+  const gotIdot = new Float32Array(await g.read(y, yBytes));
+
+  await g.run(prefillGemmQ6KSplitKWgsl(opts), [blocks, x, part], prefillGemmGrid(opts));
+  await g.run(prefillSplitKCombineWgsl({ N, M, splits }), [part, y], prefillCombineGrid({ N, M }));
+  const gotF32 = new Float32Array(await g.read(y, yBytes));
+
+  for (const b of [blocks, x, xq, xsc, part, y]) b.destroy();
+  return [
+    compare("prefill-gemm-q6k-multirow-idot", gotIdot, refIdot,
+      PREFILL_GEMM_Q6K_IDOT_REL_TOL, PREFILL_GEMM_Q6K_IDOT_ABS_TOL),
+    compare("prefill-gemm-q6k-multirow-f32", gotF32, refF32,
+      PREFILL_GEMM_Q6K_F32_REL_TOL, PREFILL_GEMM_Q6K_F32_ABS_TOL),
+  ];
+}
+
+/**
+ * BANCO DEL PREFILL GEMM Q8_0 (riga 4 di engine-kquant) — il piu' semplice dei
+ * sei, e proprio per questo quello in cui un difetto ha meno posti dove
+ * nascondersi e piu' modi di passare inosservato.
+ *
+ *  - i pesi SONO gia' i8: nessun unpack, NESSUN TERMINE COSTANTE. Il risultato
+ *    e' `d * Sigma(q*x)` e basta, e la scala del peso per la scala di x si
+ *    applica una volta per blocco. Da qui l'assenza di `xsum`/`xh` fra gli array
+ *    di gruppo — non c'e' niente da moltiplicare per Sigma(x);
+ *  - i pesi vivono in DUE buffer come il q4_0 e il q4_1 (`repackQ8_0` → `qs` +
+ *    `scales`, con le scale a DUE f16 per parola): i binding sono
+ *    [qs, scales, xq, part, xsc] e [qs, scales, x, part], non le quattro/tre
+ *    liste dei tre K-quant;
+ *  - il segno E' il formato. E' l'unico dei sei in cui i byte dei pesi sono con
+ *    segno, e il floor test usa proprio quello come discriminante: leggerli come
+ *    u8 — `dot4U8Packed` invece di `dot4I8Packed`, o un byte estratto senza
+ *    estensione di segno — fa esplodere l'errore di sei ordini. E' una mutazione
+ *    di natura diversa da quelle degli altri quattro formati, e doveva esserlo:
+ *    qui non c'e' nessun termine costante da togliere.
+ *
+ * `fixScalesAt(src, Q8_0_BLOCK_BYTES, [1])`: UNA scala f16 per blocco da 34 B,
+ * come il q4_0 — non due come q4_1/q4_K/q5_K, non una in coda come il q6_K.
+ *
+ * NON E' CABLATO (`wired: false`), e sul 4B la ragione e' NUMERICA: i 48 siti
+ * q8_0 sono `ssm_alpha`/`ssm_beta` con N=32 righe di uscita, cioe' mezzo
+ * workgroup per dispatch. Il kernel serve al 35B (100 tensori attn, N=4096), e
+ * questo banco e' cio' che dice se ci arriva funzionante.
+ */
+async function testPrefillGemmQ80MultiRow(g: Gpu): Promise<KResult[]> {
+  const { K, N, M, splits, seedBlocks, seedX } = PREFILL_Q80_KTEST_CASE;
+  const opts: PrefillGemmOpts = { kind: "q8_0", K, N, M, splits };
+  const nBlocks = (K / Q8_0_BLOCK_WEIGHTS) * N;
+  const src = randBytes(nBlocks * Q8_0_BLOCK_BYTES, seedBlocks);
+  fixScalesAt(src, Q8_0_BLOCK_BYTES, [1]); // UNA scala f16 per blocco
+  const w = new Float32Array(nBlocks * Q8_0_BLOCK_WEIGHTS);
+  dequantQ8_0(src, 0, nBlocks, w);
+
+  const xs = randF32(M * K, seedX);
+  const XB = Q8_0_BLOCK_WEIGHTS, XW = XB / 4;
+  const xq8 = new Float32Array(M * K);
+  for (let b = 0; b + XB <= xs.length; b += XB) {
+    let amax = 0;
+    for (let i = 0; i < XB; i++) amax = Math.max(amax, Math.abs(xs[b + i]));
+    const sc = amax / 127, inv = sc > 0 ? 1 / sc : 0;
+    for (let i = 0; i < XB; i++) {
+      xq8[b + i] = Math.max(-127, Math.min(127, Math.round(xs[b + i] * inv))) * sc;
+    }
+  }
+  const refOf = (act: Float32Array): Float32Array => {
+    const out = new Float32Array(M * N);
+    for (let m = 0; m < M; m++) {
+      for (let r = 0; r < N; r++) {
+        let acc = 0;
+        for (let i = 0; i < K; i++) acc += w[r * K + i] * act[m * K + i];
+        out[m * N + r] = acc;
+      }
+    }
+    return out;
+  };
+  const refIdot = refOf(xq8), refF32 = refOf(xs);
+
+  const { qs: qsHost, scales: scHost } = repackQ8_0(src, 0, nBlocks);
+  const qs = g.buf(qsHost), scales = g.buf(scHost);
+  const x = g.buf(xs);
+  const nxb = M * (K / XB);
+  const xq = g.empty(nxb * XW * 4), xsc = g.empty(nxb * 4);
+  const part = g.empty(splits * M * N * 4), y = g.empty(M * N * 4);
+  const yBytes = M * N * 4;
+
+  await g.run(prefillQuantXQ8Wgsl({ K, M }), [x, xq, xsc], prefillQuantXGrid({ K, M }));
+  await g.run(prefillGemmQ80SplitKIdotWgsl(opts), [qs, scales, xq, part, xsc], prefillGemmGrid(opts));
+  await g.run(prefillSplitKCombineWgsl({ N, M, splits }), [part, y], prefillCombineGrid({ N, M }));
+  const gotIdot = new Float32Array(await g.read(y, yBytes));
+
+  await g.run(prefillGemmQ80SplitKWgsl(opts), [qs, scales, x, part], prefillGemmGrid(opts));
+  await g.run(prefillSplitKCombineWgsl({ N, M, splits }), [part, y], prefillCombineGrid({ N, M }));
+  const gotF32 = new Float32Array(await g.read(y, yBytes));
+
+  for (const b of [qs, scales, x, xq, xsc, part, y]) b.destroy();
+  return [
+    compare("prefill-gemm-q80-multirow-idot", gotIdot, refIdot,
+      PREFILL_GEMM_Q80_IDOT_REL_TOL, PREFILL_GEMM_Q80_IDOT_ABS_TOL),
+    compare("prefill-gemm-q80-multirow-f32", gotF32, refF32,
+      PREFILL_GEMM_Q80_F32_REL_TOL, PREFILL_GEMM_Q80_F32_ABS_TOL),
+  ];
+}
+
 async function main(): Promise<void> {
   const g = new Gpu();
   const adapterDesc = await g.init();
@@ -3949,6 +4213,14 @@ async function main(): Promise<void> {
     // --- GEMM di prefill multi-riga sui pesi Q5_K: via intera e via f32 ---
     results.push(...await testPrefillGemmQ5KMultiRow(g));
     results.push(...await testPrefillGemmQ41MultiRow(g));
+
+    // --- le TRE FORME NON CABLATE della riga 4 (q4_K, q6_K, q8_0): il piano
+    //     non ci instrada un dispatch, ma il kernel esiste e qui si misura
+    //     contro il dequant CPU. E' l'unica prova che il goal 35B eredita una
+    //     forma verificata su GPU invece che una forma soltanto scritta. ---
+    results.push(...await testPrefillGemmQ4KMultiRow(g));
+    results.push(...await testPrefillGemmQ6KMultiRow(g));
+    results.push(...await testPrefillGemmQ80MultiRow(g));
 
     // --- DeltaNet q35 (q1 fase 3): conv, gates, core, catena sul campione ---
     results.push(await testDeltaNetConv(g, 256));   // dims campione

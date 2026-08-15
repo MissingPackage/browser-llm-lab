@@ -526,15 +526,19 @@ export async function createQ35GpuModel(
             const route = planPrefillGemm({ kind: kkq, K: k, N: n, M: M_MAX, idot: prefillIdot });
             // DUE CONDIZIONI, non una. La rotta dice se la via veloce esiste per
             // questa shape; `kkq === "q5_K"` dice che il KERNEL emesso qui sotto
-            // e' quello del formato che si sta caricando. Oggi le due coincidono
-            // perche' `PREFILL_GEMM_KINDS` = q4_0 + q5_K e fra i tre K-quant di
-            // questo ramo solo il q5_K ne fa parte — ma quella coincidenza vive
-            // in un ALTRO file e questo ramo non la controlla. Se domani il
-            // q4_K entra nell'elenco, senza questa seconda condizione un
-            // superblocco da 144 B verrebbe letto con il passo da 176 del q5_K:
-            // logit sbagliati, nessuna eccezione, nessun errore di validazione
-            // WebGPU. E' la forma di it.7 — due posti che tengono una decisione
-            // sola — e si chiude qui dove si emette, non con un commento.
+            // e' quello del formato che si sta caricando. Quella coincidenza vive
+            // in un ALTRO file e questo ramo non la controlla.
+            //
+            // «SE DOMANI IL Q4_K ENTRA NELL'ELENCO» E' SUCCESSO: dalla riga 4 di
+            // engine-kquant, `PREFILL_GEMM_KINDS` = q4_0, q5_K, q4_1, q4_K, q6_K,
+            // q8_0 — i tre in coda sono portati e misurati ma `wired: false`,
+            // quindi il piano li rifiuta e `route.via` torna "legacy" da se'.
+            // La seconda condizione resta comunque la difesa che conta: senza,
+            // il giorno in cui il goal 35B girera' quel flag, un superblocco
+            // q4_K da 144 B verrebbe letto con il passo da 176 del q5_K — logit
+            // sbagliati, nessuna eccezione, nessun errore di validazione WebGPU.
+            // E' la forma di it.7 — due posti che tengono una decisione sola — e
+            // si chiude qui dove si emette, non con un commento.
             if (route.via !== "legacy" && kkq === "q5_K") {
               // `kind: kkq` e non un letterale: il formato del kernel E' quello
               // con cui si e' chiesta la rotta, per costruzione e non per

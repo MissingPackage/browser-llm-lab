@@ -3844,10 +3844,22 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
  * q5_K = riga 2 di engine-kquant (28,10x sulla legacy a M=16 su `ssm_out`).
  * q4_1 = riga 3 di engine-kquant (`blk.0-3.ffn_down` del 4B, 71% dei byte del
  *        segmento `gemm:ffn-down`).
+ * q4_K = riga 4 di engine-kquant (35B: 117 tensori expert = 17,67 GB). IL
+ *        KERNEL C'E', IL PIANO NON LO INSTRADA — v. `wired` piu' sotto.
+ * q6_K = riga 4 (35B: down degli expert di 3 layer). Idem: non instradato.
+ * q8_0 = riga 4 (35B: 100 tensori attn = 1,09 GB). Idem: non instradato.
  *
- * L'ORDINE E' PARTE DELL'INTERFACCIA, e q4_1 sta IN CODA: chi consuma questo
- * elenco per costruire un piano o una tabella lo legge posizionalmente, e un
- * kind infilato in mezzo sposterebbe tutto in silenzio.
+ * L'ORDINE E' PARTE DELL'INTERFACCIA, e i kind nuovi stanno IN CODA: chi
+ * consuma questo elenco per costruire un piano o una tabella lo legge
+ * posizionalmente, e un kind infilato in mezzo sposterebbe tutto in silenzio.
+ *
+ * STARE IN QUESTO ELENCO NON VUOL DIRE ESSERE INSTRADATI. Da riga 4 l'elenco
+ * dice «di questo formato esiste un kernel multi-riga misurato», e chi decide
+ * se un sito ci passa davvero e' il flag `wired` di `PREFILL_GEMM_SPEC`, letto
+ * dal piano (`prefillgemmplan.ts`). Le due domande erano la stessa finche' ogni
+ * kernel portato veniva anche cablato; da qui in poi non lo sono, e tenerle
+ * separate e' cio' che permette di verificare una forma sul device senza
+ * cambiare di una riga cio' che il 4B esegue.
  *
  * AGGIUNGERE UN KIND QUI NON BASTA, ED E' VOLUTO: ogni numero che dipende dal
  * formato vive in `PREFILL_GEMM_SPEC`, che e' un `Record<PrefillGemmKind, …>`.
@@ -3856,7 +3868,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
  * compilazione. E' la lezione del cast `as "q4_0"` che stava nel piano —
  * un formato che passa per un altro non fa rumore, fa numeri.
  */
-export const PREFILL_GEMM_KINDS = ["q4_0", "q5_K", "q4_1"] as const;
+export const PREFILL_GEMM_KINDS = ["q4_0", "q5_K", "q4_1", "q4_K", "q6_K", "q8_0"] as const;
 export type PrefillGemmKind = typeof PREFILL_GEMM_KINDS[number];
 
 export interface PrefillGemmOpts {
@@ -3936,6 +3948,35 @@ interface PrefillGemmKindSpec {
   splitsFor(units: number): number;
   /** Workgroup storage per via, in byte, a M righe di chunk. */
   wgBytes: Record<PrefillGemmWgVia, (M: number) => number>;
+  /**
+   * IL KERNEL ESISTE ED E' MISURATO — MA SOLO I `wired` VENGONO INSTRADATI DAL
+   * PIANO IN PRODUZIONE.
+   *
+   * `false` non significa "non funziona" e non significa "non c'e'": il
+   * generatore e' portato dal banco byte per byte, il suo testo e' quello che
+   * la fase 0 ha cronometrato e il ktest lo verifica contro il cpuref. Significa
+   * che NESSUN SITO DI PRODUZIONE CI PASSA: `kernelVerdict` in
+   * `prefillgemmplan.ts` legge questo flag e rende `legacy` con la sua ragione.
+   *
+   * Perche' serve un flag invece dell'assenza dal kernel: una forma verificata
+   * sul device e non instradata NON e' una forma inventata — e' esattamente
+   * cio' che la riga 4 del goal consegna al goal 35B. L'alternativa (tenere il
+   * kernel fuori dall'elenco fino al giorno del cablaggio) vorrebbe dire
+   * portarlo, misurarlo e verificarlo su un ramo che nessun test della suite
+   * vede.
+   *
+   * Il flag si consuma in UN POSTO SOLO, il piano. Un secondo predicato di
+   * ammissibilita' altrove e' proprio il difetto che i gate strutturali di
+   * `tests/engine-prefillwiring-q5k.test.ts` [d] e `[6f]` sorvegliano.
+   */
+  wired: boolean;
+  /**
+   * Perche' e' cablato, o perche' non lo e'. Non e' decorazione: e' la stringa
+   * che il piano riporta nella ragione della rotta, cioe' cio' che si legge in
+   * telemetria quando un sito resta legacy. Stessa postura di `kUnitWhy` e
+   * `sliceWhy` — accanto a ogni decisione, il suo motivo.
+   */
+  wiredWhy: string;
 }
 
 const PREFILL_GEMM_SPEC: Record<PrefillGemmKind, PrefillGemmKindSpec> = {
@@ -3958,6 +3999,9 @@ const PREFILL_GEMM_SPEC: Record<PrefillGemmKind, PrefillGemmKindSpec> = {
       // `xs` M*16 vec4<f32> = 256·M B (4.096 a M=16)
       f32: (M) => M * 16 * 16,
     },
+    wired: true,
+    wiredWhy: "riga 1 di engine-ttft: e' il formato di quasi tutto il 4B (172 siti su 248) "
+      + "e il cablaggio e' verificato dal ktest e dal checkpoint di TTFT",
   },
   q5_K: {
     // il SUPERBLOCCO da 256: le scale a 6 bit sono condivise dagli otto
@@ -3988,6 +4032,9 @@ const PREFILL_GEMM_SPEC: Record<PrefillGemmKind, PrefillGemmKindSpec> = {
       // il superblocco intero (che a M=16 sarebbe 16.384 B, il minimo di spec)
       f32: (M) => M * 32 * 4,
     },
+    wired: true,
+    wiredWhy: "riga 2 di engine-kquant: le 24 `ssm_out` del 4B erano il 37,9% del tempo del "
+      + "prefill sul percorso legacy, e il cablaggio e' verificato dal ktest (maxRel 2,61e-7)",
   },
   q4_1: {
     // la GEOMETRIA e' quella del q4_0 — blocchi da 32, il loop avanza a BK = 2
@@ -4015,12 +4062,160 @@ const PREFILL_GEMM_SPEC: Record<PrefillGemmKind, PrefillGemmKindSpec> = {
       // f32 legge le attivazioni dense e la somma Sigma(x) la fa in registri.
       f32: (M) => M * 16 * 16,
     },
+    wired: true,
+    wiredWhy: "riga 3 di engine-kquant: i 4 `blk.0-3.ffn_down` del 4B sono il 71% dei byte del "
+      + "segmento `gemm:ffn-down`, e il cablaggio e' verificato dal ktest (maxRel 1,73e-5)",
+  },
+  // -------------------------------------------------------------------------
+  // LE TRE FORME DELLA RIGA 4: kernel in produzione, NESSUN CABLAGGIO.
+  //
+  // Sono le famiglie del 35B (17,67 GB di q4_K, 1,09 GB di q8_0, 0,66 GB di
+  // q6_K contro ZERO byte di q4_0), portate qui dal banco perche' il goal
+  // successivo le trovi misurate e verificate — non perche' il 4B ci passi.
+  // Ogni numero di queste tre righe viene dal FORMATO o dal testo del kernel di
+  // banco (`src/microbench/ttKQuant.ts`), mai scelto.
+  // -------------------------------------------------------------------------
+  q4_K: {
+    // il SUPERBLOCCO da 256, esattamente come il q5_K: `dequantQ4_K`
+    // (engine/quant.ts) legge `QK_K = 256` pesi con 12 byte di scale/min a 6 bit
+    // condivisi dagli otto sotto-blocchi. Il q4_K e' il q5_K senza `qh`, e il
+    // piano del 5o bit non c'entra con l'unita' di taglio.
+    kUnit: 256,
+    kUnitWhy: "il superblocco Q4_K e' l'unita' indivisibile: le sue scale a 6 bit "
+      + "sono condivise dagli otto sotto-blocchi",
+    formatWhy: "q4_K superblocco da 256 con le scale a 6 bit, cioe' il q5_K SENZA il piano del 5o bit",
+    unitsPerRow: (K) => K / 256,
+    slices: (units, splits) => units % splits === 0,
+    sliceWhy: (units, splits) => `${units} superblocchi da 256 non divisibili in ${splits} fette`,
+    // la scala K-quant del banco (`kquantSplitsFor`), identica al q5_K: le
+    // unita' per riga sono otto volte meno numerose che sui formati a blocchi,
+    // e il ripiego secco a 1 lascerebbe senza split-K la down degli expert del
+    // 35B (K=512 = DUE superblocchi), che il banco ha misurato a 2 fette.
+    splitsFor: (units) => {
+      if (units % PREFILL_SPLITS_MEASURED === 0) return PREFILL_SPLITS_MEASURED;
+      if (units % 2 === 0) return 2;
+      return PREFILL_SPLITS_UNSPLIT;
+    },
+    wgBytes: {
+      // `xs` M*64 u32 + `xss` M*8 f32 + `xsum` M*8 f32 = 320·M B (5.120 a M=16):
+      // gli stessi tre array del q5_K, perche' e' la stessa forma con un piano
+      // di bit in meno — e il piano di bit sta nei PESI, non nelle attivazioni.
+      idot: (M) => M * 64 * 4 + M * 8 * 4 + M * 8 * 4,
+      // `xs` M*32 f32 = 128·M B (2.048 a M=16): UN sotto-blocco per volta, come
+      // il q5_K, per stare sotto il minimo di spec anche a M grandi.
+      f32: (M) => M * 32 * 4,
+    },
+    wired: false,
+    wiredWhy: "NON CABLATO: il 4B non ha un byte di q4_K (e' la forma degli expert del 35B, "
+      + "117 tensori = 17,67 GB). Cablarla e' il goal successivo, e li' il collo e' la "
+      + "residency, non il kernel: serve il piano MoE, l'arena e una baseline 35B fresca, "
+      + "nessuna delle quali esiste oggi. Il kernel c'e', e' portato dal banco byte per byte "
+      + "ed e' verificato dal ktest: e' una forma misurata e non instradata, non una inventata",
+  },
+  q6_K: {
+    // superblocco da 256 anche qui (`dequantQ6_K`: `QK_K` pesi, 16 scale int8 e
+    // `d` in coda). I SOTTO-blocchi delle scale sono da 16, non da 32 — e' una
+    // proprieta' dell'ARITMETICA del kernel (per questo `xh` e' per mezzo
+    // sotto-blocco), non dell'unita' di taglio di K, che resta il superblocco.
+    kUnit: 256,
+    kUnitWhy: "il superblocco Q6_K e' l'unita' indivisibile: le sue 16 scale int8 e il `d` "
+      + "in coda valgono per tutti i 256 pesi",
+    formatWhy: "q6_K superblocco da 256 con `ql`+`qh` a 6 bit, 16 scale int8 e i pesi centrati su -32",
+    unitsPerRow: (K) => K / 256,
+    slices: (units, splits) => units % splits === 0,
+    sliceWhy: (units, splits) => `${units} superblocchi da 256 non divisibili in ${splits} fette`,
+    // stessa scala K-quant del q5_K/q4_K: la shape misurata del 35B (K=512) ha
+    // DUE superblocchi per riga, cioe' proprio il caso in cui il 2 serve.
+    splitsFor: (units) => {
+      if (units % PREFILL_SPLITS_MEASURED === 0) return PREFILL_SPLITS_MEASURED;
+      if (units % 2 === 0) return 2;
+      return PREFILL_SPLITS_UNSPLIT;
+    },
+    wgBytes: {
+      // `xs` M*64 u32 + `xss` M*8 f32 + `xh` M*16 f32 = 352·M B (5.632 a M=16).
+      // I 32·M in piu' del q5_K sono `xh`: la somma delle attivazioni per MEZZO
+      // sotto-blocco (16 elementi), che e' la granularita' delle scale del Q6_K.
+      idot: (M) => M * 64 * 4 + M * 8 * 4 + M * 16 * 4,
+      // `xs` M*32 f32 = 128·M B (2.048 a M=16): un sotto-blocco da 32 per volta.
+      f32: (M) => M * 32 * 4,
+    },
+    wired: false,
+    wiredWhy: "NON CABLATO: il 4B non ha un byte di q6_K nei GEMM di prefill (il suo unico q6_K "
+      + "e' `token_embd`, che non e' una moltiplicazione di prefill). E' la down degli expert "
+      + "di 3 layer del 35B, e vale la stessa cosa del q4_K: il cablaggio e' il goal successivo. "
+      + "Il kernel c'e' ed e' verificato dal ktest",
+  },
+  q8_0: {
+    // LA GEOMETRIA E' QUELLA DEL q4_0, e viene dal TESTO del kernel: il ciclo
+    // avanza `b0 = b0 + 2u` su blocchi da 32 (`dequantQ8_0`: 32 pesi per
+    // blocco), quindi l'unita' di taglio e' 64 pesi e le fette devono dividere i
+    // blocchi A COPPIE. Il `check` del banco e' piu' largo (conta in blocchi da
+    // 32 e chiede solo `upr % splits == 0`): sulla shape misurata i due danno
+    // gli stessi numeri (K=2048 -> 64 blocchi, 4 fette, PER=16), ma una PER
+    // dispari farebbe leggere alla fetta un blocco della fetta dopo. Qui si
+    // tiene la soglia del kernel, non quella del banco.
+    kUnit: 64,
+    kUnitWhy: "il loop avanza a BK = 2 blocchi da 32",
+    formatWhy: "q8_0 pesi GIA' in i8, 8 parole per blocco da 32 e le scale a DUE f16 per parola come il q4_0",
+    unitsPerRow: (K) => K / 32,
+    slices: (units, splits) => units % (splits * 2) === 0,
+    sliceWhy: (units, splits) => `${units} blocchi non divisibili in ${splits} fette da BK=2`,
+    // stessa scala del q4_0 e del q4_1: 4 fette se i blocchi si dividono a
+    // BK=2, altrimenti nessuno split-K. Il 2 non compare perche' sul q8_0 non e'
+    // stato misurato, e i blocchi per riga qui sono tanti quanti sul q4_0
+    // (K/32), non otto volte meno come sui K-quant.
+    splitsFor: (units) =>
+      units % (PREFILL_SPLITS_MEASURED * 2) === 0 ? PREFILL_SPLITS_MEASURED : PREFILL_SPLITS_UNSPLIT,
+    wgBytes: {
+      // `xs` M*16 u32 + `xss` M*2 f32 = 72·M B (1.152 a M=16): gli STESSI due
+      // array del q4_0, e nessun `xsum` — il q8_0 non ha termine costante,
+      // perche' i suoi pesi sono gia' interi con segno.
+      idot: (M) => M * 16 * 4 + M * 2 * 4,
+      // `xs` M*64 f32 = 256·M B (4.096 a M=16): la via f32 del q8_0 tiene DUE
+      // blocchi da 32 in virgola mobile (M*64 f32), non 16 vec4 come il q4_0.
+      // Il numero coincide, la dichiarazione no — ed e' la dichiarazione che il
+      // test confronta col testo.
+      f32: (M) => M * 64 * 4,
+    },
+    wired: false,
+    wiredWhy: "NON CABLATO, e sul 4B la ragione e' NUMERICA: i 48 siti q8_0 sono `ssm_alpha` e "
+      + "`ssm_beta` con N=32 righe di uscita, cioe' MEZZO workgroup per dispatch sulla forma "
+      + "split-K, che ne produce 64. Sono lo 0,204% dei byte del prefill ed erano gia' esclusi "
+      + "coi numeri dal contratto della riga 3. `prefillGemmCheck` non guarda N — controlla kind, "
+      + "K e fette — quindi senza questo flag il piano instraderebbe quei 48 siti e cambierebbe "
+      + "cio' che il 4B esegue oggi. Il kernel serve al 35B (100 tensori attn = 1,09 GB, N=4096)",
   },
 };
 
 /** Il restringimento al formato, letto dall'elenco esportato e non da una copia. */
 export function isPrefillGemmKind(k: string): k is PrefillGemmKind {
   return (PREFILL_GEMM_KINDS as readonly string[]).includes(k);
+}
+
+/**
+ * I FORMATI CHE IL PIANO INSTRADA DAVVERO — derivati dal flag, non riscritti.
+ *
+ * Chi vuole sapere «quante vie veloci sono accese in produzione» chiede QUESTO,
+ * non `PREFILL_GEMM_KINDS.length`: da riga 4 i due numeri sono diversi, e
+ * confonderli e' il modo in cui una forma non cablata finisce contata come se
+ * lo fosse.
+ */
+export const PREFILL_GEMM_WIRED_KINDS: readonly PrefillGemmKind[] =
+  PREFILL_GEMM_KINDS.filter((k) => PREFILL_GEMM_SPEC[k].wired);
+
+/**
+ * Il flag di cablaggio DEL FORMATO, con la sua ragione, in una risposta sola.
+ *
+ * L'unico consumatore previsto e' `kernelVerdict` in `prefillgemmplan.ts`: e'
+ * li' che si decide la via di un sito, ed e' l'unico posto dove un predicato di
+ * ammissibilita' puo' stare senza diventare una seconda soglia che diverge in
+ * silenzio (la lezione di it.7). Un booleano nudo non basterebbe: la ragione
+ * finisce nella rotta e quindi in telemetria, dove serve a capire PERCHE' un
+ * sito e' rimasto legacy senza aprire il sorgente.
+ */
+export function prefillGemmWiring(kind: PrefillGemmKind): { wired: boolean; why: string } {
+  const spec = PREFILL_GEMM_SPEC[kind];
+  return { wired: spec.wired, why: spec.wiredWhy };
 }
 
 /**
@@ -4631,6 +4826,582 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
             sx = sx + dot(vec4<f32>(1.0), xa) + dot(vec4<f32>(1.0), xb);
           }
           acc[m] = acc[m] + dm.x * qx + dm.y * sx;
+        }
+      }
+    }
+    workgroupBarrier();
+    b0 = b0 + 2u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+// ---------------------------------------------------------------------------
+// PREFILL GEMM q4_K / q6_K / q8_0 SPLIT-K — port dal banco
+// (src/microbench/ttKQuant.ts, `kquantQ4K*` / `kquantQ6K*` / `kquantQ80*`).
+//
+// PORTATE MA NON CABLATE, ed e' il punto della riga 4: `wired: false` in
+// `PREFILL_GEMM_SPEC` tiene il piano fuori da questi tre formati, quindi cio'
+// che il 4B esegue non cambia di un dispatch. Il goal successivo (35B) trova le
+// forme gia' portate, misurate e verificate col ktest invece di doverle
+// riscrivere — e le trova QUI, dentro la suite, non su un ramo.
+//
+// Provenienza dei numeri (fase 0, p50 a M=16, legacy/veloce nella forma
+// `idot | f32`, artefatto
+// results/microbench/kquant-fase0-4090-linux-2026-08-14T19-29-20-014Z.json):
+//   q4_K [2048,512]  0,070016 -> 0,016832 | 0,061504 =  4,16x | 1,14x
+//   q4_K [512,2048]  0,049536 -> 0,009472 | 0,026752 =  5,23x | 1,85x
+//   q6_K [512,2048]  0,152896 -> 0,024960 | 0,092160 =  6,13x | 1,66x
+//   q8_0 [2048,4096] 1,322432 -> 0,037568 | 0,075008 = 35,20x | 17,63x
+// (Sul q4_K la via f32 a [2048,512] non passa la regola di stop dell'1,5x: e'
+// un fatto della fase 0, registrato qui perche' chi cabla lo veda.)
+//
+// STESSA REGOLA DEL PORT delle tre famiglie gia' in produzione: il testo WGSL e'
+// quello del banco, riga per riga, e ogni divergenza sta in
+// `PREFILL_GEMM_PORT_DIFFS` con la sua ragione.
+//
+// ORDINE DEI BINDING (congelato — lo consumeranno il piano e il wiring del 35B):
+//   q4_K/q6_K idot [0 blocks, 1 xq(u32), 2 part(rw), 3 xsc(f32)]
+//   q4_K/q6_K f32  [0 blocks, 1 x(f32 row-major M x K), 2 part(rw)]
+//   q8_0      idot [0 qs, 1 scales, 2 xq(u32), 3 part(rw), 4 xsc(f32)]
+//   q8_0      f32  [0 qs, 1 scales, 2 x(f32 row-major M x K), 3 part(rw)]
+// I due K-quant hanno UN buffer di pesi (il superblocco GGUF copiato in parole),
+// come il q5_K; il q8_0 ne ha DUE, perche' `repackQ8_0` (quant.ts) spezza in qs
+// + scales a due f16 per parola, come il q4_0. Il quantizzatore delle
+// attivazioni e la combine sono gli STESSI di tutte le altre famiglie
+// (`prefillQuantXQ8Wgsl`, `prefillSplitKCombineWgsl`): blocchi da 32 ovunque.
+// ---------------------------------------------------------------------------
+
+/**
+ * VIA INTERA q4_K x q8_0 (`dot4I8Packed`) — il Q5_K SENZA il piano del 5o bit.
+ *
+ * Superblocco da 144 B = 36 parole: `d,dmin` nella parola 0, 12 byte di scale a
+ * 6 bit (byte 4..15), `qs` a byte **16** — dove il Q5_K tiene il suo `qh`.
+ * Stessa `get_scale_min_k4`, stessa aritmetica `d*sc*q - dmin*mn`, un piano di
+ * bit in meno. Gli offset sono quelli di `dequantQ4_K` (engine/quant.ts) e di
+ * `gemvQ4KWgsl`: e' li' che un port distratto sbaglia (48 invece di 16, 44
+ * parole invece di 36).
+ *
+ * NIENTE `enable packed_4x8_integer_dot_product;`: e' una LANGUAGE FEATURE, non
+ * un'estensione. Scriverlo fa fallire la compilazione con «expected extension».
+ */
+export function prefillGemmQ4KSplitKIdotWgsl(o: PrefillGemmOpts): string {
+  const { N, M } = o;
+  const { units: upr, per } = prefillGemmCheck(o, "prefillGemmQ4KSplitKIdotWgsl");
+  return `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> xq: array<u32>;
+@group(0) @binding(2) var<storage, read_write> part: array<f32>;
+@group(0) @binding(3) var<storage, read> xsc: array<f32>;
+const SBPR = ${upr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+const WORDS = 36u;
+var<workgroup> xs: array<u32, ${M * 64}>;
+var<workgroup> xss: array<f32, ${M * 8}>;
+var<workgroup> xsum: array<f32, ${M * 8}>;
+fn sbyte(base: u32, i: u32) -> u32 {
+  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let sbEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var sb = s * PER;
+  loop {
+    if (sb >= sbEnd) { break; }
+    for (var idx = t; idx < ${M * 64}u; idx = idx + 64u) {
+      let m = idx / 64u;
+      let jj = (idx % 64u) / 8u;
+      let ii = idx % 8u;
+      xs[idx] = xq[((m * SBPR + sb) * 8u + jj) * 8u + ii];
+    }
+    for (var idx = t; idx < ${M * 8}u; idx = idx + 64u) {
+      let m = idx / 8u;
+      let jj = idx % 8u;
+      xss[idx] = xsc[(m * SBPR + sb) * 8u + jj];
+    }
+    workgroupBarrier();
+    for (var idx = t; idx < ${M * 8}u; idx = idx + 64u) {
+      var sq = 0i;
+      for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+        sq = sq + dot4I8Packed(0x01010101u, xs[idx * 8u + ii]);
+      }
+      xsum[idx] = f32(sq) * xss[idx];
+    }
+    workgroupBarrier();
+    if (r < N_ROWS) {
+      let wb = (r * SBPR + sb) * WORDS;
+      let dm = unpack2x16float(blocks[wb]);
+      for (var g = 0u; g < 4u; g = g + 1u) {
+        let is = 2u * g;
+        var sc1: u32; var mn1: u32; var sc2: u32; var mn2: u32;
+        if (is < 4u) {
+          sc1 = sbyte(wb, 4u + is) & 63u;
+          mn1 = sbyte(wb, 4u + is + 4u) & 63u;
+          sc2 = sbyte(wb, 4u + is + 1u) & 63u;
+          mn2 = sbyte(wb, 4u + is + 5u) & 63u;
+        } else {
+          sc1 = (sbyte(wb, 4u + is + 4u) & 0xfu) | ((sbyte(wb, 4u + is - 4u) >> 6u) << 4u);
+          mn1 = (sbyte(wb, 4u + is + 4u) >> 4u) | ((sbyte(wb, 4u + is) >> 6u) << 4u);
+          sc2 = (sbyte(wb, 4u + is + 5u) & 0xfu) | ((sbyte(wb, 4u + is - 3u) >> 6u) << 4u);
+          mn2 = (sbyte(wb, 4u + is + 5u) >> 4u) | ((sbyte(wb, 4u + is + 1u) >> 6u) << 4u);
+        }
+        var lo: array<u32, 8>;
+        var hi: array<u32, 8>;
+        for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+          let word = blocks[wb + 4u + g * 8u + ii];
+          lo[ii] = word & 0x0f0f0f0fu;
+          hi[ii] = (word >> 4u) & 0x0f0f0f0fu;
+        }
+        let d1 = dm.x * f32(sc1); let min1 = dm.y * f32(mn1);
+        let d2 = dm.x * f32(sc2); let min2 = dm.y * f32(mn2);
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          let bLo = m * 64u + is * 8u;
+          let bHi = bLo + 8u;
+          var i1 = 0i; var i2 = 0i;
+          for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+            i1 = i1 + dot4I8Packed(lo[ii], xs[bLo + ii]);
+            i2 = i2 + dot4I8Packed(hi[ii], xs[bHi + ii]);
+          }
+          acc[m] = acc[m]
+            + d1 * f32(i1) * xss[m * 8u + is] - min1 * xsum[m * 8u + is]
+            + d2 * f32(i2) * xss[m * 8u + is + 1u] - min2 * xsum[m * 8u + is + 1u];
+        }
+      }
+    }
+    workgroupBarrier();
+    sb = sb + 1u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+/**
+ * VIA f32 q4_K — FALLBACK DICHIARATO. Il Q5_K f32 senza il piano del 5o bit,
+ * con `qs` a byte 16 e il superblocco da 36 parole.
+ *
+ * Il tile e' di UN SOTTO-BLOCCO da 32 per volta (M x 32 f32 = 2.048 B a M=16),
+ * non del superblocco intero: M x 256 f32 sarebbero 16.384 B a M=16, cioe'
+ * l'INTERO minimo di spec WebGPU per un solo array.
+ *
+ * ATTENZIONE, e' un fatto della fase 0 e non un difetto del port: su
+ * `[2048,512]` questa via misura 1,14x sulla legacy, cioe' SOTTO la regola di
+ * stop dell'1,5x. Si porta perche' il contratto chiede che ogni via intera
+ * abbia il suo fallback dichiarato, non perche' su quella shape paghi.
+ */
+export function prefillGemmQ4KSplitKWgsl(o: PrefillGemmOpts): string {
+  const { N, M, K } = o;
+  const { units: upr, per } = prefillGemmCheck(o, "prefillGemmQ4KSplitKWgsl");
+  return `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> part: array<f32>;
+const SBPR = ${upr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+const K_DIM = ${K}u;
+const WORDS = 36u;
+var<workgroup> xs: array<f32, ${M * 32}>;
+fn sbyte(base: u32, i: u32) -> u32 {
+  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let sbEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var sb = s * PER;
+  loop {
+    if (sb >= sbEnd) { break; }
+    for (var is = 0u; is < 8u; is = is + 1u) {
+      let g = is >> 1u;
+      let hiHalf = (is & 1u) == 1u;
+      let base = sb * 256u + is * 32u;
+      for (var idx = t; idx < ${M * 32}u; idx = idx + 64u) {
+        let m = idx / 32u;
+        xs[idx] = x[m * K_DIM + base + (idx % 32u)];
+      }
+      workgroupBarrier();
+      if (r < N_ROWS) {
+        let wb = (r * SBPR + sb) * WORDS;
+        let dm = unpack2x16float(blocks[wb]);
+        var sc: u32; var mn: u32;
+        if (is < 4u) {
+          sc = sbyte(wb, 4u + is) & 63u;
+          mn = sbyte(wb, 4u + is + 4u) & 63u;
+        } else {
+          sc = (sbyte(wb, 4u + is + 4u) & 0xfu) | ((sbyte(wb, 4u + is - 4u) >> 6u) << 4u);
+          mn = (sbyte(wb, 4u + is + 4u) >> 4u) | ((sbyte(wb, 4u + is) >> 6u) << 4u);
+        }
+        let dsc = dm.x * f32(sc);
+        let dmn = dm.y * f32(mn);
+        var q: array<f32, 32>;
+        for (var l = 0u; l < 32u; l = l + 1u) {
+          let ql = sbyte(wb, 16u + g * 32u + l);
+          if (hiHalf) { q[l] = f32(ql >> 4u); } else { q[l] = f32(ql & 0xfu); }
+        }
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          var qx = 0.0; var sx = 0.0;
+          for (var l = 0u; l < 32u; l = l + 1u) {
+            let xv = xs[m * 32u + l];
+            qx = qx + q[l] * xv; sx = sx + xv;
+          }
+          acc[m] = acc[m] + dsc * qx - dmn * sx;
+        }
+      }
+      workgroupBarrier();
+    }
+    sb = sb + 1u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+/**
+ * VIA INTERA q6_K x q8_0 (`dot4I8Packed`) — la piu' diversa delle sei, per due
+ * ragioni che il testo porta con se'.
+ *
+ * (1) I SOTTO-BLOCCHI DELLE SCALE SONO DA 16, non da 32: 16 scale int8 per 256
+ *     pesi. Le attivazioni pero' sono quantizzate per 32, quindi le due meta' di
+ *     un blocco condividono la scala di x e hanno scale di peso diverse —
+ *     servono accumuli separati per meta', ed e' per questo che qui la somma
+ *     delle attivazioni (`xh`) e' per MEZZO sotto-blocco (M x 16 f32).
+ *
+ * (2) I PESI SONO CENTRATI SU -32, e sottrarre 32 in forma impacchettata
+ *     traboccherebbe fra i byte. Non si sottrae: si tiene `q` senza segno in
+ *     [0,63] — che sta in i8 positivo — e l'offset esce dal prodotto scalare,
+ *     `Sigma (q-32)x = Sigma q*x - 32*Sigma x`. E' lo stesso Sigma(x) che le
+ *     altre famiglie usano per il loro termine costante: un solo meccanismo.
+ *
+ * Layout (`dequantQ6_K` in quant.ts, e `gemvQ6KWgsl`): 53 parole sul device —
+ * 210 B nel file, **212 col pad alla parola** — `ql` a byte 0, `qh` a byte 128,
+ * le 16 scale int8 a byte 192, `d` f16 nella parola 52.
+ *
+ * NIENTE `enable packed_4x8_integer_dot_product;`: e' una LANGUAGE FEATURE.
+ */
+export function prefillGemmQ6KSplitKIdotWgsl(o: PrefillGemmOpts): string {
+  const { N, M } = o;
+  const { units: upr, per } = prefillGemmCheck(o, "prefillGemmQ6KSplitKIdotWgsl");
+  return `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> xq: array<u32>;
+@group(0) @binding(2) var<storage, read_write> part: array<f32>;
+@group(0) @binding(3) var<storage, read> xsc: array<f32>;
+const SBPR = ${upr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+const WORDS = 53u;
+var<workgroup> xs: array<u32, ${M * 64}>;
+var<workgroup> xss: array<f32, ${M * 8}>;
+var<workgroup> xh: array<f32, ${M * 16}>;
+fn sbyte(base: u32, i: u32) -> u32 {
+  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+}
+fn sint8(base: u32, i: u32) -> f32 {
+  return f32((i32(sbyte(base, i)) << 24u) >> 24u);
+}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let sbEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var sb = s * PER;
+  loop {
+    if (sb >= sbEnd) { break; }
+    for (var idx = t; idx < ${M * 64}u; idx = idx + 64u) {
+      let m = idx / 64u;
+      let jj = (idx % 64u) / 8u;
+      let ii = idx % 8u;
+      xs[idx] = xq[((m * SBPR + sb) * 8u + jj) * 8u + ii];
+    }
+    for (var idx = t; idx < ${M * 8}u; idx = idx + 64u) {
+      let m = idx / 8u;
+      let jj = idx % 8u;
+      xss[idx] = xsc[(m * SBPR + sb) * 8u + jj];
+    }
+    workgroupBarrier();
+    // somma delle attivazioni per MEZZO sotto-blocco (16 elementi = 4 parole):
+    // e' la granularita' delle scale del Q6_K
+    for (var idx = t; idx < ${M * 16}u; idx = idx + 64u) {
+      let half = idx % 2u;
+      var sq = 0i;
+      for (var ii = 0u; ii < 4u; ii = ii + 1u) {
+        sq = sq + dot4I8Packed(0x01010101u, xs[(idx / 2u) * 8u + half * 4u + ii]);
+      }
+      xh[idx] = f32(sq);
+    }
+    workgroupBarrier();
+    if (r < N_ROWS) {
+      let wb = (r * SBPR + sb) * WORDS;
+      let d = unpack2x16float(blocks[wb + 52u]).x;
+      for (var n = 0u; n < 2u; n = n + 1u) {
+        let scO = 192u + n * 8u;
+        for (var c = 0u; c < 4u; c = c + 1u) {
+          let blk = n * 4u + c;                  // sotto-blocco da 32 dentro il superblocco
+          let sh = 2u * c;                       // bit del piano alto per questo quarto
+          var w8: array<u32, 8>;
+          for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+            // c pari  -> ql "A" (byte l), c dispari -> ql "B" (byte l+32)
+            // c < 2   -> nibble basso,    c >= 2    -> nibble alto
+            let qlw = blocks[wb + n * 16u + (c & 1u) * 8u + ii];
+            let qhw = blocks[wb + 32u + n * 8u + ii];
+            let nib = select(qlw & 0x0f0f0f0fu, (qlw >> 4u) & 0x0f0f0f0fu, c >= 2u);
+            w8[ii] = nib | (((qhw >> sh) & 0x03030303u) << 4u);
+          }
+          for (var m = 0u; m < M_ROWS; m = m + 1u) {
+            let b0 = m * 64u + blk * 8u;
+            var iA = 0i; var iB = 0i;
+            for (var ii = 0u; ii < 4u; ii = ii + 1u) {
+              iA = iA + dot4I8Packed(w8[ii], xs[b0 + ii]);
+              iB = iB + dot4I8Packed(w8[ii + 4u], xs[b0 + 4u + ii]);
+            }
+            // i pesi restano senza segno: l'offset -32 esce dal prodotto
+            // scalare come -32*Sigma(x), per ciascuna meta'
+            let scA = sint8(wb, scO + 2u * c);
+            let scB = sint8(wb, scO + 1u + 2u * c);
+            let xsm = xss[m * 8u + blk];
+            acc[m] = acc[m] + d * xsm * (
+                scA * (f32(iA) - 32.0 * xh[(m * 8u + blk) * 2u])
+              + scB * (f32(iB) - 32.0 * xh[(m * 8u + blk) * 2u + 1u]));
+          }
+        }
+      }
+    }
+    workgroupBarrier();
+    sb = sb + 1u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+/**
+ * VIA f32 q6_K — FALLBACK DICHIARATO. Qui l'offset -32 si sottrae DIRETTAMENTE
+ * dal peso: il traboccamento fra byte esiste solo nella forma impacchettata, e
+ * portarsi dietro il giro di `Sigma(x)` senza motivo sarebbe riscrivere.
+ * Le due scale del sotto-blocco si scelgono come in produzione (`gemvQ6KWgsl`).
+ */
+export function prefillGemmQ6KSplitKWgsl(o: PrefillGemmOpts): string {
+  const { N, M, K } = o;
+  const { units: upr, per } = prefillGemmCheck(o, "prefillGemmQ6KSplitKWgsl");
+  return `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> part: array<f32>;
+const SBPR = ${upr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+const K_DIM = ${K}u;
+const WORDS = 53u;
+var<workgroup> xs: array<f32, ${M * 32}>;
+fn sbyte(base: u32, i: u32) -> u32 {
+  return (blocks[base + (i >> 2u)] >> ((i & 3u) * 8u)) & 0xffu;
+}
+fn sint8(base: u32, i: u32) -> f32 {
+  return f32((i32(sbyte(base, i)) << 24u) >> 24u);
+}
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let sbEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var sb = s * PER;
+  loop {
+    if (sb >= sbEnd) { break; }
+    for (var blk = 0u; blk < 8u; blk = blk + 1u) {
+      let n = blk >> 2u;
+      let c = blk & 3u;
+      let base = sb * 256u + blk * 32u;
+      for (var idx = t; idx < ${M * 32}u; idx = idx + 64u) {
+        let m = idx / 32u;
+        xs[idx] = x[m * K_DIM + base + (idx % 32u)];
+      }
+      workgroupBarrier();
+      if (r < N_ROWS) {
+        let wb = (r * SBPR + sb) * WORDS;
+        let d = unpack2x16float(blocks[wb + 52u]).x;
+        let scO = 192u + n * 8u;
+        let qlO = n * 64u + (c & 1u) * 32u;
+        let qhO = 128u + n * 32u;
+        let sh = 2u * c;
+        var q: array<f32, 32>;
+        for (var l = 0u; l < 32u; l = l + 1u) {
+          let ql = sbyte(wb, qlO + l);
+          let qh = sbyte(wb, qhO + l);
+          let nib = select(ql & 0xfu, ql >> 4u, c >= 2u);
+          q[l] = f32(nib | (((qh >> sh) & 3u) << 4u)) - 32.0;
+        }
+        let scA = sint8(wb, scO + 2u * c);
+        let scB = sint8(wb, scO + 1u + 2u * c);
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          var a = 0.0; var b = 0.0;
+          for (var l = 0u; l < 16u; l = l + 1u) {
+            a = a + q[l] * xs[m * 32u + l];
+            b = b + q[l + 16u] * xs[m * 32u + l + 16u];
+          }
+          acc[m] = acc[m] + d * (scA * a + scB * b);
+        }
+      }
+      workgroupBarrier();
+    }
+    sb = sb + 1u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+/**
+ * VIA INTERA q8_0 x q8_0 (`dot4I8Packed`) — la piu' semplice delle sei: i pesi
+ * SONO gia' i8.
+ *
+ * Niente unpack e niente termine costante — il ciclo interno e' `dot4I8Packed`
+ * nudo su otto parole, e la scala del peso per la scala di x si applica una
+ * volta per blocco. Passo di due blocchi per giro, come il q4_0 e il q4_1.
+ *
+ * Layout `repackQ8_0` (quant.ts): 8 parole di i8 per blocco da 32, scale a DUE
+ * f16 per parola come il q4_0 — quindi `scales[gb >> 1u][gb & 1u]`, che sul
+ * q4_1 sarebbe invece l'errore di formato.
+ *
+ * NIENTE `enable packed_4x8_integer_dot_product;`: e' una LANGUAGE FEATURE.
+ */
+export function prefillGemmQ80SplitKIdotWgsl(o: PrefillGemmOpts): string {
+  const { N, M } = o;
+  const { units: bpr, per } = prefillGemmCheck(o, "prefillGemmQ80SplitKIdotWgsl");
+  return `@group(0) @binding(0) var<storage, read> qs: array<u32>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> xq: array<u32>;
+@group(0) @binding(3) var<storage, read_write> part: array<f32>;
+@group(0) @binding(4) var<storage, read> xsc: array<f32>;
+const BPR = ${bpr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+var<workgroup> xs: array<u32, ${M * 16}>;
+var<workgroup> xss: array<f32, ${M * 2}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let bEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var b0 = s * PER;
+  loop {
+    if (b0 >= bEnd) { break; }
+    for (var idx = t; idx < ${M * 16}u; idx = idx + 64u) {
+      let m = idx / 16u;
+      let qi = idx % 16u;
+      xs[idx] = xq[(m * BPR + b0) * 8u + qi];
+    }
+    for (var idx = t; idx < ${M * 2}u; idx = idx + 64u) {
+      let m = idx / 2u;
+      xss[idx] = xsc[m * BPR + b0 + (idx % 2u)];
+    }
+    workgroupBarrier();
+    if (r < N_ROWS) {
+      for (var bi = 0u; bi < 2u; bi = bi + 1u) {
+        let gb = r * BPR + b0 + bi;
+        let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+        var w8: array<u32, 8>;
+        for (var ii = 0u; ii < 8u; ii = ii + 1u) { w8[ii] = qs[gb * 8u + ii]; }
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          let xo = m * 16u + bi * 8u;
+          var idot = 0i;
+          for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+            idot = idot + dot4I8Packed(w8[ii], xs[xo + ii]);
+          }
+          acc[m] = acc[m] + sc * f32(idot) * xss[m * 2u + bi];
+        }
+      }
+    }
+    workgroupBarrier();
+    b0 = b0 + 2u;
+  }
+  if (r < N_ROWS) {
+    for (var m = 0u; m < M_ROWS; m = m + 1u) { part[(s * M_ROWS + m) * N_ROWS + r] = acc[m]; }
+  }
+}`;
+}
+
+/**
+ * VIA f32 q8_0 — FALLBACK DICHIARATO: i pesi si convertono da i8, nient'altro.
+ *
+ * Le attivazioni si leggono DENSE row-major M x K (binding 2), non come `x4`
+ * vec4 alla maniera del q4_0: il tile e' di due blocchi da 32 per giro, cioe'
+ * M x 64 f32 (4.096 B a M=16).
+ */
+export function prefillGemmQ80SplitKWgsl(o: PrefillGemmOpts): string {
+  const { N, M, K } = o;
+  const { units: bpr, per } = prefillGemmCheck(o, "prefillGemmQ80SplitKWgsl");
+  return `@group(0) @binding(0) var<storage, read> qs: array<u32>;
+@group(0) @binding(1) var<storage, read> scales: array<u32>;
+@group(0) @binding(2) var<storage, read> x: array<f32>;
+@group(0) @binding(3) var<storage, read_write> part: array<f32>;
+const BPR = ${bpr}u;
+const PER = ${per}u;
+const N_ROWS = ${N}u;
+const M_ROWS = ${M}u;
+const K_DIM = ${K}u;
+var<workgroup> xs: array<f32, ${M * 64}>;
+@compute @workgroup_size(64)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let t = lid.x;
+  let r = wid.x * 64u + t;
+  let s = wid.y;
+  let bEnd = s * PER + PER;
+  var acc: array<f32, ${M}>;
+  for (var m = 0u; m < M_ROWS; m = m + 1u) { acc[m] = 0.0; }
+  var b0 = s * PER;
+  loop {
+    if (b0 >= bEnd) { break; }
+    for (var idx = t; idx < ${M * 64}u; idx = idx + 64u) {
+      let m = idx / 64u;
+      xs[idx] = x[m * K_DIM + b0 * 32u + (idx % 64u)];
+    }
+    workgroupBarrier();
+    if (r < N_ROWS) {
+      for (var bi = 0u; bi < 2u; bi = bi + 1u) {
+        let gb = r * BPR + b0 + bi;
+        let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];
+        // i 32 pesi del blocco in registri: le M righe li riusano
+        var q: array<f32, 32>;
+        for (var ii = 0u; ii < 8u; ii = ii + 1u) {
+          let w = qs[gb * 8u + ii];
+          for (var by = 0u; by < 4u; by = by + 1u) {
+            // il byte "by" della parola, come i8 con segno
+            q[ii * 4u + by] = f32((i32(w << ((3u - by) * 8u)) >> 24u));
+          }
+        }
+        for (var m = 0u; m < M_ROWS; m = m + 1u) {
+          var qx = 0.0;
+          for (var l = 0u; l < 32u; l = l + 1u) {
+            qx = qx + q[l] * xs[m * 64u + bi * 32u + l];
+          }
+          acc[m] = acc[m] + sc * qx;
         }
       }
     }

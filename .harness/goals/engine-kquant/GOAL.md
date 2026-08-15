@@ -56,10 +56,20 @@ sotto la barra che `engine-ttft` ha mancato.
      2026-08-10: expert Q4_K 17,67 GB · Q6_K 0,66 · attn Q8_0 1,09 · linear_attn
      Q8_0 0,27 · head Q8_0 0,54): la via veloce oggi ne copre lo 0%. Ma il suo
      collo non e' il kernel — 17,7 GB di expert non stanno in 16 GiB di scheda
-     (residency-bound), il suo prefill gira su un piano DIVERSO
-     (`moeprefillplan.ts`: unione degli expert per chunk, gather, readback CPU
-     per layer) e non e' mai stato rimisurato dopo i kernel nuovi, quindi non
-     esiste nemmeno la baseline da cui partire.
+     (residency-bound), il suo prefill NON passa dal piano del 4B e non e' mai
+     stato rimisurato dopo i kernel nuovi, quindi non esiste nemmeno la baseline
+     da cui partire.
+     [REFUSO CORRETTO in it.8, come il "K=2560" di it.2 — non e' una modifica di
+     scope.] Il contratto diceva che il prefill del 35B «gira su un piano DIVERSO
+     (`moeprefillplan.ts`)». E' FALSO, e verificato: `planMoeChunk` ha un solo
+     consumatore di produzione, `glmmodel.ts:1368` — il GLM, non il 35B. Il 35B
+     ripete per riga la catena del DECODE (`q35gpumodel.ts:2743-2778`, ramo
+     `moe`): readback CPU dei router logits per ogni riga, `pinUnion` che calcola
+     gia' l'unione ma solo per pinnare gli slot, poi un `for m2` con
+     `prepLayer` + `encodeExperts` per riga. Chi charter-a il goal 35B parta da
+     qui: `moeprefillplan.ts` e' gia' parametrico su `{nExpert, nExpertUsed}` e
+     `{256, 8}` lo soddisfa per struttura, quindi il piano CPU-side NON e' il
+     lavoro — il lavoro e' il ramo `moe` di `q35gpumodel.ts`.
      DECISIONE MIA (meccanismo e ordine, non funzione obiettivo): la FAMIGLIA DI
      KERNEL si fa qui e per intero — Q5_K, Q4_K, Q6_K e Q8_0, tutte misurate al
      banco e verificate col ktest; il CABLAGGIO e la misura end-to-end del 35B

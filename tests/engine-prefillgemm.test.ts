@@ -19,16 +19,23 @@ import {
 import {
   kquantQ5KMultiRowSplitKIdotWgsl, kquantQ5KMultiRowSplitKWgsl, kquantSplitsFor,
   kquantQ41MultiRowSplitKIdotWgsl, kquantQ41MultiRowSplitKWgsl,
+  kquantQ4KMultiRowSplitKIdotWgsl, kquantQ4KMultiRowSplitKWgsl,
+  kquantQ6KMultiRowSplitKIdotWgsl, kquantQ6KMultiRowSplitKWgsl,
+  kquantQ80MultiRowSplitKIdotWgsl, kquantQ80MultiRowSplitKWgsl,
+  type KQuantFamily,
 } from "../src/microbench/ttKQuant";
 import {
   prefillGemmQ4SplitKIdotWgsl, prefillGemmQ4SplitKWgsl,
   prefillGemmQ5KSplitKIdotWgsl, prefillGemmQ5KSplitKWgsl,
   prefillGemmQ41SplitKIdotWgsl, prefillGemmQ41SplitKWgsl,
+  prefillGemmQ4KSplitKIdotWgsl, prefillGemmQ4KSplitKWgsl,
+  prefillGemmQ6KSplitKIdotWgsl, prefillGemmQ6KSplitKWgsl,
+  prefillGemmQ80SplitKIdotWgsl, prefillGemmQ80SplitKWgsl,
   prefillQuantXQ8Wgsl, prefillSplitKCombineWgsl,
   prefillGemmGrid, prefillQuantXGrid, prefillCombineGrid,
   prefillGemmSplitsFor, prefillPartialFloats, prefillGemmWorkgroupStorageBytes,
-  PREFILL_GEMM_PORT_DIFFS, PREFILL_GEMM_KINDS,
-  type PrefillGemmOpts, type PrefillGemmKind,
+  PREFILL_GEMM_PORT_DIFFS, PREFILL_GEMM_KINDS, PREFILL_GEMM_WIRED_KINDS,
+  type PrefillGemmOpts,
 } from "../src/engine/kernels/wgsl";
 
 /** Le DUE shape misurate in riga 1 (qkv e down del 4B a chunk 16). */
@@ -59,6 +66,34 @@ const MEASURED_Q5K: PrefillGemmOpts[] = [
  */
 const MEASURED_Q41: PrefillGemmOpts[] = [
   { kind: "q4_1", K: 9216, N: 2560, M: 16, splits: 4 },
+];
+
+/**
+ * LE TRE FORME DELLA RIGA 4 — PORTATE, NON CABLATE.
+ *
+ * Le shape sono quelle di `KQUANT_SHAPES` (src/microbench/ttKQuant.ts), cioe'
+ * i tensori veri del 35B su cui la fase 0 ha misurato, e le fette sono quelle
+ * che `kquantSplitsFor` sceglie su quelle shape — verificato piu' sotto contro
+ * la funzione di banco, non riscritto a mano:
+ *   q4_K [2048,512]  = 8 superblocchi per riga -> 4 fette (expert gate/up)
+ *   q4_K [512,2048]  = 2 superblocchi per riga -> 2 fette (expert down, C0-4)
+ *   q6_K [512,2048]  = 2 superblocchi per riga -> 2 fette (down di 3 layer)
+ *   q8_0 [2048,4096] = 64 blocchi da 32       -> 4 fette (attn q-proj)
+ *
+ * Che questi kernel esistano NON vuol dire che il piano ci passi: `wired` e'
+ * false su tutti e tre, e chi lo verifica e'
+ * tests/engine-prefillgemmplan-notwired.test.ts. Qui si verifica solo che il
+ * TESTO sia quello che la fase 0 ha cronometrato.
+ */
+const MEASURED_Q4K: PrefillGemmOpts[] = [
+  { kind: "q4_K", K: 2048, N: 512, M: 16, splits: 4 },
+  { kind: "q4_K", K: 512, N: 2048, M: 16, splits: 2 },
+];
+const MEASURED_Q6K: PrefillGemmOpts[] = [
+  { kind: "q6_K", K: 512, N: 2048, M: 16, splits: 2 },
+];
+const MEASURED_Q80: PrefillGemmOpts[] = [
+  { kind: "q8_0", K: 2048, N: 4096, M: 16, splits: 4 },
 ];
 
 /**
@@ -182,6 +217,37 @@ function q41Pairs(o: PrefillGemmOpts): { name: string; bench: string; prod: stri
   ];
 }
 
+/**
+ * Le SEI forme della riga 4, appaiate coi loro gemelli di banco. Come per le
+ * altre famiglie, quantizzatore delle attivazioni e combine non compaiono: i
+ * sotto-blocchi K-quant sono da 32 e il q8_0 ha blocchi da 32, quindi tutte
+ * riusano `prefillQuantXQ8Wgsl` / `prefillSplitKCombineWgsl` tali e quali.
+ */
+function q4kPairs(o: PrefillGemmOpts): { name: string; bench: string; prod: string }[] {
+  const { K, N, M, splits } = o;
+  const b = { family: "q4_K" as const, K, N, M, splits };
+  return [
+    { name: "q4k-idot", bench: kquantQ4KMultiRowSplitKIdotWgsl(b), prod: prefillGemmQ4KSplitKIdotWgsl(o) },
+    { name: "q4k-f32", bench: kquantQ4KMultiRowSplitKWgsl(b), prod: prefillGemmQ4KSplitKWgsl(o) },
+  ];
+}
+function q6kPairs(o: PrefillGemmOpts): { name: string; bench: string; prod: string }[] {
+  const { K, N, M, splits } = o;
+  const b = { family: "q6_K" as const, K, N, M, splits };
+  return [
+    { name: "q6k-idot", bench: kquantQ6KMultiRowSplitKIdotWgsl(b), prod: prefillGemmQ6KSplitKIdotWgsl(o) },
+    { name: "q6k-f32", bench: kquantQ6KMultiRowSplitKWgsl(b), prod: prefillGemmQ6KSplitKWgsl(o) },
+  ];
+}
+function q80Pairs(o: PrefillGemmOpts): { name: string; bench: string; prod: string }[] {
+  const { K, N, M, splits } = o;
+  const b = { family: "q8_0" as const, K, N, M, splits };
+  return [
+    { name: "q80-idot", bench: kquantQ80MultiRowSplitKIdotWgsl(b), prod: prefillGemmQ80SplitKIdotWgsl(o) },
+    { name: "q80-f32", bench: kquantQ80MultiRowSplitKWgsl(b), prod: prefillGemmQ80SplitKWgsl(o) },
+  ];
+}
+
 describe("[a] semantica misurata preservata: il ciclo caldo e' quello del banco", () => {
   for (const o of MEASURED) {
     const tag = `K${o.K} N${o.N} M${o.M} splits${o.splits}`;
@@ -295,12 +361,199 @@ describe("[a]-port Q5_K: il testo e' quello del banco, riga per riga", () => {
     });
   }
 
-  it("i kind della via veloce sono esattamente q4_0, q5_K e q4_1", () => {
-    // L'ORDINE e' parte dell'asserzione: q4_1 sta in CODA. Chi legge questo
-    // elenco per costruire un piano o una tabella (t2..t6) lo consuma
+  it("i kind con un kernel sono sei; quelli INSTRADATI restano q4_0, q5_K e q4_1", () => {
+    // L'ORDINE e' parte dell'asserzione: i kind nuovi stanno in CODA. Chi legge
+    // questo elenco per costruire un piano o una tabella (t2..t6) lo consuma
     // posizionalmente, e un kind infilato in mezzo sposterebbe tutto in
     // silenzio.
-    expect([...PREFILL_GEMM_KINDS]).toEqual(["q4_0", "q5_K", "q4_1"]);
+    //
+    // PERCHE' QUESTA ASSERZIONE E' CAMBIATA (riga 4 del goal engine-kquant):
+    // diceva «esattamente q4_0, q5_K e q4_1» quando avere un kernel ed essere
+    // instradati erano la stessa cosa. Ora non lo sono: q4_K, q6_K e q8_0 hanno
+    // il kernel portato dal banco e misurato, ma `wired: false` tiene il piano
+    // fuori. Le DUE liste sono asserite separatamente proprio perche' la
+    // differenza fra le due e' il contenuto della riga 4 — se un giorno
+    // coincidessero di nuovo, sarebbe perche' qualcuno ha cablato, e allora
+    // questa riga deve fallire e farlo dire.
+    expect([...PREFILL_GEMM_KINDS]).toEqual(["q4_0", "q5_K", "q4_1", "q4_K", "q6_K", "q8_0"]);
+    expect([...PREFILL_GEMM_WIRED_KINDS]).toEqual(["q4_0", "q5_K", "q4_1"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [a]-port RIGA 4 — Q4_K, Q6_K e Q8_0: portate, NON cablate.
+//
+// Stessa tesi delle tre famiglie gia' in produzione, e vale ancora di piu' qui:
+// il testo che finira' sul device del 35B dev'essere quello che la fase 0 ha
+// cronometrato, perche' fra la misura e il cablaggio passa un goal intero e
+// nessuno rileggera' il diff. Il confronto e' TOTALE (`toBe` sull'intero testo)
+// riga per riga.
+//
+// Che il piano NON le instradi e' l'altra meta' del lavoro, e sta in
+// tests/engine-prefillgemmplan-notwired.test.ts: qui si guarda il testo.
+// ---------------------------------------------------------------------------
+describe("[a]-port riga 4: il testo delle tre forme del 35B e' quello del banco", () => {
+  // `fam` e' lo stesso letterale del kind, ma col tipo che il BANCO usa: e' cio'
+  // che permette di confrontare le fette contro `kquantSplitsFor` senza un cast
+  // (un cast qui potrebbe mentire proprio sul formato).
+  const ALL4: {
+    o: PrefillGemmOpts; fam: KQuantFamily; ps: { name: string; bench: string; prod: string }[];
+  }[] = [
+    ...MEASURED_Q4K.map((o) => ({ o, fam: "q4_K" as const, ps: q4kPairs(o) })),
+    ...MEASURED_Q6K.map((o) => ({ o, fam: "q6_K" as const, ps: q6kPairs(o) })),
+    ...MEASURED_Q80.map((o) => ({ o, fam: "q8_0" as const, ps: q80Pairs(o) })),
+  ];
+
+  for (const { o, fam, ps } of ALL4) {
+    const tag = `${o.kind} K${o.K} N${o.N} M${o.M} splits${o.splits}`;
+    for (const { name, bench, prod } of ps) {
+      it(`${tag} ${name}: identico al banco riga per riga`, () => {
+        const b = bench.split("\n");
+        const p = prod.split("\n");
+        expect(p.length, "numero di righe").toBe(b.length);
+        for (let i = 0; i < b.length; i++) {
+          expect(p[i], `${name}: riga ${i + 1} divergente dal banco`).toBe(b[i]);
+        }
+        expect(prod).toBe(bench);
+      });
+    }
+
+    it(`${tag}: le fette sono quelle di kquantSplitsFor, non un numero scelto`, () => {
+      expect(prefillGemmSplitsFor(o.K, o.N, o.kind)).toBe(kquantSplitsFor(fam, o.K));
+      expect(o.splits).toBe(kquantSplitsFor(fam, o.K));
+    });
+
+    it(`${tag}: niente enable packed_4x8, e la f32 non usa dot4I8Packed`, () => {
+      const [idot, f32] = ps.map((p) => p.prod);
+      for (const code of [idot, f32]) expect(code).not.toContain("enable packed_4x8");
+      expect(idot).toContain("dot4I8Packed");
+      expect(f32).not.toContain("dot4I8Packed");
+    });
+  }
+
+  it("Q4_K: binding CONGELATI e le righe calde del formato (il q5_K SENZA qh)", () => {
+    const o = MEASURED_Q4K[0];
+    expect(storageBindings(prefillGemmQ4KSplitKIdotWgsl(o))).toEqual([
+      "0:read:blocks:array<u32>",
+      "1:read:xq:array<u32>",
+      "2:read_write:part:array<f32>",
+      "3:read:xsc:array<f32>",
+    ]);
+    expect(storageBindings(prefillGemmQ4KSplitKWgsl(o))).toEqual([
+      "0:read:blocks:array<u32>",
+      "1:read:x:array<f32>",
+      "2:read_write:part:array<f32>",
+    ]);
+    // 36 parole (144 B) e `qs` a byte 16: sono i DUE numeri su cui un port
+    // distratto scivola verso il q5_K (44 parole, qs a 48). Il q5_K li ha
+    // davvero diversi, e qui lo si vede invece di darlo per scontato.
+    for (const code of [prefillGemmQ4KSplitKIdotWgsl(o), prefillGemmQ4KSplitKWgsl(o)]) {
+      expect(code).toContain("const WORDS = 36u;");
+      expect(code).not.toContain("const WORDS = 44u;");
+    }
+    expect(prefillGemmQ4KSplitKIdotWgsl(o)).toContain("let word = blocks[wb + 4u + g * 8u + ii];");
+    expect(prefillGemmQ4KSplitKWgsl(o)).toContain("let ql = sbyte(wb, 16u + g * 32u + l);");
+    // e nessun piano del 5o bit: `qh` non esiste in questo formato
+    expect(prefillGemmQ4KSplitKIdotWgsl(o)).not.toContain("qhw");
+    expect(prefillGemmQ4KSplitKWgsl(o)).not.toContain("(1u << is)");
+  });
+
+  it("Q6_K: binding CONGELATI, 53 parole, e l'offset -32 FUORI dal prodotto scalare", () => {
+    const o = MEASURED_Q6K[0];
+    expect(storageBindings(prefillGemmQ6KSplitKIdotWgsl(o))).toEqual([
+      "0:read:blocks:array<u32>",
+      "1:read:xq:array<u32>",
+      "2:read_write:part:array<f32>",
+      "3:read:xsc:array<f32>",
+    ]);
+    expect(storageBindings(prefillGemmQ6KSplitKWgsl(o))).toEqual([
+      "0:read:blocks:array<u32>",
+      "1:read:x:array<f32>",
+      "2:read_write:part:array<f32>",
+    ]);
+    // 53 parole = 212 B: il repack allinea il superblocco da 210 B alla parola,
+    // e contare 210 sottostimerebbe ogni riga dello 0,95%.
+    for (const code of [prefillGemmQ6KSplitKIdotWgsl(o), prefillGemmQ6KSplitKWgsl(o)]) {
+      expect(code).toContain("const WORDS = 53u;");
+    }
+    // via intera: i pesi restano senza segno e l'offset esce come -32*Sigma(x),
+    // perche' sottrarre 32 in forma impacchettata traboccherebbe fra i byte
+    expect(prefillGemmQ6KSplitKIdotWgsl(o)).toContain("32.0 * xh[(m * 8u + blk) * 2u]");
+    expect(prefillGemmQ6KSplitKIdotWgsl(o)).not.toContain(") - 32.0;");
+    // via f32: li' il -32 si sottrae direttamente dal peso, ed e' corretto
+    expect(prefillGemmQ6KSplitKWgsl(o)).toContain("q[l] = f32(nib | (((qh >> sh) & 3u) << 4u)) - 32.0;");
+  });
+
+  it("Q8_0: binding CONGELATI (due buffer come il q4_0) e il ciclo interno NUDO", () => {
+    const o = MEASURED_Q80[0];
+    expect(storageBindings(prefillGemmQ80SplitKIdotWgsl(o))).toEqual([
+      "0:read:qs:array<u32>",
+      "1:read:scales:array<u32>",
+      "2:read:xq:array<u32>",
+      "3:read_write:part:array<f32>",
+      "4:read:xsc:array<f32>",
+    ]);
+    expect(storageBindings(prefillGemmQ80SplitKWgsl(o))).toEqual([
+      "0:read:qs:array<u32>",
+      "1:read:scales:array<u32>",
+      "2:read:x:array<f32>",
+      "3:read_write:part:array<f32>",
+    ]);
+    // scale a DUE f16 per parola come il q4_0 (`repackQ8_0`), non una per blocco
+    // come il q4_1: e' la riga che distingue i due repack.
+    for (const code of [prefillGemmQ80SplitKIdotWgsl(o), prefillGemmQ80SplitKWgsl(o)]) {
+      expect(code).toContain("let sc = unpack2x16float(scales[gb >> 1u])[gb & 1u];");
+      expect(code).not.toContain("unpack2x16float(scales[gb])");
+      // geometria a blocchi da 32 col passo BK=2, come il q4_0
+      expect(code).toContain(`const BPR = ${o.K / 32}u;`);
+      expect(code).toContain(`const PER = ${o.K / 32 / o.splits}u;`);
+      expect(code).toContain("b0 = b0 + 2u;");
+    }
+    // niente unpack e niente termine costante: i pesi SONO gia' i8
+    expect(prefillGemmQ80SplitKIdotWgsl(o)).toContain("idot = idot + dot4I8Packed(w8[ii], xs[xo + ii]);");
+    expect(prefillGemmQ80SplitKIdotWgsl(o)).not.toContain("xsum");
+    expect(prefillGemmQ80SplitKIdotWgsl(o)).not.toContain("0x0f0f0f0fu");
+  });
+
+  it("workgroup storage: i numeri della spec sono quelli LETTI dal testo", () => {
+    // Stessa regola delle altre tre famiglie: la formula in PREFILL_GEMM_SPEC
+    // non puo' derivare dal kernel, quindi si confronta col testo vero.
+    const cases: [PrefillGemmOpts, (o: PrefillGemmOpts) => string, (o: PrefillGemmOpts) => string][] = [
+      [MEASURED_Q4K[0], prefillGemmQ4KSplitKIdotWgsl, prefillGemmQ4KSplitKWgsl],
+      [MEASURED_Q6K[0], prefillGemmQ6KSplitKIdotWgsl, prefillGemmQ6KSplitKWgsl],
+      [MEASURED_Q80[0], prefillGemmQ80SplitKIdotWgsl, prefillGemmQ80SplitKWgsl],
+    ];
+    for (const [base, genIdot, genF32] of cases) {
+      for (const M of [1, 8, 16]) {
+        const oo: PrefillGemmOpts = { ...base, M };
+        const idot = workgroupStorageBytes(genIdot(oo));
+        const f32 = workgroupStorageBytes(genF32(oo));
+        expect(prefillGemmWorkgroupStorageBytes(oo, "idot"), `${base.kind} M=${M}`).toBe(idot);
+        expect(prefillGemmWorkgroupStorageBytes(oo, "f32"), `${base.kind} M=${M}`).toBe(f32);
+        expect(prefillGemmWorkgroupStorageBytes(oo), `${base.kind} M=${M}`).toBe(Math.max(idot, f32));
+        expect(idot, `${base.kind} M=${M}`).toBeLessThanOrEqual(16384);
+        expect(f32, `${base.kind} M=${M}`).toBeLessThanOrEqual(16384);
+      }
+    }
+    // I numeri a M=16, scritti perche' si leggano: q4_K e' il q5_K (tre array,
+    // 320·M B); il q6_K ha in piu' `xh` per MEZZO sotto-blocco (352·M B); il
+    // q8_0 e' il q4_0 senza `xsum` (72·M B) con una f32 da M*64 f32 (256·M B).
+    expect(prefillGemmWorkgroupStorageBytes(MEASURED_Q4K[0], "idot")).toBe(5120);
+    expect(prefillGemmWorkgroupStorageBytes(MEASURED_Q4K[0], "f32")).toBe(2048);
+    expect(prefillGemmWorkgroupStorageBytes(MEASURED_Q6K[0], "idot")).toBe(5632);
+    expect(prefillGemmWorkgroupStorageBytes(MEASURED_Q6K[0], "f32")).toBe(2048);
+    expect(prefillGemmWorkgroupStorageBytes(MEASURED_Q80[0], "idot")).toBe(1152);
+    expect(prefillGemmWorkgroupStorageBytes(MEASURED_Q80[0], "f32")).toBe(4096);
+    // lo scarto q6_K - q4_K sulla via intera e' ESATTAMENTE `xh` (M*16 f32)
+    expect(prefillGemmWorkgroupStorageBytes(MEASURED_Q6K[0], "idot")
+      - prefillGemmWorkgroupStorageBytes(MEASURED_Q4K[0], "idot")).toBe(16 * 16 * 4 - 16 * 8 * 4);
+  });
+
+  it("griglia e parziali: le stesse formule, sulle shape del 35B", () => {
+    for (const o of [...MEASURED_Q4K, ...MEASURED_Q6K, ...MEASURED_Q80]) {
+      expect(prefillGemmGrid(o)).toEqual([Math.ceil(o.N / 64), o.splits, 1]);
+      expect(prefillPartialFloats(o)).toBe(o.splits * o.M * o.N);
+    }
   });
 });
 
@@ -445,6 +698,13 @@ describe("[b] ogni divergenza dal banco e' dichiarata in PREFILL_GEMM_PORT_DIFFS
     ...MEASURED.map((o) => ({ o, ps: pairs(o) })),
     ...MEASURED_Q5K.map((o) => ({ o, ps: q5kPairs(o) })),
     ...MEASURED_Q41.map((o) => ({ o, ps: q41Pairs(o) })),
+    // Riga 4: le tre forme del 35B entrano nel MECCANISMO delle divergenze
+    // come tutte le altre. Un port che non compare in questa lista non e'
+    // sorvegliato da niente — e' proprio il modo in cui un kernel portato "a
+    // occhio" resterebbe verde.
+    ...MEASURED_Q4K.map((o) => ({ o, ps: q4kPairs(o) })),
+    ...MEASURED_Q6K.map((o) => ({ o, ps: q6kPairs(o) })),
+    ...MEASURED_Q80.map((o) => ({ o, ps: q80Pairs(o) })),
   ];
   for (const { o, ps } of ALL) {
     for (const { name, bench, prod } of ps) {
@@ -475,7 +735,7 @@ describe("[b] ogni divergenza dal banco e' dichiarata in PREFILL_GEMM_PORT_DIFFS
 
   // Il record VUOTO dice una cosa precisa: il port non ha riscritto niente.
   // Senza questa asserzione, "vuoto" sarebbe indistinguibile da "dimenticato".
-  it("record vuoto => gli otto kernel sono byte-per-byte quelli del banco", () => {
+  it("record vuoto => TUTTI i kernel appaiati sono byte-per-byte quelli del banco", () => {
     if (Object.keys(PREFILL_GEMM_PORT_DIFFS).length !== 0) return;
     for (const { o, ps } of ALL) {
       for (const { name, bench, prod } of ps) {
@@ -827,12 +1087,25 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
     // fette, e quando le 4 misurate non dividono ripiega su 1 (vedi [e]).
   });
 
-  it("kind fuori dai tre supportati -> throw che NOMINA il kind e i kind supportati", () => {
-    for (const kind of ["q8_0", "q4_K", "q6_K", "f32"]) {
+  // COSA E' CAMBIATO QUI, E PERCHE' (riga 4 del goal engine-kquant): la lista
+  // era `["q8_0", "q4_K", "q6_K", "f32"]`. Quei tre K-quant ADESSO HANNO IL LORO
+  // KERNEL — portato dal banco e misurato — quindi il contorno non li rifiuta
+  // piu', e pretendere il contrario misurerebbe il passato. Restano fuori i
+  // formati per cui un moltiplicatore multi-riga non esiste: `f32` (che non e'
+  // quantizzato) e le due famiglie che il motore sa leggere ma per cui nessuno
+  // ha misurato una forma di prefill (`q3_K`, `q2_K` — v. quant.ts).
+  // ATTENZIONE ALLA DISTINZIONE: "il kernel lo rifiuta" NON e' "il piano non lo
+  // instrada". q8_0/q4_K/q6_K sono nel secondo caso, e chi lo verifica e'
+  // tests/engine-prefillgemmplan-notwired.test.ts.
+  it("kind senza kernel -> throw che NOMINA il kind e i kind supportati", () => {
+    for (const kind of ["f32", "q3_K", "q2_K"]) {
       const k = { ...MEASURED[0], kind } as unknown as PrefillGemmOpts;
       for (const gen of [prefillGemmQ4SplitKIdotWgsl, prefillGemmQ4SplitKWgsl,
         prefillGemmQ5KSplitKIdotWgsl, prefillGemmQ5KSplitKWgsl,
-        prefillGemmQ41SplitKIdotWgsl, prefillGemmQ41SplitKWgsl]) {
+        prefillGemmQ41SplitKIdotWgsl, prefillGemmQ41SplitKWgsl,
+        prefillGemmQ4KSplitKIdotWgsl, prefillGemmQ4KSplitKWgsl,
+        prefillGemmQ6KSplitKIdotWgsl, prefillGemmQ6KSplitKWgsl,
+        prefillGemmQ80SplitKIdotWgsl, prefillGemmQ80SplitKWgsl]) {
         // il kind RIFIUTATO e' nominato...
         expect(() => gen(k), kind).toThrow(new RegExp(kind));
         // ...e anche quelli supportati, cosi' il messaggio dice dove si puo' andare
@@ -851,10 +1124,13 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
       // superblocchi non divisibili per le fette
       expect(() => gen({ ...q5, splits: 3 })).toThrow(/fette/);
     }
-    // e un kind non supportato viene rifiutato PRIMA della geometria: il
-    // messaggio parla del formato, non del K
-    const k = { ...q5, kind: "q4_K", K: 4128 } as unknown as PrefillGemmOpts;
-    expect(() => prefillGemmQ5KSplitKIdotWgsl(k)).toThrow(/q4_K/);
+    // e un kind SENZA KERNEL viene rifiutato PRIMA della geometria: il
+    // messaggio parla del formato, non del K.
+    // Era `q4_K`, che da riga 4 il kernel ce l'ha: il caso serve un formato
+    // davvero fuori dall'elenco, e `q3_K` lo e' (il motore lo legge, nessuno ne
+    // ha misurato una forma multi-riga di prefill).
+    const k = { ...q5, kind: "q3_K", K: 4128 } as unknown as PrefillGemmOpts;
+    expect(() => prefillGemmQ5KSplitKIdotWgsl(k)).toThrow(/q3_K/);
     let msg = "";
     try { prefillGemmQ5KSplitKIdotWgsl(k); } catch (e) { msg = (e as Error).message; }
     expect(msg).not.toContain("4128");
@@ -868,23 +1144,32 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
       // 288 blocchi non si dividono in 7 fette da BK=2
       expect(() => gen({ ...q41, splits: 7 })).toThrow(/fette/);
     }
-    // e un kind non supportato viene rifiutato PRIMA della geometria
-    const k = { ...q41, kind: "q4_K", K: 9248 } as unknown as PrefillGemmOpts;
-    expect(() => prefillGemmQ41SplitKIdotWgsl(k)).toThrow(/q4_K/);
+    // e un kind SENZA KERNEL viene rifiutato PRIMA della geometria. Era `q4_K`,
+    // che da riga 4 il kernel ce l'ha (v. la ragione nel test Q5_K qui sopra).
+    const k = { ...q41, kind: "q3_K", K: 9248 } as unknown as PrefillGemmOpts;
+    expect(() => prefillGemmQ41SplitKIdotWgsl(k)).toThrow(/q3_K/);
     let msg = "";
     try { prefillGemmQ41SplitKIdotWgsl(k); } catch (e) { msg = (e as Error).message; }
     expect(msg).not.toContain("9248");
   });
 
   it("il predicato sta in UNA sede sola: tutte le funzioni rifiutano allo stesso modo", () => {
-    // Otto generatori/funzioni, un solo `prefillGemmCheck`. Se una di queste
-    // avesse il suo predicato, un kind nuovo entrerebbe da una porta e non
-    // dall'altra.
-    const kinds: PrefillGemmKind[] = [...PREFILL_GEMM_KINDS];
-    expect(kinds.length).toBe(3);
-    const k = { ...MEASURED[0], kind: "q6_K" } as unknown as PrefillGemmOpts;
+    // Dodici generatori e tre funzioni di geometria, un solo
+    // `prefillGemmCheck`. Se una di queste avesse il suo predicato, un kind
+    // nuovo entrerebbe da una porta e non dall'altra.
+    //
+    // I DUE CONTI SONO DIVERSI, ED E' IL PUNTO DELLA RIGA 4. Questa riga
+    // diceva `expect(kinds.length).toBe(3)` quando "kind con un kernel" e
+    // "kind instradato" erano la stessa cosa. Il 3 non era la lunghezza
+    // dell'array: era il numero di formati che il piano manda sulla via veloce,
+    // ed e' QUELLO il valore che va pinnato — oggi lo porta
+    // `PREFILL_GEMM_WIRED_KINDS`. La lunghezza dell'elenco e' 6 e vale un'altra
+    // cosa: quanti kernel esistono.
+    expect(PREFILL_GEMM_KINDS.length, "kernel esistenti").toBe(6);
+    expect(PREFILL_GEMM_WIRED_KINDS.length, "kind instradati dal piano").toBe(3);
+    const k = { ...MEASURED[0], kind: "q3_K" } as unknown as PrefillGemmOpts;
     for (const f of [prefillGemmGrid, prefillPartialFloats, prefillGemmWorkgroupStorageBytes]) {
-      expect(() => f(k)).toThrow(/q6_K/);
+      expect(() => f(k)).toThrow(/q3_K/);
     }
   });
 });

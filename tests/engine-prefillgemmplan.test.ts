@@ -125,9 +125,17 @@ describe("[1] la via: idot dove si puo', f32 come fallback dichiarato, legacy co
     // del kernel (`prefillGemmCheck`, dentro `prefillPartialFloats`) e riporta
     // il suo messaggio. Qui si verifica proprio quello — la ragione CONTIENE
     // alla lettera cio' che il kernel dice quando gli si chiede la shape.
+    // COSA E' CAMBIATO IN QUESTA LISTA, E PERCHE' (riga 4 di engine-kquant):
+    // c'erano `q4_K` e `q6_K` a K=4096. Da riga 4 quei due formati HANNO il
+    // loro kernel, quindi `prefillPartialFloats` non solleva piu' su quella
+    // shape e il caso non provava piu' niente — pretendere il contrario
+    // avrebbe misurato il passato. Al loro posto c'e' `f32`, che un
+    // moltiplicatore multi-riga non ce l'ha e non l'avra': il caso che questo
+    // test vuole e' «il kernel rifiuta, il piano riporta», non «il piano non
+    // instrada» (quello e' il flag `wired`, e sta in
+    // tests/engine-prefillgemmplan-notwired.test.ts).
     for (const bad of [
-      { kind: "q4_K" as PrefillQuantKind, K: 4096 },
-      { kind: "q6_K" as PrefillQuantKind, K: 4096 },
+      { kind: "f32" as PrefillQuantKind, K: 4096 },
       { kind: "q4_0" as PrefillQuantKind, K: 2592 },
       // Q5_K con K non multiplo di 256: il formato ora e' AMMESSO, e' la
       // geometria a non tornare (un superblocco non si taglia a meta').
@@ -147,9 +155,13 @@ describe("[1] la via: idot dove si puo', f32 come fallback dichiarato, legacy co
       expect(r.reason).toContain(kernelMsg);
     }
     // ...e l'ordine dei rifiuti e' quello del kernel: prima il formato, poi la
-    // geometria. Su un kind ANCORA NON SUPPORTATO (q4_K, q6_K) con K storto, il
+    // geometria. Su un kind NON INSTRADATO (q4_K, q6_K) con K storto, il
     // messaggio deve dire il KIND — che e' la ragione strutturale e quella su
-    // cui si puo' agire — e non il K, che e' la seconda.
+    // cui si puo' agire — e non il K, che e' la seconda. Da riga 4 il rifiuto
+    // di questi due arriva dal FLAG DI CABLAGGIO invece che dal contorno del
+    // kernel, e l'ordine e' lo stesso per la stessa ragione: anche con K buono
+    // resterebbero legacy, quindi parlare del K sarebbe una risposta vera e
+    // inutile.
     for (const kind of ["q4_K", "q6_K"] as const) {
       const both = planPrefillGemm({ kind, K: 2592, N: 2560, M, idot: true });
       expect(both.reason, kind).toContain(kind);

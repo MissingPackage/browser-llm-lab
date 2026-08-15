@@ -540,3 +540,132 @@ servita.
 
 **PROSSIMA: riga 4** — le tre forme del 35B (Q4_K, Q6_K, Q8_0) misurate e
 verificate ma **non** cablate, piu' la scheda di consegna al goal successivo.
+
+## it.8 — RIGA 4 CHIUSA: tre formati portati, verificati, e NON cablati (2026-08-15)
+
+**`[ktest] OK — 111 PASS, 0 FAIL`.** I sei bracci nuovi (due per formato) girano
+su GPU vera e stanno tutti **sul pavimento derivato o appena sotto**:
+
+    prefill-gemm-q4k-multirow-idot  maxRel 7,39e-5   floor 7,841e-5   tol 1e-3
+    prefill-gemm-q4k-multirow-f32   maxRel 3,86e-5   floor 6,266e-5   tol 8e-4
+    prefill-gemm-q6k-multirow-idot  maxRel 8,08e-5   floor 8,810e-5   tol 1e-3
+    prefill-gemm-q6k-multirow-f32   maxRel 5,63e-3   floor 1,118e-2   tol 1,5e-1
+    prefill-gemm-q80-multirow-idot  maxRel 5,96e-4   floor 7,611e-4   tol 1e-2
+    prefill-gemm-q80-multirow-f32   maxRel 2,04e-4   floor 1,859e-4   tol 2e-3
+
+E' la terza volta di fila che i pavimenti derivati predicono il silicio, ora su
+tre formati che in produzione non erano mai girati. La regola «la tolleranza si
+deriva, non si sceglie» ha smesso di essere una preferenza di stile.
+
+### Il conflitto di fattibilita', trovato PRIMA di spendere
+
+La riga 4 chiedeva due cose che oggi non stavano insieme: **il kernel in
+produzione** e **il piano che non lo instrada**. Il predicato di ammissibilita'
+del piano non e' una lista propria — e' derivato INTERAMENTE da
+`PREFILL_GEMM_KINDS`, per design dichiarato (`prefillgemmplan.ts:174-193`: «IL
+PREDICATO NON VIVE QUI: si SONDA il kernel»). Quindi «il kernel esiste ma non e'
+instradato» non era esprimibile.
+
+E non era un cavillo: **`prefillGemmCheck` controlla kind, K e splits ma NON N**.
+Mettere `q8_0` fra i kind avrebbe instradato da solo i **48 siti
+`ssm_alpha`/`ssm_beta` del 4B con N=32** — mezzo workgroup per dispatch — che il
+contratto esclude coi numeri. Su q4_K e q6_K non sarebbe cambiato nulla (il 4B
+non ne ha un byte); su q8_0 si', e in silenzio.
+
+**Deciso da me** (meccanismo, non funzione obiettivo): flag **`wired` +
+`wiredWhy`** in `PREFILL_GEMM_SPEC`, dove gia' vivono tutti i numeri che
+dipendono dal formato, consumato in **una sede sola** dentro `kernelVerdict` di
+`prefillgemmplan.ts` — quindi nessun secondo predicato fuori da quel file, che
+e' cio' che il gate strutturale sorveglia. Il `wiredWhy` non e' ornamento: un
+booleano nudo non e' diagnosticabile, e la ragione finisce in telemetria.
+
+**Il rifiuto per cablaggio ha una frase DIVERSA da quello geometrico.** Dare a
+«questa shape non si moltiplica cosi'» e a «questa shape si moltiplicherebbe
+benissimo, ma nessun sito ci passa» la stessa diagnosi avrebbe messo in
+telemetria un problema di geometria dove il kernel non c'entra niente.
+
+### Il port e' un port, e c'e' il numero che lo prova
+
+`PREFILL_GEMM_PORT_DIFFS` resta **`{}`** con sei kernel in piu': il testo
+portato e' byte-per-byte quello che la fase 0 ha misurato, verificato nelle due
+direzioni su **14 coppie**. Se avessi riscritto invece di portare, il record non
+sarebbe potuto restare vuoto.
+
+**La produzione del 4B non cambia di un dispatch**: `[6c]` invariato a 15,5247x,
+200/248 siti, 48 eccezioni tutte q8_0. Verificato anche sul caso concreto (q8_0
+K=2560 N=32 resta legacy), non solo sul flag. E il gate morde: girando
+`wired: true` su q8_0 falliscono 8 test in 3 file — provato mutando e
+revertendo.
+
+### Il refuso nel contratto, corretto
+
+`GOAL.md` diceva che il prefill del 35B «gira su un piano DIVERSO
+(`moeprefillplan.ts`)». **E' falso**: `planMoeChunk` ha un solo consumatore di
+produzione, `glmmodel.ts:1368` — il GLM, non il 35B. Il 35B ripete per riga la
+catena del DECODE (`q35gpumodel.ts:2743-2778`): readback CPU dei router logits
+per riga, `pinUnion` che calcola gia' l'unione ma solo per pinnare gli slot, poi
+`prepLayer` + `encodeExperts` per riga — 40 round-trip per chunk, 512 dispatch
+per layer. Corretto sul posto col precedente del refuso `K=2560` di it.2. Chi
+avesse ereditato quella frase avrebbe chartato il goal 35B sul file sbagliato:
+il piano CPU-side e' gia' parametrico su `{nExpert, nExpertUsed}` e `{256, 8}`
+lo soddisfa per struttura — **il lavoro e' il ramo `moe` di `q35gpumodel.ts`**.
+
+### Il caso q6_K via f32, che meritava di essere sospettato
+
+Pavimento relativo **1,118e-2** e tolleranza **1,5e-1**: una tolleranza
+relativa del 15% ha tutta l'aria della compiacenza. Non lo e', ed e' stato
+verificato: il caso peggiore cade sull'uscita di modulo **piu' piccolo
+dell'intera griglia** (|ref| = 4,395e-2 contro una media di 1,340e3), dove
+l'errore assoluto vale 4,914e-4 — dentro il pavimento assoluto della stessa
+via. E' una cancellazione, non un kernel impreciso. La tolleranza e' forzata dal
+pavimento (13,4x sopra, sotto il tetto di 20x che il test impone) e il
+discriminante regge lo stesso: la mutazione porta l'errore a >10x la
+tolleranza. Su GPU vera il misurato e' **5,63e-3**, meta' dell'inviluppo.
+
+**Una precisazione che correggo dal report dell'agent**: `compare` fa
+`maxAbs <= absTol || maxRel <= relTol` — un OR sui MASSIMI, non elemento per
+elemento (`ktest.worker.ts:124`). Quindi non e' vero che «li' il giudizio lo
+porta il ramo assoluto»: con quel relativo il banco passa dal ramo relativo. Non
+e' un difetto — la mutazione dimostra che discrimina lo stesso — ma la ragione
+scritta accanto dev'essere quella giusta.
+
+### La trappola che il goal 35B eredita, scritta in tre posti
+
+**Il flag `wired` e' per FORMATO, non per shape.** Il giorno in cui il goal 35B
+accendera' `q8_0` per i suoi tensori attn (N=4096), i 48 siti del 4B con N=32
+entreranno **nello stesso istante**, perche' `prefillGemmCheck` continua a non
+guardare N. Serve, in quel momento, un predicato sulla shape. Sta nella
+`wiredWhy`, nella scheda di consegna e qui — ma una stringa non e' un gate, e
+chi cabla deve saperlo prima di girare il flag.
+
+### DONE WHEN della riga 4, voce per voce
+
+| clausola | esito | evidenza |
+|---|---|---|
+| un caso ktest PASS per ciascuna delle tre forme | **si'** | 6 bracci, 111 PASS / 0 FAIL |
+| test che il piano NON le instrada | **si'** | `engine-prefillgemmplan-notwired.test.ts`, 17 test, gate mutato e provato |
+| scheda di consegna al goal 35B | **si'** | `docs/engine/kquant-consegna-35b-2026-08-15.md`, 423 righe |
+| tsc + vitest verdi | **si'** | exit 0 · **998 passed, 10 skipped** (erano 836: +162) |
+
+**RIGA 4 CHIUSA.**
+
+### Difetti tolti sul percorso, non recintati
+
+- il commento di `q35gpumodel.ts:530` diceva «se domani il q4_K entra
+  nell'elenco»: e' entrato oggi. Riscritto col fatto, e con la ragione per cui
+  la guardia doppia resta la difesa che conta anche ora che i tre kind sono
+  `wired: false`;
+- l'avviso in `engine-ktest-q41-wiring.test.ts` sul conteggio dei generatori
+  condivisi a livello di file era **gia' falso** (il debito era stato pagato in
+  it.6): sostituito con la constatazione e la regola per chi aggiunge il settimo
+  banco. Verificato che nessun test conti piu' a livello di file.
+
+**NON toccato di proposito**: `docs/engine/kquant-riga3-coda-spec.md` parla di
+due formati su cinque, ma e' l'ordine di lavoro di UNA coda gia' eseguita, non
+un riferimento vivo. Estenderlo lo trasformerebbe in un documento che non e'.
+
+**PROSSIMA: riga 5** — la misura di chiusura. Checkpoint fresco sul prompt-idx 0,
+le due barre di segmento a 2.000 ms, e il debito di
+`build-ttft-checkpoint.mjs:108` (i byte del segmento derivati dal meter invece
+che ricopiati). **E' la prima riga da it.4 che muove la metrica del goal**, ed e'
+la prima misura di tempo dell'intero goal.

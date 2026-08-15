@@ -33,17 +33,17 @@
 // solo per il q4_1 (e restare indifferente a quello che il q5_K fa o smette di
 // fare).
 //
-// CONSEGUENZA DICHIARATA, e non risolvibile da qui: il gemello Q5_K conta
-// ancora quei generatori condivisi A LIVELLO DI FILE (`callsTo(code(KTEST), …)`
-// con prefillQuantXQ8Wgsl atteso 1 volta e prefillSplitKCombineWgsl 2). Quando
-// t2-ktest-bank aggiungera' il banco q4_1 — che usa gli stessi due generatori —
-// quei due conteggi diventeranno 2 e 4, e il gemello passera' da verde a ROSSO
-// senza che nulla del q5_K sia cambiato. Non e' un difetto di questo file, e il
-// gemello NON e' di questo task (interfaceFreeze: non si tocca nessun altro
-// file): serve un follow-up che ri-scopi il suo blocco (c) al corpo del PROPRIO
-// banco, esattamente come qui. Finche' quel follow-up non entra, il merge del
-// banco q4_1 romperebbe un test verde — e il gate di non-regressione del
-// progetto e' permanente.
+// E IL GEMELLO Q5_K FA LO STESSO. Quando questo file e' stato scritto, il
+// gemello contava ancora quei generatori condivisi A LIVELLO DI FILE
+// (`callsTo(code(KTEST), …)`), e qui stava annotato il debito: un conteggio
+// cosi' sarebbe tornato ROSSO a ogni banco nuovo per una ragione che non ha
+// niente a che vedere con cio' che il test difende. Il debito e' stato PAGATO —
+// `tests/engine-ktest-q5k-wiring.test.ts` blocco (c) conta dentro
+// `bankBody(code(KTEST))`, col suo commento accanto — e con i tre banchi della
+// riga 4 (q4_K, q6_K, q8_0) la cosa si vede: sei banchi usano gli stessi due
+// generatori condivisi, e nessuno dei cinque file di cablaggio se ne accorge.
+// La regola che ne resta, per chi aggiunge il settimo: i generatori condivisi si
+// contano SEMPRE nel corpo del proprio banco.
 //
 // Il verdetto NUMERICO non e' di questo test: lo da' `node
 // .harness/tools/engine-ktest.mjs`, che vuole un vite server e un Chrome vero.

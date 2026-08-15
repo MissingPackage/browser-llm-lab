@@ -133,3 +133,24 @@ il goal e cosa e' in dubbio.
   piu' erano speranza, non misura.
 - **Difetto tolto**: il comando di ripresa in HANDOFF.md era senza `BASE_URL` e
   puntava alla 5173 di default. Fallito al primo colpo, corretto.
+
+## it.8 — riga 4 CHIUSA: le tre forme del 35B verificate su GPU, e non cablate (2026-08-15)
+
+- **ktest 111 PASS / 0 FAIL**: sei bracci nuovi (q4_K, q6_K, q8_0 × idot/f32),
+  tutti **sul pavimento derivato o appena sotto**. Terza volta di fila che i
+  pavimenti predicono il silicio, ora su formati mai girati in produzione.
+- **Conflitto di fattibilita' risolto prima di spendere**: il piano derivava i
+  formati ammessi dall'elenco dei kernel, quindi «portato ma non instradato» non
+  era esprimibile — e `prefillGemmCheck` non guarda N, per cui il solo q8_0
+  avrebbe instradato in silenzio i 48 siti del 4B a N=32. Flag `wired` +
+  `wiredWhy`, una sede sola, rifiuto con frase propria.
+- **Il port e' provato port**: `PREFILL_GEMM_PORT_DIFFS` resta vuoto con sei
+  kernel in piu' (14 coppie, due direzioni). Produzione del 4B invariata:
+  `[6c]` 15,5247x, 200/248 siti, zero dispatch di differenza.
+- **Refuso corretto nel contratto**: il prefill del 35B NON gira su
+  `moeprefillplan.ts` (unico consumatore: il GLM). Il lavoro del goal successivo
+  e' il ramo `moe` di `q35gpumodel.ts` — 40 readback per chunk, 512 dispatch per
+  layer. Il piano CPU-side e' gia' parametrico e non e' il lavoro.
+- **Suite: 998 passed | 10 skipped** (erano 836), tsc exit 0.
+- **Trappola consegnata scritta**: `wired` e' per formato, non per shape. Quando
+  il 35B accendera' q8_0, i 48 siti del 4B entrano nello stesso istante.

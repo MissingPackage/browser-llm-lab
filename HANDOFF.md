@@ -2,45 +2,62 @@
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-kquant`. Righe 1, 2 e 3 CHIUSE E VERIFICATE SU GPU.
-PROSSIMA: RIGA 4.**
+**GOAL ATTIVO: `engine-kquant`. Righe 1, 2, 3 e 4 CHIUSE. PROSSIMA: RIGA 5 — la
+misura di chiusura, e la PRIMA misura di tempo dell'intero goal.**
 Chartered 2026-08-14. `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
 
-**IL GATE GPU E' TORNATO, ED ERA L'AMBIENTE.** Il PI ha riavviato la macchina —
-il discriminante che avevo chiesto in it.6 — e il ktest e' passato al primo
-tentativo utile, **senza che io toccassi una riga di codice**: `105 PASS /
-0 FAIL`, adapter `nvidia lovelace`, con `q35-mtp-head-real-blk32` PASS e tutti i
-casi che lo seguono PASS. Il banco e' scagionato, docket item 2 chiuso, **non
-c'e' nessuna tassa da pagare sui goal futuri.**
+**LA RIGA 5 E' L'UNICA COSA CHE MUOVE ANCORA LA METRICA.** Tutto il resto del
+goal e' correttezza e consegna. Cosa chiede, meccanicamente:
+- checkpoint fresco sul **prompt-idx 0** (il default del flag e' 4 = 388 token:
+  e' il flag da cui e' venuto un numero sbagliato in un goal precedente,
+  LEGGERLO prima di spendere GPU);
+- `gemm:deltanet-out` **<= 2.000 ms** (oggi 12.169) e `gemm:ffn-down`
+  **<= 2.000 ms** (oggi 4.971), coi byte e i GB/s per segmento accanto;
+- `prefill.ms + decode.firstMs` **< 22.500 ms** (oggi 32.127; nice-to-have
+  18.000). Proiezione dal banco: **~16,9 s** — proiezione, non risultato;
+- il debito di `scripts/build-ttft-checkpoint.mjs:108`, che ricopia a mano
+  `173_015_040` invece di derivarlo da `prefillbytes.ts`: **due posti che
+  decidono lo stesso numero**, e quel segmento in questo goal ha cambiato forma.
 
-Come si rilancia il gate (il `BASE_URL` NON e' opzionale: il runner di default
-parla alla 5173):
+Comandi (il `BASE_URL` NON e' opzionale: il runner del ktest di default parla
+alla 5173):
 
     setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
-    curl -s -o /dev/null -w "%{http_code}" http://localhost:5199/ktest.html   # 200
-    BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs   # 105 PASS / 0 FAIL
+    BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs   # 111 PASS / 0 FAIL
+    node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --declared quiescent
+    node scripts/build-ttft-checkpoint.mjs
 
 **DOVE STA IL MOTORE ADESSO** (tutto committato e pushato su origin/main):
-- **Riga 2 — Q5_K in produzione, VERIFICATA**: casi ktest a maxRel 2,61e-7 e
-  4,28e-7.
-- **Riga 3 — Q4_1 in produzione, VERIFICATA su GPU vera** (2026-08-15):
-  `prefill-gemm-q41-multirow-idot` maxRel **1,73e-5**, `-f32` **1,51e-5**,
-  contro pavimenti derivati dal floor test 1,693e-5 / 1,715e-5 e tolleranza
-  2e-4. **L'errore misurato sta SUL pavimento**: il margine 11,8x e' aritmetica
-  del formato, non slack. La mutazione che toglie `m*Sigma(x)` porta l'errore a
-  5,233 — il banco boccia davvero un kernel che sbaglia il formato.
-- **Copertura del piano: 5,8593x → 15,5247x** sull'inventario per-layer INTERO
-  del 4B a M=16. **200/248 siti = 99,796% dei byte.** Resta legacy un solo
-  kind: 48 siti Q8_0 con N=32 (0,204%), esclusi coi numeri dal contratto.
-- **Suite senza GPU: 836 passed | 10 skipped** (exit 0), `tsc --noEmit` exit 0.
-- **NESSUNA MISURA DI TEMPO NUOVA**: che il TTFT sia sceso **non e' stato
-  misurato**. Il piano non e' il cronometro, e la riga 5 non e' stata eseguita.
-  Proiezione dal banco: −15,2 s ⇒ ~16,9 s. E' una proiezione, non un risultato.
+- **Q5_K e Q4_1 in produzione e VERIFICATI su GPU** (righe 2 e 3). Copertura del
+  piano **5,8593x -> 15,5247x**: 200/248 siti = **99,796% dei byte** del prefill
+  del 4B. Resta legacy un solo kind: 48 siti Q8_0 con N=32 (0,204%).
+- **Q4_K, Q6_K e Q8_0 PORTATI, VERIFICATI e NON CABLATI** (riga 4). I sei
+  bracci ktest stanno tutti sul pavimento derivato o appena sotto.
+  `PREFILL_GEMM_PORT_DIFFS` resta **vuoto**: il testo portato e' byte-per-byte
+  quello che la fase 0 ha misurato.
+- **ktest: 111 PASS / 0 FAIL.** Suite senza GPU: **998 passed | 10 skipped**
+  (exit 0), `tsc --noEmit` exit 0.
+- **NESSUNA MISURA DI TEMPO IN TUTTO IL GOAL, ancora.** Che il TTFT sia sceso
+  **non e' stato misurato**. Il piano non e' il cronometro.
 
-**RIGA 4, la prossima**: le tre forme del 35B (Q4_K, Q6_K, Q8_0) **misurate e
-verificate col ktest ma NON cablate**, piu' un test che verifica che il piano
-NON le instradi, piu' `docs/engine/kquant-consegna-35b-<data>.md`. Poi riga 5
-(la misura di chiusura del TTFT), riga 6 (gate di merge), riga 7 (consuntivo).
+**IL FLAG `wired`, E LA TRAPPOLA CHE PORTA CON SE'.** `PREFILL_GEMM_SPEC` ha ora
+`wired`/`wiredWhy`: il kernel esiste ed e' misurato, ma solo i `wired` vengono
+instradati, e il flag si legge in UNA sede sola (`kernelVerdict` di
+`prefillgemmplan.ts`). **E' un flag per FORMATO, non per shape**, e
+`prefillGemmCheck` non guarda N: il giorno in cui il goal 35B accendera' q8_0
+per i suoi tensori attn (N=4096), i **48 siti del 4B con N=32** verrebbero
+instradati nello stesso istante, senza che niente lo dica. Serve un predicato
+sulla shape PRIMA di girare quel flag.
+
+**PER IL GOAL 35B**: `docs/engine/kquant-consegna-35b-2026-08-15.md` (423
+righe). Il collo del 35B **non e' il kernel, e' la residency**: 19,45 GiB di
+modello contro ~16 GB di scheda, expert Q4_K 17.666.408.448 B. E il suo prefill
+**NON gira su `moeprefillplan.ts`** — refuso del contratto corretto in it.8:
+`planMoeChunk` ha un solo consumatore di produzione, `glmmodel.ts:1368`, che e'
+il GLM. Il 35B ripete per riga la catena del DECODE
+(`q35gpumodel.ts:2743-2778`): 40 round-trip di readback per chunk, 512 dispatch
+per layer. Il piano CPU-side e' gia' parametrico su `{nExpert, nExpertUsed}` e
+regge `{256, 8}` per struttura: **il lavoro e' quel ramo `moe`, non il piano.**
 
 **IL REPERTO DA NON PERDERE**: la guardia doppia del cablaggio
 (`route.via !== "legacy" && kk === "<formato>"`) **ha intercettato un caso
