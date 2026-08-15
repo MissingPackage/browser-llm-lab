@@ -27,12 +27,36 @@ nell'unità di riparazione del decode ottimistico.
          replay+conta  45.531 ms   per differenza, mai scomposto
        tokenMs − tailCpuMs = 23.053 ms / 1092 forward = **21,1 ms/token**
 
-     **IL NUMERO CHE CHARTER-A IL GOAL: 21,1 ms.** È il token del 35B senza la
-     tassa di residency, cioè **47,4 tok/s** — sopra la soglia. La lentezza del
-     35B non è fisica e non è un limite di banda: il pavimento di banda su
-     questa scheda è ~2,9 ms/token (~1,66 GB di pesi attivi, 4090 mobile
-     ~576 GB/s — *conto mio dagli header, non una misura*). La fisica sta a 2,9,
-     il codice pulito a 21,1, il misurato a 120. Due ordini di separazione.
+     **[RITRATTATO il 2026-08-15, poche ore dopo averlo scritto — v. C0-4 in
+     `PHASES.md`.]** Il contratto diceva: «IL NUMERO CHE CHARTER-A IL GOAL:
+     21,1 ms, cioè 47,4 tok/s, sopra la soglia». **Quella sottrazione non regge
+     due controlli**, e la ritratto prima che diventi un ingresso di qualcun
+     altro:
+       (a) `readbackMs`/pass vale 37,4 ms (89.924 / 2.407 submit) — più
+           dell'INTERA porzione non-tail del token (21,8 ms/decode step). Un
+           pass non può contenere un'attesa più lunga di sé;
+       (b) `results/engine/q35-vramplan-35b-it35.json`, pass `optimistic-warm`
+           con **0 miss, 0 dirty, 0 replay** — cioè un token pulito MISURATO,
+           non dedotto — costa **43,74 ms**, di cui `readbackWait` **40,98** e
+           `tailCpuMs` **0,194**. Il 2026-08-11, su codice più vecchio.
+     Il token pulito va MISURATO (riga 1), non ottenuto per differenza da
+     aggregati che mescolano pass iniziale e replay.
+
+     **CONSEGUENZA SULLA FATTIBILITÀ, da dichiarare adesso e non a metà goal.**
+     Se il token pulito è ~43 ms, togliere il 100% della tassa di residency
+     porta a **~23 tok/s: SOTTO la barra dei 30**. In quel caso le righe 2 e 3
+     non chiudono il goal da sole e serve una quarta leva — il pass stesso, dove
+     `readbackWait` era il **94%** del token pulito di it.35. Se invece è ~21 ms
+     la barra si prende con le righe 2 e 3. **La riga 1 non è più solo la
+     baseline: è la misura che decide se questo contratto è eseguibile come
+     scritto.** Nessuna riga successiva parte prima che quel numero esista.
+
+     RESTA VERO, e non dipende dalla sottrazione ritrattata: il pavimento di
+     banda su questa scheda è ~2,9 ms/token (~1,66 GB di pesi attivi, 4090
+     mobile ~576 GB/s — *conto mio dagli header, non una misura*), contro i ~120
+     ms misurati. La lentezza del 35B **non è un limite fisico** — questo
+     reperto è intatto. Ciò che è caduto è la stima di QUANTO margine ci sia
+     sotto la tassa di residency, non l'esistenza della tassa.
 
      PERCHÉ `readMs` È ~0 E NON SIGNIFICA "I/O GRATUITO". È scritto nel sorgente
      dal 2026-08-?? e nessuno l'aveva ancora incrociato con un turno lungo:
