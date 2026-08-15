@@ -467,3 +467,76 @@ banco. Da li' in poi stavo solo sperando.
 davvero sceso) e la riga 6 (i gate di merge) — passa dal ktest o da una run di
 modello, cioe' dalla stessa infrastruttura che ora non regge. Il discriminante
 e' un ambiente pulito, e su una macchina di qualcun altro non lo decido io.
+
+## it.7 — RIGA 3 CHIUSA: era l'ambiente, e il riavvio l'ha dimostrato (2026-08-15)
+
+**Il PI ha eseguito il discriminante che avevo chiesto — riavvio della
+macchina — e il ktest e' tornato verde al primo tentativo utile.**
+
+    [ktest] adapter: {"webgpu":true,"adapter":"nvidia lovelace"}
+    [ktest] OK — 105 PASS, 0 FAIL
+
+**Fra l'ultimo fallimento di it.6 e questa run non ho cambiato una riga di
+codice.** L'albero e' lo stesso commit (`aff171b`), lavoro pulito. L'unica
+variabile mossa e' l'ambiente: e' la definizione stessa di esperimento
+controllato, ed e' il PI ad averlo fatto girare.
+
+**`q35-mtp-head-real-blk32` PASS** (max|Δ| 4,77e-6, maxRel 5,67e-4, L2rel
+2,67e-7), e PASS tutti i trenta e passa casi che lo seguivano e che in it.6 non
+venivano mai raggiunti. Il punto di rottura stabile non era una proprieta' del
+banco: era il momento in cui la sessione lunga aveva finito il credito.
+
+**I DUE CASI DELLA RIGA 3, i primi mai eseguiti su GPU vera:**
+
+    prefill-gemm-q41-multirow-idot   PASS   max|Δ| 7,63e-5   maxRel 1,73e-5
+    prefill-gemm-q41-multirow-f32    PASS   max|Δ| 7,63e-5   maxRel 1,51e-5
+
+**E qui c'e' la cosa che vale piu' del PASS.** I pavimenti derivati dal floor
+test erano `1,693e-5` (idot) e `1,715e-5` (f32). L'errore misurato sulla GPU
+vera e' `1,73e-5` e `1,51e-5`: **siamo esattamente sul pavimento**, non a
+meta' strada verso la tolleranza. Vuol dire due cose insieme:
+- il margine 11,8x verso `tol 2e-4` e' reale ma **e' tutto pavimento**, non
+  slack — il caso e' dominato dall'aritmetica del formato (288 termini per riga,
+  contrazione FMA), non da un difetto del kernel;
+- **derivare la tolleranza invece di sceglierla ha funzionato**: un numero
+  scelto a occhio o l'avrebbe messa troppo stretta (falso rosso permanente) o
+  troppo larga, e in nessuno dei due casi avremmo saputo quale dei due.
+
+Il discriminante del floor test regge: togliere `m*Sigma(x)` dal kernel porta
+l'errore a `5,233` idot / `4,192` f32, cinque ordini sopra la tolleranza. Il
+banco **non** passerebbe su un kernel che si dimentica il termine costante del
+q4_1.
+
+**DONE WHEN della riga 3, voce per voce:**
+
+| clausola | esito | evidenza |
+|---|---|---|
+| `[6c]` ≥ 15,5x con le 4 `ffn_down` Q4_1 fra i `multirow` | **si'** | 15,5247x, it.5 |
+| caso ktest Q4_1 PASS | **si'** | 105 PASS / 0 FAIL, i due casi qui sopra |
+| floor test esteso | **si'** | pavimenti derivati, mutazione a 5,233 |
+| `gpulimits` verde | **si'** | dentro la suite |
+| tsc + vitest verdi | **si'** | `tsc --noEmit` exit 0 · `vitest run` **836 passed, 10 skipped**, exit 0 |
+
+**RIGA 3 CHIUSA.** Il Q4_1 e' in produzione e verificato su GPU vera.
+
+**IL PREZZO DI it.6, scritto perche' non si ripeta.** Cinque run di ktest da
+~10 minuti l'una. La terza — quella che disattiva il banco nuovo e vede
+fallire lo stesso — aveva gia' chiuso l'attribuzione: **non e' il codice
+nuovo**. Da li' in poi la mossa corretta era una sola frase al PI («riavvia»),
+non altri due tentativi. La regola che ne esce, e che vale oltre questo goal:
+*quando la disattivazione del codice nuovo non cambia l'esito, l'ipotesi
+ambiente e' gia' provata; il ritentativo non e' una misura.* Docket item 2
+chiuso con questa nota.
+
+**Il difetto trovato per strada, e tolto**: il comando che avevo lasciato in
+HANDOFF.md per la ripresa era **incompleto** — `node .harness/tools/engine-ktest.mjs`
+senza `BASE_URL`, con vite sulla 5199 e il runner che di default parla alla
+5173. Prima cosa fatta alla ripresa, primo comando, fallito. Costo reale zero
+(il runner rifiuta subito e dichiara la porta, senza spendere GPU) e proprio per
+questo istruttivo: il runner era gia' scritto bene, ero io ad aver scritto male
+la consegna. Corretto in HANDOFF.md. La stessa landmine e' annotata nel prereg
+della riga 1 del goal ttft — la conoscenza c'era, non era nel posto dove sarebbe
+servita.
+
+**PROSSIMA: riga 4** — le tre forme del 35B (Q4_K, Q6_K, Q8_0) misurate e
+verificate ma **non** cablate, piu' la scheda di consegna al goal successivo.

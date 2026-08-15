@@ -1,35 +1,46 @@
-# HANDOFF — browser-llm-lab   (aggiornato 2026-08-14)
+# HANDOFF — browser-llm-lab   (aggiornato 2026-08-15)
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-kquant`. Righe 1 e 2 CHIUSE, riga 3 CABLATA MA NON
-VERIFICATA SU GPU. STOP BY DESIGN — v. docket item 2.**
+**GOAL ATTIVO: `engine-kquant`. Righe 1, 2 e 3 CHIUSE E VERIFICATE SU GPU.
+PROSSIMA: RIGA 4.**
 Chartered 2026-08-14. `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
 
-**PRIMA COSA DA FARE ALLA RIPRESA, e non e' negoziabile: rieseguire il ktest su
-ambiente fresco.**
+**IL GATE GPU E' TORNATO, ED ERA L'AMBIENTE.** Il PI ha riavviato la macchina —
+il discriminante che avevo chiesto in it.6 — e il ktest e' passato al primo
+tentativo utile, **senza che io toccassi una riga di codice**: `105 PASS /
+0 FAIL`, adapter `nvidia lovelace`, con `q35-mtp-head-real-blk32` PASS e tutti i
+casi che lo seguono PASS. Il banco e' scagionato, docket item 2 chiuso, **non
+c'e' nessuna tassa da pagare sui goal futuri.**
+
+Come si rilancia il gate (il `BASE_URL` NON e' opzionale: il runner di default
+parla alla 5173):
 
     setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
     curl -s -o /dev/null -w "%{http_code}" http://localhost:5199/ktest.html   # 200
-    node .harness/tools/engine-ktest.mjs      # atteso: 105 PASS / 0 FAIL
-
-Se passa, la riga 3 si chiude e si prosegue con la riga 4. Se fallisce di nuovo
-subito dopo `q35-mtp-head-real-blk32`, il difetto e' di quel banco o
-dell'infrastruttura e diventa lavoro suo — non una tassa su ogni goal.
+    BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs   # 105 PASS / 0 FAIL
 
 **DOVE STA IL MOTORE ADESSO** (tutto committato e pushato su origin/main):
-- **Riga 2 — Q5_K in produzione, VERIFICATA**: ktest 103 PASS / 0 FAIL alle
-  00:52 del 2026-08-15, coi due casi nuovi a maxRel 2,61e-7 e 4,28e-7.
-- **Riga 3 — Q4_1 cablato, NON verificato su GPU**: kernel, piano, wiring,
-  floor test coi pavimenti derivati (11,8x sopra) e banco ktest **scritto e
-  registrato ma mai eseguito**.
+- **Riga 2 — Q5_K in produzione, VERIFICATA**: casi ktest a maxRel 2,61e-7 e
+  4,28e-7.
+- **Riga 3 — Q4_1 in produzione, VERIFICATA su GPU vera** (2026-08-15):
+  `prefill-gemm-q41-multirow-idot` maxRel **1,73e-5**, `-f32` **1,51e-5**,
+  contro pavimenti derivati dal floor test 1,693e-5 / 1,715e-5 e tolleranza
+  2e-4. **L'errore misurato sta SUL pavimento**: il margine 11,8x e' aritmetica
+  del formato, non slack. La mutazione che toglie `m*Sigma(x)` porta l'errore a
+  5,233 — il banco boccia davvero un kernel che sbaglia il formato.
 - **Copertura del piano: 5,8593x → 15,5247x** sull'inventario per-layer INTERO
   del 4B a M=16. **200/248 siti = 99,796% dei byte.** Resta legacy un solo
   kind: 48 siti Q8_0 con N=32 (0,204%), esclusi coi numeri dal contratto.
-- **Suite senza GPU: 836 passed | 10 skipped**, tsc pulito.
+- **Suite senza GPU: 836 passed | 10 skipped** (exit 0), `tsc --noEmit` exit 0.
 - **NESSUNA MISURA DI TEMPO NUOVA**: che il TTFT sia sceso **non e' stato
   misurato**. Il piano non e' il cronometro, e la riga 5 non e' stata eseguita.
   Proiezione dal banco: −15,2 s ⇒ ~16,9 s. E' una proiezione, non un risultato.
+
+**RIGA 4, la prossima**: le tre forme del 35B (Q4_K, Q6_K, Q8_0) **misurate e
+verificate col ktest ma NON cablate**, piu' un test che verifica che il piano
+NON le instradi, piu' `docs/engine/kquant-consegna-35b-<data>.md`. Poi riga 5
+(la misura di chiusura del TTFT), riga 6 (gate di merge), riga 7 (consuntivo).
 
 **IL REPERTO DA NON PERDERE**: la guardia doppia del cablaggio
 (`route.via !== "legacy" && kk === "<formato>"`) **ha intercettato un caso
@@ -75,8 +86,9 @@ a M=16, `idot | f32`, barra 1,5x. Artefatto:
 **A M=1 la forma multi-riga PERDE** (0,91x sul Q4_K): il piano non deve mai
 offrirla al decode.
 
-**Da misurare, non dedurre**: la quota Q4_1 di `gemm:ffn-down` oggi e' stimata
-dal banco; la riga 3 non chiude senza un `pbCat` proprio per quei quattro siti.
+**Da misurare, non dedurre**: la quota Q4_1 di `gemm:ffn-down` era stimata dal
+banco. Risolto in it.5 — quei quattro siti hanno una categoria di misura propria
+(`gemm:ffn-down-q41`), cosi' la riga 5 attribuisce quel tempo invece di dedurlo.
 
 Toglie ai pesi non-q4_0 le M riletture per chunk: `ssm_out` **Q5_K** (37,9% del
 prefill) e `ffn_down` **Q4_1** (il 71% dei byte del segmento `gemm:ffn-down`)

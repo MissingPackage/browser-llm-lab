@@ -113,3 +113,23 @@ il goal e cosa e' in dubbio.
   item 2, con l'attribuzione per esclusione.
 - **Suite senza GPU: 836 passed | 10 skipped**, tsc pulito.
 - **STOP BY DESIGN**: tutto il resto del goal passa da quella infrastruttura.
+
+## it.7 — riga 3 CHIUSA, il gate GPU era l'ambiente (2026-08-15)
+
+- **ktest 105 PASS / 0 FAIL** su macchina riavviata, **senza toccare una riga di
+  codice** fra l'ultimo fallimento e questa run. L'ipotesi «stato accumulato
+  dell'host» era quella giusta; il banco `q35-mtp-head-real-blk32` e' scagionato
+  e non diventa lavoro suo. Docket item 2 chiuso.
+- **Q4_1 verificato su GPU vera**: `prefill-gemm-q41-multirow-idot` maxRel
+  **1,73e-5**, `-f32` **1,51e-5**, contro pavimenti derivati 1,693e-5 / 1,715e-5
+  e tolleranza 2e-4. **L'errore misurato sta sul pavimento**: il margine 11,8x
+  e' aritmetica del formato, non slack — e derivare la tolleranza invece di
+  sceglierla e' cio' che permette di dirlo.
+- **Riga 3 CHIUSA** su tutte e cinque le clausole: copertura 15,5247x, ktest
+  PASS, floor test, gpulimits, `tsc` exit 0 e `vitest` **836 passed | 10
+  skipped** exit 0.
+- **Lezione di it.6 registrata**: quando disattivare il codice nuovo non cambia
+  l'esito, l'attribuzione all'ambiente e' gia' completa — i due ritentativi in
+  piu' erano speranza, non misura.
+- **Difetto tolto**: il comando di ripresa in HANDOFF.md era senza `BASE_URL` e
+  puntava alla 5173 di default. Fallito al primo colpo, corretto.

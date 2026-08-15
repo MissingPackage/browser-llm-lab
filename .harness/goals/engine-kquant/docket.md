@@ -72,3 +72,23 @@ cosa, ri-eseguo il ktest su ambiente fresco. Se passa, la riga 3 si chiude e il
 goal prosegue con la riga 4; se fallisce di nuovo allo stesso punto, il difetto
 e' del banco `q35-mtp-head-real-blk32` o dell'infrastruttura, e diventa lavoro
 suo — non una tassa su ogni goal che passa di qui.
+
+### CHIUSO il 2026-08-15 — l'ipotesi residua era quella giusta
+
+**Il PI ha eseguito il discriminante** (riavvio della macchina) e il ktest e'
+tornato verde al primo tentativo utile: **105 PASS / 0 FAIL**, adapter
+`nvidia lovelace`, `q35-mtp-head-real-blk32` PASS e tutti i 30+ casi che lo
+seguono PASS. Nessuna riga di codice cambiata fra l'ultimo fallimento e questa
+run: l'unica variabile mossa e' stata l'ambiente.
+
+**Attribuzione definitiva**: stato accumulato dell'host/GPU in una sessione
+lunga, non un difetto del banco `q35-mtp-head-real-blk32` ne' del kernel q4_1.
+Non diventa lavoro suo. Non c'e' una tassa da pagare su ogni goal.
+
+**Cosa resta come regola operativa** (mio, non serve ruling): quando tre sintomi
+diversi convergono sullo stesso punto di rottura E la disattivazione del codice
+nuovo non cambia l'esito, l'attribuzione all'ambiente e' gia' completa. Da li'
+il passo giusto e' chiedere il riavvio, non ritentare: i due tentativi in piu'
+che ho fatto in it.6 erano speranza, non misura.
+
+**RULING: non serve piu'.** Item chiuso dall'evidenza.
