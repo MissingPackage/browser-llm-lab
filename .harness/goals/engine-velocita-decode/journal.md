@@ -568,3 +568,73 @@ cercare se il primo run dà numeri doppi.
 2. Il floor test FMA (rischio isolato in it.3).
 3. I casi ktest di indirizzamento su GPU vera.
 4. La misura su GLM E 35B — la regola delle ≥ 2 famiglie.
+
+---
+
+## it.8 — riga 2c: il kfan è cablato, spento, e il tranello ha il suo test
+
+### Correzione trovata eseguendo: il cablaggio non andava dove diceva la specifica
+
+La specifica di it.7 diceva «sostituire il `for k2` di `encodeExperts`». **È il
+posto sbagliato.** `encodeExperts` (`q35gpumodel.ts:2184`) serve il path SYNC e
+il prefill-per-riga; **il decode ottimistico — quello con
+`submitsPerToken: 1` e i 40,753 ms che la barra misura — ha il suo loop
+inline** (`:1891-1900`, dentro il ramo che costruisce l'unico submit del token).
+Cablare `encodeExperts` non avrebbe toccato la metrica del goal, e i test
+sarebbero passati lo stesso.
+
+Trovata leggendo il codice prima di scriverlo, non dopo. *Quarta inferenza non
+verificata di questo goal, e seconda presa in tempo.*
+
+### Cablato
+
+Nel ramo ottimistico, per layer: **5 dispatch invece di 33.**
+
+    pGateK  [dE, 1, topK]   dyn0 = m * topK * MOE_IDX_STRIDE
+    pUpK    [dE, 1, topK]   dyn0
+    pSiluK  [ceil(topK*dE/64), 1, 1]
+    pDownK  [gg2[0], gg2[1], topK]   dyn0
+    pCombine [ceil(d/64), 1, 1]      dyn0
+      → 200 dispatch/token contro 1.320
+
+`dyn0` è l'offset di **k = 0**: il kernel ci somma `wid.z` per raggiungere la
+sua `Sel`. Buffer nuovi e non allargati (`gateK`, `upK`, `ySlots`: 16+16+64 KB),
+perché `gateE`/`upE`/`moeAcc` sono condivisi dai path che non vanno toccati.
+
+### PARTE SPENTO, ed è metodo e non prudenza
+
+`setKfan(on)` accende a caldo; il default è `false`. I due bracci vanno
+confrontati **nello stesso processo, sulla stessa cache, a parità di
+residenza** — è così che sono state decise sync-vs-optimistic (it.35) e il
+token pulito (run A). Due run separate confronterebbero anche gli host.
+
+### Il tranello, e il test che lo prende
+
+Nel ramo sequenziale il down accumula in `moeAcc` e poi `pAdd` fa `x += moeAcc`.
+Nel kfan la combine fa `x += moeAcc + Σ_k w·y`: **include già il `+=`**.
+Dispacciare anche `pAdd` sommerebbe `moeAcc` — che contiene lo shexp — **due
+volte**: nessun crash, nessun NaN, output plausibile ma sbagliato, e su un 35B
+lo si scoprirebbe leggendo del testo leggermente storto. Un gate a tolleranza
+non lo prende.
+
+Casi [12]-[16]: il ramo kfan dispaccia i cinque pipeline attesi, **non contiene
+`pAdd`**, il ramo sequenziale è intatto e lo dispaccia ancora, il default è
+spento, e i tre buffer sono per-k e non allargamenti degli scratch condivisi.
+
+**EVIDENZA**: `npx vitest run` **1067 passed | 10 skipped** (+5 casi) ·
+`npx tsc --noEmit` exit 0 · diff +95/−3 su un file.
+
+### Cosa resta della riga 2c — e da qui in poi serve la GPU
+
+1. **La misura A/B**, che è anche il primo gate di correttezza: stesso processo,
+   `setKfan(false)` poi `setKfan(true)`, argmax confrontati token per token.
+   **Se il ramo kfan avesse il doppio-add, l'argmax divergerebbe subito.**
+2. Casi ktest di indirizzamento su GPU vera.
+3. Floor test FMA (rischio isolato in it.3).
+4. La misura su GLM — la regola delle ≥ 2 famiglie.
+
+**Il runner non ha un flag `--kfan`**: `q35-conf-run.mjs` passa opzioni via
+query string (`optimistic`, `optcold`, `tier`, …) che `q35conf.worker.ts` legge.
+Serve aggiungerlo lì, sul modello di `--optimistic`, e far girare la coppia di
+passate interleavate come per sync/optimistic. È il primo passo della prossima
+iterazione, prima di chiedere la finestra GPU.

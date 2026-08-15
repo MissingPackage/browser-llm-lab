@@ -13,7 +13,7 @@ import {
   attnDecodeCombineWgsl, attnDecodeWgsl, axpyWgsl,
   gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
   gemvQ6KWgsl, gemvQuantWgsl, gemvQuantGrid, gemvQuantVec4Rows2Ok, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
-  siluMulWgsl, stridedCopyWgsl, routerTopKWgsl,
+  siluMulWgsl, stridedCopyWgsl, routerTopKWgsl, moeCombineWgsl,
   SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE, type KArenaOpts,
   prefillGemmQ4SplitKWgsl, prefillSplitKCombineWgsl, prefillGemmGrid,
   PREFILL_SPLITS_MEASURED,
@@ -268,6 +268,9 @@ export interface Q35GpuModel {
    * STESSA cache: passata sync a freddo, passata ottimistica a caldo.
    */
   setOptimistic(on: boolean): void;
+  /** KFAN (riga 2c): i topK expert in un giro di dispatch invece di uno per volta. Solo decode ottimistico. */
+  setKfan(on: boolean): void;
+  kfanOn(): boolean;
   /**
    * PREFILL A CHUNK (fase 4): M token in un solo submit, con i logits della
    * SOLA ultima riga — il prefill non ha bisogno degli altri. `null` se il
@@ -645,6 +648,17 @@ export async function createQ35GpuModel(
   const moeAcc = empty(d * 4);
   const gateS = empty(Math.max(dE, 4) * 4), upS = empty(Math.max(dE, 4) * 4), dnS = empty(d * 4), shScalar = empty(16);
   const gateE = empty(Math.max(dE, 4) * 4), upE = empty(Math.max(dE, 4) * 4);
+  // KFAN (goal engine-velocita-decode, riga 2c): gli stessi scratch, ma UNO PER
+  // k. Il decode dispaccia i topK expert in un colpo (`wid.z` = k) invece che
+  // uno per volta, quindi gate/up/down scrivono in `topK` slot affiancati e la
+  // combine li somma in ordine k. Sono buffer NUOVI e non un allargamento di
+  // `gateE`/`upE`: quelli sono condivisi dai path one-pass e prefill-per-riga,
+  // che questo goal non tocca finche' la misura non promuove il kfan.
+  // Taglia: 8 x 512 x 4 = 16 KB l'uno, e 8 x 2048 x 4 = 64 KB gli slot —
+  // trascurabili accanto agli 11,17 GB d'arena.
+  const kfanAvail = topK > 0 && dE > 0;
+  const gateK = empty(Math.max(topK * dE, 4) * 4), upK = empty(Math.max(topK * dE, 4) * 4);
+  const ySlots = empty(Math.max(topK * d, 4) * 4);
   /** confini dei segmenti statici: segmento i = steps[cuts[i-1]..cuts[i]) */
   const cuts: number[] = [];
   /**
@@ -1458,6 +1472,17 @@ export async function createQ35GpuModel(
           ? gemvQ6KWgsl({ K: dE, N: d, arena: kar(L.down), accum: true })
           : gemvQ4KWgsl({ K: dE, N: d, arena: kar(L.down), accum: true })),
         bgGate: bg(xn, gateE), bgUp: bg(xn, upE), bgDown: bg(gateE, moeAcc),
+        // KFAN: stessi kernel, `wid.z` = k. Il down NON accumula — scrive lo
+        // slot k, e la somma pesata la fa la combine in ordine k crescente,
+        // che e' esattamente la catena del decode sequenziale (bit-identita'
+        // per costruzione, non attesa). Il `bg` regge cosi' com'e': lega
+        // arena + selBuf + moeIdx e cambia solo la destinazione.
+        pGateK: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.gate), kfan: { nUsed: topK } })),
+        pUpK: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.up), kfan: { nUsed: topK } })),
+        pDownK: mkPipe(dk === "q6_K"
+          ? gemvQ6KWgsl({ K: dE, N: d, arena: kar(L.down), kfan: { nUsed: topK } })
+          : gemvQ4KWgsl({ K: dE, N: d, arena: kar(L.down), kfan: { nUsed: topK } })),
+        bgGateK: bg(xn, gateK), bgUpK: bg(xn, upK), bgDownK: bg(gateK, ySlots),
       };
     };
     const expertCls: Record<ExpertClass, ReturnType<typeof mkExpertClass>> = {};
@@ -1471,6 +1496,27 @@ export async function createQ35GpuModel(
       });
     const bgSilu = mkBg(pSilu, [gateE, upE]);
     const bgAddRes = mkBg(pAdd, [x, moeAcc]);
+    // KFAN: il silu e' elementwise, quindi basta la taglia — un dispatch sui
+    // topK slot invece di topK dispatch da dE.
+    const pSiluK = kfanAvail ? pipe(siluMulWgsl(topK * dE)) : null;
+    const bgSiluK = pSiluK ? mkBg(pSiluK, [gateK, upK]) : null;
+    // La combine chiude il token: `x += moeAcc + Σ_k w·y`. `moeAcc` a quel
+    // punto contiene GIA' lo shexp (l'axpy della catena statica), quindi
+    // questo UN dispatch fa il lavoro che oggi fanno il down accumulante piu'
+    // `pAdd` — ed e' per questo che nel ramo kfan `pAdd` NON va dispacciato:
+    // sommerebbe `moeAcc` due volte.
+    const pCombine = kfanAvail ? pipe(moeCombineWgsl({ D: d, nUsed: topK, weightsFromSel: true })) : null;
+    const bgCombine = pCombine ? device.createBindGroup({
+      layout: pCombine.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: x } },
+        { binding: 1, resource: { buffer: moeAcc } },
+        { binding: 2, resource: { buffer: ySlots } },
+        { binding: 3, resource: { buffer: selBuf } },
+        // `size` esplicita: hasDynamicOffset pretende offset+dyn+size <= buffer
+        { binding: 4, resource: { buffer: moeIdxUni, offset: 0, size: MOE_IDX_BYTES } },
+      ],
+    }) : null;
     // Nel prefill a chunk il residuo va sulla RIGA: stesso kernel, stesso
     // `moeAcc`, solo la destinazione cambia (sotto-range di PB.x).
     const bgAddRow = PB ? Array.from({ length: M_MAX }, (_, m2) => device.createBindGroup({
@@ -1847,6 +1893,28 @@ export async function createQ35GpuModel(
             pass.dispatchWorkgroups(1);
             const E = expertCls[cfg.classOf(moeLayerAbs[m])];
             pass = usePass("expert");
+            if (kfanEnabled && pSiluK && bgSiluK && pCombine && bgCombine) {
+              // KFAN (goal engine-velocita-decode, riga 2c). I topK expert in
+              // UN giro invece che uno per volta: `wid.z` = k, e l'offset
+              // dinamico e' quello di k = 0 perche' il kernel ci somma `wid.z`
+              // (le topK entry di Sel di un (riga, layer) sono contigue).
+              //   5 dispatch per layer invece di 33 => 200 per token invece di
+              //   1.320. E' il termine che decide: sul token pulito il decode
+              //   fa 13,9 GB/s effettivi contro i 576 della scheda, cioe' e'
+              //   dispatch/occupancy-bound e non bandwidth-bound.
+              const dyn0 = m * topK * MOE_IDX_STRIDE; // decode: riga 0
+              pass.setPipeline(E.pGateK); pass.setBindGroup(0, E.bgGateK, [dyn0]); pass.dispatchWorkgroups(dE, 1, topK);
+              pass.setPipeline(E.pUpK); pass.setBindGroup(0, E.bgUpK, [dyn0]); pass.dispatchWorkgroups(dE, 1, topK);
+              pass.setPipeline(pSiluK); pass.setBindGroup(0, bgSiluK); pass.dispatchWorkgroups(Math.ceil((topK * dE) / 64), 1, 1);
+              pass.setPipeline(E.pDownK); pass.setBindGroup(0, E.bgDownK, [dyn0]); pass.dispatchWorkgroups(gg2[0], gg2[1], topK);
+              // `x += moeAcc + Σ_k w·y`, somme in ordine k crescente: la STESSA
+              // catena del ramo sequenziale qui sotto, quindi bit-identica per
+              // costruzione. Fa anche il `+=`, per cui `pAdd` NON si dispaccia:
+              // lo sommerebbe due volte.
+              pass.setPipeline(pCombine); pass.setBindGroup(0, bgCombine, [dyn0]); pass.dispatchWorkgroups(Math.ceil(d / 64), 1, 1);
+              endPass();
+              continue;
+            }
             for (let k2 = 0; k2 < topK; k2++) {
               const dyn = (m * topK + k2) * MOE_IDX_STRIDE; // decode: riga 0
               pass.setPipeline(E.pGate); pass.setBindGroup(0, E.bgGate, [dyn]); pass.dispatchWorkgroups(dE, 1, 1);
@@ -2147,9 +2215,13 @@ export async function createQ35GpuModel(
           pass.dispatchWorkgroups(wg[0], wg[1], wg[2]);
         };
         const gg2 = gemvGrid(d);
+        // l'offset dinamico sceglie la entry (layer, k) di MoeIdx, che punta
+        // alla Sel di quell'expert: è l'unico parametro per-expert rimasto.
+        // NB: il KFAN non sta qui. Questo è il path SYNC / prefill-per-riga,
+        // che dispaccia una riga per volta con `addBg` diverso per riga; il
+        // decode che la barra misura ha il suo loop inline (il ramo
+        // ottimistico), ed è lì che il kfan è cablato.
         for (let k2 = 0; k2 < topK; k2++) {
-          // l'offset dinamico sceglie la entry (layer, k) di MoeIdx, che punta
-          // alla Sel di quell'expert: è l'unico parametro per-expert rimasto.
           const dyn = ((row * nMoeLayer + m) * topK + k2) * MOE_IDX_STRIDE;
           disp(E.pGate, E.bgGate, [dE, 1, 1], dyn);
           disp(E.pUp, E.bgUp, [dE, 1, 1], dyn);
@@ -2189,6 +2261,8 @@ export async function createQ35GpuModel(
    * numeri, che e' cio' che il done-when della riga 5 ammette.
    */
   let optimisticOn = opts.select === "optimistic";
+  /** KFAN (riga 2c): parte SPENTO, si accende con `setKfan` per l'A/B nello stesso processo. */
+  let kfanEnabled = false;
   // ---- sonda di decomposizione del tempo GPU (fase 4, it.19) ----
   // Con le marche di it.23 le categorie per layer diventano 7 (norm, attn|ssm,
   // resid, shexp, routerGemv, router, expert): 40x7+1 = 281 sul 35B. 512 da'
@@ -2724,6 +2798,24 @@ export async function createQ35GpuModel(
       }
       optimisticOn = on;
     },
+    /**
+     * KFAN acceso/spento a caldo (goal engine-velocita-decode, riga 2c).
+     *
+     * PARTE SPENTO, e non e' prudenza: e' il modo in cui questo motore misura.
+     * I due bracci vanno confrontati NELLO STESSO PROCESSO, sulla stessa cache
+     * e a parita' di residenza — e' cosi' che sono state decise le due
+     * decisioni precedenti (sync vs optimistic, it.35 e run A del 2026-08-15).
+     * Due run separate confronterebbero anche gli host.
+     *
+     * Il ramo kfan vale SOLO nel decode ottimistico (M = 1): la `moeCombine`
+     * che lo chiude legge i pesi da `selBuf[moeIdx.selIdx + k]`, che copre i
+     * topK contigui di UNA riga. Il prefill a chunk resta sul ramo sequenziale.
+     */
+    setKfan(on: boolean): void {
+      if (on && !kfanAvail) throw new Error("q35gpumodel: setKfan(true) su un modello senza expert MoE");
+      kfanEnabled = on;
+    },
+    kfanOn: () => kfanEnabled,
     gpuTimeStats: canGpuTs
       ? () => ({ tokens: tsqTokens, overflow: tsqOverflow, byCat: Object.fromEntries([...tsqAcc.entries()].map(([k2, v2]) => [k2, { ...v2 }])) })
       : null,

@@ -179,3 +179,79 @@ describe("moeCombine — la variante che legge i pesi dalla Sel", () => {
     expect(sel).toContain("@group(0) @binding(4) var<uniform> moeIdx: MoeIdx;");
   });
 });
+
+// ————————————————————————————————————————————————————————————————————————
+// Il CABLAGGIO del kfan nel decode ottimistico. Test STATICO sul sorgente.
+//
+// IL TRANELLO CHE QUESTO TEST ESISTE PER PRENDERE. Nel ramo sequenziale il
+// down ACCUMULA in `moeAcc` e poi `pAdd` fa `x += moeAcc`. Nel ramo kfan la
+// `moeCombine` fa `x += moeAcc + Σ_k w·y` — cioe' include GIA' il `+=`. Se il
+// cablaggio dispacciasse anche `pAdd`, `moeAcc` (che contiene lo shexp)
+// verrebbe sommato DUE VOLTE: nessun crash, nessun NaN, output plausibile ma
+// sbagliato, e su un modello da 35B lo si scoprirebbe leggendo del testo
+// leggermente storto. Un gate a tolleranza non lo prende.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const MODEL_SRC = (() => {
+  const raw = readFileSync(join(__dirname, "..", "src/engine/q35gpumodel.ts"), "utf8");
+  // commenti biancati: questa stessa spiegazione nomina `pAdd`
+  const out = raw.split("");
+  let i = 0;
+  while (i < raw.length) {
+    const c = raw[i], dd = raw[i + 1] ?? "";
+    if (c === "/" && dd === "/") { while (i < raw.length && raw[i] !== "\n") { out[i] = " "; i++; } continue; }
+    if (c === "/" && dd === "*") {
+      const e = raw.indexOf("*/", i + 2), stop = e < 0 ? raw.length : e + 2;
+      for (let j = i; j < stop; j++) if (out[j] !== "\n") out[j] = " ";
+      i = stop; continue;
+    }
+    i++;
+  }
+  return out.join("");
+})();
+
+describe("cablaggio kfan nel decode ottimistico", () => {
+  /** il corpo del ramo kfan: da `if (kfanEnabled` al suo `continue;` */
+  const kfanBranch = (): string => {
+    const a = MODEL_SRC.indexOf("if (kfanEnabled");
+    expect(a, "ramo kfan non trovato nel decode ottimistico").toBeGreaterThan(-1);
+    const b = MODEL_SRC.indexOf("continue;", a);
+    expect(b, "il ramo kfan non si chiude con un continue").toBeGreaterThan(a);
+    return MODEL_SRC.slice(a, b);
+  };
+
+  it("[12] il ramo kfan dispaccia i cinque pipeline attesi", () => {
+    const br = kfanBranch();
+    for (const p of ["pGateK", "pUpK", "pSiluK", "pDownK", "pCombine"]) {
+      expect(br, `${p} non dispacciato nel ramo kfan`).toContain(p);
+    }
+  });
+
+  it("[13] il ramo kfan NON dispaccia pAdd — sommerebbe moeAcc due volte", () => {
+    expect(kfanBranch()).not.toContain("pAdd");
+  });
+
+  it("[14] il ramo sequenziale resta intatto e dispaccia ancora pAdd", () => {
+    // non-regressione: il path di oggi non deve essere stato toccato
+    const a = MODEL_SRC.indexOf("continue;", MODEL_SRC.indexOf("if (kfanEnabled"));
+    const seq = MODEL_SRC.slice(a, a + 1600);
+    for (const p of ["E.pGate", "E.pUp", "pSilu", "E.pDown", "pAdd"]) {
+      expect(seq, `${p} sparito dal ramo sequenziale`).toContain(p);
+    }
+  });
+
+  it("[15] il kfan parte SPENTO: l'A/B si fa nello stesso processo", () => {
+    // due run separate confronterebbero anche gli host; questo motore misura i
+    // bracci sulla stessa cache, come per sync-vs-optimistic
+    expect(MODEL_SRC).toContain("let kfanEnabled = false;");
+    expect(MODEL_SRC).toContain("setKfan(on: boolean)");
+  });
+
+  it("[16] i tre buffer del kfan sono per-k, non condivisi con gli scratch di oggi", () => {
+    // allargare gateE/upE toccherebbe i path one-pass e prefill-per-riga
+    expect(MODEL_SRC).toContain("const gateK = empty(Math.max(topK * dE, 4) * 4)");
+    expect(MODEL_SRC).toContain("const ySlots = empty(Math.max(topK * d, 4) * 4)");
+    expect(MODEL_SRC).toContain("const gateE = empty(Math.max(dE, 4) * 4)");
+  });
+});
