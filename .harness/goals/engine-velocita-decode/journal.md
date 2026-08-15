@@ -638,3 +638,79 @@ query string (`optimistic`, `optcold`, `tier`, …) che `q35conf.worker.ts` legg
 Serve aggiungerlo lì, sul modello di `--optimistic`, e far girare la coppia di
 passate interleavate come per sync/optimistic. È il primo passo della prossima
 iterazione, prima di chiedere la finestra GPU.
+
+---
+
+## it.9 — IL NUMERO SI È MOSSO: 22,58 → 28,90 tok/s, e il gate ha preso due bug
+
+**Prima misura in cui l'obiettivo cambia.** A/B nello stesso processo, stessa
+cache, bracci interleavati, `--kfan` su `q35-conf-run.mjs`:
+
+    kfan OFF   44,286 ms/token  =  22,58 tok/s
+    kfan ON    34,601 ms/token  =  28,90 tok/s     speedup 1,280x
+    argmax     39/39 IDENTICI   ← il gate, e viene prima del tempo
+    submits/token 1 in entrambi
+
+**Barra 30 tok/s = 33,33 ms/token: mancano 1,27 ms.** Non ci siamo, ma il
+braccio è vivo e corretto.
+
+### I due bug che il gate ha preso, e nessuno dei due sarebbe caduto da solo
+
+**(1) Il mio: il down leggeva l'`h` del k = 0 per tutti e otto gli expert.**
+Nel modo kfan avevo cambiato l'indice di `Sel` e la scrittura, ma **non
+l'ingresso**: gate e up leggono tutti lo stesso `x` (l'hidden del token), il
+down no — il suo ingresso è l'`h` che gate/up/silu hanno prodotto **per
+ciascun k**. Senza offset di riga leggeva sempre lo slot 0.
+
+Il modo in cui si presentava: **girava, era più veloce (1,295x) e dava argmax
+DIVERSI** — 14/39 uguali, prima divergenza al token 2. *Un gate a sola velocità
+avrebbe promosso un motore rotto e nessun test statico se ne sarebbe accorto.*
+Fix: `kfan.xPerK`, vero solo per il down. Casi [17] e [18].
+
+**(2) Preesistente, e mio da togliere perché sta sul path: `setInFlight(true)`
+senza `finally`.** Fra il submit e il readback il flag I1 rende la slotTable
+intoccabile; in mezzo c'è `popErrorScope`, **che lancia**. Senza `finally`
+`inFlight` restava `true` per sempre e **ogni passata successiva del processo**
+moriva su «ensure con token in volo».
+
+La conseguenza pratica, misurata: il primo run dell'A/B ha riportato
+`argmaxCompared: 0` e tre passate a zero token, e **l'errore riportato era
+quello del braccio SANO** (`sync-warm`) — che era solo il primo a inciampare nel
+flag lasciato sporco dal braccio kfan. La diagnosi puntava al path sbagliato.
+Un errore di validazione in un braccio azzerava l'intero run e ne falsificava
+l'attribuzione. `try/finally`: chi apre la finestra la chiude, sempre.
+
+**(3) E la causa prima del punto 2**: `pCombine` era creata con `pipe()`, cioè
+**layout AUTO**, che non dichiara offset dinamici — e io le passavo `[dyn0]`.
+Errore di validazione WebGPU. Ora ha un bind group layout esplicito con
+`hasDynamicOffset` su `moeIdx`, come i GEMV expert.
+
+### La correzione al modello mentale: il dispatch costa 8,65 µs, non 31
+
+    risparmio 9,685 ms  su  1.120 dispatch tolti  =  8,65 µs/dispatch
+
+In it.5 avevo scritto **30,9 µs** dividendo TUTTI i 40,753 ms di `readbackWait`
+per i 1.320 dispatch expert — ma il token contiene anche attention, norm,
+router e coda, che non sono dispatch expert. **Il conto era una divisione, non
+una misura**, e sovrastimava di 3,6x.
+
+Conseguenza sul piano: togliere il 100% dei dispatch expert residui varrebbe
+altri ~1,7 ms (200 × 8,65 µs). **Non basta a chiudere il divario di 1,27 ms con
+margine, e soprattutto non è più lì il grosso**: dopo il kfan restano 34,6 ms
+per token di cui il collasso non ha toccato niente. Il prossimo termine va
+MISURATO (sonda `--gpu-time` per categoria), non dedotto — è la quarta volta in
+questo goal che una divisione si spaccia per misura.
+
+**EVIDENZA**: `npx vitest run` **1069 passed | 10 skipped** (+2 casi) ·
+`npx tsc --noEmit` exit 0 · tre run GPU su host quiescente verificato
+(`results/engine/q35-kfan-ab-2026-08-15{,b,c}.json` — il primo e il secondo
+sono i due fallimenti, tenuti perché sono l'evidenza dei due bug).
+
+### Cosa resta della riga 2c
+
+1. **Il divario di 1,27 ms** dalla barra. Il prossimo termine si misura con
+   `--gpu-time` (sonda per categoria: statico / router / expert / coda), che
+   perturba e va dichiarata.
+2. **La misura su GLM** — la regola delle ≥ 2 famiglie non è ancora soddisfatta.
+3. Casi ktest di indirizzamento e floor test FMA.
+4. La misura di chiusura a contesto lungo: questi 39 token sono lo smoke.

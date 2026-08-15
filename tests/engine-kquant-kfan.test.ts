@@ -37,8 +37,11 @@ const FAMS = [
 ] as const;
 
 /** riporta il sorgente kfan alla forma accumulante, differenza per differenza */
-function unKfan(src: string, N: number): string {
+function unKfan(src: string, N: number, K?: number): string {
   return src
+    // (0) `xPerK`: solo il down ce l'ha — il suo ingresso e' l'h per-k
+    .replace(`  let xR = wid.z * ${K}u;\n`, "")
+    .replace(/x\[xR \+ /g, "x[")
     // (a) l'indice di Sel: da «il k su wid.z» al k fissato dall'offset dinamico
     .replace("let sel = selBuf[moeIdx.selIdx + wid.z];", "let sel = selBuf[moeIdx.selIdx];")
     // (b) l'uscita anticipata sul miss, che il kfan non puo' avere
@@ -60,7 +63,7 @@ describe("GEMV K-quant — il modo kfan non tocca l'aritmetica", () => {
         const kfan = gen({ ...dims, arena: ARENA, kfan: { nUsed: N_USED } });
         expect(kfan).not.toBe(acc);
         // se resta una sola riga di differenza oltre le tre dichiarate, cade
-        expect(unKfan(kfan, dims.N)).toBe(acc);
+        expect(unKfan(kfan, dims.N, dims.K)).toBe(acc);
       });
     }
 
@@ -253,5 +256,31 @@ describe("cablaggio kfan nel decode ottimistico", () => {
     expect(MODEL_SRC).toContain("const gateK = empty(Math.max(topK * dE, 4) * 4)");
     expect(MODEL_SRC).toContain("const ySlots = empty(Math.max(topK * d, 4) * 4)");
     expect(MODEL_SRC).toContain("const gateE = empty(Math.max(dE, 4) * 4)");
+  });
+});
+
+describe("kfan — l'ingresso per-k del down", () => {
+  it("[17] il DOWN legge l'h dello slot k; gate e up leggono lo stesso x", () => {
+    // il difetto misurato il 2026-08-15: senza `xPerK` il down usava l'h del
+    // k = 0 per tutti gli otto expert. Girava 1,295x piu' veloce e produceva
+    // argmax DIVERSI (14/39, prima divergenza al token 2). Un gate a sola
+    // velocita' avrebbe promosso un motore rotto.
+    const A = { nBuf: 2, slabWords: 1024, slabsPerBuf: 8, tensorWords: 128 };
+    const down = gemvQ4KWgsl({ K: 512, N: 2048, arena: A, kfan: { nUsed: 8, xPerK: true } });
+    const gate = gemvQ4KWgsl({ K: 2048, N: 512, arena: A, kfan: { nUsed: 8 } });
+    expect(down).toContain("let xR = wid.z * 512u;");
+    expect(down).toContain("x[xR + ");
+    expect(gate).not.toContain("let xR =");
+    expect(gate).not.toContain("x[xR + ");
+  });
+
+  it("[18] il cablaggio del 35B passa xPerK al down e NON a gate/up", () => {
+    const i = MODEL_SRC.indexOf("pDownK: mkPipe(");
+    expect(i).toBeGreaterThan(-1);
+    expect(MODEL_SRC.slice(i, i + 400)).toContain("xPerK: true");
+    for (const p of ["pGateK: mkPipe(", "pUpK: mkPipe("]) {
+      const j = MODEL_SRC.indexOf(p);
+      expect(MODEL_SRC.slice(j, j + 200), `${p} non deve avere xPerK`).not.toContain("xPerK");
+    }
   });
 });

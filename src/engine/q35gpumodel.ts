@@ -1479,9 +1479,12 @@ export async function createQ35GpuModel(
         // arena + selBuf + moeIdx e cambia solo la destinazione.
         pGateK: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.gate), kfan: { nUsed: topK } })),
         pUpK: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.up), kfan: { nUsed: topK } })),
+        // `xPerK`: il down legge l'`h` prodotto per CIASCUN k (slot k di
+        // gateK), non quello del k = 0. Gate e up no — leggono tutti lo stesso
+        // hidden del token.
         pDownK: mkPipe(dk === "q6_K"
-          ? gemvQ6KWgsl({ K: dE, N: d, arena: kar(L.down), kfan: { nUsed: topK } })
-          : gemvQ4KWgsl({ K: dE, N: d, arena: kar(L.down), kfan: { nUsed: topK } })),
+          ? gemvQ6KWgsl({ K: dE, N: d, arena: kar(L.down), kfan: { nUsed: topK, xPerK: true } })
+          : gemvQ4KWgsl({ K: dE, N: d, arena: kar(L.down), kfan: { nUsed: topK, xPerK: true } })),
         bgGateK: bg(xn, gateK), bgUpK: bg(xn, upK), bgDownK: bg(gateK, ySlots),
       };
     };
@@ -1505,9 +1508,32 @@ export async function createQ35GpuModel(
     // questo UN dispatch fa il lavoro che oggi fanno il down accumulante piu'
     // `pAdd` — ed e' per questo che nel ramo kfan `pAdd` NON va dispacciato:
     // sommerebbe `moeAcc` due volte.
-    const pCombine = kfanAvail ? pipe(moeCombineWgsl({ D: d, nUsed: topK, weightsFromSel: true })) : null;
-    const bgCombine = pCombine ? device.createBindGroup({
-      layout: pCombine.getBindGroupLayout(0),
+    // LAYOUT ESPLICITO, non `pipe()`. Il layout AUTO non dichiara nessun
+    // offset dinamico, e `setBindGroup(0, bg, [dyn0])` su un layout che non ne
+    // ha e' un errore di validazione WebGPU — che nel ramo ottimistico si
+    // manifesta come throw DENTRO la finestra `setInFlight`. Il `moeIdx` della
+    // combine deve essere `hasDynamicOffset`, come quello dei GEMV expert.
+    const combineBgl = kfanAvail ? device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" as const } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" as const } },
+        {
+          binding: 4, visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "uniform" as const, hasDynamicOffset: true, minBindingSize: MOE_IDX_BYTES },
+        },
+      ],
+    }) : null;
+    const pCombine = combineBgl ? device.createComputePipeline({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [combineBgl] }),
+      compute: {
+        module: device.createShaderModule({ code: moeCombineWgsl({ D: d, nUsed: topK, weightsFromSel: true }) }),
+        entryPoint: "main",
+      },
+    }) : null;
+    const bgCombine = combineBgl ? device.createBindGroup({
+      layout: combineBgl,
       entries: [
         { binding: 0, resource: { buffer: x } },
         { binding: 1, resource: { buffer: moeAcc } },
@@ -1961,21 +1987,34 @@ export async function createQ35GpuModel(
           // e si alza prima di usare i byte letti; cambia che si aspetta una
           // volta sola.
           const tRb = performance.now();
-          const maps: Promise<undefined>[] = [
-            opt.selStaging.mapAsync(GPUMapMode.READ),
-            opt.dirtyStaging.mapAsync(GPUMapMode.READ),
-          ];
-          if (read) maps.push(staging.mapAsync(GPUMapMode.READ));
-          // La mapAsync dei timestamp parte DOPO il submit — mai prima,
-          // altrimenti Dawn droppa il command buffer (known-issue fase A).
-          if (canGpuTs && tsIdx > 0) maps.push(tsqStaging!.mapAsync(GPUMapMode.READ));
-          await Promise.all(maps);
-          const errOom = await device.popErrorScope();
-          const errVal = await device.popErrorScope();
-          if (errOom ?? errVal) throw new Error(`q35 optimistic error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
+          // `try/finally` sul flag I1 (goal engine-velocita-decode, it.9): qui
+          // dentro si puo' LANCIARE — `popErrorScope` alza gli errori di
+          // validazione del submit. Senza il `finally`, `inFlight` restava
+          // `true` per sempre e OGNI passata successiva del processo moriva su
+          // «ensure con token in volo», compresi i bracci che non c'entravano
+          // niente. Misurato il 2026-08-15: un solo errore di validazione nel
+          // braccio kfan ha azzerato tutte e tre le passate calde del run, e la
+          // diagnosi puntava al path sbagliato — l'errore riportato era quello
+          // del braccio SANO, che era solo il primo a inciampare nel flag.
+          // Il flag descrive una finestra: chi la apre la chiude, sempre.
+          try {
+            const maps: Promise<undefined>[] = [
+              opt.selStaging.mapAsync(GPUMapMode.READ),
+              opt.dirtyStaging.mapAsync(GPUMapMode.READ),
+            ];
+            if (read) maps.push(staging.mapAsync(GPUMapMode.READ));
+            // La mapAsync dei timestamp parte DOPO il submit — mai prima,
+            // altrimenti Dawn droppa il command buffer (known-issue fase A).
+            if (canGpuTs && tsIdx > 0) maps.push(tsqStaging!.mapAsync(GPUMapMode.READ));
+            await Promise.all(maps);
+            const errOom = await device.popErrorScope();
+            const errVal = await device.popErrorScope();
+            if (errOom ?? errVal) throw new Error(`q35 optimistic error scope: ${(errOom ?? errVal)!.message.slice(0, 300)}`);
+          } finally {
+            cache.setInFlight(false); // confine di giro: la tabella torna toccabile
+          }
           perfAcc.readbacks++;
           perfAcc.readbackMs += performance.now() - tRb;
-          cache.setInFlight(false); // confine di giro: la tabella torna toccabile
           if (canGpuTs && tsIdx > 0) {
             const ts = new BigUint64Array(tsqStaging!.getMappedRange().slice(0));
             tsqStaging!.unmap();

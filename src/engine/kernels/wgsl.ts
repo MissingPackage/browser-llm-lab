@@ -2194,7 +2194,24 @@ export interface KGatherOpts { nUsed: number }
  * (`select(0.0, partial[0], ok)`), che e' lo stesso contributo nullo ma
  * DICHIARATO. E' la stessa filosofia del degrado definito di `arenaSlotWgsl`.
  */
-export interface KFanOpts { nUsed: number }
+export interface KFanOpts {
+  nUsed: number;
+  /**
+   * L'ingresso `x` e' PER-K invece che condiviso.
+   *
+   * Gate e up leggono tutti lo STESSO x — l'hidden del token, una riga di K
+   * valori: `xPerK` falso. Il DOWN no: il suo ingresso e' l'`h` che gate/up/silu
+   * hanno prodotto **per ciascun k**, e vive nello slot `k` di un array
+   * [topK, K]. Senza questo flag il down leggerebbe l'h del k = 0 per tutti e
+   * otto gli expert.
+   *
+   * MISURATO il 2026-08-15 (it.9), perche' non e' un difetto teorico: col down
+   * senza offset il kfan girava 1,295x piu' veloce e produceva argmax
+   * DIVERSI — 14/39 uguali, prima divergenza al token 2. Il gate dell'A/B
+   * l'ha preso; un gate a sola velocita' avrebbe promosso un motore rotto.
+   */
+  xPerK?: boolean;
+}
 
 /** le combinazioni di modi che non esistono, con la ragione nel messaggio */
 function assertGatherCombo(
@@ -2312,13 +2329,14 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   // `m | kslot<<16`; x resta [M,K], y e' l'array degli slot e la scrittura NON
   // e' pesata (contratto a slot: e' moeCombine a sommare w*y in ordine k).
   // Senza nessuno dei due il testo emesso e' identico byte per byte.
-  const XR = batch || gather ? "xR + " : "";
+  const xPerK = kfan?.xPerK === true;
+  const XR = batch || gather || xPerK ? "xR + " : "";
   const YR = gather
     ? `(mRow * ${gather.nUsed}u + kslot) * ${N}u + `
     : batch ? `wid.z * ${N}u + ` : "";
   const xRowPre = gather
     ? `\n  let gk = gather[wid.z];\n  let mRow = gk & 0xffffu;\n  let kslot = gk >> 16u;\n  let xR = mRow * ${K}u;`
-    : batch ? `\n  let xR = wid.z * ${K}u;` : "";
+    : batch || xPerK ? `\n  let xR = wid.z * ${K}u;` : "";
   const tailAcc = kfan
     // slot `wid.z` della riga 0 (il decode e' M=1): stesso layout che
     // `moeCombineWgsl` legge, `(m*nUsed + k)*N + r` con m = 0. Sul miss si
@@ -2518,13 +2536,14 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   // `m | kslot<<16`; x resta [M,K], y e' l'array degli slot e la scrittura NON
   // e' pesata (contratto a slot: e' moeCombine a sommare w*y in ordine k).
   // Senza nessuno dei due il testo emesso e' identico byte per byte.
-  const XR = batch || gather ? "xR + " : "";
+  const xPerK = kfan?.xPerK === true;
+  const XR = batch || gather || xPerK ? "xR + " : "";
   const YR = gather
     ? `(mRow * ${gather.nUsed}u + kslot) * ${N}u + `
     : batch ? `wid.z * ${N}u + ` : "";
   const xRowPre = gather
     ? `\n  let gk = gather[wid.z];\n  let mRow = gk & 0xffffu;\n  let kslot = gk >> 16u;\n  let xR = mRow * ${K}u;`
-    : batch ? `\n  let xR = wid.z * ${K}u;` : "";
+    : batch || xPerK ? `\n  let xR = wid.z * ${K}u;` : "";
   const tailAcc = kfan
     // slot `wid.z` della riga 0 (il decode e' M=1): stesso layout che
     // `moeCombineWgsl` legge, `(m*nUsed + k)*N + r` con m = 0. Sul miss si
