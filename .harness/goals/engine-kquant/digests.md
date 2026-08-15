@@ -185,3 +185,22 @@ il goal e cosa e' in dubbio.
   top-1 pieno viene da un albero precedente. Sono gate della riga 6.
 - Gate: tsc exit 0 · vitest **1017 passed | 10 skipped** · **ktest 111 PASS / 0
   FAIL** sull'albero finale.
+
+## it.10 — riga 6 CHIUSA: il gate di merge passa (2026-08-15)
+
+- **Otto gate, tutti misurati su QUESTO albero** (era il difetto che il ratchet
+  denunciava da solo): ktest 111/0 · top-1 **1012/1024** su ENTRAMBI i bracci ·
+  **sequenze generate identiche 8/8, zero token di differenza** · decode 47,06
+  (barra 45,5) · vitest 1017 passed | 10 skipped · tsc exit 0.
+- I due bracci coincidono anche nella ripartizione per prompt, non solo nel
+  totale: il prefill a chunk non cambia cosa il modello scrive.
+- **Una clausola interpretata e dichiarata**: il GLM b12 sta FUORI dalla banda
+  +-5% da tutte e tre le parti, **in meglio** (decode +16,4%, prefill +20,1%,
+  TTFT -16,7%). La leggo come banda di rumore per la non-regressione, non come
+  requisito a due code. **E non la spaccio per una vittoria**: host diverso fra
+  riferimento e run, e il decode +16,4% NON e' spiegabile da questo goal (a M=1
+  la forma multi-riga perde ed e' esclusa dal decode).
+- **Ratchet e checkpoint ricostruiti**: niente piu' `NON MISURATO`, e la banda
+  per segmento e' derivata invece che ricopiata.
+- **GPU nei pass 46,5%, fuori 53,5%**: piu' della meta' del prefill non e' piu'
+  calcolo. Da consegnare alla riga 7 insieme a `deltanet:recurrence`.

@@ -1,18 +1,19 @@
 {
-  "date": "2026-08-15",
-  "albero": "455100b + riga 5 in albero (q35prefillsites, builder derivato)",
-  "ktest": "111 PASS / 0 FAIL",
-  "vitest": "1017 passed | 10 skipped",
-  "tsc": "pulito",
-  "top1SequenzialeVsOracolo": "NON MISURATO su questo albero — e' un gate della riga 6, e l'ultimo valore pieno (1012/1024 = 98,828%) viene da un albero PRECEDENTE alle righe 2-4. Ricopiarlo qui lo farebbe passare per fresco.",
-  "top1PrefillAChunkVsOracolo": "NON MISURATO su questo albero — stessa ragione. L'unico dato di oggi e' uno smoke a 64 posizioni (62/64) in q35-conf-4b-riga2-check-2026-08-15.json, che NON e' il gate a 1024.",
-  "sequenzeGenerateIdentiche": "NON MISURATO su questo albero — gate della riga 6.",
-  "decodeSoglia": 45.5,
-  "contratto": {
-    "goal": "engine-kquant",
-    "baselineWarmMs": 32127,
-    "barraContrattoMs": 22500,
-    "barraNiceToHaveMs": 18000,
-    "perche": "baseline e barra sono quelle di engine-kquant, NON quelle di engine-ttft (87.618 / 21.905) che stavano incise nel builder: su questa run avrebbero pubblicato una discesa di 5,108x mescolando due contratti."
-  }
+ "date": "2026-08-15",
+ "albero": "66c3f4e (riga 5 chiusa) + riga 6 misurata su questo stesso albero, working tree pulito",
+ "ktest": "111 PASS / 0 FAIL",
+ "vitest": "1017 passed | 10 skipped",
+ "tsc": "pulito",
+ "top1SequenzialeVsOracolo": "1012/1024 = 98,828% — MISURATO su questo albero il 2026-08-15, results/engine/q35-conf-4b-riga6-seq-2026-08-15.json (8 prompt x 128 posizioni, host quiescent). Pari al riferimento di fase D (1012/1024): la barra e' >= 1012, quindi PASSA.",
+ "top1PrefillAChunkVsOracolo": "1012/1024 = 98,828% — MISURATO su questo albero il 2026-08-15, results/engine/q35-conf-4b-riga6-chunk-2026-08-15.json (--conf-prefill-m 16). Identico al braccio sequenziale anche nella ripartizione per prompt [125,125,125,127,128,127,127,128], non solo nel totale.",
+ "sequenzeGenerateIdentiche": "8/8 prompt IDENTICI, zero token di differenza su 1024 posizioni — confronto di engineArgmaxByPrompt fra i due artefatti riga6-seq e riga6-chunk. Il campo sta al livello alto dell'artefatto, non dentro perPrompt: il worker lo sposta la' (q35conf.worker.ts:722-723).",
+ "decodeSoglia": 45.5,
+ "contratto": {
+  "goal": "engine-kquant",
+  "baselineWarmMs": 32127,
+  "barraContrattoMs": 22500,
+  "barraNiceToHaveMs": 18000,
+  "perche": "baseline e barra sono quelle di engine-kquant, NON quelle di engine-ttft (87.618 / 21.905) che stavano incise nel builder: su questa run avrebbero pubblicato una discesa di 5,108x mescolando due contratti."
+ },
+ "glmB12NonRegressione": "NESSUNA REGRESSIONE, ma il confronto e' CONFUSO dall'host state e lo dichiaro. Mediane su 3 ripetizioni, results/engine/bench-glm-4090-b12-riga6-2026-08-15.json contro bench-glm-4090-b12-optimistic-nonreg-2026-08-09.json: decode 13,172 -> 15,330 tok/s (+16,4%), prefill 31,265 -> 37,542 (+20,1%), TTFT 14.745 -> 12.279 ms (-16,7%). Stessa config (chunked M=16, budget 12 GiB, ctxMax 525, policy lru) MA host diverso: il riferimento e' 'user-session-light', questa run 'quiescent'. Il prefill a +20% e' plausibilmente vero (il GLM ha 256 slot q4_1, portati a multi-riga dalla riga 3); il decode a +16,4% NON e' spiegabile da questo goal — la forma multi-riga a M=1 perde ed e' esclusa dal decode per costruzione — quindi quella parte e' host, non codice. Per il gate basta il non-peggioramento, che e' soddisfatto."
 }

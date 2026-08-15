@@ -803,3 +803,84 @@ l'aritmetica del ramo a chunk e' cambiata, e la bit-identita' e' sospesa per
 ruling dal 2026-08-14.
 
 **PROSSIMA: riga 6**, i gate di merge. Tre dei sei campi del ratchet li aspetta.
+
+## it.10 — RIGA 6 CHIUSA: il gate di merge passa, e una clausola l'ho interpretata (2026-08-15)
+
+**Riga di sola verifica, e ogni numero e' stato MISURATO su questo albero** —
+nessuno ricopiato da un albero precedente, che era il difetto che il ratchet
+denunciava di se' con tre `NON MISURATO`.
+
+| gate | barra | misurato | esito |
+|---|---|---|---|
+| ktest | tutti PASS | **111 / 0** | PASS |
+| top-1 vs oracolo, braccio sequenziale | >= 1012/1024 | **1012/1024 = 98,828%** | PASS |
+| top-1 vs oracolo, braccio a chunk | >= 1012/1024 | **1012/1024 = 98,828%** | PASS |
+| sequenze generate identiche | 8/8 | **8/8, zero token di differenza** | PASS |
+| decode 4B a ctx 6333 | >= 45,5 tok/s | **47,06** | PASS |
+| GLM b12 optimistic | +-5% di 13,172 / 31,26 / 14,74 | 15,330 / 37,542 / 12.279 | v. sotto |
+| vitest | verde | **1017 passed \| 10 skipped**, exit 0 | PASS |
+| tsc | pulito | exit 0 | PASS |
+
+**I due bracci non coincidono solo nel totale**: la ripartizione per prompt e'
+la stessa cifra per cifra — `[125,125,125,127,128,127,127,128]` su entrambi — e
+le sequenze generate sono identiche token per token su tutte e 1024 le
+posizioni. E' il gate che dice che il prefill a chunk non ha cambiato cosa il
+modello scrive, ed e' passato nella sua forma piu' forte.
+
+**Una nota di metodo che e' costata dieci minuti e ne avrebbe fatti perdere
+venticinque**: il piano di it.10 diceva di confrontare `perPrompt[i].engineArgmax`
+fra i due artefatti. **Quel campo non esiste**: il worker lo toglie da
+`perPrompt` e lo sposta al livello alto in `engineArgmaxByPrompt`
+(`q35conf.worker.ts:722-723`). L'ho scoperto guardando la struttura
+dell'artefatto PRIMA di lanciare il secondo braccio — se l'avessi scoperto dopo,
+avrei avuto due run buone e nessun modo di confrontarle senza rifarne una.
+E' la stessa regola di stamattina, applicata bene per una volta: **leggere
+l'artefatto prima di progettare la misura.**
+
+### La clausola che ho INTERPRETATO, e lo dichiaro
+
+Il contratto chiede il GLM b12 «**entro +-5%** di 13,172 / 31,26 / 14,74». Il
+misurato sta FUORI da quella banda **da tutte e tre le parti, e in meglio**:
+
+    decode   13,172 -> 15,330 tok/s   +16,4%
+    prefill  31,265 -> 37,542 tok/s   +20,1%
+    TTFT     14.745 -> 12.279 ms      -16,7%
+
+Letta alla lettera, quella clausola **fallisce**. La leggo come banda di RUMORE
+per la non-regressione — che e' il ruling permanente di questo progetto («le
+metriche misurate non peggiorano mai; banda rumore +-5%») — e non come un
+requisito a due code che vieta di migliorare. **Decisione mia, registrata, non
+un ruling richiesto**: se non arrivasse nessuna risposta farei esattamente
+questo, quindi non e' un'escalation.
+
+**E non la spaccio per una vittoria del goal.** Stessa config sui due lati
+(chunked M=16, budget 12 GiB, ctxMax 525, policy lru) ma **host diverso**: il
+riferimento e' `user-session-light`, questa run `quiescent`. Il confronto e'
+confuso da quella differenza, e non ho modo di togliere il confondimento senza
+rimisurare il riferimento su un albero che non c'e' piu'. Di piu':
+- il **prefill a +20,1% e' plausibilmente vero**: il GLM ha 256 slot q4_1, che
+  la riga 3 ha portato alla forma multi-riga, e il suo prefill passa da
+  `prefillChunk`;
+- il **decode a +16,4% NON e' spiegabile da questo goal**: la forma multi-riga
+  a M=1 PERDE ed e' esclusa dal decode per costruzione. Quella parte e' host,
+  non codice.
+Scritto cosi' nel ratchet, dove chi rifara' il confronto lo trovera'.
+
+### Il ratchet non porta piu' bugie
+
+I tre campi `NON MISURATO` sono stati riempiti coi valori di oggi e con
+l'artefatto accanto, e il checkpoint e' stato **ricostruito** con quel ratchet
+(`build-ttft-checkpoint.mjs`, exit 0). Il checkpoint ora pubblica una banda per
+segmento derivata e non ricopiata:
+
+    gemm:ffn            335,5 GB / 1303,0 ms = 257,5 GB/s
+    deltanet:gemm       194,2 GB / 1030,8 ms = 188,3 GB/s
+    gemm:ffn-down       146,8 GB / 1187,6 ms = 123,6 GB/s
+    gemm:deltanet-out    68,3 GB /  572,8 ms = 119,3 GB/s
+    gemm:ffn-down-q41    23,3 GB /  225,8 ms = 103,2 GB/s
+
+**GPU nei pass 46,5%, fuori 53,5%**: piu' della meta' del prefill ormai non e'
+piu' calcolo. E' il fatto che la riga 7 deve consegnare al goal successivo
+insieme a `deltanet:recurrence`.
+
+**RIGA 6 CHIUSA. Resta solo la riga 7: il consuntivo.**

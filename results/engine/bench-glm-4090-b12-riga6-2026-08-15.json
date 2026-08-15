@@ -1,0 +1,1716 @@
+{
+ "kind": "glm-bench",
+ "schemaVersion": 3,
+ "date": "2026-08-15T11:40:29.706Z",
+ "ggufSha256": "d0bbdfcde6e323ebf90a8b9e95da57100e972be1ec6f0bfa0fad0feaa426557e",
+ "config": {
+  "promptIdx": 6,
+  "promptId": "p6",
+  "promptTokens": 461,
+  "nGen": 64,
+  "replicates": 3,
+  "budgetGiB": 12,
+  "budgetMode": "fisso (config)",
+  "prefetch": null,
+  "policy": "lru",
+  "parkFrac": null,
+  "slotsOverride": {
+   "q4_0": 2161,
+   "q4_1": 256
+  },
+  "slabBudget": null,
+  "ctxMax": 525,
+  "prefillPath": "chunked M=16 (prefillChunk, fase 5)",
+  "decodePath": "single-step greedy su select:\"optimistic\" (1 submit + repair/replay, C3b)",
+  "selectMode": "optimistic",
+  "rateWindow": "intera fase (prefill: nPrompt posizioni; decode: nGen token)",
+  "protocol": "B2: warmup scartato + N repliche, mediana come headline"
+ },
+ "gates": {
+  "decodeGateToksPerSec": 13.43,
+  "decodeMedian": 15.330167494055198,
+  "decodePass": true,
+  "prefillGateToksPerSec": 56.58,
+  "prefillMedian": 37.54241335825755,
+  "prefillPass": false,
+  "dispatchPlan": null,
+  "structural": {
+   "submitsPerToken": 2.1875,
+   "syncsPerToken": 2.1875,
+   "routerSyncsPerToken": 0,
+   "gate": 2,
+   "pass": false,
+   "vsC3aSyncPath": {
+    "syncsPerToken": 47,
+    "note": "il termine che il decode ottimistico elimina (46 readback router + 1 coda)"
+   }
+  },
+  "floorSource": "results/engine/moe-oracle/llama-bench-glm47flash-q4_0-2026-07-30.json (llama.cpp 5f55650, CPU i9-14900HX 16 thread, n_prompt 512 / n_gen 64)"
+ },
+ "decodeToksPerSec": {
+  "median": 15.330167494055198,
+  "mean": 15.211773774995864,
+  "stdev": 0.2700506026898925,
+  "reps": [
+   14.902747926998789,
+   15.402405903933607,
+   15.330167494055198
+  ]
+ },
+ "prefillToksPerSec": {
+  "median": 37.54241335825755,
+  "mean": 37.38646511287496,
+  "stdev": 1.507739389653719,
+  "reps": [
+   35.80681253735665,
+   37.54241335825755,
+   38.81016944301068
+  ]
+ },
+ "ttftMs": {
+  "median": 12279.429999999702,
+  "mean": 12344.125,
+  "stdev": 501.2982915148395,
+  "reps": [
+   12874.63000000082,
+   12279.429999999702,
+   11878.314999999478
+  ]
+ },
+ "objective": {
+  "note": "funzione obiettivo direction §2 (ruling PI 2026-08-01): il floor CPU 13.43/56.58 è gate d'ingresso INTERMEDIO, non obiettivo. Questi numeri non sono gate; la loro assenza dal report è però un FAIL di checklist (GOAL C3a).",
+  "gapDecode30": {
+   "targetToksPerSec": 30,
+   "measuredToksPerSec": 15.330167494055198,
+   "factor": 1.9569257812501746,
+   "deficitMsPerToken": 31.897526041672485
+  },
+  "gapDecode60": {
+   "targetToksPerSec": 60,
+   "measuredToksPerSec": 15.330167494055198,
+   "factor": 3.913851562500349,
+   "deficitMsPerToken": 48.56419270833915
+  },
+  "gapTtft4s": {
+   "budgetMs": 4000,
+   "measuredMs": 12279.429999999702,
+   "factor": 3.0698574999999253,
+   "definition": "dal primo forward di prefill al primo token generato disponibile, modello GIÀ residente (il TTFT a freddo è metrica C3b/instant-on)",
+   "impliedPrefillToksPerSec": 115.25
+  }
+ },
+ "optimistic": {
+  "slots": {
+   "q4_0": 2161,
+   "q4_1": 256
+  },
+  "park": {
+   "q4_0": 2688,
+   "q4_1": 256
+  },
+  "slotsPolicy": "q4_1-first (docket c3b item 6b): q4_1 intera, resto a q4_0",
+  "residencyRatio": 0.8209918478260869,
+  "pDirty": 0.9375,
+  "replaysPerToken": 1.1875,
+  "replayFracPerDirty": 0.6458566629339306,
+  "repairMsPerToken": 4.181718749954598,
+  "note": "pDirty/replayFrac/repair dalla finestra di attribuzione; miss/stallo per token in telemetry.decode (headline); la tassa si confronta in fase 5 con wp0-replay-sim-2026-08-06.json allo stesso budget slot"
+ },
+ "attribution2": {
+  "windowNote": "SOLO repliche di attribuzione (telemetria accesa): il wall qui è più alto dell'headline e non va nei gate",
+  "replicates": 1,
+  "wallMsPerToken": 67.61218749999534,
+  "gpuBusyMsPerToken": 42.734864,
+  "stallResidenzaMsPerToken": 4.1673437498975545,
+  "syncCpuMsPerToken": 20.709979750097787,
+  "quotaFuoriGpu": 0.3679414084923233,
+  "misure": {
+   "encodeCpuMsPerToken": 0.6187499998777639,
+   "routerWaitMsPerToken": 0,
+   "tailWaitMsPerToken": 62.5484375001688,
+   "ensureMsPerToken": 0
+  },
+  "identity": {
+   "sumSegmentiMsPerToken": 63.167187500046566,
+   "wallMsPerToken": 67.61218749999534,
+   "unattributedMsPerToken": 4.444999999948777,
+   "note": "encode/ensure/routerWait/tailWait sono disgiunti per costruzione; gpuBusy invece si SOVRAPPONE a routerWait (mentre si aspetta il readback la GPU esegue) e non va sommato"
+  },
+  "routerSyncsPerToken": 0,
+  "submitsPerToken": 2.1875,
+  "dispatchesPerTokenMeasured": 2570.828125,
+  "gpuPassesPerToken": 166.09375,
+  "gpuPassOverflow": 0,
+  "projectionByK": null,
+  "caveats": [
+   "Chrome quantizza i timestamp GPU (~100 µs): con ~140 pass/token l'errore per pass si media, ma gpuBusy va letto come stima, non come misura esatta.",
+   "routerWait include il tempo in cui la GPU esegue: NON è tutto overhead recuperabile. Il limite inferiore recuperabile è syncFloorProbe × routerSyncsPerToken.",
+   "syncCpu è un RESIDUO (wall − gpuBusy − stallo): assorbe encode CPU, latenza submit→start, event loop e l'argmax del bench."
+  ]
+ },
+ "attributionByCategory": {
+  "note": "replica dedicata: i compute pass sono spezzati ai confini di categoria, quindi il TOTALE contiene confini che l'headline non ha. Confrontare le quote, non i totali.",
+  "wallMsPerToken": 70.87750000000233,
+  "gpuBusyMsPerToken": 43.682144,
+  "gpuBusyMsPerTokenSenzaSplit": 42.734864,
+  "costoDeiConfiniMsPerToken": 0.9472799999999992,
+  "msPerToken": {
+   "attn": 24.62849600000001,
+   "dense": 0.509024,
+   "router": 2.792928,
+   "shexp": 3.694992,
+   "experts": 8.592431999999999,
+   "addMoe": 0.4590080000000003,
+   "head": 3.0052639999999995
+  },
+  "quota": {
+   "attn": 0.5638115198741163,
+   "dense": 0.011652907879246954,
+   "router": 0.06393752101545198,
+   "shexp": 0.08458815574620147,
+   "experts": 0.19670353176803773,
+   "addMoe": 0.01050790913559555,
+   "head": 0.06879845458135021
+  },
+  "passesPerToken": {
+   "attn": 166.09375,
+   "dense": 1,
+   "router": 82.046875,
+   "shexp": 82.046875,
+   "experts": 82.046875,
+   "addMoe": 82.046875,
+   "head": 2.1875
+  }
+ },
+ "syncFloorProbe": {
+  "mapRoundTripMs": {
+   "median": 2.290000000037253,
+   "mean": 1.8120312500395812,
+   "stdev": 1.8375787899441125,
+   "reps": [
+    0.7200000006705523,
+    0.7100000008940697,
+    13.905000001192093,
+    2.330000000074506,
+    2.3349999990314245,
+    2.3600000012665987,
+    2.3549999985843897,
+    2.3399999998509884,
+    2.3399999998509884,
+    2.3400000017136335,
+    0.12999999895691872,
+    0.06499999947845936,
+    2.3450000006705523,
+    2.25,
+    2.375,
+    2.3549999985843897,
+    2.3100000005215406,
+    2.375,
+    2.375,
+    2.3599999994039536,
+    2.3950000014156103,
+    2.2799999993294477,
+    2.3349999990314245,
+    2.3799999989569187,
+    2.294999999925494,
+    2.3700000010430813,
+    2.369999999180436,
+    0.25,
+    2.380000000819564,
+    2.3849999997764826,
+    2.4049999993294477,
+    0.22499999962747097,
+    2.3200000002980232,
+    2.380000000819564,
+    0.22499999962747097,
+    2.3849999997764826,
+    2.3200000002980232,
+    2.369999999180436,
+    2.3150000013411045,
+    2.2650000005960464,
+    2.3900000005960464,
+    0.2549999989569187,
+    0.09500000067055225,
+    2.2850000001490116,
+    0.17999999970197678,
+    2.275000000372529,
+    0.1699999999254942,
+    2.349999999627471,
+    0.17999999970197678,
+    2.255000000819564,
+    0.08999999985098839,
+    2.1899999994784594,
+    2.2400000002235174,
+    0.23499999940395355,
+    2.2850000001490116,
+    0.08500000089406967,
+    0.06999999843537807,
+    2.2450000010430813,
+    0.11500000022351742,
+    0.11500000022351742,
+    0.12000000104308128,
+    0.11499999836087227,
+    0.0800000000745058,
+    2.225000001490116
+   ]
+  },
+  "routerSyncsPerToken": 0,
+  "floorMsPerToken": 0,
+  "note": "floor teorico dei soli readback router a GPU scarica: nessun meccanismo che li mantenga può costare meno"
+ },
+ "timestampQuery": {
+  "available": true,
+  "used": true
+ },
+ "deviceLimits": {
+  "maxBufferSize": 4294967292,
+  "maxStorageBufferBindingSize": 2144600064,
+  "maxStorageBuffersPerShaderStage": 9,
+  "maxComputeWorkgroupStorageSize": 30848,
+  "maxComputeInvocationsPerWorkgroup": 256,
+  "maxComputeWorkgroupSizeX": 256,
+  "maxComputeWorkgroupsPerDimension": 65535
+ },
+ "deviceFeatures": [
+  "core-features-and-limits",
+  "timestamp-query"
+ ],
+ "adapterFeatures": [
+  "bgra8unorm-storage",
+  "chromium-experimental-multi-draw-indirect",
+  "chromium-experimental-subgroup-matrix",
+  "chromium-experimental-timestamp-query-inside-passes",
+  "clip-distances",
+  "core-features-and-limits",
+  "depth-clip-control",
+  "depth32float-stencil8",
+  "dual-source-blending",
+  "float32-blendable",
+  "float32-filterable",
+  "indirect-first-instance",
+  "primitive-index",
+  "rg11b10ufloat-renderable",
+  "subgroup-size-control",
+  "subgroups",
+  "texture-component-swizzle",
+  "texture-compression-bc",
+  "texture-compression-bc-sliced-3d",
+  "texture-formats-tier1",
+  "texture-formats-tier2",
+  "timestamp-query"
+ ],
+ "telemetry": {
+  "dispatchesPerTokenPlanned": 1449,
+  "syncsPerTokenExpected": 2,
+  "syncsNote": "optimistic: 1 readback di coda per giro (pulito 1, sporco 2 col replay); il valore e' il TETTO del gate strutturale, l'atteso vero e' 1+P(dirty). Confronto C3a sync path: 47/token.",
+  "decode": {
+   "hitRateNote": "semantica diversa in optimistic: solo i miss passano da ensure — v. optimistic.residencyRatio",
+   "hitRate": 0,
+   "retention": 0,
+   "missesPerToken": 4.78125,
+   "stallMsPerToken": 4.0467968749580905,
+   "readMsPerToken": 2.4746874998963904,
+   "packMsPerToken": 0,
+   "uploadMsPerToken": 1.5721093750617001,
+   "msPerToken": 65.23085937500582,
+   "residuoMsPerToken": 60.878125000046566,
+   "evictionsPerToken": 4.78125
+  },
+  "occupancy": {
+   "occupied": {
+    "q4_0": 2161,
+    "q4_1": 256
+   },
+   "slots": {
+    "q4_0": 2161,
+    "q4_1": 256
+   }
+  },
+  "attribution": {
+   "tokens": 192,
+   "zeroMissTokens": 12,
+   "msPerTokenZeroMiss": 28.365000000223517,
+   "msPerTokenNetStall": 60.24249999970198,
+   "fitInterceptMs": 42.465823148435305,
+   "fitSlopeMsPerMiss": 4.827850714054047,
+   "missCostMsMedian": 0.88241666679581
+  }
+ },
+ "warmup": {
+  "prefill": {
+   "tokens": 461,
+   "ms": 25541.33499999903,
+   "toksPerSec": 18.049174015376153,
+   "msPerToken": 55.404197396961024,
+   "msPerTokenP50": 28.737500000046566,
+   "residency": {
+    "hits": 33485,
+    "misses": 3857,
+    "evictions": 1504,
+    "hitRate": 0.8967114776926784,
+    "hitsResident": 33485,
+    "hitsPrefetch": 0,
+    "retention": 0.9597236355845964,
+    "readMs": 6414.144999982789,
+    "packMs": 0,
+    "uploadMs": 1324.0500000528991,
+    "stallMs": 7738.195000035688,
+    "bytesRead": 20512309248,
+    "bytesUploaded": 20512309248
+   }
+  },
+  "decode": {
+   "tokens": 64,
+   "ms": 4442.159999998286,
+   "toksPerSec": 14.407405406384436,
+   "msPerToken": 69.40874999997322,
+   "msPerTokenP50": 64.4199999999255,
+   "residency": {
+    "hits": 0,
+    "misses": 306,
+    "evictions": 306,
+    "hitRate": 0,
+    "hitsResident": 0,
+    "hitsPrefetch": 0,
+    "retention": 0,
+    "readMs": 460.4949999935925,
+    "packMs": 0,
+    "uploadMs": 115.47499999217689,
+    "stallMs": 575.9699999857694,
+    "bytesRead": 1624375296,
+    "bytesUploaded": 1624375296
+   }
+  }
+ },
+ "reps": [
+  {
+   "prefill": {
+    "tokens": 461,
+    "ms": 12874.644999999553,
+    "toksPerSec": 35.80681253735665,
+    "msPerToken": 27.927646420823326,
+    "msPerTokenP50": 25.450312500004657,
+    "residency": {
+     "hits": 33675,
+     "misses": 1314,
+     "evictions": 1314,
+     "hitRate": 0.9624453399639887,
+     "hitsResident": 33675,
+     "hitsPrefetch": 0,
+     "retention": 0.9624453399639887,
+     "readMs": 1584.0450000260025,
+     "packMs": 0,
+     "uploadMs": 364.059999987483,
+     "stallMs": 1948.1050000134856,
+     "bytesRead": 6975258624,
+     "bytesUploaded": 6975258624
+    }
+   },
+   "decode": {
+    "tokens": 64,
+    "ms": 4294.510000001639,
+    "toksPerSec": 14.902747926998789,
+    "msPerToken": 67.10171875002561,
+    "msPerTokenP50": 65.70749999955297,
+    "residency": {
+     "hits": 0,
+     "misses": 306,
+     "evictions": 306,
+     "hitRate": 0,
+     "hitsResident": 0,
+     "hitsPrefetch": 0,
+     "retention": 0,
+     "readMs": 302.20500002242625,
+     "packMs": 0,
+     "uploadMs": 107.2199999988079,
+     "stallMs": 409.42500002123415,
+     "bytesRead": 1624375296,
+     "bytesUploaded": 1624375296
+    }
+   },
+   "decodeTokens": [
+    {
+     "ms": 66.00500000081956,
+     "stallMs": 6.040000002831221,
+     "misses": 4
+    },
+    {
+     "ms": 84.52499999850988,
+     "stallMs": 16.21499999985099,
+     "misses": 9
+    },
+    {
+     "ms": 74.22499999962747,
+     "stallMs": 7.41499999910593,
+     "misses": 4
+    },
+    {
+     "ms": 133.30000000074506,
+     "stallMs": 23.534999998286366,
+     "misses": 18
+    },
+    {
+     "ms": 107.41000000014901,
+     "stallMs": 15.724999999627471,
+     "misses": 13
+    },
+    {
+     "ms": 83.21499999985099,
+     "stallMs": 7.105000000447035,
+     "misses": 6
+    },
+    {
+     "ms": 75.51999999955297,
+     "stallMs": 11.069999998435378,
+     "misses": 6
+    },
+    {
+     "ms": 69.53999999910593,
+     "stallMs": 7.250000001862645,
+     "misses": 5
+    },
+    {
+     "ms": 76.99500000104308,
+     "stallMs": 12.345000000670552,
+     "misses": 7
+    },
+    {
+     "ms": 80.5599999986589,
+     "stallMs": 12.10500000230968,
+     "misses": 9
+    },
+    {
+     "ms": 60.30499999970198,
+     "stallMs": 2.894999999552965,
+     "misses": 2
+    },
+    {
+     "ms": 62.875,
+     "stallMs": 3.2649999987334013,
+     "misses": 3
+    },
+    {
+     "ms": 91.1699999999255,
+     "stallMs": 7.950000001117587,
+     "misses": 6
+    },
+    {
+     "ms": 64.0650000013411,
+     "stallMs": 4.160000000149012,
+     "misses": 5
+    },
+    {
+     "ms": 65.47499999962747,
+     "stallMs": 7.730000000447035,
+     "misses": 5
+    },
+    {
+     "ms": 61.705000000074506,
+     "stallMs": 2.650000000372529,
+     "misses": 3
+    },
+    {
+     "ms": 83.3600000012666,
+     "stallMs": 8.110000001266599,
+     "misses": 11
+    },
+    {
+     "ms": 39.46999999880791,
+     "stallMs": 1.1399999987334013,
+     "misses": 1
+    },
+    {
+     "ms": 85.68999999947846,
+     "stallMs": 12.464999999850988,
+     "misses": 8
+    },
+    {
+     "ms": 36.31000000052154,
+     "stallMs": 0.6400000005960464,
+     "misses": 1
+    },
+    {
+     "ms": 58.94999999925494,
+     "stallMs": 2.1100000012665987,
+     "misses": 2
+    },
+    {
+     "ms": 60.85999999940395,
+     "stallMs": 2.73000000230968,
+     "misses": 3
+    },
+    {
+     "ms": 46.580000000074506,
+     "stallMs": 0.9100000001490116,
+     "misses": 1
+    },
+    {
+     "ms": 93.43000000156462,
+     "stallMs": 9.27500000409782,
+     "misses": 12
+    },
+    {
+     "ms": 43.41000000014901,
+     "stallMs": 1.849999999627471,
+     "misses": 2
+    },
+    {
+     "ms": 42.67500000074506,
+     "stallMs": 1.6050000004470348,
+     "misses": 2
+    },
+    {
+     "ms": 56.32500000111759,
+     "stallMs": 1.9599999990314245,
+     "misses": 2
+    },
+    {
+     "ms": 79.44999999925494,
+     "stallMs": 12.43999999947846,
+     "misses": 7
+    },
+    {
+     "ms": 108.7050000000745,
+     "stallMs": 15.185000002384186,
+     "misses": 14
+    },
+    {
+     "ms": 49.019999999552965,
+     "stallMs": 1.6950000002980232,
+     "misses": 1
+    },
+    {
+     "ms": 69.79999999888241,
+     "stallMs": 4.689999999478459,
+     "misses": 5
+    },
+    {
+     "ms": 67.7649999987334,
+     "stallMs": 10.31000000052154,
+     "misses": 3
+    },
+    {
+     "ms": 28.169999999925494,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 72.01999999955297,
+     "stallMs": 7.7650000005960464,
+     "misses": 4
+    },
+    {
+     "ms": 50.755000000819564,
+     "stallMs": 2.5649999994784594,
+     "misses": 2
+    },
+    {
+     "ms": 87.36999999918044,
+     "stallMs": 4.97999999858439,
+     "misses": 6
+    },
+    {
+     "ms": 100.75499999895692,
+     "stallMs": 8.970000002533197,
+     "misses": 10
+    },
+    {
+     "ms": 78.24499999918044,
+     "stallMs": 11.874999998137355,
+     "misses": 8
+    },
+    {
+     "ms": 89.05000000074506,
+     "stallMs": 14.725000005215406,
+     "misses": 10
+    },
+    {
+     "ms": 50.415000000968575,
+     "stallMs": 5.464999999850988,
+     "misses": 4
+    },
+    {
+     "ms": 70.63499999977648,
+     "stallMs": 6.079999998211861,
+     "misses": 8
+    },
+    {
+     "ms": 83.11500000022352,
+     "stallMs": 15.165000000968575,
+     "misses": 9
+    },
+    {
+     "ms": 53.730000000447035,
+     "stallMs": 2.4399999994784594,
+     "misses": 3
+    },
+    {
+     "ms": 71.7050000000745,
+     "stallMs": 9.994999999180436,
+     "misses": 6
+    },
+    {
+     "ms": 47.08500000089407,
+     "stallMs": 0.900000000372529,
+     "misses": 1
+    },
+    {
+     "ms": 29.890000000596046,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 52.82000000029802,
+     "stallMs": 11.085000002756715,
+     "misses": 2
+    },
+    {
+     "ms": 65.93999999947846,
+     "stallMs": 7.179999999701977,
+     "misses": 4
+    },
+    {
+     "ms": 40.205000000074506,
+     "stallMs": 0.900000000372529,
+     "misses": 1
+    },
+    {
+     "ms": 49.394999999552965,
+     "stallMs": 0.8549999985843897,
+     "misses": 1
+    },
+    {
+     "ms": 28.52000000141561,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 75,
+     "stallMs": 8.389999998733401,
+     "misses": 4
+    },
+    {
+     "ms": 97.75999999977648,
+     "stallMs": 9.930000001564622,
+     "misses": 8
+    },
+    {
+     "ms": 60.25999999977648,
+     "stallMs": 2.5649999994784594,
+     "misses": 3
+    },
+    {
+     "ms": 60.915000000968575,
+     "stallMs": 6.46000000089407,
+     "misses": 1
+    },
+    {
+     "ms": 63.809999998658895,
+     "stallMs": 3.5899999998509884,
+     "misses": 3
+    },
+    {
+     "ms": 64.91000000014901,
+     "stallMs": 2.0600000005215406,
+     "misses": 2
+    },
+    {
+     "ms": 44.15500000119209,
+     "stallMs": 0.8700000010430813,
+     "misses": 1
+    },
+    {
+     "ms": 97.17500000074506,
+     "stallMs": 13.915000000968575,
+     "misses": 10
+    },
+    {
+     "ms": 55.42499999888241,
+     "stallMs": 1.5100000016391277,
+     "misses": 2
+    },
+    {
+     "ms": 77,
+     "stallMs": 7.035000000149012,
+     "misses": 7
+    },
+    {
+     "ms": 60.85999999940395,
+     "stallMs": 2.2549999989569187,
+     "misses": 2
+    },
+    {
+     "ms": 27.790000000968575,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 66.82500000111759,
+     "stallMs": 5.330000000074506,
+     "misses": 4
+    }
+   ],
+   "generated": [
+    73022,
+    2236,
+    198,
+    9636,
+    220,
+    341,
+    262,
+    330,
+    8511,
+    788,
+    330,
+    2911,
+    654,
+    76,
+    25788,
+    756,
+    262,
+    330,
+    6111,
+    788,
+    330,
+    3342,
+    87,
+    99698,
+    24,
+    15,
+    756,
+    262,
+    330,
+    15891,
+    788,
+    330,
+    18167,
+    756,
+    262,
+    330,
+    957,
+    788,
+    220,
+    115760,
+    13,
+    19,
+    345,
+    262,
+    330,
+    3843,
+    788,
+    330,
+    29482,
+    2687,
+    756,
+    262,
+    330,
+    1028,
+    788,
+    330,
+    115937,
+    21,
+    12,
+    100372,
+    12,
+    100104,
+    51,
+    99243
+   ],
+   "ttftMs": 12874.63000000082
+  },
+  {
+   "prefill": {
+    "tokens": 461,
+    "ms": 12279.445000000298,
+    "toksPerSec": 37.54241335825755,
+    "msPerToken": 26.63654013015249,
+    "msPerTokenP50": 24.944687499897555,
+    "residency": {
+     "hits": 33675,
+     "misses": 1314,
+     "evictions": 1314,
+     "hitRate": 0.9624453399639887,
+     "hitsResident": 33675,
+     "hitsPrefetch": 0,
+     "retention": 0.9624453399639887,
+     "readMs": 1050.2750000357628,
+     "packMs": 0,
+     "uploadMs": 345.85500000976026,
+     "stallMs": 1396.130000045523,
+     "bytesRead": 6975258624,
+     "bytesUploaded": 6975258624
+    }
+   },
+   "decode": {
+    "tokens": 64,
+    "ms": 4155.195000000298,
+    "toksPerSec": 15.402405903933607,
+    "msPerToken": 64.92492187500466,
+    "msPerTokenP50": 63.58749999944121,
+    "residency": {
+     "hits": 0,
+     "misses": 306,
+     "evictions": 306,
+     "hitRate": 0,
+     "hitsResident": 0,
+     "hitsPrefetch": 0,
+     "retention": 0,
+     "readMs": 158.37999999336898,
+     "packMs": 0,
+     "uploadMs": 100.61500000394881,
+     "stallMs": 258.9949999973178,
+     "bytesRead": 1624375296,
+     "bytesUploaded": 1624375296
+    }
+   },
+   "decodeTokens": [
+    {
+     "ms": 55.96499999985099,
+     "stallMs": 3.4900000002235174,
+     "misses": 4
+    },
+    {
+     "ms": 74.88499999977648,
+     "stallMs": 7.08500000089407,
+     "misses": 9
+    },
+    {
+     "ms": 60.93999999947846,
+     "stallMs": 3.794999999925494,
+     "misses": 4
+    },
+    {
+     "ms": 122.31000000052154,
+     "stallMs": 15.110000003129244,
+     "misses": 18
+    },
+    {
+     "ms": 100.99500000104308,
+     "stallMs": 10.18999999947846,
+     "misses": 13
+    },
+    {
+     "ms": 80.3899999987334,
+     "stallMs": 4.590000003576279,
+     "misses": 6
+    },
+    {
+     "ms": 68.46499999985099,
+     "stallMs": 4.589999997988343,
+     "misses": 6
+    },
+    {
+     "ms": 65.11999999918044,
+     "stallMs": 4.009999997913837,
+     "misses": 5
+    },
+    {
+     "ms": 74.02499999850988,
+     "stallMs": 5.874999998137355,
+     "misses": 7
+    },
+    {
+     "ms": 74.71000000089407,
+     "stallMs": 6.935000000521541,
+     "misses": 9
+    },
+    {
+     "ms": 58.98499999940395,
+     "stallMs": 1.7749999985098839,
+     "misses": 2
+    },
+    {
+     "ms": 63.524999998509884,
+     "stallMs": 2.8849999997764826,
+     "misses": 3
+    },
+    {
+     "ms": 94.13499999977648,
+     "stallMs": 4.980000000447035,
+     "misses": 6
+    },
+    {
+     "ms": 64.09500000067055,
+     "stallMs": 4.579999998211861,
+     "misses": 5
+    },
+    {
+     "ms": 63.355000000447035,
+     "stallMs": 4.394999999552965,
+     "misses": 5
+    },
+    {
+     "ms": 60.644999999552965,
+     "stallMs": 2.7099999990314245,
+     "misses": 3
+    },
+    {
+     "ms": 80.80000000074506,
+     "stallMs": 8.639999998733401,
+     "misses": 11
+    },
+    {
+     "ms": 40.74000000022352,
+     "stallMs": 0.9099999982863665,
+     "misses": 1
+    },
+    {
+     "ms": 80.5449999999255,
+     "stallMs": 7.175000000745058,
+     "misses": 8
+    },
+    {
+     "ms": 38.19999999925494,
+     "stallMs": 0.9849999994039536,
+     "misses": 1
+    },
+    {
+     "ms": 60.119999999180436,
+     "stallMs": 2.3049999997019768,
+     "misses": 2
+    },
+    {
+     "ms": 62.809999998658895,
+     "stallMs": 2.4100000001490116,
+     "misses": 3
+    },
+    {
+     "ms": 47.24000000022352,
+     "stallMs": 1.6099999994039536,
+     "misses": 1
+    },
+    {
+     "ms": 92.53999999910593,
+     "stallMs": 9.349999999627471,
+     "misses": 12
+    },
+    {
+     "ms": 41.63499999977648,
+     "stallMs": 1.7149999998509884,
+     "misses": 2
+    },
+    {
+     "ms": 43.35999999940395,
+     "stallMs": 1.574999999254942,
+     "misses": 2
+    },
+    {
+     "ms": 55.97000000067055,
+     "stallMs": 1.8650000002235174,
+     "misses": 2
+    },
+    {
+     "ms": 72.85999999940395,
+     "stallMs": 6.08500000089407,
+     "misses": 7
+    },
+    {
+     "ms": 102.30499999970198,
+     "stallMs": 10.93999999947846,
+     "misses": 14
+    },
+    {
+     "ms": 50.80000000074506,
+     "stallMs": 1.3450000006705523,
+     "misses": 1
+    },
+    {
+     "ms": 69.5800000000745,
+     "stallMs": 3.519999999552965,
+     "misses": 5
+    },
+    {
+     "ms": 56.709999999031425,
+     "stallMs": 3.094999998807907,
+     "misses": 3
+    },
+    {
+     "ms": 28.5,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 67.125,
+     "stallMs": 3.5099999997764826,
+     "misses": 4
+    },
+    {
+     "ms": 47.915000000968575,
+     "stallMs": 1.705000001937151,
+     "misses": 2
+    },
+    {
+     "ms": 92.74000000022352,
+     "stallMs": 5.279999999329448,
+     "misses": 6
+    },
+    {
+     "ms": 105.89500000141561,
+     "stallMs": 8.774999998509884,
+     "misses": 10
+    },
+    {
+     "ms": 71.9050000011921,
+     "stallMs": 6.675000000745058,
+     "misses": 8
+    },
+    {
+     "ms": 84.6900000013411,
+     "stallMs": 8.135000001639128,
+     "misses": 10
+    },
+    {
+     "ms": 50.959999999031425,
+     "stallMs": 3.8349999990314245,
+     "misses": 4
+    },
+    {
+     "ms": 74.46000000089407,
+     "stallMs": 6.114999998360872,
+     "misses": 8
+    },
+    {
+     "ms": 87.00499999895692,
+     "stallMs": 7.044999999925494,
+     "misses": 9
+    },
+    {
+     "ms": 53.8899999987334,
+     "stallMs": 3.475000001490116,
+     "misses": 3
+    },
+    {
+     "ms": 69.88000000081956,
+     "stallMs": 4.700000001117587,
+     "misses": 6
+    },
+    {
+     "ms": 47.41499999910593,
+     "stallMs": 1.0099999997764826,
+     "misses": 1
+    },
+    {
+     "ms": 29.71000000089407,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 41.669999999925494,
+     "stallMs": 2.044999999925494,
+     "misses": 2
+    },
+    {
+     "ms": 63.65000000037253,
+     "stallMs": 3.3849999997764826,
+     "misses": 4
+    },
+    {
+     "ms": 41.44999999925494,
+     "stallMs": 0.875,
+     "misses": 1
+    },
+    {
+     "ms": 50.83999999985099,
+     "stallMs": 0.8149999994784594,
+     "misses": 1
+    },
+    {
+     "ms": 28.34999999962747,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 71.3600000012666,
+     "stallMs": 3.319999998435378,
+     "misses": 4
+    },
+    {
+     "ms": 91.32000000029802,
+     "stallMs": 6.405000003054738,
+     "misses": 8
+    },
+    {
+     "ms": 60.255000000819564,
+     "stallMs": 3.2900000028312206,
+     "misses": 3
+    },
+    {
+     "ms": 56.375,
+     "stallMs": 1.2599999997764826,
+     "misses": 1
+    },
+    {
+     "ms": 64.90000000037253,
+     "stallMs": 2.6299999989569187,
+     "misses": 3
+    },
+    {
+     "ms": 65.46499999985099,
+     "stallMs": 2.3349999990314245,
+     "misses": 2
+    },
+    {
+     "ms": 45.23499999940395,
+     "stallMs": 1.1400000005960464,
+     "misses": 1
+    },
+    {
+     "ms": 89.65000000037253,
+     "stallMs": 8.815000001341105,
+     "misses": 10
+    },
+    {
+     "ms": 55.19500000029802,
+     "stallMs": 1.555000001564622,
+     "misses": 2
+    },
+    {
+     "ms": 73.02500000037253,
+     "stallMs": 5.4099999982863665,
+     "misses": 7
+    },
+    {
+     "ms": 58.88499999977648,
+     "stallMs": 1.6449999995529652,
+     "misses": 2
+    },
+    {
+     "ms": 28.425000000745058,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 65.60500000044703,
+     "stallMs": 3.2900000009685755,
+     "misses": 4
+    }
+   ],
+   "generated": [
+    73022,
+    2236,
+    198,
+    9636,
+    220,
+    341,
+    262,
+    330,
+    8511,
+    788,
+    330,
+    2911,
+    654,
+    76,
+    25788,
+    756,
+    262,
+    330,
+    6111,
+    788,
+    330,
+    3342,
+    87,
+    99698,
+    24,
+    15,
+    756,
+    262,
+    330,
+    15891,
+    788,
+    330,
+    18167,
+    756,
+    262,
+    330,
+    957,
+    788,
+    220,
+    115760,
+    13,
+    19,
+    345,
+    262,
+    330,
+    3843,
+    788,
+    330,
+    29482,
+    2687,
+    756,
+    262,
+    330,
+    1028,
+    788,
+    330,
+    115937,
+    21,
+    12,
+    100372,
+    12,
+    100104,
+    51,
+    99243
+   ],
+   "ttftMs": 12279.429999999702
+  },
+  {
+   "prefill": {
+    "tokens": 461,
+    "ms": 11878.330000000075,
+    "toksPerSec": 38.81016944301068,
+    "msPerToken": 25.76644251626914,
+    "msPerTokenP50": 24.195625000051223,
+    "residency": {
+     "hits": 33675,
+     "misses": 1314,
+     "evictions": 1314,
+     "hitRate": 0.9624453399639887,
+     "hitsResident": 33675,
+     "hitsPrefetch": 0,
+     "retention": 0.9624453399639887,
+     "readMs": 658.3749999888241,
+     "packMs": 0,
+     "uploadMs": 336.00000001117587,
+     "stallMs": 994.375,
+     "bytesRead": 6975258624,
+     "bytesUploaded": 6975258624
+    }
+   },
+   "decode": {
+    "tokens": 64,
+    "ms": 4174.7750000003725,
+    "toksPerSec": 15.330167494055198,
+    "msPerToken": 65.23085937500582,
+    "msPerTokenP50": 63.40000000037253,
+    "residency": {
+     "hits": 0,
+     "misses": 306,
+     "evictions": 306,
+     "hitRate": 0,
+     "hitsResident": 0,
+     "hitsPrefetch": 0,
+     "retention": 0,
+     "readMs": 157.89999999292195,
+     "packMs": 0,
+     "uploadMs": 99.79000000841916,
+     "stallMs": 257.6900000013411,
+     "bytesRead": 1624375296,
+     "bytesUploaded": 1624375296
+    }
+   },
+   "decodeTokens": [
+    {
+     "ms": 53.380000000819564,
+     "stallMs": 2.7900000009685755,
+     "misses": 4
+    },
+    {
+     "ms": 74.42499999888241,
+     "stallMs": 7.1400000005960464,
+     "misses": 9
+    },
+    {
+     "ms": 59.53999999910593,
+     "stallMs": 3.5950000006705523,
+     "misses": 4
+    },
+    {
+     "ms": 120.68000000156462,
+     "stallMs": 14.590000003576279,
+     "misses": 18
+    },
+    {
+     "ms": 103.00500000081956,
+     "stallMs": 11.20499999821186,
+     "misses": 13
+    },
+    {
+     "ms": 81.82500000111759,
+     "stallMs": 5.3400000017136335,
+     "misses": 6
+    },
+    {
+     "ms": 66.26500000059605,
+     "stallMs": 5.195000000298023,
+     "misses": 6
+    },
+    {
+     "ms": 66.6900000013411,
+     "stallMs": 4.110000003129244,
+     "misses": 5
+    },
+    {
+     "ms": 76.25999999977648,
+     "stallMs": 6.269999999552965,
+     "misses": 7
+    },
+    {
+     "ms": 74.72000000067055,
+     "stallMs": 7.1599999982863665,
+     "misses": 9
+    },
+    {
+     "ms": 58.64000000059605,
+     "stallMs": 2.7549999989569187,
+     "misses": 2
+    },
+    {
+     "ms": 66.64000000059605,
+     "stallMs": 2.6150000002235174,
+     "misses": 3
+    },
+    {
+     "ms": 96.49000000022352,
+     "stallMs": 4.6450000032782555,
+     "misses": 6
+    },
+    {
+     "ms": 64.19999999925494,
+     "stallMs": 3.6200000029057264,
+     "misses": 5
+    },
+    {
+     "ms": 62.09499999880791,
+     "stallMs": 4.525000000372529,
+     "misses": 5
+    },
+    {
+     "ms": 62.494999999180436,
+     "stallMs": 2.5,
+     "misses": 3
+    },
+    {
+     "ms": 85.98499999940395,
+     "stallMs": 8.544999998062849,
+     "misses": 11
+    },
+    {
+     "ms": 42.375,
+     "stallMs": 1.6449999995529652,
+     "misses": 1
+    },
+    {
+     "ms": 78.71499999985099,
+     "stallMs": 6.294999998062849,
+     "misses": 8
+    },
+    {
+     "ms": 40.03500000014901,
+     "stallMs": 0.7799999993294477,
+     "misses": 1
+    },
+    {
+     "ms": 61.72999999858439,
+     "stallMs": 1.5350000001490116,
+     "misses": 2
+    },
+    {
+     "ms": 64.22000000067055,
+     "stallMs": 3.194999998435378,
+     "misses": 3
+    },
+    {
+     "ms": 45.144999999552965,
+     "stallMs": 1.5249999985098839,
+     "misses": 1
+    },
+    {
+     "ms": 95.37999999895692,
+     "stallMs": 10.365000002086163,
+     "misses": 12
+    },
+    {
+     "ms": 44.25,
+     "stallMs": 2.3350000008940697,
+     "misses": 2
+    },
+    {
+     "ms": 45.50499999895692,
+     "stallMs": 2.199999999254942,
+     "misses": 2
+    },
+    {
+     "ms": 57.205000000074506,
+     "stallMs": 2.5,
+     "misses": 2
+    },
+    {
+     "ms": 70.52999999932945,
+     "stallMs": 5.474999999627471,
+     "misses": 7
+    },
+    {
+     "ms": 100.4699999988079,
+     "stallMs": 10.609999997541308,
+     "misses": 14
+    },
+    {
+     "ms": 53.16000000014901,
+     "stallMs": 0.9500000011175871,
+     "misses": 1
+    },
+    {
+     "ms": 67.22499999962747,
+     "stallMs": 4.555000001564622,
+     "misses": 5
+    },
+    {
+     "ms": 58.94500000029802,
+     "stallMs": 2.4249999970197678,
+     "misses": 3
+    },
+    {
+     "ms": 26.83999999985099,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 70.75999999977648,
+     "stallMs": 4.0400000009685755,
+     "misses": 4
+    },
+    {
+     "ms": 48.92999999970198,
+     "stallMs": 2.2649999987334013,
+     "misses": 2
+    },
+    {
+     "ms": 88.59999999962747,
+     "stallMs": 5.865000000223517,
+     "misses": 6
+    },
+    {
+     "ms": 118.86500000022352,
+     "stallMs": 8.219999998807907,
+     "misses": 10
+    },
+    {
+     "ms": 73.84500000067055,
+     "stallMs": 6.745000001043081,
+     "misses": 8
+    },
+    {
+     "ms": 95.36499999836087,
+     "stallMs": 8.449999999254942,
+     "misses": 10
+    },
+    {
+     "ms": 50.690000001341105,
+     "stallMs": 3.424999998882413,
+     "misses": 4
+    },
+    {
+     "ms": 74.7050000000745,
+     "stallMs": 6.164999997243285,
+     "misses": 8
+    },
+    {
+     "ms": 76.19999999925494,
+     "stallMs": 6.800000000745058,
+     "misses": 9
+    },
+    {
+     "ms": 56.37000000104308,
+     "stallMs": 2.48000000230968,
+     "misses": 3
+    },
+    {
+     "ms": 66.2350000012666,
+     "stallMs": 4.605000000447035,
+     "misses": 6
+    },
+    {
+     "ms": 45.68000000156462,
+     "stallMs": 0.8650000002235174,
+     "misses": 1
+    },
+    {
+     "ms": 28.37000000104308,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 43.93500000052154,
+     "stallMs": 2.3399999998509884,
+     "misses": 2
+    },
+    {
+     "ms": 60.36500000022352,
+     "stallMs": 2.844999998807907,
+     "misses": 4
+    },
+    {
+     "ms": 40.125,
+     "stallMs": 0.9199999999254942,
+     "misses": 1
+    },
+    {
+     "ms": 48.08500000089407,
+     "stallMs": 1.1950000002980232,
+     "misses": 1
+    },
+    {
+     "ms": 28.359999999403954,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 71.81000000052154,
+     "stallMs": 3.169999999925494,
+     "misses": 4
+    },
+    {
+     "ms": 89.63499999977648,
+     "stallMs": 5.949999999254942,
+     "misses": 8
+    },
+    {
+     "ms": 59.81000000052154,
+     "stallMs": 2.5549999997019768,
+     "misses": 3
+    },
+    {
+     "ms": 55.78500000014901,
+     "stallMs": 0.7850000001490116,
+     "misses": 1
+    },
+    {
+     "ms": 64.52500000037253,
+     "stallMs": 3.419999998062849,
+     "misses": 3
+    },
+    {
+     "ms": 62.815000001341105,
+     "stallMs": 1.5950000006705523,
+     "misses": 2
+    },
+    {
+     "ms": 45.705000000074506,
+     "stallMs": 1.0299999993294477,
+     "misses": 1
+    },
+    {
+     "ms": 90.72999999858439,
+     "stallMs": 7.48000000230968,
+     "misses": 10
+    },
+    {
+     "ms": 55.06000000052154,
+     "stallMs": 1.3649999983608723,
+     "misses": 2
+    },
+    {
+     "ms": 73.77999999932945,
+     "stallMs": 5.355000000447035,
+     "misses": 7
+    },
+    {
+     "ms": 60.07499999925494,
+     "stallMs": 1.625,
+     "misses": 2
+    },
+    {
+     "ms": 28.239999998360872,
+     "stallMs": 0,
+     "misses": 0
+    },
+    {
+     "ms": 63.98499999940395,
+     "stallMs": 3.1450000014156103,
+     "misses": 4
+    }
+   ],
+   "generated": [
+    73022,
+    2236,
+    198,
+    9636,
+    220,
+    341,
+    262,
+    330,
+    8511,
+    788,
+    330,
+    2911,
+    654,
+    76,
+    25788,
+    756,
+    262,
+    330,
+    6111,
+    788,
+    330,
+    3342,
+    87,
+    99698,
+    24,
+    15,
+    756,
+    262,
+    330,
+    15891,
+    788,
+    330,
+    18167,
+    756,
+    262,
+    330,
+    957,
+    788,
+    220,
+    115760,
+    13,
+    19,
+    345,
+    262,
+    330,
+    3843,
+    788,
+    330,
+    29482,
+    2687,
+    756,
+    262,
+    330,
+    1028,
+    788,
+    330,
+    115937,
+    21,
+    12,
+    100372,
+    12,
+    100104,
+    51,
+    99243
+   ],
+   "ttftMs": 11878.314999999478
+  }
+ ],
+ "buildMs": 2455.5950000006706,
+ "wallMs": 115544.82499999925,
+ "importMs": 0,
+ "hostState": {
+  "declared": "quiescent",
+  "before": {
+   "temperatureC": 50,
+   "smClockMHz": 210,
+   "powerW": 588.21,
+   "memUsedMiB": 637,
+   "utilizationPct": 0,
+   "throttleReasons": "0x0000000000000001"
+  },
+  "after": {
+   "temperatureC": 57,
+   "smClockMHz": 2265,
+   "powerW": 55.78,
+   "memUsedMiB": 648,
+   "utilizationPct": 32,
+   "throttleReasons": "0x0000000000000024"
+  }
+ },
+ "vramPeakMiB": 14973,
+ "gpuErrors": []
+}
