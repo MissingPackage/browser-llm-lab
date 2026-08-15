@@ -1,4 +1,4 @@
-# DOCKET — engine-35b-residency
+# DOCKET — engine-velocita-decode (già `engine-35b-residency`)
 
 Le decisioni REGISTRATE E NON PRESE, in attesa di ruling del PI. Ordine e
 meccanismo non stanno qui: quelli li decido io e finiscono nel journal.
@@ -95,7 +95,34 @@ funzione obiettivo.
 **Nel frattempo NON parto con la riga 2**: il meccanismo giusto per la fetch
 dipende da quanto margine serve, e quello lo decide questo ruling.
 
-**RULING:** _
+**RULING (PI, 2026-08-15):** uscita **1**, e con due aggiunte e un richiamo.
+
+> «Tieni 30, allarga il goal alla forma gather (ti avevo detto che avremmo
+> dovuto farlo anche nel goal dei k quant, ma non mi hai ascoltato mettendolo
+> fuori scope). Aggiungi anche il raggruppamento delle richieste http se può
+> dare un boost globale al motore. Non so quante volte ti ho ripetuto di non
+> overingegnerizzare e applicare il principio di Pareto. Leve globali, massimo
+> risultato, non piccolezze specifiche per il modello A o il quant B e robe
+> simili. FACCIAMO IL MOTORE PIÙ VELOCE POSSIBILE. PUNTO»
+
+**Applicato così:**
+1. Barra tenuta a 30. Forma a gather **dentro**, ed è la riga 2 (era fuori
+   scope).
+2. Raggruppamento delle richieste I/O **dentro** come riga 2b, con il
+   done-when che pretende l'effetto misurato **anche sul LOAD di 4B/9B/GLM** —
+   è così che «se può dare un boost globale» diventa verificabile invece che
+   sperato.
+3. Il goal è stato **rinominato** `engine-35b-residency` → `engine-velocita-decode`:
+   il nome vecchio mi avrebbe tirato verso il modello singolo a ogni
+   iterazione.
+4. **Regola meccanica messa in testa a PHASES.md e nei done-when: una leva vale
+   solo se misurata su ≥ 2 famiglie.** Sulle intenzioni ho già fallito una
+   volta in questo goal; questa è verificabile.
+
+**Il richiamo, registrato senza attenuanti**: il PI aveva già chiesto la forma a
+gather durante `engine-kquant` e l'ho messa fuori scope con «varrebbe il 16% del
+token». Il 16% veniva da una stima non misurata. Sul numero vero vale il 93,5%.
+Memoria scritta: `global-levers-not-per-model-optimizations`.
 
 ## item 2 — `blankNonCode` è duplicato in sette file di test (io → PI, it.1)
 

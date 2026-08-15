@@ -2,27 +2,45 @@
 
 ## 1. Next decidable
 
-**GOAL `engine-35b-residency` CHARTATO il 2026-08-15 e FERMO SU UN RULING.**
-Riga 1 chiusa (strumentazione + due misure su GPU). Riga 2 non parte.
+**GOAL `engine-velocita-decode` ATTIVO** (chartato il 2026-08-15 come
+`engine-35b-residency`, RI-SCOPATO lo stesso giorno su ruling del PI).
+Riga 1 chiusa. **Prossimo passo: riga 2, la forma a gather universale.**
 
-**LA DECISIONE CHE ASPETTA IL PI — `docket.md` item 3.** La barra che ho messo
-al goal (decode 35B >= 30 tok/s) **non e' raggiungibile nello scope che ho
-chartato**, e lo dice una misura, non una stima:
+**LA TESI DEL GOAL, dopo che la misura ha demolito quella precedente**: il
+decode del motore accelera con **leve globali**, non con ottimizzazioni per
+modello. Barra: **35B >= 30 tok/s**, le altre tre famiglie non regrediscono.
+**REGOLA MECCANICA su ogni riga: una leva vale solo se misurata su >= 2
+famiglie.**
 
-    token PULITO del 35B (0 miss, 0 dirty, 0 replay, tassa di residency ZERO)
-      tokenMs        43,585 ms  =  22,9 tok/s     <- SOTTO la barra dei 30
+**IL NUMERO CHE HA RI-SCOPATO IL GOAL:**
+
+    token PULITO del 35B (0 miss, 0 dirty, 0 replay: residency AZZERATA)
+      tokenMs        43,585 ms  =  22,9 tok/s     <- il TETTO della residency
       readbackWait   40,753 ms  =  93,5% del token pulito
       submits/token  1 · readbacks/token 1
     q35-optimistic-35b-cleantoken-2026-08-15.json (oggi, albero post-kquant)
     q35-vramplan-35b-it35.json  43,736 ms (2026-08-11) — coincidono entro 0,7%
 
-Le righe 2 e 3 del goal aggrediscono la tassa di residency. Anche azzerandola —
-che nessuno sa fare — il 35B resta a 22,9 tok/s. **Il termine che decide e' ora
-il pass stesso**, e la sola leva nota su di esso e' la forma a gather K-quant
-della consegna §4.2-4.4, che il contratto ha messo FUORI SCOPE sulla base di una
-stima che ho poi ritrattato. Tre uscite nel docket item 3 (allargare lo scope /
-abbassare la barra / spezzare in due goal); la mia lettura e' la prima, ma e'
-funzione obiettivo e non la decido io.
+Togliere il 100% della tassa di residency lascia il 35B **sotto la barra**. Il
+termine che decide e' il **pass**, e la leva su di esso e' la forma a gather
+K-quant della consegna §4.2-4.4 — che il contratto aveva messo fuori scope con
+«varrebbe il 16% del token», stima NON misurata: sul numero vero vale il 93,5%.
+Il PI l'aveva gia' chiesta durante `engine-kquant`.
+
+**LE DUE RIGHE CHE VENGONO ORA:**
+- **riga 2 — la forma a gather diventa universale.** I kernel esistono e girano
+  in produzione **su GLM** (`wgsl.ts:3221`, `:3303`, `:3381`, cablati a
+  `glmmodel.ts:1368-1412`), fermi a **q4_0 e top-4** (`m * 4u` a mano a
+  `wgsl.ts:3296`, `:3351`, `:3375`). Vanno resi parametrici su `nUsed` e sui
+  K-quant, e misurati su GLM **E** 35B. Gate secco: la bit-identita' col path
+  sequenziale (il down del 35B usa `accum: true`, il contratto a slot pretende
+  che il down scriva NON pesato — consegna §4.4c).
+- **riga 2b — il raggruppamento delle richieste di I/O**, chiesto dal PI come
+  leva globale. **Misurato: 2,1x** (6,90 ms/fetch con 24 richieste concorrenti
+  in `prepLayer`, 3,27 ms con qualche centinaio nel repair; stessi byte, stesso
+  server). Va nel path condiviso `range()`/`readRange`
+  (`chat.worker.ts:62`, `q35conf.worker.ts:186`), NON nei call site del 35B, e
+  l'effetto va misurato **anche sul LOAD** di 4B/9B/GLM.
 
 **CIO' CHE LA RIGA 1 HA GIA' CONSEGNATO, e vale comunque vada il ruling:**
 il 43% del tempo di parete del 35B che non aveva un nome adesso ce l'ha.

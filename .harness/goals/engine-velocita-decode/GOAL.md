@@ -1,8 +1,44 @@
-GOAL: engine-35b-residency — il 35B smette di pagare la residency a ogni token:
-il decode a caldo passa da 8,34 tok/s a **oltre 30 tok/s**, che è la soglia di
-usabilità della funzione obiettivo del progetto. Il lavoro NON è nei kernel: è
-nella fetch degli expert mancanti, oggi seriale dentro il loop del token, e
-nell'unità di riparazione del decode ottimistico.
+GOAL: engine-velocita-decode — **il decode del motore diventa più veloce su
+tutte le famiglie**, con tre leve GLOBALI misurate su almeno due famiglie
+ciascuna: la forma a gather universale per gli expert MoE, il raggruppamento
+delle richieste di I/O, e l'unità di riparazione del decode ottimistico. Il caso
+più duro è il 35B e porta la barra: **≥ 30 tok/s a caldo**. Nessun modello
+regredisce.
+
+<!-- RI-SCOPATO il 2026-08-15 su ruling del PI, dopo che la misura ha demolito
+     il contratto precedente. Il goal si chiamava `engine-35b-residency` e la
+     sua tesi era che il collo del 35B fosse la residency. Ruling:
+
+     «Tieni 30, allarga il goal alla forma gather (ti avevo detto che avremmo
+     dovuto farlo anche nel goal dei k quant, ma non mi hai ascoltato mettendolo
+     fuori scope). Aggiungi anche il raggruppamento delle richieste http se può
+     dare un boost globale al motore. Non so quante volte ti ho ripetuto di non
+     overingegnerizzare e applicare il principio di Pareto. Leve globali,
+     massimo risultato, non piccolezze specifiche per il modello A o il quant B
+     e robe simili. FACCIAMO IL MOTORE PIÙ VELOCE POSSIBILE. PUNTO»
+
+     L'ERRORE CHE HA CORRETTO, per intero e senza attenuanti. Nel goal
+     `engine-kquant` la forma a gather K-quant era stata messa fuori scope con
+     la motivazione «varrebbe il 16% del token», e il PI aveva già detto allora
+     che andava fatta. Il 16% era calcolato su una stima del token pulito
+     (21,1 ms) ottenuta per sottrazione e mai misurata. **Misurato: il token
+     pulito costa 43,585 ms e il termine che quella leva aggredisce vale il
+     93,5%.** Ho escluso il termine dominante con un numero derivato — la
+     stessa forma d'errore di `readMs`, che sembrava dire «I/O gratuito» perché
+     misurava una finestra dove l'I/O non passa. Due istanze nello stesso goal.
+
+     LA REGOLA CHE NE ESCE, ed è meccanica perché sulle intenzioni ho già
+     fallito: **una leva vale solo se è misurata su ≥ 2 famiglie di modelli.**
+     Sta nei done-when, non nelle premesse. Una leva che serve un modello solo o
+     un formato solo non è candidata a riga di questo goal.
+-->
+
+<!-- CONTRATTO (chartered 2026-08-15 come `engine-35b-residency`, ri-scopato lo
+     stesso giorno). La tesi v0 diceva «il lavoro NON è nei kernel, è nella
+     fetch degli expert»: la prima metà regge ed è una riga di questo goal, la
+     seconda è falsa — sul token pulito il 93,5% è il pass. Tutto ciò che segue
+     è misurato e il ri-scopo non lo tocca: cambia l'ordine delle leve, non i
+     fatti.
 
 <!-- CONTRATTO v1 (chartered 2026-08-15, PI in chat: «Con il 4 e il 9B direi che
      siamo apposto. Con il 35 diamo ancora lenti, ma a questo punto credo sia un
@@ -143,35 +179,53 @@ nell'unità di riparazione del decode ottimistico.
 
 DONE WHEN (all measurable):
 
-- **BASELINE E STRUMENTAZIONE PRIMA DI QUALUNQUE OTTIMIZZAZIONE.** Un artefatto
-  di riferimento del 35B (host dichiarato, warm-up scartato, repliche) con i
-  termini del token scomposti, e i contatori nuovi che nominano ciò che oggi è
-  residuo: la somma dei termini nominati copre **≥ 95% di `tailCpuMs`**. Senza
-  questo, ogni riga successiva è una scommessa: oggi il 43% del turno non ha
-  nome.
+- **LA REGOLA CHE VALE SU OGNI RIGA, e viene prima delle righe: OGNI LEVA È
+  MISURATA SU ≥ 2 FAMIGLIE DI MODELLI.** Una riga che migliora un modello solo o
+  un formato solo non chiude, anche se il suo numero è bello. È la forma
+  meccanica del ruling del PI, messa qui perché sulle intenzioni ho già fallito
+  una volta in questo stesso goal.
+
+- **STRUMENTAZIONE PRIMA DI QUALUNQUE OTTIMIZZAZIONE**: i termini del token
+  scomposti e nominati, `nominati / tailCpuMs ≥ 0,95` **nel regime sporco**.
+  ✅ **FATTO in it.1-it.2**: `namedFrac` **0,9995**.
 
 - **IL DECODE DEL 35B A CALDO ≥ 30 tok/s**, a contesto dichiarato, select
-  `optimistic`, su host dichiarato quiescente, misurato su artefatto di
-  riferimento e non su una chat. *Nice-to-have, e non è un secondo obiettivo ma
-  la lettura del pavimento misurato: **≥ 45 tok/s**, cioè il token pulito di
-  21,1 ms senza aver aggiunto nulla al resto.*
+  `optimistic`, host quiescente, su artefatto di riferimento e non su una chat.
+  Punto di partenza misurato: **22,9 tok/s** è il TETTO della sola residency
+  (token pulito 43,585 ms), quindi la barra richiede per costruzione la leva sul
+  pass. *Nice-to-have **≥ 45 tok/s**: è il token pulito diviso ~2, cioè ciò che
+  la forma a gather dovrebbe rendere se il suo ~2,6× di dispatch si traduce
+  anche solo per metà.*
 
-- **I MISS SMETTONO DI ESSERE SERIALI COL TOKEN**: il tempo per miss scende da
-  5,98 ms sotto **1,5 ms** (cioè sotto il costo pack+upload già misurato, 1,33
-  ms/miss), oppure la fetch esce del tutto dal path critico e il contatore che
-  la misura lo dimostra. Il meccanismo lo scelgo io sui numeri della riga 1 —
-  non è deciso qui.
+- **LA FORMA A GATHER DIVENTA UNIVERSALE** — la leva sul 93,5%. Non «gather per
+  il 35B»: **un solo path a gather che regge ogni famiglia MoE e ogni formato**.
+  Oggi `pairGemvSiluGatherWgsl`/`gemvDownSlotsWgsl` esistono, funzionano, e sono
+  cablati a **q4_0 e top-4** — cioè al solo GLM (consegna §4.2). Done-when:
+  i due kernel parametrici su `nUsed` (il 35B è top-8) e sui formati K-quant;
+  **misurati su GLM E sul 35B** (le due famiglie MoE: è qui che la regola delle
+  ≥ 2 famiglie si verifica da sé); bit-identità col path sequenziale rimisurata.
 
-- **IL LAVORO GPU RIPETUTO SCENDE**: `replayLayers / (tokens × nLayer)` da
-  **0,87** (oggi: 37.977 su 43.680) a **≤ 0,20**, oppure il replay a prefisso è
-  sostituito e il contatore che lo misura è dichiarato obsoleto con la sua
-  ragione scritta.
+- **IL RAGGRUPPAMENTO DELLE RICHIESTE DI I/O** — leva globale, il PI l'ha
+  chiesta esplicitamente. **Misurato oggi: 2,1×** (6,90 ms/fetch con 24
+  richieste concorrenti in `prepLayer`, 3,27 ms con qualche centinaio nel
+  repair; stessi byte, stesso server). Done-when: il raggruppamento è nel path
+  di I/O **condiviso** (`readRange`), non nei due call site del 35B; il tempo
+  per fetch scende sotto **1,5 ms**; e l'effetto è misurato **anche sul LOAD**
+  di 4B/9B/GLM, che passa dallo stesso `range()` — se lì non paga, si dichiara
+  col numero.
+
+- **L'UNITÀ DI RIPARAZIONE DEL DECODE OTTIMISTICO**:
+  `replayLayers / (tokens × nLayer)` da **0,87** a **≤ 0,20**, oppure il replay a
+  prefisso è sostituito e i suoi contatori dichiarati obsoleti con la ragione
+  scritta. Vale su ogni famiglia MoE con arena che non contiene il working set:
+  **misurata su GLM e 35B**.
 
 - **IL 35B RICEVE LA SUA MODALITÀ DI RAGIONAMENTO PER DEFAULT**: il prompt reso
   in-page rispetta la polarità del template della famiglia, la scelta è
-  DICHIARATA nel JSON (non implicita), e un test senza GPU verifica le due
-  polarità sui `chatTemplateRaw` dei tre modelli. Clausola gated sulla barra dei
-  30 tok/s: si esegue solo dopo, per la ragione scritta nel contratto.
+  DICHIARATA nel JSON, e un test senza GPU verifica le due polarità sui
+  `chatTemplateRaw`. Gated sulla barra dei 30 tok/s. **Unica clausola
+  ammessa a valere su un modello solo**, e per una ragione che non è di
+  velocità: è un difetto di correttezza del prompt, non un'ottimizzazione.
 
 - **GATE DI MERGE** (riga di sola verifica): `node
   .harness/tools/engine-ktest.mjs` tutti PASS; top-1 contro l'oracolo
@@ -180,10 +234,11 @@ DONE WHEN (all measurable):
   barre che `engine-kquant` ha portato: non si regredisce); GLM b12 optimistic
   entro ±5%; `npx vitest run` verde; `npx tsc --noEmit` pulito.
 
-- **CONSUNTIVO E CONSEGNA**: `docs/engine/35b-residency-consuntivo-<data>.md`
-  clausola per clausola con l'artefatto accanto, la nuova ripartizione del
-  token, e **il termine che diventa primo dopo questa leva, nominato con la sua
-  misura fresca**; `HANDOFF.md` §1 aggiornato; `GLOSSARY.md` coi termini coniati.
+- **CONSUNTIVO E CONSEGNA**: `docs/engine/velocita-decode-consuntivo-<data>.md`
+  clausola per clausola con l'artefatto accanto, **la tabella dei tok/s prima e
+  dopo su tutte e quattro le famiglie** (4B, 9B, 35B, GLM — è la prova che le
+  leve erano globali), e il termine che diventa primo dopo, con la sua misura
+  fresca; `HANDOFF.md` §1 aggiornato; `GLOSSARY.md` coi termini coniati.
 
 NON-REGRESSIONE (ruling permanente 2026-07-31, banda ±5% su tok/s e TTFT, gate
 di correttezza secchi):
@@ -205,18 +260,19 @@ di correttezza secchi):
   sorgente: `--help` non esiste e fa partire il bench.
 
 FUORI SCOPE (registrati, non aperti):
-- **Il PREFILL del 35B a chunk** (§4.4 della consegna: readback CPU per layer,
-  `for m2` con `prepLayer`+`encodeExperts` per riga, 20.480 dispatch per chunk).
-  È un termine grosso e reale, ma il TTFT del 35B non è la barra di questo goal
-  e mescolarci il decode renderebbe illeggibile quale leva ha pagato. La riga 1
-  lo MISURA (serve alla baseline); nessuna riga lo tocca.
-- **I kernel a gather K-quant** (§4.2-4.4 della consegna, ~2,6× di dispatch).
-  Oggi varrebbero il 16% del token: sono un'ottimizzazione del termine che
-  diventa primo DOPO questo goal, non di quello che è primo adesso. Se la
-  riga 1 li promuove a primo termine, il contratto si riapre — non si allarga in
-  silenzio.
-- **Il cablaggio Q8_0 attn** (§4.1): tocca il prefill denso, cioè il piano che
-  il 4B usa già. Stesso motivo.
+- **Il PREFILL a chunk del 35B** (§4.4 della consegna: readback CPU per layer,
+  20.480 dispatch per chunk). Termine grosso e reale, ma questo goal ha una
+  barra sul DECODE e mescolarci il prefill renderebbe illeggibile quale leva ha
+  pagato. Le misure lo riportano; nessuna riga lo tocca. *Nota: la forma a
+  gather che la riga sul 93,5% costruisce è la stessa che servirebbe lì — il
+  prefill la eredita gratis, ed è un'altra ragione per cui è una leva globale.*
+- **Il cablaggio Q8_0 attn** (§4.1 della consegna): tocca il prefill denso.
+  Stesso motivo.
+
+> **RIENTRATA IN SCOPO il 2026-08-15 su ruling del PI: la forma a gather
+> K-quant.** Era qui, esclusa con «varrebbe il 16% del token». Il 16% veniva
+> da una stima non misurata; sul numero vero vale il **93,5%**, ed è la leva
+> che porta la barra. Il PI aveva già chiesto di farla nel goal precedente.
 - **Il LOAD del modello** (7,85 s sul 35B): soglia sua, famiglia residency/IO,
   ma è una leva sul time-to-first-use e non sul tok/s.
 - **Il 29,1% fuori dai pass GPU del 4B**: eredità di `engine-kquant`, resta il
