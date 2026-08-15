@@ -17,6 +17,8 @@ const cfg = {
   optTrace: q.get("optimistic") === "1",
   // ?optcold=1 → la passata fredda la fa il path ottimistico (repair+replay)
   optCold: q.get("optcold") === "1",
+  // ?kfan=1 → A/B del collasso dei k nel decode ottimistico (riga 2c)
+  kfan: q.get("kfan") === "1",
   // ?gputime=1 → decomposizione del tempo GPU del token per categoria
   gpuTime: q.get("gputime") === "1",
   // ?nosnap=1 → misura: senza snapshot dello stato ricorrente (fase 4-ter)

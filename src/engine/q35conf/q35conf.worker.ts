@@ -81,6 +81,22 @@ interface Cfg {
   coldBoth?: boolean;
   /** fase 5: policy di residenza ("lru" default, "tier" = LRU + AUTOPIN). */
   expertPolicy?: "lru" | "tier";
+  /**
+   * KFAN (goal engine-velocita-decode, riga 2c): confronto A/B del collasso dei
+   * k nel decode ottimistico — i topK expert in UN giro di dispatch invece che
+   * uno per volta, 5 dispatch per layer invece di 33.
+   *
+   * I due bracci girano NELLO STESSO PROCESSO, interleavati, sulla stessa
+   * cache: e' come sono state decise sync-vs-optimistic (it.35) e il token
+   * pulito (run A del 2026-08-15). Due run separate confronterebbero anche gli
+   * host.
+   *
+   * L'argmax dei due bracci e' il primo GATE DI CORRETTEZZA, e non un extra:
+   * la combine del kfan fa gia' `x += moeAcc`, quindi se il cablaggio
+   * dispacciasse anche il vecchio `pAdd` lo shexp verrebbe sommato due volte —
+   * niente crash, niente NaN, solo argmax che divergono. Qui si vede subito.
+   */
+  kfan?: boolean;
 }
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
@@ -508,7 +524,7 @@ async function main(cfg: Cfg): Promise<void> {
     // ma NON la cache expert — è lo stesso strumento di it.16.
     const p = golden.prompts[0];
     const tokens = [...p.promptTokens, ...p.generated];
-    const runPass = async (optimistic: boolean): Promise<{
+    const runPass = async (optimistic: boolean, kfan = false): Promise<{
       argmax: number[]; submits: number; readbacks: number; hits: number; misses: number;
       routing: Record<string, number>; ms: number; error: string | null;
       dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
@@ -520,6 +536,10 @@ async function main(cfg: Cfg): Promise<void> {
     }> => {
       model.resetState();
       model.setOptimistic(optimistic);
+      // KFAN (riga 2c): si accende a caldo, sullo STESSO modello e sulla stessa
+      // cache. E' il punto dell'A/B — due run separate confronterebbero anche
+      // gli host.
+      model.setKfan(kfan);
       const p0 = model.perf(), m0 = model.moeStats!();
       const t = performance.now();
       const argmax: number[] = [];
@@ -592,9 +612,15 @@ async function main(cfg: Cfg): Promise<void> {
     const REPS = 4;
     const syncRuns: Awaited<ReturnType<typeof runPass>>[] = [];
     const optRuns: Awaited<ReturnType<typeof runPass>>[] = [];
+    // KFAN (riga 2c): il terzo braccio. Interleavato con gli altri due e non in
+    // coda, perche' e' l'interleaving a togliere la deriva termica dal
+    // confronto — se i bracci girassero in blocchi, l'ultimo pagherebbe il
+    // DVFS accumulato dai primi.
+    const kfanRuns: Awaited<ReturnType<typeof runPass>>[] = [];
     for (let r = 0; r < REPS; r++) {
       syncRuns.push(await runPass(false));
       optRuns.push(await runPass(true));
+      if (cfg.kfan) kfanRuns.push(await runPass(true, true));
       post({ type: "tick", msg: `rep ${r + 1}/${REPS}` });
     }
     const msOf = (rs: typeof syncRuns): number[] =>
@@ -605,6 +631,27 @@ async function main(cfg: Cfg): Promise<void> {
     const msSync = disp(msOf(syncRuns)), msOpt = disp(msOf(optRuns));
     const syncWarm = syncRuns[syncRuns.length - 1];
     const optim = optRuns[optRuns.length - 1];
+    const kfanWarm = kfanRuns.length > 0 ? kfanRuns[kfanRuns.length - 1] : null;
+    const msKfan = kfanRuns.length > 1 ? disp(msOf(kfanRuns)) : null;
+    // IL GATE del kfan, e viene prima del tempo: l'argmax dei due bracci
+    // ottimistici deve coincidere token per token. La combine del kfan fa gia'
+    // `x += moeAcc`, quindi un `pAdd` di troppo sommerebbe lo shexp DUE VOLTE —
+    // niente crash, niente NaN, solo argmax che divergono. Se questo campo non
+    // e' `true`, il ms/token del kfan non significa niente e non va letto.
+    const kfanGate = kfanWarm ? (() => {
+      const nK = Math.min(optim.argmax.length, kfanWarm.argmax.length);
+      const eq = optim.argmax.slice(0, nK).filter((v, i) => v === kfanWarm.argmax[i]).length;
+      const firstDiff = optim.argmax.slice(0, nK).findIndex((v, i) => v !== kfanWarm.argmax[i]);
+      return {
+        comparedPasses: "optimistic-warm (kfan OFF) vs optimistic-warm (kfan ON)",
+        argmaxEqual: eq, argmaxCompared: nK, argmaxIdentical: nK > 0 && eq === nK,
+        firstDivergentToken: firstDiff < 0 ? null : firstDiff,
+        msPerTokenKfanOff: msOpt.median, msPerTokenKfanOn: msKfan ? msKfan.median : null,
+        speedup: msKfan ? msOpt.median / msKfan.median : null,
+        submitsPerTokenKfanOff: optim.submits / Math.max(1, optim.argmax.length),
+        submitsPerTokenKfanOn: kfanWarm.submits / Math.max(1, kfanWarm.argmax.length),
+      };
+    })() : null;
     const n = tokens.length;
     const nCmp = Math.min(syncWarm.argmax.length, optim.argmax.length);
     const argmaxEqual = syncWarm.argmax.slice(0, nCmp).filter((v, i) => v === optim.argmax[i]).length;
@@ -634,7 +681,14 @@ async function main(cfg: Cfg): Promise<void> {
         }] : []),
         { pass: "sync-warm", tokensDone: syncWarm.argmax.length, error: syncWarm.error, ...pass2json(syncWarm, Math.max(1, syncWarm.argmax.length)), msPerTokenDisp: msSync },
         { pass: "optimistic-warm", tokensDone: optim.argmax.length, error: optim.error, ...pass2json(optim, Math.max(1, optim.argmax.length)), msPerTokenDisp: msOpt },
+        ...(kfanWarm ? [{
+          pass: "optimistic-warm-kfan",
+          tokensDone: kfanWarm.argmax.length, error: kfanWarm.error,
+          ...pass2json(kfanWarm, Math.max(1, kfanWarm.argmax.length)),
+          msPerTokenDisp: msKfan,
+        }] : []),
       ],
+      kfanGate,
       gate: {
         // il confronto che qualifica la fetta è A PARITÀ di residenza: pass 1
         // (sync, caldo) contro pass 2 (ottimistico, caldo)

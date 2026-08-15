@@ -63,6 +63,11 @@ if (process.argv.includes("--gpu-time")) qs.set("gputime", "1");
 if (process.argv.includes("--cold-both")) qs.set("coldboth", "1");
 // Policy di residenza: "tier" = LRU + AUTOPIN (fase 5). Default lru.
 if (process.argv.includes("--tier")) qs.set("policy", "tier");
+// KFAN (goal engine-velocita-decode, riga 2c): A/B del collasso dei k nel
+// decode ottimistico. Implica --optimistic: i due bracci sono entrambi
+// ottimistici e differiscono SOLO per il kfan, altrimenti il confronto
+// misurerebbe due cose insieme.
+if (process.argv.includes("--kfan")) { qs.set("optimistic", "1"); qs.set("kfan", "1"); }
 // MISURA della fase 4-ter: quanto costa lo snapshot dello stato ricorrente
 // (62,8 MiB per token). Rompe il replay: solo a cache calda.
 if (process.argv.includes("--no-snapshot")) qs.set("nosnap", "1");
