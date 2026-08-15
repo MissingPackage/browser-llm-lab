@@ -1,9 +1,11 @@
 GOAL: engine-velocita-decode — **il decode del motore diventa più veloce su
-tutte le famiglie**, con tre leve GLOBALI misurate su almeno due famiglie
-ciascuna: la forma a gather universale per gli expert MoE, il raggruppamento
-delle richieste di I/O, e l'unità di riparazione del decode ottimistico. Il caso
-più duro è il 35B e porta la barra: **≥ 30 tok/s a caldo**. Nessun modello
-regredisce.
+tutte le famiglie**, con leve **globali e RIUSABILI**: costruite una volta e
+ereditate dai modelli, non riscritte per ciascuno. Il caso più duro è il 35B e
+porta la barra: **≥ 30 tok/s a caldo**. Nessun modello regredisce.
+
+ORDINE DEL LAVORO (ruling PI 2026-08-15): *prima* le ottimizzazioni globali e
+riusabili — i modelli nuovi le ereditano da soli — *poi*, solo se non bastano o
+se l'architettura è diversa, quelle specifiche.
 
 <!-- RI-SCOPATO il 2026-08-15 su ruling del PI, dopo che la misura ha demolito
      il contratto precedente. Il goal si chiamava `engine-35b-residency` e la
@@ -27,10 +29,14 @@ regredisce.
      stessa forma d'errore di `readMs`, che sembrava dire «I/O gratuito» perché
      misurava una finestra dove l'I/O non passa. Due istanze nello stesso goal.
 
-     LA REGOLA CHE NE ESCE, ed è meccanica perché sulle intenzioni ho già
-     fallito: **una leva vale solo se è misurata su ≥ 2 famiglie di modelli.**
-     Sta nei done-when, non nelle premesse. Una leva che serve un modello solo o
-     un formato solo non è candidata a riga di questo goal.
+     LA REGOLA CHE AVEVO SCRITTO QUI, e che il PI ha corretto in it.12: «una
+     leva vale solo se è misurata su ≥ 2 famiglie». Era una **metrica di
+     copertura al posto di un principio di riuso**, e mi ha mandato a pianificare
+     la terza scrittura a mano dello stesso kernel. La regola vera:
+     **riusa ciò che c'è già, costruisci globale quando possibile e poi estendi,
+     propaga i fix sul vecchio quando serve.** Il trigger è la RIPETIZIONE, non
+     la copertura: la seconda copia scritta a mano è una domanda, la terza no.
+     Veicolo: `pattern-migration` (`fix-dont-fence`, 2026-08-14).
 -->
 
 <!-- CONTRATTO (chartered 2026-08-15 come `engine-35b-residency`, ri-scopato lo
@@ -40,7 +46,7 @@ regredisce.
      è misurato e il ri-scopo non lo tocca: cambia l'ordine delle leve, non i
      fatti.
 
-<!-- CONTRATTO v1 (chartered 2026-08-15, PI in chat: «Con il 4 e il 9B direi che
+     CONTRATTO v1 (chartered 2026-08-15, PI in chat: «Con il 4 e il 9B direi che
      siamo apposto. Con il 35 diamo ancora lenti, ma a questo punto credo sia un
      limite fisico?» → dopo la lettura dei contatori: «mi torna. andiamo».)
 
