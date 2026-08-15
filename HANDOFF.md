@@ -2,8 +2,42 @@
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-kquant`, riga 1 CHIUSA (it.1-it.3) — prossima la riga 2.**
+**GOAL ATTIVO: `engine-kquant`. Righe 1 e 2 CHIUSE, riga 3 CABLATA MA NON
+VERIFICATA SU GPU. STOP BY DESIGN — v. docket item 2.**
 Chartered 2026-08-14. `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
+
+**PRIMA COSA DA FARE ALLA RIPRESA, e non e' negoziabile: rieseguire il ktest su
+ambiente fresco.**
+
+    setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
+    curl -s -o /dev/null -w "%{http_code}" http://localhost:5199/ktest.html   # 200
+    node .harness/tools/engine-ktest.mjs      # atteso: 105 PASS / 0 FAIL
+
+Se passa, la riga 3 si chiude e si prosegue con la riga 4. Se fallisce di nuovo
+subito dopo `q35-mtp-head-real-blk32`, il difetto e' di quel banco o
+dell'infrastruttura e diventa lavoro suo — non una tassa su ogni goal.
+
+**DOVE STA IL MOTORE ADESSO** (tutto committato e pushato su origin/main):
+- **Riga 2 — Q5_K in produzione, VERIFICATA**: ktest 103 PASS / 0 FAIL alle
+  00:52 del 2026-08-15, coi due casi nuovi a maxRel 2,61e-7 e 4,28e-7.
+- **Riga 3 — Q4_1 cablato, NON verificato su GPU**: kernel, piano, wiring,
+  floor test coi pavimenti derivati (11,8x sopra) e banco ktest **scritto e
+  registrato ma mai eseguito**.
+- **Copertura del piano: 5,8593x → 15,5247x** sull'inventario per-layer INTERO
+  del 4B a M=16. **200/248 siti = 99,796% dei byte.** Resta legacy un solo
+  kind: 48 siti Q8_0 con N=32 (0,204%), esclusi coi numeri dal contratto.
+- **Suite senza GPU: 836 passed | 10 skipped**, tsc pulito.
+- **NESSUNA MISURA DI TEMPO NUOVA**: che il TTFT sia sceso **non e' stato
+  misurato**. Il piano non e' il cronometro, e la riga 5 non e' stata eseguita.
+  Proiezione dal banco: −15,2 s ⇒ ~16,9 s. E' una proiezione, non un risultato.
+
+**IL REPERTO DA NON PERDERE**: la guardia doppia del cablaggio
+(`route.via !== "legacy" && kk === "<formato>"`) **ha intercettato un caso
+vero** il giorno dopo essere stata scritta. Quando il piano ha accettato il
+q4_1 prima che `gemvB` emettesse i suoi kernel, quei tensori sono ricaduti
+sulla legacy invece di essere letti col kernel del q4_0 — nibble senza offset e
+scale col passo sbagliato, cioe' logit storti senza nessun errore WebGPU.
+Chi tocca quel sito non tolga quella condizione.
 
 **LA FASE 0 HA DETTO SI' A TUTTE E CINQUE LE FAMIGLIE.** Rapporto legacy/veloce
 a M=16, `idot | f32`, barra 1,5x. Artefatto:
