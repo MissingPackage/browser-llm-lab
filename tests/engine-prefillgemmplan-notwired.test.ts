@@ -1,4 +1,14 @@
-// IL PIANO NON INSTRADA LE TRE FORME DELLA RIGA 4 (q4_K, q6_K, q8_0).
+// IL PIANO NON INSTRADA LE FORME PORTATE E NON CABLATE.
+//
+// AGGIORNATO il 2026-08-15 (goal engine-velocita-decode, riga 2d): le forme
+// della riga 4 erano tre — q4_K, q6_K, q8_0 — e ora sono DUE. Il **q8_0 e'
+// stato cablato**, e cio' che l'ha reso sicuro non e' una misura nuova: e' il
+// predicato su N in `kernelVerdict`. Il q8_0 era escluso PER FAMIGLIA allo
+// scopo di proteggere una SHAPE (i 48 siti a N=32 del 4B); ora la shape si
+// protegge da sola e la famiglia puo' passare, cosi' i 100 tensori attn del 35B
+// (1,09 GB, N=4096) prendono la via veloce. I casi del predicato stanno in
+// `tests/engine-prefillgemm-nmin.test.ts`; qui resta la difesa dei 48 siti, che
+// e' la piu' importante e ora poggia sulla geometria invece che sul flag.
 //
 // La tesi di questo file e' UNA, ed e' il contrario di quella degli altri test
 // di port: che un kernel esista, sia portato dal banco byte per byte e sia
@@ -38,8 +48,8 @@ import type { PrefillQuantKind } from "../src/engine/prefillbytes";
 /** M del prefill in produzione (PREFILL_M = 16). */
 const M = 16;
 
-/** I tre formati che la riga 4 porta SENZA cablare. */
-const NOT_WIRED = ["q4_K", "q6_K", "q8_0"] as const;
+/** I formati che la riga 4 porta SENZA cablare — erano tre, il q8_0 e' uscito. */
+const NOT_WIRED = ["q4_K", "q6_K"] as const;
 
 /**
  * Per ognuno, una shape che il CONTORNO DEL KERNEL ACCETTA. E' la condizione
@@ -52,7 +62,6 @@ const ACCEPTED: { kind: PrefillGemmKind; K: number; N: number; what: string }[] 
   { kind: "q4_K", K: 2048, N: 512, what: "35B expert gate/up (117 tensori = 17,67 GB)" },
   { kind: "q4_K", K: 512, N: 2048, what: "35B expert down (DUE superblocchi per riga)" },
   { kind: "q6_K", K: 512, N: 2048, what: "35B expert down di 3 layer" },
-  { kind: "q8_0", K: 2048, N: 4096, what: "35B attn q-proj (100 tensori = 1,09 GB)" },
 ];
 
 /**
@@ -62,11 +71,12 @@ const ACCEPTED: { kind: PrefillGemmKind; K: number; N: number; what: string }[] 
  */
 const SSM_Q80 = { kind: "q8_0" as const, K: 2560, N: 32 };
 
-describe("[w1] il flag: sei kernel, tre instradati, e ogni non-cablato dice perche'", () => {
+describe("[w1] il flag: sei kernel, QUATTRO instradati, e ogni non-cablato dice perche'", () => {
   it("PREFILL_GEMM_WIRED_KINDS e' un SOTTOINSIEME PROPRIO dell'elenco dei kernel", () => {
     expect([...PREFILL_GEMM_KINDS]).toEqual(["q4_0", "q5_K", "q4_1", "q4_K", "q6_K", "q8_0"]);
-    expect([...PREFILL_GEMM_WIRED_KINDS]).toEqual(["q4_0", "q5_K", "q4_1"]);
-    // e i non-cablati sono esattamente i tre della riga 4
+    // il q8_0 e' entrato il 2026-08-15: la shape ora si protegge da sola
+    expect([...PREFILL_GEMM_WIRED_KINDS]).toEqual(["q4_0", "q5_K", "q4_1", "q8_0"]);
+    // e i non-cablati sono esattamente i DUE che restano della riga 4
     const notWired = PREFILL_GEMM_KINDS.filter((k) => !prefillGemmWiring(k).wired);
     expect([...notWired]).toEqual([...NOT_WIRED]);
   });
@@ -81,13 +91,20 @@ describe("[w1] il flag: sei kernel, tre instradati, e ogni non-cablato dice perc
     }
   });
 
-  it("la ragione del q8_0 NOMINA il fatto che lo esclude: N=32 sul 4B", () => {
-    // Non e' una preferenza di gusto: e' il numero del contratto. Se un giorno
-    // la ragione diventasse generica, si perderebbe l'unica cosa che permette
-    // di ridiscutere l'esclusione con i dati in mano.
+  it("la ragione del q8_0 NOMINA cio' che l'ha reso cablabile: il predicato su N", () => {
+    // Prima questo caso pretendeva che la ragione nominasse cio' che ESCLUDEVA
+    // il q8_0 (i 48 siti a N=32, lo 0,204% dei byte). Il q8_0 e' cablato dal
+    // 2026-08-15 e la ragione e' cambiata di segno — ma la pretesa NON si
+    // ammorbidisce: deve continuare a nominare quei 48 siti, perche' sono la
+    // cosa che il cablaggio poteva rompere e che adesso protegge un altro
+    // meccanismo. Una `wiredWhy` che dicesse solo «e' veloce» perderebbe
+    // l'informazione che serve a chi un giorno toccasse il predicato su N.
     const why = prefillGemmWiring("q8_0").why;
-    expect(why).toContain("N=32");
-    expect(why).toContain("0,204%");
+    expect(prefillGemmWiring("q8_0").wired).toBe(true);
+    expect(why, "la ragione non nomina i siti che il predicato protegge").toContain("N=32");
+    expect(why, "la ragione non nomina il predicato che ha reso sicuro il cablaggio")
+      .toMatch(/predicato|ROWS_PER_WG|shape/);
+    expect(why, "la ragione non porta la misura che la giustifica").toContain("3,26x");
   });
 
   it("le ragioni di q4_K e q6_K dicono che il 4B non ne ha e che il cablaggio e' il goal dopo", () => {
@@ -158,11 +175,22 @@ describe("[w3] il caso concreto: i 48 siti q8_0 del 4B restano legacy", () => {
     expect(SSM_Q80.N).toBeLessThan(64);
   });
 
-  it("...e il piano li lascia comunque sulla legacy, con la sua ragione", () => {
+  it("...e il piano li lascia comunque sulla legacy — ma ora per la SHAPE, non per la famiglia", () => {
+    // IL CAMBIO DI CUSTODE, ed e' la cosa che questo caso deve sorvegliare.
+    // Prima la ragione nominava il KIND: quei 48 siti restavano legacy perche'
+    // il q8_0 non era cablato. Dal 2026-08-15 il q8_0 e' cablato — quindi se
+    // restassero legacy per la famiglia, vorrebbe dire che il cablaggio non e'
+    // avvenuto. Restano legacy per la loro GEOMETRIA, ed e' l'unica difesa
+    // rimasta: se cadesse, il 4B cambierebbe cio' che esegue, in peggio, e
+    // nessun altro test se ne accorgerebbe.
     for (const idot of [true, false]) {
       const r = planPrefillGemm({ ...SSM_Q80, M, idot });
       expect(r.via, `idot=${idot}: ${r.reason}`).toBe("legacy");
-      expect(r.reason).toContain("q8_0");
+      expect(r.reason, "la ragione non nomina la shape che li esclude").toContain("N=32");
+      expect(r.reason).toContain("workgroup");
+      // e NON deve piu' essere il cablaggio a tenerli fuori: se lo fosse, il
+      // q8_0 non sarebbe cablato e questo file mentirebbe altrove
+      expect(r.reason, "e' ancora il flag di famiglia a escluderli").not.toContain("non e' cablato");
     }
   });
 
@@ -223,17 +251,31 @@ describe("[w4] `prefillGemmWiring` si legge solo nel piano", () => {
     expect(hits.sort()).toEqual(Object.keys(ALLOWED).sort());
   });
 
-  it("il wiring del 4B non nomina i tre formati non cablati", () => {
+  it("il wiring del 4B non nomina i formati non cablati — e nomina quello cablato", () => {
     // La guardia doppia del cablaggio (`route.via !== "legacy" && kk === "…"`)
     // e' cio' che ha intercettato un caso vero in riga 3. Qui si verifica il
-    // suo presupposto: in q35gpumodel.ts non esiste un ramo che emetta uno dei
-    // tre kernel nuovi. Se un giorno ci sara', sara' perche' qualcuno ha
-    // cablato — e allora questo test va cambiato con la sua ragione, non
-    // aggirato.
+    // suo presupposto: in q35gpumodel.ts non esiste un ramo che emetta il
+    // kernel di un formato non cablato.
+    //
+    // CAMBIATO CON LA SUA RAGIONE, come il caso precedente prescriveva
+    // («se un giorno ci sara', sara' perche' qualcuno ha cablato — e allora
+    // questo test va cambiato con la sua ragione, non aggirato»). Il q8_0 e'
+    // cablato dal 2026-08-15, quindi il suo generatore DEVE comparire; gli
+    // altri due no. La lista non si scrive a mano: si deriva dal flag, cosi'
+    // il caso resta vero al prossimo cablaggio invece di marcire.
     const model = readFileSync(join(ROOT, "src/engine/q35gpumodel.ts"), "utf8");
-    for (const gen of ["prefillGemmQ4KSplitK", "prefillGemmQ6KSplitK", "prefillGemmQ80SplitK"]) {
-      expect(model, `${gen} non deve comparire nel motore finche' non e' cablato`)
-        .not.toContain(gen);
+    const GEN: Record<string, string> = {
+      q4_K: "prefillGemmQ4KSplitK", q6_K: "prefillGemmQ6KSplitK", q8_0: "prefillGemmQ80SplitK",
+    };
+    for (const [kind, gen] of Object.entries(GEN)) {
+      const wired = prefillGemmWiring(kind as PrefillGemmKind).wired;
+      if (wired) {
+        expect(model, `${gen}: il formato e' cablato ma il motore non lo emette — ` +
+          "il piano dichiarerebbe una via veloce che nessuno percorre").toContain(gen);
+      } else {
+        expect(model, `${gen} non deve comparire nel motore finche' non e' cablato`)
+          .not.toContain(gen);
+      }
     }
   });
 

@@ -376,7 +376,9 @@ describe("[a]-port Q5_K: il testo e' quello del banco, riga per riga", () => {
     // coincidessero di nuovo, sarebbe perche' qualcuno ha cablato, e allora
     // questa riga deve fallire e farlo dire.
     expect([...PREFILL_GEMM_KINDS]).toEqual(["q4_0", "q5_K", "q4_1", "q4_K", "q6_K", "q8_0"]);
-    expect([...PREFILL_GEMM_WIRED_KINDS]).toEqual(["q4_0", "q5_K", "q4_1"]);
+    // il q8_0 e' entrato il 2026-08-15 (goal engine-velocita-decode, riga 2d):
+    // il predicato su N protegge la shape, quindi la famiglia puo' passare
+    expect([...PREFILL_GEMM_WIRED_KINDS]).toEqual(["q4_0", "q5_K", "q4_1", "q8_0"]);
   });
 });
 
@@ -1166,7 +1168,7 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
     // `PREFILL_GEMM_WIRED_KINDS`. La lunghezza dell'elenco e' 6 e vale un'altra
     // cosa: quanti kernel esistono.
     expect(PREFILL_GEMM_KINDS.length, "kernel esistenti").toBe(6);
-    expect(PREFILL_GEMM_WIRED_KINDS.length, "kind instradati dal piano").toBe(3);
+    expect(PREFILL_GEMM_WIRED_KINDS.length, "kind instradati dal piano").toBe(4);
     const k = { ...MEASURED[0], kind: "q3_K" } as unknown as PrefillGemmOpts;
     for (const f of [prefillGemmGrid, prefillPartialFloats, prefillGemmWorkgroupStorageBytes]) {
       expect(() => f(k)).toThrow(/q3_K/);

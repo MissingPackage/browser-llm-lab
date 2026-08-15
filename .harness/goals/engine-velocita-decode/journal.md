@@ -1067,3 +1067,72 @@ messo nella stima, non scoperto girando il flag.
 
 **EVIDENZA**: albero invariato e verde, 1075 passed | 10 skipped, tsc exit 0.
 Nessun commit di codice: l'unico prodotto di questa iterazione è il reperto.
+
+---
+
+## it.16 — il q8_0 è cablato: undici test aggiornati, nessuno indebolito
+
+Il flag è girato, il ramo emittente c'è, e i test che lo difendevano sono
+**undici** — due più dei nove previsti in it.15. I due in più sono gate
+strutturali che leggono il sorgente del motore:
+
+    engine-prefillgemmplan-notwired [w4]  «il wiring non nomina i tre formati
+                                           non cablati» — legge q35gpumodel.ts
+    engine-prefillwiring-q5k [a]          «gemvB apre DUE rami veloci»
+
+### Come li ho aggiornati, e la differenza che conta
+
+**Nessuno è stato allentato.** Tre sono diventati *più* stringenti:
+
+- **[w3] notwired** — «i 48 siti del 4B restano legacy». Prima pretendeva che
+  la ragione nominasse il **kind**; ora pretende che nomini la **shape**
+  (`N=32`, `workgroup`) **e che NON nomini il cablaggio**. È il cambio di
+  custode reso esplicito: se restassero legacy per la famiglia, vorrebbe dire
+  che il cablaggio non è avvenuto. Quella riga è ora l'unica difesa di quei 48
+  siti, e il test lo dice.
+- **[w1] notwired** — la ragione del q8_0 doveva nominare ciò che lo
+  *escludeva*; ora deve nominare i 48 siti che il predicato protegge, il
+  predicato stesso, **e la misura che giustifica il cablaggio** (3,26x). Una
+  `wiredWhy` che dicesse solo «è veloce» perderebbe l'informazione utile a chi
+  un giorno toccasse il predicato su N.
+- **[w4] notwired** — era una lista scritta a mano di tre generatori che «non
+  devono comparire». Ora **si deriva dal flag**: il generatore di un formato
+  cablato DEVE comparire (altrimenti il piano dichiara una via veloce che
+  nessuno percorre), quello di un non cablato no. Non marcisce al prossimo
+  cablaggio.
+
+Il caso [w4] portava già la sua istruzione: *«se un giorno ci sarà, sarà perché
+qualcuno ha cablato — e allora questo test va cambiato con la sua ragione, non
+aggirato»*. Scritto dal goal precedente, letto oggi, seguito alla lettera.
+
+### L'errore che ho fatto e corretto in due minuti
+
+Sul file `engine-prefillwiring-q5k` ho fatto un replace globale `.toBe(2)` →
+`.toBe(3)`. Ha rotto un conteggio che doveva **restare** 2 (`planPrefillGemm`
+chiamato in due siti). **È esattamente il modo di indebolire i test che it.15
+temeva**, e l'ha preso il test stesso. Revert e fix chirurgico: il file è
+guidato da una lista dichiarata (`site.fmts`), e la modifica giusta era
+aggiungere `q8_0` **lì** — dopodiché tre asserzioni si aggiornano da sole,
+perché usano quella lista come atteso.
+
+Che il primo tentativo grossolano sia stato preso in due minuti è il motivo per
+cui it.15 ha rimandato invece di improvvisare a contesto profondo.
+
+### Il codice
+
+- `wired: true` per il q8_0, con la `wiredWhy` che porta il predicato e le due
+  misure (35,2x a M=16, 3,26x a M=1).
+- Ramo esplicito `kk === "q8_0"` in `gemvB`, **non un ternario**: il gate
+  strutturale legge il sorgente e verifica che il kernel sia emesso con gli
+  stessi `opts` con cui si è chiesta la rotta.
+
+**EVIDENZA**: `npx vitest run` **1074 passed | 10 skipped** · `npx tsc --noEmit`
+exit 0. Nessuna GPU: questo cablaggio tocca il **prefill**, e il suo effetto va
+misurato — ma il decode non passa ancora dal piano, che è il pezzo dopo.
+
+### Cosa resta della riga 2d
+
+1. **Far uscire la rotta dal ramo condizionato al prefill** — è il pezzo che
+   porta il valore sulla barra, ed è quello globale: una sede, tre famiglie.
+2. La misura: TTFT del 4B (non deve regredire: i 48 siti restano legacy) e il
+   decode del 35B.

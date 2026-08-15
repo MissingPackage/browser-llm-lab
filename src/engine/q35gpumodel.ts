@@ -20,6 +20,7 @@ import {
   prefillGemmQ4SplitKIdotWgsl, prefillQuantXQ8Wgsl,
   prefillGemmQ5KSplitKWgsl, prefillGemmQ5KSplitKIdotWgsl,
   prefillGemmQ41SplitKWgsl, prefillGemmQ41SplitKIdotWgsl,
+  prefillGemmQ80SplitKWgsl, prefillGemmQ80SplitKIdotWgsl,
   prefillQuantXGrid, prefillCombineGrid,
 } from "./kernels/wgsl";
 import { planPrefillGemm, prefillGemmCapsFor } from "./prefillgemmplan";
@@ -951,6 +952,37 @@ export async function createQ35GpuModel(
             [w.qs, w.scales, prefillXq, prefillPart, prefillXsc], prefillGemmGrid(o41));
         } else {
           pushB(prefillGemmQ41SplitKWgsl(o41), [w.qs, w.scales, src, prefillPart], prefillGemmGrid(o41));
+        }
+        pushB(prefillSplitKCombineWgsl({ N: w.n, M: M_MAX, splits: route.splits }), [prefillPart, dst],
+          prefillCombineGrid({ N: w.n, M: M_MAX }));
+        return;
+      }
+      // Q8_0 — SITO PROPRIO, per la stessa ragione dei due qui sotto: il gate
+      // strutturale legge il SORGENTE e verifica che il kernel sia emesso con
+      // gli stessi `opts` con cui si e' chiesta la rotta. Dietro un ternario
+      // quella catena non e' piu' leggibile e il gate diventa cieco proprio
+      // sulla proprieta' che esiste per difendere.
+      //
+      // CABLATO il 2026-08-15 (goal engine-velocita-decode, riga 2d). Cio' che
+      // l'ha reso sicuro e' il predicato su N in `kernelVerdict`: prima il
+      // q8_0 era escluso PER FAMIGLIA allo scopo di proteggere una SHAPE — i 48
+      // siti `ssm_alpha`/`ssm_beta` del 4B a N=32, mezzo workgroup sulla forma
+      // split-K. Ora la shape si protegge da sola, quindi i 100 tensori attn
+      // del 35B (1,09 GB, N=4096) prendono la via veloce e quei 48 restano
+      // legacy. Misura: 35,2x a M=16 e 3,26x a M=1 sul banco della fase 0.
+      //
+      // L'aritmetica del q8_0 non ha ne' l'offset -8 del q4_0 ne' il termine
+      // costante del q4_1: i pesi sono gia' interi con segno, e per questo il
+      // suo kernel idot non porta `xsum`.
+      if (route.via !== "legacy" && kk === "q8_0") {
+        const o80 = { kind: kk, K: w.k, N: w.n, M: M_MAX, splits: route.splits };
+        if (route.via === "idot" && prefillXq !== null && prefillXsc !== null) {
+          pushB(prefillQuantXQ8Wgsl({ K: w.k, M: M_MAX }), [src, prefillXq, prefillXsc],
+            prefillQuantXGrid({ K: w.k, M: M_MAX }));
+          pushB(prefillGemmQ80SplitKIdotWgsl(o80),
+            [w.qs, w.scales, prefillXq, prefillPart, prefillXsc], prefillGemmGrid(o80));
+        } else {
+          pushB(prefillGemmQ80SplitKWgsl(o80), [w.qs, w.scales, src, prefillPart], prefillGemmGrid(o80));
         }
         pushB(prefillSplitKCombineWgsl({ N: w.n, M: M_MAX, splits: route.splits }), [prefillPart, dst],
           prefillCombineGrid({ N: w.n, M: M_MAX }));

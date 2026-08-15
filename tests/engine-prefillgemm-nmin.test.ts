@@ -6,21 +6,25 @@
 // contro la legacy, dove non e' mai stata misurata.
 //
 // COSA PROTEGGE, e non e' teorico: i 48 siti `ssm_alpha`/`ssm_beta` del 4B
-// hanno **N=32**. Fino a ieri erano esclusi dal flag `wired` del q8_0, cioe'
-// **per famiglia** — e quel flag e' esattamente cio' che il cablaggio del q8_0
-// (la riga 2d) deve girare. Girarlo senza un predicato sulla shape
-// instraderebbe anche quei 48 siti e cambierebbe cio' che il 4B esegue oggi,
-// in peggio. Sul 35B gli stessi tensori di attn hanno N=4096 e devono passare.
+// hanno **N=32**. Erano esclusi dal flag `wired` del q8_0, cioe' **per
+// famiglia** — e quel flag e' esattamente cio' che il cablaggio del q8_0 doveva
+// girare. **Girato il 2026-08-15**: da quel momento questo predicato e' l'UNICA
+// cosa che tiene quei 48 siti sulla legacy. Se cadesse, il 4B cambierebbe cio'
+// che esegue, in peggio, senza che nessun errore lo dica. Sul 35B gli stessi
+// tensori di attn hanno N=4096 e passano.
 //
-// IL PUNTO DELICATO CHE QUESTO FILE COPRE, e che gli altri test non possono:
-// **oggi il predicato su N e' IRRAGGIUNGIBILE per il q8_0**, perche' il
-// controllo del cablaggio viene prima e il q8_0 non e' cablato. Un guard che
-// nessun test attraversa e' un guard che non sai se funziona — e' la stessa
-// classe del contatore mai incrementato. Qui si esercita su un kind **cablato**,
-// dove il controllo lo raggiunge davvero.
+// NOTA STORICA, e vale come metodo: quando questo file e' stato scritto (it.14)
+// il q8_0 NON era ancora cablato, quindi il predicato era **irraggiungibile**
+// per lui — il controllo del cablaggio veniva prima. Un guard che nessun test
+// attraversa e' un guard di cui non sai se funziona (la classe del contatore
+// mai incrementato). Per questo i casi girano su OGNI kind cablato invece che
+// sul solo caso d'interesse: cosi' il predicato era esercitato gia' il giorno
+// prima di servire davvero.
 import { describe, expect, it } from "vitest";
 import { planPrefillGemm } from "../src/engine/prefillgemmplan";
-import { PREFILL_GEMM_ROWS_PER_WG, PREFILL_GEMM_WIRED_KINDS } from "../src/engine/kernels/wgsl";
+import {
+  PREFILL_GEMM_ROWS_PER_WG, PREFILL_GEMM_WIRED_KINDS, PREFILL_GEMM_KINDS,
+} from "../src/engine/kernels/wgsl";
 
 const M = 16;
 // K valido per tutti i kind cablati (multiplo di 64 e di 256)
@@ -84,7 +88,15 @@ describe("piano di prefill — N sotto le righe per workgroup non si instrada", 
     // cablaggio — la shape sarebbe una risposta vera e inutile, perche' anche
     // con N buono quel sito resterebbe legacy. E' lo stesso ordine che il
     // kernel tiene fra formato e geometria.
-    const r = planPrefillGemm({ kind: "q8_0", K: 2048, N: 32, M, idot: true });
+    //
+    // L'ESEMPIO NON E' PIU' IL q8_0: era il kind non cablato di ieri, ed e'
+    // stato cablato oggi (riga 2d). Si prende un non-cablato dall'elenco vero
+    // invece di scriverne uno a mano, cosi' il caso non marcisce alla prossima
+    // accensione.
+    const notWired = PREFILL_GEMM_KINDS.filter((k) => !PREFILL_GEMM_WIRED_KINDS.includes(k));
+    expect(notWired.length, "nessun kind non cablato: il caso non prova piu' niente")
+      .toBeGreaterThan(0);
+    const r = planPrefillGemm({ kind: notWired[0], K: 2048, N: 32, M, idot: true });
     expect(r.via).toBe("legacy");
     expect(r.reason, "la ragione deve accusare il cablaggio, non N").toContain("cablato");
   });

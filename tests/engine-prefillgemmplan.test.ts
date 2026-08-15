@@ -91,7 +91,13 @@ describe("[1] la via: idot dove si puo', f32 come fallback dichiarato, legacy co
   });
 
   it("kind fuori dalle vie veloci: legacy, con una ragione >= 40 caratteri che NOMINA il kind", () => {
-    const kinds: PrefillQuantKind[] = ["q8_0", "q4_K", "q6_K", "f32"];
+    // IL q8_0 NON E' PIU' QUI, ed e' la riga 2d di `engine-velocita-decode` ad
+    // averlo tolto: il predicato su N (`kernelVerdict`) protegge la shape che
+    // il flag di famiglia proteggeva prima, quindi i 100 tensori attn del 35B
+    // possono prendere la via veloce mentre i 48 siti a N=32 del 4B restano
+    // legacy per la loro geometria. La stessa promozione che la riga 3 di
+    // `engine-kquant` aveva fatto al q4_1.
+    const kinds: PrefillQuantKind[] = ["q4_K", "q6_K", "f32"];
     for (const kind of kinds) {
       for (const idot of [true, false]) {
         const r = planPrefillGemm({ kind, K: 2560, N: 9216, M, idot });

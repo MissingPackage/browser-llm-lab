@@ -4365,13 +4365,17 @@ const PREFILL_GEMM_SPEC: Record<PrefillGemmKind, PrefillGemmKindSpec> = {
       // test confronta col testo.
       f32: (M) => M * 64 * 4,
     },
-    wired: false,
-    wiredWhy: "NON CABLATO, e sul 4B la ragione e' NUMERICA: i 48 siti q8_0 sono `ssm_alpha` e "
-      + "`ssm_beta` con N=32 righe di uscita, cioe' MEZZO workgroup per dispatch sulla forma "
-      + "split-K, che ne produce 64. Sono lo 0,204% dei byte del prefill ed erano gia' esclusi "
-      + "coi numeri dal contratto della riga 3. `prefillGemmCheck` non guarda N — controlla kind, "
-      + "K e fette — quindi senza questo flag il piano instraderebbe quei 48 siti e cambierebbe "
-      + "cio' che il 4B esegue oggi. Il kernel serve al 35B (100 tensori attn = 1,09 GB, N=4096)",
+    wired: true,
+    wiredWhy: "CABLATO il 2026-08-15 (goal engine-velocita-decode, riga 2d), e cio' che l'ha reso "
+      + "sicuro NON e' una misura nuova: e' il predicato su N in `kernelVerdict`. La ragione "
+      + "vecchia diceva «non cablato perche' i 48 siti `ssm_alpha`/`ssm_beta` del 4B hanno N=32, "
+      + "mezzo workgroup sulla forma split-K che ne produce 64» — vera, ma risolta nel posto "
+      + "sbagliato: escludeva una FAMIGLIA intera per proteggere una SHAPE. Ora l'esclusione e' "
+      + "sulla shape (`PREFILL_GEMM_ROWS_PER_WG`, casi in engine-prefillgemm-nmin.test.ts): quei "
+      + "48 siti restano legacy per la loro geometria, e i 100 tensori attn del 35B (1,09 GB, "
+      + "N=4096) passano. Misura, banco fase 0 di engine-kquant su [2048,4096]: a M=16 "
+      + "splitk-idot 0,0376 ms contro 1,3224 della legacy = 35,2x; a M=1 0,0698 contro 0,2278 = "
+      + "3,26x, cioe' paga anche nel regime del decode",
   },
 };
 

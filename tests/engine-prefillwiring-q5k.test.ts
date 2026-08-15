@@ -291,7 +291,13 @@ const SITES = [
     body: (src: string) => helperBody(src, "gemvB"),
     K: "w.k", N: "w.n",
     /** DUE formati da riga 3: q4_0 e q4_1, ognuno col suo kernel e la sua guardia */
-    fmts: ["q4_0", "q4_1"],
+    // q8_0 entrato il 2026-08-15 (goal engine-velocita-decode, riga 2d): il
+    // predicato su N protegge la shape che il flag di famiglia proteggeva
+    // prima. Questa lista non e' decorativa — i casi [a] la usano come atteso
+    // sia per il numero di rami che escludono la legacy, sia per l'insieme dei
+    // formati guardati, sia per il conteggio delle emissioni: un ramo aggiunto
+    // senza aggiornare qui, o viceversa, fa fallire tre asserzioni.
+    fmts: ["q4_0", "q4_1", "q8_0"],
     fmt: "q4_0",
     kernel: "prefillGemmQ4SplitKIdotWgsl",
   },
