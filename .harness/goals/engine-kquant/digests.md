@@ -154,3 +154,34 @@ il goal e cosa e' in dubbio.
 - **Suite: 998 passed | 10 skipped** (erano 836), tsc exit 0.
 - **Trappola consegnata scritta**: `wired` e' per formato, non per shape. Quando
   il 35B accendera' q8_0, i 48 siti del 4B entrano nello stesso istante.
+
+## it.9 — riga 5 CHIUSA: 1,873x misurato, barra e nice-to-have passati (2026-08-15)
+
+- **TTFT a caldo 32.127 -> 17.153 ms.** Sotto la barra (22.500) E sotto il
+  nice-to-have (18.000). prefill 197,25 -> **369,72 tok/s**. Host quiescent,
+  zero errori GPU. **Prima misura di tempo dell'intero goal.**
+- **La proiezione del banco (~16,9 s) ha sbagliato dell'1,5%**, e la
+  decomposizione predetta nel contratto pure: 9.167 fuori dai pass + 7.959
+  dentro = 17.126, contro «9.350 + 8.050» scritti prima di iniziare.
+- **Segmenti**: `gemm:deltanet-out` 12.169 -> **572,8 ms**; `gemm:ffn-down`
+  4.971 -> **1.413,4** (1.187,6 + 225,8 della categoria q41 scorporata: il
+  confronto onesto e' la somma).
+- **Termine PRIMO dopo la leva, misurato**: `deltanet:recurrence` 1.732 ms
+  (10,11% del prefill). E' la voce che la riga 7 deve nominare.
+- **Una run di GPU buttata**: la riga EVIDENCE del contratto ometteva
+  `--prefill-m 16` (default `null` ⇒ prefill sequenziale, 91.230 ms).
+  Intercettata perche' il runner DICHIARA `prefillPath` invece di lasciarlo
+  dedurre. Secondo comando incompleto trovato oggi, dopo il `BASE_URL`.
+- **Il debito del checkpoint era peggio del dichiarato**: l'inventario dei siti
+  viveva dentro un file di TEST (per questo i byte erano ricopiati), e il
+  checkpoint del 14 agosto pubblicava DUE numeri falsi — `gemm:deltanet-out`
+  ancora `legacy` (16x i byte veri) e `gemm:qkv` contato su 80 tensori invece di
+  24 (**738 GB/s erano 5x**). Ora byte e forma sono derivati, con due guardie
+  nuove e il test che li sorveglia.
+- **Trovato nel blocco accanto**: baseline e barra di engine-**ttft** ancora
+  incise nel builder — avrebbero pubblicato 5,108x invece di 1,873x. Ora
+  arrivano dal contratto, obbligatorie, con un test che impedisce di rimetterle.
+- **Tre campi del ratchet dichiarati "NON MISURATO"** invece di ricopiati: il
+  top-1 pieno viene da un albero precedente. Sono gate della riga 6.
+- Gate: tsc exit 0 · vitest **1017 passed | 10 skipped** · **ktest 111 PASS / 0
+  FAIL** sull'albero finale.

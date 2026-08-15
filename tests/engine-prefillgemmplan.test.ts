@@ -9,6 +9,7 @@ import {
   prefillQuantXQ8Wgsl, PREFILL_SPLITS_MEASURED, PREFILL_SPLITS_UNSPLIT,
 } from "../src/engine/kernels/wgsl";
 import { dispatchWeightBytes, type PrefillDispatch, type PrefillQuantKind } from "../src/engine/prefillbytes";
+import { q35PrefillSites4B } from "../src/engine/q35prefillsites";
 
 // PIANO del GEMM di prefill: quale via prende ogni sito, con quante fette, con
 // quanto scratch. Modulo PURO — nessuna GPU, nessun WGSL generato — come
@@ -376,57 +377,19 @@ describe("[5] prefillGemmCapsFor: la feature decide, e il perche' non e' mai vuo
 // (6) ACCETTAZIONE 2 DEL GOAL — in aritmetica pura, sui siti del 4B
 // ---------------------------------------------------------------------------
 //
-// PROVENIENZA DELLA LISTA (non e' inventata e non e' dedotta dalla shape):
-// header GGUF di `/home/neuromancer/.cache/blab-models/q35/Qwen3.5-4B-Q4_0.gguf`
-// (426 tensori), riletto tensore per tensore il 2026-08-13; i totali per
-// famiglia sono quelli gia' pinnati in
-// `results/engine/q35-header-dump-2026-08-10.json` (`typeHistogram`), e il test
-// [6b] li riverifica — n E byte — contro questa lista, cosi' la lista non puo'
-// scivolare in silenzio. La struttura (32 layer, full quando l%4==3) e' quella
-// che l'header dichiara: `attn_q/k/v/output` compaiono esattamente sui layer
-// 3,7,...,31 e `attn_qkv/gate` + `ssm_*` sugli altri 24.
+// PROVENIENZA DELLA LISTA: sta scritta accanto alla lista, che dal 2026-08-15
+// NON vive piu' qui — e' `src/engine/q35prefillsites.ts`.
 //
-// Dimensioni GGUF = [K, N] (ne[0] = ingresso). Nessun sito per-layer e' q6_K —
-// il q6_K del 4B sta solo in `token_embd`, che non e' un GEMM di prefill —
-// quindi su tutti i kind di questa lista i byte device coincidono con quelli
-// del file e il confronto con l'istogramma e' lecito.
-const Q35_4B = { nLayer: 32, fullInterval: 4 } as const;
-
-/** Siti FULL-attention (8 layer: l%4==3) — tutti Q4_0. */
-const SITES_FULL: readonly { site: string; kind: PrefillQuantKind; K: number; N: number }[] = [
-  { site: "attn_q", kind: "q4_0", K: 2560, N: 8192 },   // gate fuso: 2*nHead*headDim
-  { site: "attn_k", kind: "q4_0", K: 2560, N: 1024 },   // nKvHead*headDim
-  { site: "attn_v", kind: "q4_0", K: 2560, N: 1024 },
-  { site: "attn_output", kind: "q4_0", K: 4096, N: 2560 },
-];
-
-/** Siti LINEAR-attention / Gated DeltaNet (24 layer). */
-const SITES_LINEAR: readonly { site: string; kind: PrefillQuantKind; K: number; N: number }[] = [
-  { site: "attn_qkv", kind: "q4_0", K: 2560, N: 8192 },  // (2*nK+nV)*hd
-  { site: "attn_gate", kind: "q4_0", K: 2560, N: 4096 }, // nV*hd
-  { site: "ssm_alpha", kind: "q8_0", K: 2560, N: 32 },
-  { site: "ssm_beta", kind: "q8_0", K: 2560, N: 32 },
-  { site: "ssm_out", kind: "q5_K", K: 4096, N: 2560 },   // Q5_K nel file, non Q4_0
-];
-
-/** FFN densa su OGNI layer; `ffn_down` e' Q4_1 sui layer 0..3, Q4_0 altrove. */
-const FFN_Q41_LAYERS = [0, 1, 2, 3] as const;
-
-function sites4B(): PrefillSite[] {
-  const out: PrefillSite[] = [];
-  for (let l = 0; l < Q35_4B.nLayer; l++) {
-    const full = l % Q35_4B.fullInterval === Q35_4B.fullInterval - 1;
-    for (const s of full ? SITES_FULL : SITES_LINEAR) out.push({ ...s, site: `blk.${l}.${s.site}` });
-    out.push({ site: `blk.${l}.ffn_gate`, kind: "q4_0", K: 2560, N: 9216 });
-    out.push({ site: `blk.${l}.ffn_up`, kind: "q4_0", K: 2560, N: 9216 });
-    out.push({
-      site: `blk.${l}.ffn_down`,
-      kind: (FFN_Q41_LAYERS as readonly number[]).includes(l) ? "q4_1" : "q4_0",
-      K: 9216, N: 2560,
-    });
-  }
-  return out;
-}
+// PERCHE' SI E' SPOSTATA. Gli stessi 248 siti servono a
+// `scripts/build-ttft-checkpoint.mjs` per attribuire i byte ai segmenti
+// cronometrati, e uno script non puo' importare un file di test: li aveva
+// ricopiati a mano, e nel checkpoint del 2026-08-14 due di quei numeri erano
+// gia' falsi. Un numero di produzione che vive solo in un test e' cio' che rende
+// necessario ricopiarlo. Le asserzioni restano qui: [6b] riverifica n E byte
+// della lista importata contro il `typeHistogram` gia' pinnato in
+// `results/engine/q35-header-dump-2026-08-10.json`, che e' l'evidenza esterna e
+// resta in questo file — la lista e la sua controprova non sono lo stesso posto.
+const sites4B = (): PrefillSite[] => q35PrefillSites4B();
 
 /**
  * `typeHistogram` di results/engine/q35-header-dump-2026-08-10.json, entry

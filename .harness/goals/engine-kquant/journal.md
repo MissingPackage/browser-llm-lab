@@ -669,3 +669,137 @@ le due barre di segmento a 2.000 ms, e il debito di
 `build-ttft-checkpoint.mjs:108` (i byte del segmento derivati dal meter invece
 che ricopiati). **E' la prima riga da it.4 che muove la metrica del goal**, ed e'
 la prima misura di tempo dell'intero goal.
+
+## it.9 — RIGA 5 CHIUSA: il cronometro dice 1,873x, e il banco aveva ragione all'1,5% (2026-08-15)
+
+**TTFT a caldo: 32.127 -> 17.153 ms.** Sotto la barra del contratto (22.500) **e**
+sotto il nice-to-have (18.000). E' la prima misura di tempo dell'intero goal.
+
+    prefill.ms + decode.firstMs = 17.126 + 27 = 17.153 ms
+    prefill 197,25 -> 369,72 tok/s     (barra > 282: OK)
+    prefill.tokS > decode.tokS (47,06): OK
+    hostState.declared = quiescent · gpuErrors []
+    ttftAggregato 26.601 = load 9.448 + prefill 17.126 + first 27
+
+**LA PROIEZIONE E' STATA MESSA ALLA PROVA E HA TENUTO.** Il micro-banco di it.2
+proiettava ~16,9 s; il misurato e' 17,153 s — **1,5% di errore**. E la
+decomposizione predetta nel contratto PRIMA di iniziare («9.350 ms fuori dai
+pass GPU + 8,05 s di pass residui = 17,4 s») regge anche lei: misurati **9.167
+fuori + 7.959 dentro = 17.126**. Il pavimento dichiarato non era una figura
+retorica.
+
+**Le due barre di segmento:**
+
+    gemm:deltanet-out   12.169 -> 572,8 ms      (barra 2.000)
+    gemm:ffn-down        4.971 -> 1.187,6 + 225,8 (q41) = 1.413,4 ms   (barra 2.000)
+
+Il `+ 225,8` non e' un dettaglio: sono i quattro siti Q4_1 scorporati in it.5
+nella loro categoria di misura propria. Il segmento vecchio li conteneva, quindi
+il confronto onesto col 4.971 e' la SOMMA. Scriverlo scorporato senza sommarlo
+sarebbe stato un miglioramento gonfiato.
+
+**Il termine che diventa PRIMO dopo questa leva, misurato e non ipotizzato:
+`deltanet:recurrence`, 1.732,1 ms = 10,11% del prefill.** E' la voce che la
+riga 7 deve nominare, ed e' gia' pronta.
+
+**CAVEAT che va accanto a questi numeri, o dicono piu' del vero**: i totali per
+segmento sono per-chunk MISURATI e moltiplicati per 395, da una sonda girata a
+contesto corto (1.024 token) e che PERTURBA (spezza il pass di ogni layer). Il
+confronto col 12.169 regge perche' e' calcolato allo stesso modo, ma non e' un
+cronometro sul prefill vero.
+
+### La run che ho buttato, e perche' e' la stessa malattia di stamattina
+
+La riga EVIDENCE del contratto diceva `--prompt-idx 0 --n-decode 64 --vram-gib 8
+--declared quiescent`. **Manca `--prefill-m 16`**, il cui default e' `null`: il
+prompt e' andato su `step` per posizione e ha dato **91.230 ms** di prefill
+invece di 17.126. Una run di GPU buttata.
+
+**L'ho intercettata perche' il runner DICHIARA il path** (`prefillPath: "chunked
+M=16 (395 chunk + coda 12 via step)"`) invece di lasciarlo dedurre dai numeri —
+una decisione presa nella riga 0 del goal engine-ttft, che oggi ha pagato per la
+prima volta. Senza quella dichiarazione avrei avuto un numero peggiore della
+baseline e nessun modo di sapere perche'.
+
+**E' il SECONDO comando incompleto trovato oggi in un file di questo progetto**,
+dopo il `BASE_URL` mancante nel comando di ripresa dell'HANDOFF. Due su due dei
+comandi lasciati scritti per la ripresa erano ineseguibili come stavano.
+Corretti entrambi, e in HANDOFF ho scritto la regola che ne esce: **un comando
+lasciato per la ripresa si esegue come sta scritto prima di lasciarlo.**
+
+### Il debito del checkpoint: era peggio di come era dichiarato
+
+Il contratto chiamava `build-ttft-checkpoint.mjs:108` «due posti che decidono lo
+stesso numero». Aprendolo, il difetto sotto era un altro: **l'inventario dei
+siti viveva DENTRO `tests/engine-prefillgemmplan.test.ts`**, e uno script non
+puo' importare un file di test — per questo i byte erano stati ricopiati. Ora
+sta in `src/engine/q35prefillsites.ts`, modulo puro, importato da entrambi.
+
+**E il checkpoint del 2026-08-14 pubblicava DUE numeri falsi, non uno:**
+- `gemm:deltanet-out` dichiarato `forma: "legacy"` col suo `* M` — vero quando
+  fu scritto, falso da quando la riga 2 ha portato le 24 `ssm_out` a multi-riga:
+  **16 volte i byte veri**;
+- `gemm:qkv` contava 589.824.000 byte = l'INTERA famiglia attn Q4_0 (80
+  tensori), mentre quel segmento ne cronometra **24**. I 738 GB/s pubblicati
+  erano **5x**.
+
+Ora i byte li conta `dispatchWeightBytes` e la forma la decide `planPrefillGemm`.
+Il moltiplicatore `M` non e' piu' scritto da nessuna parte: sta dentro la
+definizione di `legacy`. Piu' due guardie nuove: i byte non devono dipendere da
+`idot` (se dipendessero, il checkpoint pubblicherebbe i byte del device che ha
+girato) e il numero di dispatch misurati dev'essere compatibile con la forma
+derivata (e' il controllo che il 14 agosto mancava, ed e' esattamente il caso
+che avrebbe preso).
+
+### Il difetto che ho trovato io nel blocco accanto
+
+Chiuso il debito dei byte, `metrica` conteneva ancora **`baselineWarmMs: 87618`
+e `barraContrattoMs: 21905`** incisi nel builder: i numeri del goal
+**engine-ttft**. Il primo checkpoint di engine-kquant — baseline 32.127, barra
+22.500 — avrebbe pubblicato una discesa di **5,108x** invece di 1,873x,
+mescolando due contratti in un campo che si legge come un risultato. Stessa
+malattia, un blocco piu' in la'. Ora baseline e barra arrivano dal file di
+ratchet, obbligatorie e senza default, col `goal` accanto; e c'e' un test che
+fallisce se quei due numeri tornano nel sorgente.
+
+Ho anche rinominato `mancaAllaBarra` in `quotaDellaBarra` + `barraPassata`: il
+nome vecchio si leggeva «manca» anche quando la barra era gia' passata.
+
+### Il ratchet: quello che NON ho misurato, dichiarato tale
+
+Il ratchet di correttezza portava stringhe di tre iterazioni fa («101 PASS»,
+«680 passed»). Ora e' un file datato passato alla run, obbligatorio. **E tre dei
+suoi sei campi li ho scritti "NON MISURATO su questo albero"**: il top-1 pieno
+contro l'oracolo (1012/1024) viene da un albero PRECEDENTE alle righe 2-4, e
+l'unico dato di oggi e' uno smoke a 64 posizioni. Ricopiarlo l'avrebbe fatto
+passare per fresco. **Sono gate della riga 6**, ed e' li' che si misurano.
+
+### DONE WHEN della riga 5, voce per voce
+
+| clausola | esito | valore |
+|---|---|---|
+| JSON `kind: q35-ttft-kernel-checkpoint` | **si'** | `results/engine/q35-ttft-kernel-checkpoint-4b-2026-08-15.json` |
+| `gemm:deltanet-out` <= 2.000 ms | **si'** | 572,8 |
+| `gemm:ffn-down` <= 2.000 ms | **si'** | 1.413,4 (1.187,6 + 225,8 q41) |
+| byte e GB/s per segmento | **si'** | 7 categorie attribuite, 9 dichiarate non attribuibili con la ragione |
+| `prefill.ms + decode.firstMs` < 22.500 | **si'** | **17.153** |
+| dichiarato contro il nice-to-have 18.000 | **si'** | `niceToHavePassato: true` |
+| `prefill.tokS > 282` | **si'** | 369,72 |
+| `prefill.tokS > decode.tokS` | **si'** | 369,72 > 47,06 |
+| `loadMs`/`prefill.ms`/`decode.firstMs` scomposti | **si'** | 9.448 + 17.126 + 27 = 26.601 aggregato |
+| `hostState.declared = "quiescent"` | **si'** | + `gpuErrors: []` |
+| test: i byte vengono da `prefillbytes.ts`, non da una costante | **si'** | `tests/engine-ttft-checkpoint-banda.test.ts` |
+
+**Gate**: `tsc --noEmit` exit 0 · `vitest run` exit 0 **1017 passed | 10
+skipped** · **ktest 111 PASS / 0 FAIL sull'albero finale**.
+
+**RIGA 5 CHIUSA.**
+
+**Non-regressione sul gate chunk-vs-sequenziale**: `argmaxSame 63/64`, **identico
+al run precedente fin nella singola divergenza** (chunk 0, stesso token, stesso
+`seqTop2Gap` 0,0179119 alla cifra). Non e' una regressione dei kernel nuovi: e'
+un quasi-pareggio che c'era gia'. `bitEqual` 31 -> 18 e' atteso e dichiarato —
+l'aritmetica del ramo a chunk e' cambiata, e la bit-identita' e' sospesa per
+ruling dal 2026-08-14.
+
+**PROSSIMA: riga 6**, i gate di merge. Tre dei sei campi del ratchet li aspetta.

@@ -1,0 +1,18 @@
+{
+  "date": "2026-08-15",
+  "albero": "455100b + riga 5 in albero (q35prefillsites, builder derivato)",
+  "ktest": "111 PASS / 0 FAIL",
+  "vitest": "1017 passed | 10 skipped",
+  "tsc": "pulito",
+  "top1SequenzialeVsOracolo": "NON MISURATO su questo albero — e' un gate della riga 6, e l'ultimo valore pieno (1012/1024 = 98,828%) viene da un albero PRECEDENTE alle righe 2-4. Ricopiarlo qui lo farebbe passare per fresco.",
+  "top1PrefillAChunkVsOracolo": "NON MISURATO su questo albero — stessa ragione. L'unico dato di oggi e' uno smoke a 64 posizioni (62/64) in q35-conf-4b-riga2-check-2026-08-15.json, che NON e' il gate a 1024.",
+  "sequenzeGenerateIdentiche": "NON MISURATO su questo albero — gate della riga 6.",
+  "decodeSoglia": 45.5,
+  "contratto": {
+    "goal": "engine-kquant",
+    "baselineWarmMs": 32127,
+    "barraContrattoMs": 22500,
+    "barraNiceToHaveMs": 18000,
+    "perche": "baseline e barra sono quelle di engine-kquant, NON quelle di engine-ttft (87.618 / 21.905) che stavano incise nel builder: su questa run avrebbero pubblicato una discesa di 5,108x mescolando due contratti."
+  }
+}

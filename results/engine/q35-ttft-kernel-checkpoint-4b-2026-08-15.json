@@ -1,0 +1,403 @@
+{
+ "schemaVersion": 2,
+ "kind": "q35-ttft-kernel-checkpoint",
+ "date": "2026-08-15",
+ "goal": "engine-ttft",
+ "phase": "riga 5 — la discesa massima, contabilizzata",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "modelSha256": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
+ "deviceLabel": "4090-linux",
+ "declared": "orchestratore correttezza-prima; sui densi decode BATCHED (fase D fase 3: argmax su GPU, K=32 token/submit, un readback ogni K); sul MoE ancora un readback del router per layer",
+ "prompt": {
+  "idx": 0,
+  "file": "/home/neuromancer/Projects/browser-llm-lab/tools/oracle-moe/corpus/01-code-ts-review.txt",
+  "tokens": 6333
+ },
+ "chunkM": 16,
+ "chunks": 395,
+ "metrica": {
+  "ttftWarmMs": 17153,
+  "ttftAggregatoMs": 26601,
+  "loadMs": 9448,
+  "prefillMs": 17126,
+  "firstMs": 27,
+  "prefillTokS": 369.7207358913965,
+  "decodeTokS": 47.05882352941177,
+  "goal": "engine-kquant",
+  "baselineWarmMs": 32127,
+  "barraContrattoMs": 22500,
+  "barraNiceToHaveMs": 18000,
+  "discesaSullaBaseline": 1.873,
+  "quotaDellaBarra": 0.762,
+  "barraPassata": true,
+  "niceToHavePassato": true
+ },
+ "sonda": {
+  "nota": "un pass per segmento invece di uno solo aggiunge barriere, quindi il chunk cronometrato e' piu' lento del vero. Il confronto col totale a sonda SPENTA e' qui accanto e non si assume trascurabile.",
+  "chunkCronometrati": 64,
+  "overflow": 0,
+  "msPerChunkSondaAccesa": 20.148,
+  "msPerChunkSondaSpenta": 35.18
+ },
+ "doveFinisceIlTempo": {
+  "prefillMs": 17126,
+  "dentroIPassGpuMs": 7958,
+  "dentroIPassPct": 46.5,
+  "fuoriDaiPassMs": 9168,
+  "fuoriDaiPassPct": 53.5,
+  "fuoriDaiPassCosaE": "encode CPU (i bind group sono gia' costruiti al load, restano setPipeline/setBindGroup/dispatchWorkgroups), submit, e i buchi fra un submit e il successivo. NON e' attribuito piu' finemente: servirebbe una sonda CPU per dispatch che oggi non esiste, ed e' un lavoro suo."
+ },
+ "segmenti": [
+  {
+   "cat": "deltanet:recurrence",
+   "msPerChunk": 4.3852,
+   "msTotale": 1732.1,
+   "quotaPrefillPct": 10.11,
+   "dispatches": 768,
+   "workgroupPerDispatch": 80,
+   "wgMin": 32,
+   "wgMax": 128
+  },
+  {
+   "cat": "gemm:ffn",
+   "msPerChunk": 3.2988,
+   "msTotale": 1303,
+   "quotaPrefillPct": 7.61,
+   "dispatches": 192,
+   "workgroupPerDispatch": 967,
+   "wgMin": 20,
+   "wgMax": 2304
+  },
+  {
+   "cat": "gemm:ffn-down",
+   "msPerChunk": 3.0067,
+   "msTotale": 1187.6,
+   "quotaPrefillPct": 6.93,
+   "dispatches": 112,
+   "workgroupPerDispatch": 378,
+   "wgMin": 72,
+   "wgMax": 640
+  },
+  {
+   "cat": "deltanet:gemm",
+   "msPerChunk": 2.6096,
+   "msTotale": 1030.8,
+   "quotaPrefillPct": 6.02,
+   "dispatches": 192,
+   "workgroupPerDispatch": 613,
+   "wgMin": 20,
+   "wgMax": 2048
+  },
+  {
+   "cat": "attn:core",
+   "msPerChunk": 2.1476,
+   "msTotale": 848.3,
+   "quotaPrefillPct": 4.95,
+   "dispatches": 16,
+   "workgroupPerDispatch": 640,
+   "wgMin": 256,
+   "wgMax": 1024
+  },
+  {
+   "cat": "gemm:deltanet-out",
+   "msPerChunk": 1.4501,
+   "msTotale": 572.8,
+   "quotaPrefillPct": 3.34,
+   "dispatches": 72,
+   "workgroupPerDispatch": 277,
+   "wgMin": 32,
+   "wgMax": 640
+  },
+  {
+   "cat": "gemm:qkv",
+   "msPerChunk": 0.8421,
+   "msTotale": 332.6,
+   "quotaPrefillPct": 1.94,
+   "dispatches": 72,
+   "workgroupPerDispatch": 362,
+   "wgMin": 20,
+   "wgMax": 2048
+  },
+  {
+   "cat": "gemm:ffn-down-q41",
+   "msPerChunk": 0.5716,
+   "msTotale": 225.8,
+   "quotaPrefillPct": 1.32,
+   "dispatches": 16,
+   "workgroupPerDispatch": 378,
+   "wgMin": 72,
+   "wgMax": 640
+  },
+  {
+   "cat": "gemm:attn-out",
+   "msPerChunk": 0.3941,
+   "msTotale": 155.7,
+   "quotaPrefillPct": 0.91,
+   "dispatches": 24,
+   "workgroupPerDispatch": 277,
+   "wgMin": 32,
+   "wgMax": 640
+  },
+  {
+   "cat": "norm:attn",
+   "msPerChunk": 0.3567,
+   "msTotale": 140.9,
+   "quotaPrefillPct": 0.82,
+   "dispatches": 32,
+   "workgroupPerDispatch": 16,
+   "wgMin": 16,
+   "wgMax": 16
+  },
+  {
+   "cat": "norm:ffn",
+   "msPerChunk": 0.3543,
+   "msTotale": 139.9,
+   "quotaPrefillPct": 0.82,
+   "dispatches": 32,
+   "workgroupPerDispatch": 16,
+   "wgMin": 16,
+   "wgMax": 16
+  },
+  {
+   "cat": "ffn:act",
+   "msPerChunk": 0.2205,
+   "msTotale": 87.1,
+   "quotaPrefillPct": 0.51,
+   "dispatches": 32,
+   "workgroupPerDispatch": 2304,
+   "wgMin": 2304,
+   "wgMax": 2304
+  },
+  {
+   "cat": "resid",
+   "msPerChunk": 0.1891,
+   "msTotale": 74.7,
+   "quotaPrefillPct": 0.44,
+   "dispatches": 32,
+   "workgroupPerDispatch": 640,
+   "wgMin": 640,
+   "wgMax": 640
+  },
+  {
+   "cat": "deltanet:gates",
+   "msPerChunk": 0.1373,
+   "msTotale": 54.2,
+   "quotaPrefillPct": 0.32,
+   "dispatches": 24,
+   "workgroupPerDispatch": 16,
+   "wgMin": 16,
+   "wgMax": 16
+  },
+  {
+   "cat": "attn:prep",
+   "msPerChunk": 0.1025,
+   "msTotale": 40.5,
+   "quotaPrefillPct": 0.24,
+   "dispatches": 32,
+   "workgroupPerDispatch": 592,
+   "wgMin": 64,
+   "wgMax": 1024
+  },
+  {
+   "cat": "attn:rope+kv",
+   "msPerChunk": 0.082,
+   "msTotale": 32.4,
+   "quotaPrefillPct": 0.19,
+   "dispatches": 32,
+   "workgroupPerDispatch": 168,
+   "wgMin": 32,
+   "wgMax": 256
+  }
+ ],
+ "bandaNota": "BYTE E FORMA DERIVATI, non ricopiati: i byte li conta dispatchWeightBytes (src/engine/prefillbytes.ts), la forma la decide planPrefillGemm (src/engine/prefillgemmplan.ts), l'inventario dei 248 siti e' src/engine/q35prefillsites.ts. Il moltiplicatore M vive solo dentro la definizione di `legacy` (M·N·bytesPerRow contro N·bytesPerRow): non c'e' un `* M` scritto accanto a una forma scritta. `bytePerPassata` e' il peso dei tensori del segmento (M non entra), `bytePerChunk` e' cio' che il segmento fa attraversare la memoria in un chunk. ATTENZIONE ALLA LETTURA: un GB/s sopra la banda DRAM del device non e' traffico verso la memoria — e' la cache che serve i pesi fra un chunk e il successivo; e un GB/s molto basso su una forma multi-riga dice che quel segmento non e' limitato dai byte dei pesi, non che la memoria vada piano. Schema 2 (era 1): nello schema 1 `banda` copriva due categorie con byte ricopiati, e quelli di `gemm:qkv` erano l'intera famiglia attn Q4_0 invece dei 24 tensori del segmento.",
+ "banda": [
+  {
+   "cat": "gemm:ffn",
+   "forma": "multirow",
+   "formaPerSito": {
+    "multirow": 64,
+    "legacy": 0
+   },
+   "tensori": "64 ffn_gate+ffn_up Q4_0",
+   "bytePerPassata": 849346560,
+   "bytePerChunk": 849346560,
+   "byteTotali": 335491891200,
+   "dispatchesMisurati": 192,
+   "msTotale": 1303,
+   "gbs": 257.5
+  },
+  {
+   "cat": "gemm:ffn-down",
+   "forma": "multirow",
+   "formaPerSito": {
+    "multirow": 28,
+    "legacy": 0
+   },
+   "tensori": "28 ffn_down Q4_0",
+   "bytePerPassata": 371589120,
+   "bytePerChunk": 371589120,
+   "byteTotali": 146777702400,
+   "dispatchesMisurati": 112,
+   "msTotale": 1187.6,
+   "gbs": 123.6
+  },
+  {
+   "cat": "deltanet:gemm",
+   "forma": "mista",
+   "formaPerSito": {
+    "multirow": 48,
+    "legacy": 48
+   },
+   "tensori": "48 attn_gate+attn_qkv Q4_0 · 48 ssm_alpha+ssm_beta Q8_0",
+   "bytePerPassata": 428851200,
+   "bytePerChunk": 491520000,
+   "byteTotali": 194150400000,
+   "dispatchesMisurati": 192,
+   "msTotale": 1030.8,
+   "gbs": 188.3
+  },
+  {
+   "cat": "gemm:deltanet-out",
+   "forma": "multirow",
+   "formaPerSito": {
+    "multirow": 24,
+    "legacy": 0
+   },
+   "tensori": "24 ssm_out Q5_K",
+   "bytePerPassata": 173015040,
+   "bytePerChunk": 173015040,
+   "byteTotali": 68340940800,
+   "dispatchesMisurati": 72,
+   "msTotale": 572.8,
+   "gbs": 119.3
+  },
+  {
+   "cat": "gemm:qkv",
+   "forma": "multirow",
+   "formaPerSito": {
+    "multirow": 24,
+    "legacy": 0
+   },
+   "tensori": "24 attn_k+attn_q+attn_v Q4_0",
+   "bytePerPassata": 117964800,
+   "bytePerChunk": 117964800,
+   "byteTotali": 46596096000,
+   "dispatchesMisurati": 72,
+   "msTotale": 332.6,
+   "gbs": 140.1
+  },
+  {
+   "cat": "gemm:ffn-down-q41",
+   "forma": "multirow",
+   "formaPerSito": {
+    "multirow": 4,
+    "legacy": 0
+   },
+   "tensori": "4 ffn_down Q4_1",
+   "bytePerPassata": 58982400,
+   "bytePerChunk": 58982400,
+   "byteTotali": 23298048000,
+   "dispatchesMisurati": 16,
+   "msTotale": 225.8,
+   "gbs": 103.2
+  },
+  {
+   "cat": "gemm:attn-out",
+   "forma": "multirow",
+   "formaPerSito": {
+    "multirow": 8,
+    "legacy": 0
+   },
+   "tensori": "8 attn_output Q4_0",
+   "bytePerPassata": 47185920,
+   "bytePerChunk": 47185920,
+   "byteTotali": 18638438400,
+   "dispatchesMisurati": 24,
+   "msTotale": 155.7,
+   "gbs": 119.7
+  }
+ ],
+ "bandaNonAttribuita": [
+  {
+   "cat": "norm:attn",
+   "perche": "nessun peso di GEMM in questo segmento (norm, attivazioni, ricorrenza, attenzione): i byte che attraversa non sono pesi e non stanno nell'inventario dei siti"
+  },
+  {
+   "cat": "deltanet:gates",
+   "perche": "nessun peso di GEMM in questo segmento (norm, attivazioni, ricorrenza, attenzione): i byte che attraversa non sono pesi e non stanno nell'inventario dei siti"
+  },
+  {
+   "cat": "deltanet:recurrence",
+   "perche": "nessun peso di GEMM in questo segmento (norm, attivazioni, ricorrenza, attenzione): i byte che attraversa non sono pesi e non stanno nell'inventario dei siti"
+  },
+  {
+   "cat": "resid",
+   "perche": "nessun peso di GEMM in questo segmento (norm, attivazioni, ricorrenza, attenzione): i byte che attraversa non sono pesi e non stanno nell'inventario dei siti"
+  },
+  {
+   "cat": "norm:ffn",
+   "perche": "nessun peso di GEMM in questo segmento (norm, attivazioni, ricorrenza, attenzione): i byte che attraversa non sono pesi e non stanno nell'inventario dei siti"
+  },
+  {
+   "cat": "ffn:act",
+   "perche": "nessun peso di GEMM in questo segmento (norm, attivazioni, ricorrenza, attenzione): i byte che attraversa non sono pesi e non stanno nell'inventario dei siti"
+  },
+  {
+   "cat": "attn:prep",
+   "perche": "nessun peso di GEMM in questo segmento (norm, attivazioni, ricorrenza, attenzione): i byte che attraversa non sono pesi e non stanno nell'inventario dei siti"
+  },
+  {
+   "cat": "attn:rope+kv",
+   "perche": "nessun peso di GEMM in questo segmento (norm, attivazioni, ricorrenza, attenzione): i byte che attraversa non sono pesi e non stanno nell'inventario dei siti"
+  },
+  {
+   "cat": "attn:core",
+   "perche": "nessun peso di GEMM in questo segmento (norm, attivazioni, ricorrenza, attenzione): i byte che attraversa non sono pesi e non stanno nell'inventario dei siti"
+  }
+ ],
+ "calcolo": {
+  "flopPrefill": 50656000000000,
+  "tflopsSostenuti": 2.958,
+  "piccoFp32MisuratoRiga1": 9.26,
+  "quotaDelPiccoPct": 31.9,
+  "nota": "il picco e' fp32 su GEMM densa (riga 1, it.2). Il prefill gira su pesi QUANTIZZATI, quindi questa quota non e' un'efficienza: e' la distanza da un tetto che questo carico non tocca per costruzione. Serve a dire che il collo non e' l'ALU."
+ },
+ "ratchetCorrettezza": {
+  "ktest": "111 PASS / 0 FAIL",
+  "vitest": "1017 passed | 10 skipped",
+  "tsc": "pulito",
+  "top1SequenzialeVsOracolo": "NON MISURATO su questo albero — e' un gate della riga 6, e l'ultimo valore pieno (1012/1024 = 98,828%) viene da un albero PRECEDENTE alle righe 2-4. Ricopiarlo qui lo farebbe passare per fresco.",
+  "top1PrefillAChunkVsOracolo": "NON MISURATO su questo albero — stessa ragione. L'unico dato di oggi e' uno smoke a 64 posizioni (62/64) in q35-conf-4b-riga2-check-2026-08-15.json, che NON e' il gate a 1024.",
+  "sequenzeGenerateIdentiche": "NON MISURATO su questo albero — gate della riga 6.",
+  "decodeTokS": 47.05882352941177,
+  "decodeSoglia": 45.5,
+  "fonte": "results/engine/ratchet-correttezza-2026-08-15.json",
+  "dataRatchet": "2026-08-15",
+  "dataRun": "2026-08-15",
+  "ratchetPiuVecchioDellaRun": false
+ },
+ "hostState": {
+  "declared": "quiescent",
+  "before": {
+   "temperatureC": 42,
+   "smClockMHz": 210,
+   "powerW": 11.28,
+   "memUsedMiB": 526,
+   "utilizationPct": 0,
+   "throttleReasons": "0x0000000000000001"
+  },
+  "after": {
+   "temperatureC": 48,
+   "smClockMHz": 2265,
+   "powerW": 67.1,
+   "memUsedMiB": 534,
+   "utilizationPct": 12,
+   "throttleReasons": "0x0000000000000024"
+  }
+ },
+ "repro": [
+  "node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --declared quiescent --prefill-m 16",
+  "node scripts/q35-conf-run.mjs --prefill-m 16 --gpu-time",
+  "node scripts/build-ttft-checkpoint.mjs <bench> <segmenti> <out> --ratchet <ratchet.json>"
+ ]
+}

@@ -2,62 +2,61 @@
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-kquant`. Righe 1, 2, 3 e 4 CHIUSE. PROSSIMA: RIGA 5 — la
-misura di chiusura, e la PRIMA misura di tempo dell'intero goal.**
+**GOAL ATTIVO: `engine-kquant`. Righe 1-5 CHIUSE. LA METRICA E' STATA MISURATA
+E LE BARRE SONO PASSATE. PROSSIMA: RIGA 6, i gate di merge.**
 Chartered 2026-08-14. `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
 
-**LA RIGA 5 E' L'UNICA COSA CHE MUOVE ANCORA LA METRICA.** Tutto il resto del
-goal e' correttezza e consegna. Cosa chiede, meccanicamente:
-- checkpoint fresco sul **prompt-idx 0** (il default del flag e' 4 = 388 token:
-  e' il flag da cui e' venuto un numero sbagliato in un goal precedente,
-  LEGGERLO prima di spendere GPU);
-- `gemm:deltanet-out` **<= 2.000 ms** (oggi 12.169) e `gemm:ffn-down`
-  **<= 2.000 ms** (oggi 4.971), coi byte e i GB/s per segmento accanto;
-- `prefill.ms + decode.firstMs` **< 22.500 ms** (oggi 32.127; nice-to-have
-  18.000). Proiezione dal banco: **~16,9 s** — proiezione, non risultato;
-- il debito di `scripts/build-ttft-checkpoint.mjs:108`, che ricopia a mano
-  `173_015_040` invece di derivarlo da `prefillbytes.ts`: **due posti che
-  decidono lo stesso numero**, e quel segmento in questo goal ha cambiato forma.
+**IL RISULTATO DEL GOAL, MISURATO** (riga 5, it.9):
 
-Comandi (il `BASE_URL` NON e' opzionale: il runner del ktest di default parla
-alla 5173):
+    TTFT a caldo   32.127 -> 17.153 ms   = 1,873x
+    barra 22.500   PASSATA · nice-to-have 18.000  PASSATO
+    prefill        197,25 -> 369,72 tok/s
+    gemm:deltanet-out  12.169 -> 572,8 ms      (barra 2.000)
+    gemm:ffn-down       4.971 -> 1.413,4 ms    (barra 2.000; 1.187,6 + 225,8 q41)
+    ttftAggregato 26.601 = load 9.448 + prefill 17.126 + first 27
+
+Artefatto: `results/engine/q35-ttft-kernel-checkpoint-4b-2026-08-15.json`
+(+ `ratchet-correttezza-2026-08-15.json`, che e' un INPUT obbligatorio).
+La proiezione del micro-banco (~16,9 s) ha sbagliato dell'**1,5%**.
+
+**IL TERMINE CHE E' DIVENTATO PRIMO**: `deltanet:recurrence`, **1.732 ms** =
+10,11% del prefill. Misurato, non ipotizzato — la riga 7 deve nominarlo.
+
+**LA RIGA 6 E' UN GATE PURO**, e tre dei suoi numeri il checkpoint li aspetta:
+il ratchet di correttezza porta oggi `NON MISURATO` su `top1SequenzialeVsOracolo`,
+`top1PrefillAChunkVsOracolo` e `sequenzeGenerateIdentiche`, perche' l'ultimo
+valore pieno (1012/1024) viene da un albero PRECEDENTE alle righe 2-4. Vanno
+misurati e il checkpoint va ricostruito con quel ratchet aggiornato. Restano poi:
+ktest tutti PASS (fatto: **111 / 0**), decode 4B **>= 45,5 tok/s** a ctx 6333
+(la run di it.9 ha dato 47,06), GLM b12 optimistic entro +-5% di
+13.172 / 31,26 / 14,74, vitest e tsc verdi (fatto: **1017 passed | 10 skipped**,
+exit 0).
+
+Comandi — **tutti eseguiti come stanno scritti**:
 
     setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
     BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs   # 111 PASS / 0 FAIL
-    node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --declared quiescent
-    node scripts/build-ttft-checkpoint.mjs
+    node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --prefill-m 16 --declared quiescent
+    node scripts/q35-conf-run.mjs --prefill-m 16 --gpu-time --vram-gib 8 --out results/engine/<segmenti>.json
+    node scripts/build-ttft-checkpoint.mjs <bench.json> <segmenti.json> <out.json> --ratchet <ratchet.json>
 
-**DOVE STA IL MOTORE ADESSO** (tutto committato e pushato su origin/main):
-- **Q5_K e Q4_1 in produzione e VERIFICATI su GPU** (righe 2 e 3). Copertura del
-  piano **5,8593x -> 15,5247x**: 200/248 siti = **99,796% dei byte** del prefill
-  del 4B. Resta legacy un solo kind: 48 siti Q8_0 con N=32 (0,204%).
-- **Q4_K, Q6_K e Q8_0 PORTATI, VERIFICATI e NON CABLATI** (riga 4). I sei
-  bracci ktest stanno tutti sul pavimento derivato o appena sotto.
-  `PREFILL_GEMM_PORT_DIFFS` resta **vuoto**: il testo portato e' byte-per-byte
-  quello che la fase 0 ha misurato.
-- **ktest: 111 PASS / 0 FAIL.** Suite senza GPU: **998 passed | 10 skipped**
-  (exit 0), `tsc --noEmit` exit 0.
-- **NESSUNA MISURA DI TEMPO IN TUTTO IL GOAL, ancora.** Che il TTFT sia sceso
-  **non e' stato misurato**. Il piano non e' il cronometro.
+**DUE FLAG NON OPZIONALI, ed entrambi mancavano in un file di questo progetto**:
+`BASE_URL` sul ktest (default 5173) e `--prefill-m 16` sul bench (default `null`
+⇒ prefill SEQUENZIALE, 91.230 ms invece di 17.126 — una run di GPU buttata in
+it.9). L'errore e' stato preso perche' il runner **dichiara `prefillPath`**
+invece di lasciarlo dedurre dai numeri. **Regola che ne esce: un comando
+lasciato qui per la ripresa si esegue come sta scritto prima di lasciarlo.**
 
-**IL FLAG `wired`, E LA TRAPPOLA CHE PORTA CON SE'.** `PREFILL_GEMM_SPEC` ha ora
-`wired`/`wiredWhy`: il kernel esiste ed e' misurato, ma solo i `wired` vengono
-instradati, e il flag si legge in UNA sede sola (`kernelVerdict` di
-`prefillgemmplan.ts`). **E' un flag per FORMATO, non per shape**, e
-`prefillGemmCheck` non guarda N: il giorno in cui il goal 35B accendera' q8_0
-per i suoi tensori attn (N=4096), i **48 siti del 4B con N=32** verrebbero
-instradati nello stesso istante, senza che niente lo dica. Serve un predicato
-sulla shape PRIMA di girare quel flag.
-
-**PER IL GOAL 35B**: `docs/engine/kquant-consegna-35b-2026-08-15.md` (423
-righe). Il collo del 35B **non e' il kernel, e' la residency**: 19,45 GiB di
-modello contro ~16 GB di scheda, expert Q4_K 17.666.408.448 B. E il suo prefill
-**NON gira su `moeprefillplan.ts`** — refuso del contratto corretto in it.8:
-`planMoeChunk` ha un solo consumatore di produzione, `glmmodel.ts:1368`, che e'
-il GLM. Il 35B ripete per riga la catena del DECODE
-(`q35gpumodel.ts:2743-2778`): 40 round-trip di readback per chunk, 512 dispatch
-per layer. Il piano CPU-side e' gia' parametrico su `{nExpert, nExpertUsed}` e
-regge `{256, 8}` per struttura: **il lavoro e' quel ramo `moe`, non il piano.**
+**DOVE STA IL MOTORE ADESSO** (committato e pushato su origin/main):
+- **Q5_K e Q4_1 in produzione e VERIFICATI su GPU** (righe 2-3). Copertura del
+  piano **5,8593x -> 15,5247x**: 200/248 siti = **99,796% dei byte**.
+- **Q4_K, Q6_K e Q8_0 PORTATI, VERIFICATI e NON CABLATI** (riga 4), col flag
+  `wired` che separa misurato da instradato. `PREFILL_GEMM_PORT_DIFFS` **vuoto**.
+- **I byte del checkpoint sono DERIVATI** (`src/engine/q35prefillsites.ts`, nuovo
+  in it.9): l'inventario dei siti viveva dentro un file di test, ed e' per questo
+  che erano ricopiati. Il checkpoint del 14 agosto pubblicava due numeri falsi —
+  `gemm:deltanet-out` ancora `legacy` (16x i byte) e `gemm:qkv` contato su 80
+  tensori invece di 24 (**738 GB/s erano 5x**).
 
 **IL REPERTO DA NON PERDERE**: la guardia doppia del cablaggio
 (`route.via !== "legacy" && kk === "<formato>"`) **ha intercettato un caso

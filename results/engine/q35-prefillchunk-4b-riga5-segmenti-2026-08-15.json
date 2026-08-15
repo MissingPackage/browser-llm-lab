@@ -1,0 +1,349 @@
+{
+ "schemaVersion": 1,
+ "kind": "q35-prefillchunk-4b",
+ "date": "2026-08-15",
+ "model": "Qwen3.5-4B-Q4_0.gguf",
+ "chunkM": 16,
+ "chunks": 64,
+ "tokens": 1024,
+ "declared": "bracci sullo STESSO modello e sullo stesso prompt; si confrontano i logits dell'ultima posizione di ogni chunk, che sono gli unici che il prefill produce. CRITERIO DI TRANSIZIONE (ruling PI 2026-08-14, docket item 22): l'atteso e' l'ARGMAX IDENTICO su ogni chunk, col numero accanto. La BIT-IDENTITA' — che era il criterio fino a it.14 — e' caduta in it.15, quando la via intera ha iniziato a quantizzare le attivazioni a int8 nel solo ramo a chunk: i due bracci fanno aritmetica diversa, quindi divergono per COSTRUZIONE e non per un difetto. E' una SOSPENSIONE, non un'abolizione: quando il percorso sequenziale sara' anch'esso su intero, i due bracci torneranno a fare la stessa aritmetica e la bit-identita' TORNA A ESSERE IL CRITERIO. Resta misurata qui sotto proprio perche' quel giorno si veda senza rifare niente.",
+ "plan": {
+  "dispatches": 1680,
+  "workgroupsTotal": 596000,
+  "sm": null,
+  "byCat": {
+   "norm:attn": {
+    "dispatches": 32,
+    "workgroups": 512,
+    "wgMin": 16,
+    "wgMax": 16
+   },
+   "deltanet:gemm": {
+    "dispatches": 192,
+    "workgroups": 117696,
+    "wgMin": 20,
+    "wgMax": 2048
+   },
+   "deltanet:gates": {
+    "dispatches": 24,
+    "workgroups": 384,
+    "wgMin": 16,
+    "wgMax": 16
+   },
+   "deltanet:recurrence": {
+    "dispatches": 768,
+    "workgroups": 61440,
+    "wgMin": 32,
+    "wgMax": 128
+   },
+   "gemm:deltanet-out": {
+    "dispatches": 72,
+    "workgroups": 19968,
+    "wgMin": 32,
+    "wgMax": 640
+   },
+   "resid": {
+    "dispatches": 32,
+    "workgroups": 20480,
+    "wgMin": 640,
+    "wgMax": 640
+   },
+   "norm:ffn": {
+    "dispatches": 32,
+    "workgroups": 512,
+    "wgMin": 16,
+    "wgMax": 16
+   },
+   "gemm:ffn": {
+    "dispatches": 192,
+    "workgroups": 185600,
+    "wgMin": 20,
+    "wgMax": 2304
+   },
+   "ffn:act": {
+    "dispatches": 32,
+    "workgroups": 73728,
+    "wgMin": 2304,
+    "wgMax": 2304
+   },
+   "gemm:ffn-down-q41": {
+    "dispatches": 16,
+    "workgroups": 6048,
+    "wgMin": 72,
+    "wgMax": 640
+   },
+   "gemm:qkv": {
+    "dispatches": 72,
+    "workgroups": 26080,
+    "wgMin": 20,
+    "wgMax": 2048
+   },
+   "attn:prep": {
+    "dispatches": 32,
+    "workgroups": 18944,
+    "wgMin": 64,
+    "wgMax": 1024
+   },
+   "attn:rope+kv": {
+    "dispatches": 32,
+    "workgroups": 5376,
+    "wgMin": 32,
+    "wgMax": 256
+   },
+   "attn:core": {
+    "dispatches": 16,
+    "workgroups": 10240,
+    "wgMin": 256,
+    "wgMax": 1024
+   },
+   "gemm:attn-out": {
+    "dispatches": 24,
+    "workgroups": 6656,
+    "wgMin": 32,
+    "wgMax": 640
+   },
+   "gemm:ffn-down": {
+    "dispatches": 112,
+    "workgroups": 42336,
+    "wgMin": 72,
+    "wgMax": 640
+   }
+  }
+ },
+ "gpuTimeByCat": {
+  "chunks": 64,
+  "overflow": 0,
+  "byCat": {
+   "norm:attn": {
+    "ms": 22.82905600000038,
+    "passes": 2048
+   },
+   "deltanet:gemm": {
+    "ms": 167.01644799999957,
+    "passes": 1536
+   },
+   "deltanet:gates": {
+    "ms": 8.787967999999916,
+    "passes": 1536
+   },
+   "deltanet:recurrence": {
+    "ms": 280.6497280000014,
+    "passes": 1536
+   },
+   "gemm:deltanet-out": {
+    "ms": 92.80511999999999,
+    "passes": 1536
+   },
+   "resid": {
+    "ms": 12.104704000000234,
+    "passes": 2048
+   },
+   "norm:ffn": {
+    "ms": 22.673408000000286,
+    "passes": 2048
+   },
+   "gemm:ffn": {
+    "ms": 211.12012799999655,
+    "passes": 2048
+   },
+   "ffn:act": {
+    "ms": 14.11174400000023,
+    "passes": 2048
+   },
+   "gemm:ffn-down-q41": {
+    "ms": 36.584448,
+    "passes": 256
+   },
+   "gemm:qkv": {
+    "ms": 53.89619199999987,
+    "passes": 512
+   },
+   "attn:prep": {
+    "ms": 6.561791999999981,
+    "passes": 512
+   },
+   "attn:rope+kv": {
+    "ms": 5.249023999999964,
+    "passes": 512
+   },
+   "attn:core": {
+    "ms": 137.44435199999995,
+    "passes": 512
+   },
+   "gemm:attn-out": {
+    "ms": 25.221119999999967,
+    "passes": 512
+   },
+   "gemm:ffn-down": {
+    "ms": 192.42803199999832,
+    "passes": 1792
+   }
+  }
+ },
+ "gate": {
+  "argmaxSame": 63,
+  "chunks": 64,
+  "argmaxIdentical": false,
+  "bitEqual": 18,
+  "compared": 15892480,
+  "bitIdentical": false,
+  "maxAbs": 2.1173248291015625,
+  "maxRel": 1.9999602018639118,
+  "argmaxDiffs": [
+   {
+    "chunk": 0,
+    "seqTok": 11,
+    "chunkTok": 248046,
+    "seqTop2Gap": 0.017911911010742188,
+    "chunkTop2Gap": 0.09352684020996094,
+    "swapMargin": 0.017911911010742188
+   }
+  ],
+  "criterion": "argmax",
+  "bitIdentitySuspendedBy": "it.15 — prefillQuantXQ8Wgsl, attivazioni int8 sul solo ramo a chunk",
+  "bitIdentityReturnsWhen": "il percorso sequenziale (`step`) passa anch'esso sulla via intera"
+ },
+ "msPerChunk": {
+  "sequential": 220.6499999994412,
+  "chunked": 35.1800000006333,
+  "speedup": 6.272029562122488,
+  "discardedFirst": true,
+  "samples": 63,
+  "seqAll": [
+   929.84,
+   201.3,
+   203.87,
+   204.06,
+   205.4,
+   206.77,
+   204.77,
+   206.48,
+   208.47,
+   209.58,
+   209.17,
+   206.94,
+   210.13,
+   211.33,
+   211.77,
+   211.99,
+   213.55,
+   211.81,
+   213.04,
+   214.78,
+   213.9,
+   214.9,
+   215.81,
+   216.03,
+   217.49,
+   216.15,
+   217.07,
+   218.21,
+   220.26,
+   220.5,
+   220.65,
+   221.04,
+   221.92,
+   221.66,
+   224.41,
+   221.84,
+   219.83,
+   222.24,
+   222.32,
+   222.58,
+   220.57,
+   222.61,
+   222.51,
+   223.1,
+   221.76,
+   222.38,
+   222.65,
+   224.1,
+   223.64,
+   222.12,
+   223.19,
+   223.41,
+   223.66,
+   224.54,
+   223.03,
+   223.84,
+   224.15,
+   223.43,
+   225.08,
+   221.77,
+   222.2,
+   224.9,
+   224.44,
+   223.49
+  ],
+  "chunkAll": [
+   33.16,
+   32.68,
+   36.6,
+   33.16,
+   28.42,
+   31.76,
+   34.27,
+   33.56,
+   30.73,
+   33.9,
+   33.65,
+   32.17,
+   35.05,
+   34.02,
+   30.75,
+   34.96,
+   32.83,
+   33.78,
+   34.31,
+   30.39,
+   30.97,
+   37.91,
+   35.59,
+   32.53,
+   35.04,
+   36.12,
+   29.03,
+   34.55,
+   36.03,
+   34.98,
+   33.86,
+   36.5,
+   31.77,
+   35.13,
+   33.65,
+   36.29,
+   36.75,
+   35.31,
+   35.18,
+   37.09,
+   37.71,
+   37.07,
+   37.34,
+   30.4,
+   35.98,
+   35.61,
+   36.22,
+   35.56,
+   36.43,
+   34.49,
+   37.09,
+   37.4,
+   36.97,
+   37.08,
+   36.33,
+   36.29,
+   37.86,
+   39.13,
+   38.94,
+   36.92,
+   41.25,
+   32.6,
+   36.01,
+   37.37
+  ]
+ },
+ "msPerToken": {
+  "sequential": 13.790624999965075,
+  "chunked": 2.198750000039581
+ }
+}

@@ -191,7 +191,15 @@ EVIDENCE OF DONE:
 - copertura: `npx vitest run tests/engine-prefillgemmplan.test.ts` → [6c] col
   rapporto >= 15,5 stampato e pinnato
 - segmenti + TTFT: `node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64
-  --vram-gib 8 --declared quiescent` e `node scripts/build-ttft-checkpoint.mjs`
+  --vram-gib 8 --prefill-m 16 --declared quiescent` e
+  `node scripts/build-ttft-checkpoint.mjs`
+  **`--prefill-m 16` NON E' OPZIONALE, e mancava qui**: il suo default e' `null`
+  e senza di esso il prompt va su `step` per posizione invece che su
+  `prefillChunk`. Costato una run in it.9 — 91.230 ms di prefill sequenziale
+  contro i 32.101 della baseline a chunk, cioe' un numero che non si confronta
+  con niente. Il runner NON lo deduce dai numeri: dichiara `prefillPath` nel
+  JSON e nella riga di log, ed e' quella dichiarazione che ha intercettato
+  l'errore (goal engine-ttft, riga 0).
   → JSON `kind: "q35-ttft-kernel-checkpoint"` con `gemm:deltanet-out` e
   `gemm:ffn-down` in ms, byte e GB/s, e `loadMs` / `prefill.{ms,tokS}` /
   `decode.firstMs` SCOMPOSTI accanto al `ttftMs` aggregato.
