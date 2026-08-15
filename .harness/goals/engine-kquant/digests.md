@@ -95,3 +95,21 @@ il goal e cosa e' in dubbio.
 - Riga 3 (Q4_1) lanciata: `[6c]` deve salire a **≥ 15,5x**, e porta con se' una
   categoria di misura propria per i quattro siti Q4_1, cosi' la riga 5
   attribuisce quel tempo invece di dedurlo.
+
+## it.5-it.6 — riga 3 cablata, gate GPU indisponibile (2026-08-15)
+
+- **Copertura 10,94x → 15,5247x**: 200/248 siti, **99,796% dei byte** del
+  prefill del 4B ora sulla forma multi-riga. Resta un solo kind legacy (48 siti
+  Q8_0, 0,204%, esclusi coi numeri).
+- **La guardia difensiva della riga 2 ha pagato**: quando il piano ha accettato
+  il q4_1 prima che il motore avesse i suoi kernel, ha fatto ricadere quei
+  tensori sulla legacy invece di leggerli col kernel del q4_0 — logit storti in
+  silenzio, senza nessun errore WebGPU.
+- Banco ktest del q4_1 scritto, tolleranze **derivate** dal pavimento (11,8x
+  sopra) e discriminante verificato: togliere il termine `m*Sigma(x)` fa
+  esplodere l'errore di quattro ordini.
+- **IL GATE SU GPU E' INDISPONIBILE** da ~01:00: cinque fallimenti, tre sintomi,
+  e fallisce anche col banco nuovo disattivato ⇒ **non e' il kernel**. Docket
+  item 2, con l'attribuzione per esclusione.
+- **Suite senza GPU: 836 passed | 10 skipped**, tsc pulito.
+- **STOP BY DESIGN**: tutto il resto del goal passa da quella infrastruttura.

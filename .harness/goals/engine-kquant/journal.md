@@ -423,3 +423,47 @@ dedurre (il kernel gira davvero e da' i numeri giusti su una GPU vera?). Coda
 affidata a un workflow con spec propria
 (`docs/engine/kquant-riga3-coda-spec.md`), che e' una gemellazione del caso
 q5_K e non un progetto nuovo.
+
+## it.6 — il banco q4_1 c'e', il gate su GPU no (2026-08-15)
+
+Il workflow della coda ha consegnato **tre task su quattro**: il caso e le
+tolleranze (`PREFILL_Q41_KTEST_CASE`, quattro tolleranze derivate), il floor
+test esteso al q4_1, e il test di composizione del `pbCat`. **Il quarto — il
+banco vero dentro `ktest.worker.ts` — non l'ha implementato**, lasciando in
+albero il suo test in fase ROSSA (22 falliti): e' la forma TDD portata a meta'.
+L'ho scritto io, gemello di quello q5_K.
+
+**I pavimenti del q4_1, misurati dal floor test e non scelti:**
+
+    [q41 idot] senzaFMA 1,462e-5 · conFMA 1,693e-5 · floor 1,693e-5 · tol 2e-4 = 11,8x
+    [q41 f32]  senzaFMA 1,489e-5 · conFMA 1,715e-5 · floor 1,715e-5 · tol 2e-4 = 11,7x
+    [q41 MUTATA senza +m*Sigma(x)] rel 5,233 — quattro ordini sopra la tolleranza
+
+L'ultima riga e' il discriminante che conta: togliere il termine costante del
+formato fa esplodere l'errore, quindi il test **non passerebbe** su un kernel
+che se lo dimentica. E i pavimenti del q4_1 sono ~40x quelli del q5_K
+(1,7e-5 contro 4,4e-7), coerente con 288 termini per riga invece di 128 e con
+un prodotto scalare che qui non e' interamente esatto.
+
+**Difetto tolto sul percorso**: il test di cablaggio del q5_K contava le
+chiamate ai generatori CONDIVISI (`prefillQuantXQ8Wgsl`, `prefillSplitKCombine`)
+su tutto il file. Misurava «quanti banchi esistono», non «come e' cablato
+questo», e sarebbe tornato rosso a ogni banco nuovo per una ragione che non ha
+niente a che vedere con cio' che difende. Ristretto al corpo del suo banco.
+
+**E POI IL GATE SU GPU E' SPARITO.** Cinque tentativi, tre sintomi diversi,
+sempre subito dopo lo stesso caso — e **fallisce anche col banco nuovo
+disattivato**, che e' l'osservazione che scagiona il kernel q4_1. Attribuzione
+per esclusione (profilo, server, Chrome zombie del Playwright MCP lasciato
+aperto da un subagente: tutti esclusi con la misura) in **docket item 2**.
+
+**Mi sono fermato al quinto tentativo, e il protocollo dice al secondo.** Lo
+registro: ogni ritentativo costava 10 minuti di GPU e nessuno di essi ha
+prodotto un'osservazione nuova dopo il terzo — quello che ha scagionato il
+banco. Da li' in poi stavo solo sperando.
+
+**STOP BY DESIGN.** Tutto cio' che resta del goal — chiudere la riga 3, la riga
+4 (i tre banchi del 35B), la riga 5 (il checkpoint che dice se il TTFT e'
+davvero sceso) e la riga 6 (i gate di merge) — passa dal ktest o da una run di
+modello, cioe' dalla stessa infrastruttura che ora non regge. Il discriminante
+e' un ambiente pulito, e su una macchina di qualcun altro non lo decido io.
