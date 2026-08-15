@@ -144,6 +144,15 @@ describe("[w3] il caso concreto: i 48 siti q8_0 del 4B restano legacy", () => {
     // IL PUNTO DI TUTTO IL MECCANISMO, in una riga: `prefillGemmCheck` non
     // guarda N. Su questa shape non solleva — e la forma split-K produce 64
     // righe di uscita per workgroup contro le 32 che servono.
+    //
+    // AGGIORNAMENTO (goal engine-velocita-decode, riga 2d): resta vero che il
+    // CONTORNO DEL KERNEL non guarda N, ed e' giusto cosi' — il kernel a N=32
+    // e' corretto, e le query di dimensionamento vanno interrogabili su
+    // qualunque shape. Cio' che e' cambiato e' che ora il PIANO guarda N
+    // (`kernelVerdict`, `PREFILL_GEMM_ROWS_PER_WG`), quindi questi 48 siti sono
+    // esclusi DUE volte: dal flag di famiglia e dalla shape. La seconda e'
+    // quella che li terra' fuori quando il q8_0 verra' cablato per il 35B.
+    // Il predicato ha i suoi casi in `tests/engine-prefillgemm-nmin.test.ts`.
     expect(() => prefillPartialFloats({ ...SSM_Q80, M, splits: PREFILL_SPLITS_UNSPLIT }))
       .not.toThrow();
     expect(SSM_Q80.N).toBeLessThan(64);

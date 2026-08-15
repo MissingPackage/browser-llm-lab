@@ -936,3 +936,67 @@ quasi tutti i 6,98 ms.
 (1069 passed, tsc exit 0 da it.11). Questa iterazione ha prodotto la verifica
 di riuso che il done-when chiedeva, e ha evitato di scrivere un kernel che
 esisteva già.
+
+---
+
+## it.14 — riga 2d: il predicato su N esiste, ed è nel posto che la repo aveva già dichiarato
+
+### Fatto
+
+`PREFILL_GEMM_ROWS_PER_WG = 64`, esportata **accanto alla griglia che la usa**
+(`prefillGemmGrid` lancia `ceil(N / 64)` workgroup): due copie di quel numero
+sarebbero due forme che divergono in silenzio. Il predicato consuma la costante
+in `kernelVerdict` (`prefillgemmplan.ts`).
+
+### Il primo tentativo era nel posto sbagliato, e sono stati i test a dirlo
+
+Avevo messo il controllo in `prefillGemmCheck`. Due test sono caduti, ed
+entrambi avevano ragione:
+
+1. **`gpulimits.test.ts`** interroga `prefillGemmWorkgroupStorageBytes` **a
+   N=1**, apposta, per provare che il fabbisogno di memoria di workgroup dipende
+   SOLO da M. È una query di dimensionamento, non una rotta: gatearla sulla
+   routabilità confonde due domande diverse.
+2. **`engine-prefillgemmplan-notwired.test.ts` [w3]** pinna che
+   «`prefillGemmCheck` non guarda N». Non difendeva il difetto: lo
+   **documentava**, scritto dal goal precedente per rendere visibile il buco.
+
+La distinzione che ne esce, e che vale oltre questo caso:
+
+    prefillGemmCheck  = «questa forma si GENERA?»   kind, K, fette
+    kernelVerdict     = «questa forma CONVIENE?»    + N
+
+A N=32 il kernel è **corretto** — guarda `r < N` e produce il valore giusto.
+Non è il kernel a dover rifiutare: è il piano a non instradare. E il piano è la
+sede unica che la repo aveva già dichiarato per i predicati di ammissibilità
+(`wgsl.ts:4396-4402`: «l'unico posto dove un predicato può stare senza diventare
+una seconda soglia che diverge in silenzio»). **Il posto giusto era già scritto;
+il primo tentativo l'ha ignorato e i test l'hanno riportato lì.**
+
+### Il guard irraggiungibile, e il test che lo raggiunge
+
+**Oggi il predicato su N non si attiva mai per il q8_0**: il controllo del
+cablaggio viene prima, e il q8_0 non è cablato. Un guard che nessun test
+attraversa è un guard di cui non sai se funziona — stessa classe del contatore
+mai incrementato (l'avvertenza di `personal-site-47` in it.9).
+
+`tests/engine-prefillgemm-nmin.test.ts`, 6 casi, lo esercita su **ogni kind
+cablato**, dove il controllo lo raggiunge davvero: il confine esatto (63 no,
+64 sì), le shape vere di 4B e 35B, il sensore che prova che non passa a vuoto,
+e l'ordine dei rifiuti (prima il cablaggio, poi la shape — la stessa gerarchia
+che il kernel tiene fra formato e geometria).
+
+Aggiornato anche il commento di [w3]: resta vero che il contorno del kernel non
+guarda N, ma ora i 48 siti sono esclusi **due volte** — dal flag di famiglia e
+dalla shape. **È la seconda che li terrà fuori quando il q8_0 verrà cablato.**
+
+**EVIDENZA**: `npx vitest run` **1075 passed | 10 skipped** (+6 casi) ·
+`npx tsc --noEmit` exit 0.
+
+### Cosa resta della riga 2d
+
+1. **Girare `wired` per il q8_0** — ora è sicuro: la shape protegge il 4B.
+2. **Far uscire la rotta dal ramo prefill** in `gemvB`, così che il decode
+   chieda al piano come fa il prefill. È il pezzo globale: una sede, tre
+   famiglie.
+3. Misura su 35B, 4B e 9B — ereditata, non riscritta.

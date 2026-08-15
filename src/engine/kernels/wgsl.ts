@@ -4419,6 +4419,23 @@ export function prefillGemmWiring(kind: PrefillGemmKind): { wired: boolean; why:
  * `units` = le unita' che il kernel conta per riga (blocchi da 32 sul q4_0,
  * superblocchi da 256 sul q5_K); `per` = quante ne tocca a ogni fetta.
  */
+/**
+ * RIGHE DI USCITA PER WORKGROUP della forma split-K. Non e' una scelta: e' la
+ * geometria del kernel, ed e' la stessa che `prefillGemmGrid` usa per la
+ * griglia (`ceil(N / 64)`). Sta qui perche' il predicato di ammissibilita' la
+ * legga dallo stesso posto della griglia invece di ricopiarla — due copie di
+ * questo numero sono due forme che divergono in silenzio.
+ *
+ * SI CONSUMA IN `kernelVerdict` (prefillgemmplan.ts), non qui. `prefillGemmCheck`
+ * e' il contorno del KERNEL — «questa forma si genera?» — e la risposta su N e'
+ * si': il kernel guarda `r < N` e produce il valore giusto anche a N=32. Cio'
+ * che N decide e' se la forma CONVIENE, cioe' l'AMMISSIBILITA' AL PIANO, e
+ * quella ha una sede sola dichiarata. Mettere il controllo qui romperebbe anche
+ * le query di dimensionamento (`prefillGemmWorkgroupStorageBytes` si interroga
+ * a N=1 apposta, per provare che il fabbisogno dipende solo da M).
+ */
+export const PREFILL_GEMM_ROWS_PER_WG = 64;
+
 function prefillGemmCheck(o: PrefillGemmOpts, who: string): { units: number; per: number } {
   const kind = o.kind as string;
   if (!isPrefillGemmKind(kind)) {
@@ -5668,7 +5685,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /** Griglia del moltiplicatore: 64 righe di uscita per workgroup in X, una fetta di K per Y. */
 export function prefillGemmGrid(o: PrefillGemmOpts): [number, number, number] {
   prefillGemmCheck(o, "prefillGemmGrid");
-  return [Math.ceil(o.N / 64), o.splits, 1];
+  return [Math.ceil(o.N / PREFILL_GEMM_ROWS_PER_WG), o.splits, 1];
 }
 
 /** Griglia della quantizzazione: un thread per blocco da 32, workgroup da 64. */

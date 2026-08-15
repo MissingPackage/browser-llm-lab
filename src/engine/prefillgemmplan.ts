@@ -24,6 +24,7 @@
 // `prefillQuantXQ8Wgsl` (`const BLOCKS = M*bpr`, `xq[b * 8u + i]`, `xsc[b]`) e
 // il test la riverifica CONTRO quel testo, non contro se stessa.
 import {
+  PREFILL_GEMM_ROWS_PER_WG,
   prefillGemmSplitsFor, prefillPartialFloats, prefillGemmWorkgroupStorageBytes,
   PREFILL_SPLITS_UNSPLIT, PREFILL_GEMM_KINDS, isPrefillGemmKind, prefillGemmWiring,
   type PrefillGemmKind,
@@ -223,6 +224,29 @@ function kernelVerdict(o: {
           + `PREFILL_GEMM_SPEC (kernels/wgsl.ts), e questo non lo e' — «${w.why}»`,
       };
     }
+  }
+  // N SOTTO LE RIGHE PER WORKGROUP — il predicato che mancava (goal
+  // engine-velocita-decode, riga 2d), e sta QUI perche' qui si decide la rotta.
+  //
+  // La forma split-K produce `PREFILL_GEMM_ROWS_PER_WG` righe di uscita per
+  // workgroup. Con N piu' piccolo il kernel e' comunque CORRETTO — guarda
+  // `r < N` — ma il dispatch lavora a meno di meta' workgroup e la forma non e'
+  // mai stata misurata li'. Non e' il kernel a rifiutare: e' il piano a non
+  // instradare.
+  //
+  // COSA PROTEGGE. I 48 siti `ssm_alpha`/`ssm_beta` del 4B hanno N=32. Fino a
+  // ieri erano esclusi dal flag `wired` del q8_0, cioe' PER FAMIGLIA — e quel
+  // flag e' esattamente cio' che il cablaggio del q8_0 deve girare. Girarlo
+  // senza questo controllo instraderebbe anche quei 48 siti e cambierebbe cio'
+  // che il 4B esegue oggi, in peggio. L'esclusione giusta e' sulla SHAPE: sul
+  // 35B gli stessi tensori di attn hanno N=4096 e devono passare.
+  if (o.N < PREFILL_GEMM_ROWS_PER_WG) {
+    return {
+      from: "kernel",
+      rejected: `N=${o.N} sotto le ${PREFILL_GEMM_ROWS_PER_WG} righe di uscita per workgroup della `
+        + "forma split-K: il dispatch lavorerebbe a meno di meta' workgroup e la forma non e' stata "
+        + "misurata a questa shape. Il sito resta sulla via legacy, che e' lenta e giusta",
+    };
   }
   // IL KIND CHE ARRIVA AL KERNEL E' QUELLO VERO. Prima qui c'era `o.kind as
   // "q4_0"`: una bugia innocua finche' il kernel accettava un formato solo, ma
