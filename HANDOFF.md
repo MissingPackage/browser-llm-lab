@@ -27,20 +27,40 @@ K-quant della consegna §4.2-4.4 — che il contratto aveva messo fuori scope co
 «varrebbe il 16% del token», stima NON misurata: sul numero vero vale il 93,5%.
 Il PI l'aveva gia' chiesta durante `engine-kquant`.
 
-**LE DUE RIGHE CHE VENGONO ORA:**
-- **riga 2 — la forma a gather diventa universale.** I kernel esistono e girano
-  in produzione **su GLM** (`wgsl.ts:3221`, `:3303`, `:3381`, cablati a
-  `glmmodel.ts:1368-1412`), fermi a **q4_0 e top-4** (`m * 4u` a mano a
-  `wgsl.ts:3296`, `:3351`, `:3375`). Vanno resi parametrici su `nUsed` e sui
-  K-quant, e misurati su GLM **E** 35B. Gate secco: la bit-identita' col path
-  sequenziale (il down del 35B usa `accum: true`, il contratto a slot pretende
-  che il down scriva NON pesato — consegna §4.4c).
-- **riga 2b — il raggruppamento delle richieste di I/O**, chiesto dal PI come
-  leva globale. **Misurato: 2,1x** (6,90 ms/fetch con 24 richieste concorrenti
-  in `prepLayer`, 3,27 ms con qualche centinaio nel repair; stessi byte, stesso
-  server). Va nel path condiviso `range()`/`readRange`
-  (`chat.worker.ts:62`, `q35conf.worker.ts:186`), NON nei call site del 35B, e
-  l'effetto va misurato **anche sul LOAD** di 4B/9B/GLM.
+**LA RIGA CHE MUOVE LA BARRA E' LA 2c — KFAN**, trovata in it.5 col controllo
+di fattibilita' prima di spendere. Aritmetica dal token pulito:
+
+    readbackWait                       40,753 ms/token
+    dispatch expert   (8x4+1) x 40 layer  = 1.320  ->  30,9 us l'uno
+    byte di pesi expert per token          566,2 MB -> 13,9 GB/s EFFETTIVI
+    a 576 GB/s quegli stessi byte             0,98 ms
+
+**41x sopra il pavimento di banda: il decode e' dispatch/occupancy-bound**, non
+compute ne' bandwidth. Nel decode l'asse con 8 elementi NON e' la riga, e' il
+top-K: con `wid.z = k` si passa da **1.320 a 200 dispatch/token**, occupazione
+x8. E' piccolo e verificato sul codice: `selBuf` e' gia' `array<Sel>` in storage
+e le topK entry di un (riga, layer) sono contigue, quindi il preambolo diventa
+`selBuf[moeIdx.selIdx + wid.z]` — una riga. La corsa sull'accumulo la risolve il
+contratto a slot di it.4. Il divieto `batch && arena` (`wgsl.ts:2175`, `:2360`)
+va affrontato introducendo `kfan` come modo A SE', non allentando la guardia.
+
+**ATTENZIONE — la riga 2 (gather per righe) NON muove la barra del decode**, ed
+e' stato corretto in it.5: il gather raggruppa le RIGHE di un chunk, e nel
+decode le righe sono una. Il ~2,6x della consegna §4.4 e' «per chunk da M=16»:
+e' una leva di PREFILL e di GLM. Cio' che it.3 e it.4 hanno costruito serve
+comunque tutto — il `nUsed` parametrico e' il nUsed della combine, e il
+contratto a slot e' cio' che rende possibile il collasso dei k senza corse.
+
+**LE ALTRE DUE RIGHE APERTE:**
+- **riga 2 — gather per righe.** Fatta per due terzi: `nUsed` parametrico
+  (it.3) e modo `gather` sui GEMV K-quant senza toccare l'aritmetica (it.4,
+  provato normalizzando il sorgente e chiedendo uguaglianza esatta col plain).
+  Resta il cablaggio sul prefill a chunk e la misura su GLM.
+- **riga 2b — raggruppamento delle richieste di I/O**, chiesto dal PI come leva
+  globale. **Misurato: 2,1x** (6,90 ms/fetch con 24 richieste concorrenti in
+  `prepLayer`, 3,27 ms con qualche centinaio nel repair). Va nel path condiviso
+  `range()`/`readRange` (`chat.worker.ts:62`, `q35conf.worker.ts:186`), NON nei
+  call site del 35B, e l'effetto va misurato **anche sul LOAD** di 4B/9B/GLM.
 
 **CIO' CHE LA RIGA 1 HA GIA' CONSEGNATO, e vale comunque vada il ruling:**
 il 43% del tempo di parete del 35B che non aveva un nome adesso ce l'ha.

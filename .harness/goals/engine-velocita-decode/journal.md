@@ -315,3 +315,94 @@ costruzione (caso [2]: senza `gather` il testo è quello di ieri byte per byte).
 3. **Il floor test FMA** (il rischio residuo isolato in it.3) + i casi ktest di
    indirizzamento per formato.
 4. **La misura su GLM E 35B** — la regola delle ≥ 2 famiglie.
+
+---
+
+## it.5 — FEASIBILITY: la riga 2 punta la leva giusta al bersaglio sbagliato
+
+**Nessun codice questa iterazione, e la ragione è che scriverlo sarebbe stato
+sprecato.** Il controllo di fattibilità della riga (protocollo: *feasibility
+before conformity*) ha trovato un difetto di piano.
+
+### L'aritmetica che lo dimostra
+
+Dal token pulito misurato in it.2 (`optimistic-warm`, 0 miss, 1 submit/token):
+
+    readbackWait                            40,753 ms/token
+    dispatch expert per token   (8×4 + 1) × 40 layer  = 1.320
+      → per dispatch                          30,9 µs
+    byte di pesi expert per token                566,2 MB
+      → banda implicita                         13,9 GB/s
+      → a 576 GB/s quei byte costerebbero        0,98 ms
+
+**Il decode è 41× sopra il pavimento di banda, e non è né compute-bound né
+bandwidth-bound: è dispatch/occupancy-bound.** 1.320 GEMV minuscole in un
+submit solo, ~31 µs l'una, 13,9 GB/s effettivi su una scheda da 576. Coincide
+col reperto già in casa (consegna §3.3: «32-64 workgroup su 128 SM: fame di
+parallelismo», banda efficace misurata 17,2 GB/s).
+
+### Il difetto: il gather per RIGHE non tocca il decode
+
+La forma a gather raggruppa **le righe di un chunk** per expert: un dispatch per
+expert sulle sole righe che lo selezionano. **Nel decode le righe sono UNA.**
+Con M=1 l'unione è 8 expert con una riga ciascuno ⇒ **8 dispatch per (layer,
+op), esattamente quanti sono adesso. Guadagno zero.**
+
+E infatti il ~2,6× della consegna §4.4 è calcolato «per layer e per chunk da
+M=16»: **è una leva di PREFILL.** La barra di questo goal è sul DECODE. La riga
+2 chiama la forma a gather «la leva sul 93,5%» — l'intenzione è giusta, il
+meccanismo descritto no.
+
+### La leva che invece lo tocca: collassare i k, non le righe
+
+Nel decode l'asse con 8 elementi non è la riga, è **il top-K**. Oggi
+`encodeExperts` (`q35gpumodel.ts:2099-2108`) fa `for k2 = 0..8` e dispaccia
+gate/up/silu/down per ciascuno. Collassando i k in **un** dispatch con
+`wid.z = k`: **1.320 → 200 dispatch per token**, e l'occupazione per dispatch
+×8.
+
+**È piccolo, ed è verificato sul codice:**
+1. `selBuf` è già `array<Sel>` in storage, indicizzato da `moeIdx.selIdx`
+   (`arenaSlotWgsl`, `wgsl.ts:3090`);
+2. le `topK` entry di un (riga, layer) sono **contigue**:
+   `selIdx = (row*nMoeLayer + m)*topK + k` (`q35gpumodel.ts:1377`);
+3. ⇒ il preambolo diventa `selBuf[moeIdx.selIdx + wid.z]`. **Una riga.**
+4. La corsa sull'accumulo (8 down che fanno `y[r] += w·partial` insieme) si
+   risolve con **il contratto a slot di it.4**: ogni k scrive il suo slot,
+   `moeCombineWgsl` somma in ordine k — e a M=1 con `nUsed=8` è *esattamente*
+   la catena di somme del decode di oggi, quindi **bit-identica per
+   costruzione**, non "attesa identica".
+
+**Ciò che it.3 e it.4 hanno costruito serve tutto**, e non per fortuna: il
+`nUsed` parametrico è il `nUsed=8` della combine, e il contratto a slot è ciò
+che rende il collasso possibile senza corse. Cambia il bersaglio del prossimo
+passo, non le fondamenta.
+
+**L'ostacolo dichiarato**: il divieto `batch && arena`
+(`wgsl.ts:2175`, `:2360`). Il collasso usa `wid.z` in regime d'arena, che è la
+combinazione vietata. La consegna §4.2.4 lo aveva previsto: «va **rimosso con
+una ragione scritta**, non aggirato: oggi è corretto perché protegge da una
+combinazione che nessuno ha misurato». La ragione scritta ora c'è, ed è questa
+sezione. *Nota: il divieto resta giusto per `batch` (righe) + arena — è il modo
+`kfan` (k su wid.z) a essere legittimo, e va introdotto come modo A SÉ invece
+che allentando la guardia esistente.*
+
+### La correzione di piano, presa e registrata (meccanismo: è mia)
+
+La riga 2 si sdoppia. La barra, i done-when e la regola delle ≥ 2 famiglie non
+cambiano — cambia quale meccanismo attacca quale metrica:
+
+- **2 (gather per righe)** — il PREFILL a chunk e il GLM. Fatto per due terzi
+  (it.3, it.4). **Non muove la barra**, e va detto nel consuntivo invece di
+  lasciarlo credere.
+- **2c (kfan: collasso dei k)** — **è questa che muove la barra del decode.**
+  1.320 → 200 dispatch/token. Vale su ogni famiglia MoE in regime d'arena: il
+  GLM fa `gemvAccumFast` k=0..3, stessa struttura ⇒ le ≥ 2 famiglie ci sono.
+
+*Terza inferenza non verificata smontata in questo goal, e stavolta prima di
+spenderci: i 21,1 ms, il «16%», il conflitto accum/slot — e ora «il gather è la
+leva del decode». Il correttivo è sempre lo stesso: l'aritmetica sui numeri
+misurati, prima del codice.*
+
+**EVIDENZA**: nessun test nuovo (nessun codice). `vitest` 1043 passed e `tsc`
+exit 0 restano quelli di it.4, albero invariato.
