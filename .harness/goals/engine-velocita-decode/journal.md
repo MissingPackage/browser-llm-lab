@@ -1136,3 +1136,79 @@ misurato — ma il decode non passa ancora dal piano, che è il pezzo dopo.
    porta il valore sulla barra, ed è quello globale: una sede, tre famiglie.
 2. La misura: TTFT del 4B (non deve regredire: i 48 siti restano legacy) e il
    decode del 35B.
+
+---
+
+## it.17 — due correzioni al modello, e il re-plan della riga 2d
+
+### (1) `gemvB` NON è il path del decode — e l'errore era nella mia consegna
+
+La consegna di it.16 diceva: «far uscire la rotta dal ramo condizionato al
+prefill in `gemvB`, così che anche il decode chieda al piano». **Sbagliato.**
+`loadW` restituisce due emettitori distinti (`q35gpumodel.ts:501-523`):
+
+    push  → gemv(...)    il DECODE      (`:862-868`, sei righe)
+    pushB → gemvB(...)   il PREFILL     (`:900+`, dove sta la rotta veloce)
+
+`gemvB` **è** il path di prefill: il decode non ci passa affatto. Non c'è nessun
+ramo da aprire — c'è una rotta da costruire in un'altra funzione.
+
+*Quinta inferenza non verificata di questo goal, e la prima che ho scritto io
+nella consegna di me stesso.* Le altre quattro: i 21,1 ms, il «16%», i «due
+contratti diversi», i 30,9 µs per dispatch.
+
+### (2) Il 3,26× è misurato contro un kernel che NON è quello del decode
+
+Il banco confronta `splitk-idot` con `base-batch-z`, cioè
+`gemvQuantWgsl({kind:"q8_0", batch:true})`. Il decode emette
+`gemvQuantWgsl({kind:"q8_0", K, N, hasBias:false})` — **senza `batch`**, e senza
+il `vec4Rows2` che `gemv` accende solo per il q4_0 (`:864`).
+
+A M=1 le due forme fanno lavoro quasi identico, ed è plausibile che il rapporto
+regga. **«Plausibile» è esattamente la parola che in questo goal è già costata
+quattro volte.** Il guadagno del decode va misurato contro ciò che il decode
+emette davvero, non contro il braccio del banco.
+
+### Cosa invece è ESATTO adesso: le shape, derivate dal sorgente
+
+`q35shape.ts:86-89` + `meta` dell'header dump (`inner_size` 4096,
+`time_step_rank` 32, `state_size` 128, `group_count` 16), K = dModel = 2048:
+
+    attn_qkv    N = (2·16 + 32)·128 = 8192   AMMESSO    66,32% dei pesi
+    attn_gate   N = inner_size      = 4096   AMMESSO    33,16%
+    ssm_beta    N = time_step_rank  =   32   ESCLUSO     0,26%
+    ssm_alpha   N = time_step_rank  =   32   ESCLUSO     0,26%
+                                             ammessi:   99,48%
+
+**Due reperti:**
+1. **Anche il 35B ha `ssm_alpha`/`ssm_beta` a N=32**, come il 4B. Il predicato
+   di it.14 non protegge una peculiarità di un modello: protegge **quella
+   coppia di tensori in questa architettura**, ovunque compaia. È la forma più
+   forte che il ruling del PI potesse avere — un predicato costruito una volta
+   che serve tutte le famiglie perché guarda la geometria, non il nome.
+2. **I due ammessi sono il 99,48% dei pesi dei quattro.** Coprirli cattura
+   praticamente tutto `ssmGemv`.
+
+### Il costo vero del passo che resta
+
+Dare al decode la via veloce non è spostare un `if`. `gemv` emette **un**
+dispatch; la forma split-K ne vuole **tre** (quantizza x → GEMM a fette →
+combine) e due buffer che nel decode non esistono: le parziali (N × fette
+float) e la x quantizzata. Più il piano interrogato a M=1.
+
+### RE-PLAN — la riga 2d ha superato la stima, e il protocollo dice di presentarlo
+
+Stima 2-3 iterazioni, **cinque consumate**. Cosa hanno prodotto, tutto in albero
+e verde:
+
+    it.13  la verifica di riuso: il kernel esiste, non va scritto
+    it.14  il predicato su N in `kernelVerdict`, con i suoi casi
+    it.15  il reperto: il flag e' difeso da 11 test
+    it.16  q8_0 cablato, 11 test aggiornati e tre resi piu' stringenti
+    it.17  le shape esatte, e due correzioni al modello
+
+**Ma il valore atterrato finora è sul PREFILL del 35B**, che questo goal ha
+dichiarato fuori scope. La barra è sul decode, e il decode non è stato toccato.
+
+**EVIDENZA**: nessun codice. `vitest` 1074 passed | 10 skipped e `tsc` exit 0
+restano quelli di it.16, albero invariato.
