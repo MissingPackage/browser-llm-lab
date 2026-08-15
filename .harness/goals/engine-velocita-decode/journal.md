@@ -714,3 +714,81 @@ sono i due fallimenti, tenuti perché sono l'evidenza dei due bug).
 2. **La misura su GLM** — la regola delle ≥ 2 famiglie non è ancora soddisfatta.
 3. Casi ktest di indirizzamento e floor test FMA.
 4. La misura di chiusura a contesto lungo: questi 39 token sono lo smoke.
+
+---
+
+## it.10 — la ripartizione per categoria, PER BRACCIO: il primo termine non è più l'expert
+
+### Prima la strumentazione, perché l'aggregato non bastava
+
+Il primo run `--gpu-time` ha dato una ripartizione **cumulativa su tutto il
+processo**, che mescola kfan-off e kfan-on: attribuire lo split sarebbe stata la
+quinta divisione spacciata per misura di questo goal. `gpuTimeStats()` è
+cumulativo come `perf` e `moeStats`, quindi si snapshotta prima/dopo ogni
+passata e si differenzia — 15 righe nel worker, e il braccio si legge invece di
+stimarlo.
+
+### La misura (ms per token, sonda accesa — PERTURBA e va dichiarato)
+
+    categoria     kfan OFF   kfan ON    delta
+    expert          8,951     5,151     −3,800
+    ssmGemv         7,767     6,980     −0,787
+    router          3,221     2,883     −0,338
+    attn            2,823     2,537
+    shexp           2,380     2,156
+    ssmOut          2,281     2,046
+    tail            1,444     1,276
+    routerGemv      0,702     0,660
+    ssmRec          0,596     0,553
+    norm            0,435     0,400
+    resid           0,229     0,214
+    static          0,047     0,045
+    TOT GPU nei pass 30,878   24,902    −5,976
+    ms/token (sonda) 47,455   37,005    −10,450
+    gate: argmax 39/39 IDENTICI
+
+**`ssmGemv` è il primo termine del decode del 35B: 6,98 ms contro i 5,15
+dell'expert.** Non è MoE — è la proiezione DeltaNet, e ce l'hanno anche il 4B e
+il 9B. Chi cerca ancora velocità nel MoE lavora sul secondo termine.
+
+Due letture accanto:
+- **La sonda costa**: 47,46 ms/token contro i 44,29 senza. Il rapporto fra i
+  bracci regge (1,283 contro 1,280), il valore assoluto no.
+- **GPU nei pass 24,9 su ~34,6 ms di parete = 72%**; il 28% resta fuori.
+  Il kfan ha tolto 5,98 ms di GPU ma 10,45 di parete: **la metà del guadagno è
+  CPU** — 1.120 dispatch in meno sono anche 1.120 encode in meno.
+- **`router` 2,88 ms/token per scegliere 8 expert su 256**, 40 pass per token =
+  72 µs a layer per una riduzione minuscola. Sproporzionato, e non l'ho toccato.
+
+### Dove siamo rispetto alla barra
+
+    28,90 tok/s misurati (senza sonda)  ·  barra 30 = 33,33 ms/token
+    mancano 1,27 ms/token
+
+### DECISIONE PRESA, non escalata: la riga 2c si chiude come «leva atterrata», e il prossimo passo è una riga NUOVA
+
+Cosa farei se nessuno rispondesse: questo. Il kfan ha fatto il suo — 1,28x,
+gate verde, e ha spostato il primo termine. Spremere altri 1,27 ms **dal MoE**
+significherebbe lavorare sul secondo termine mentre il primo sta lì: è
+esattamente l'errore che il PI ha corretto (leve globali, Pareto).
+
+Le due candidate, e sono entrambe **globali per costruzione** — il che soddisfa
+la regola delle ≥ 2 famiglie senza sforzarla:
+1. **`ssmGemv` (6,98 ms, primo termine)**: la proiezione DeltaNet del decode.
+   4B, 9B e 35B ce l'hanno tutti. *NB: `engine-kquant` ha ottimizzato
+   `gemm:deltanet-out` nel PREFILL; questo è il GEMV del decode, path diverso.*
+2. **`router` (2,88 ms)**: 72 µs a layer per un top-8 su 256. Il rapporto fra
+   lavoro e tempo è talmente fuori scala che vale un'occhiata prima di
+   progettare qualsiasi cosa.
+
+### Cosa resta APERTO della riga 2c, e non va dimenticato
+
+**La regola delle ≥ 2 famiglie NON è soddisfatta**: il kfan è cablato solo in
+`q35gpumodel.ts`. Il GLM fa `gemvAccumFast` k=0..3 — stessa struttura, stesso
+collasso possibile — ma non è cablato e non è misurato. Finché non lo è, la
+riga 2c ha una leva misurata su UNA famiglia sola, che è precisamente ciò che il
+ruling del PI vieta.
+
+**EVIDENZA**: `npx vitest run` **1069 passed | 10 skipped** · `npx tsc --noEmit`
+exit 0 · due run GPU su host quiescente
+(`q35-kfan-gputime-2026-08-15{,b}.json`).

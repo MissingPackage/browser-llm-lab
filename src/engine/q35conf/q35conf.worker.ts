@@ -104,6 +104,7 @@ const pass2json = (
   r: {
     submits: number; readbacks: number; hits: number; misses: number; ms: number;
     dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
+    gpuCat: Record<string, { ms: number; n: number }> | null;
     fetchRepairMs: number; fetchRepairCalls: number; fetchRepairBytes: number;
     fetchPrepMs: number; fetchPrepCalls: number;
     replayPassMs: number; flushMs: number;
@@ -133,6 +134,13 @@ const pass2json = (
     accountingMs: r.tailCpuMs - r.repairMs - r.replayPassMs,
     namedFrac: r.tailCpuMs > 0 ? (r.repairMs + r.replayPassMs) / r.tailCpuMs : null,
   },
+  // ripartizione GPU per categoria DI QUESTA PASSATA, ms per token, ordinata
+  // dal termine piu' grosso: e' la risposta a «quale termine e' primo adesso»
+  gpuCat: r.gpuCat
+    ? Object.fromEntries(Object.entries(r.gpuCat)
+      .map(([k2, v2]) => [k2, { msPerToken: v2.ms / n, dispatchPerToken: v2.n / n }])
+      .sort((a, b) => (b[1] as { msPerToken: number }).msPerToken - (a[1] as { msPerToken: number }).msPerToken))
+    : null,
   // FASE 4-TER: il token fuori dai pass GPU, per voce e per token
   cpu: {
     encodeMs: r.encodeMs / n, embedMs: r.embedMs / n, argmaxMs: r.argmaxMs / n,
@@ -533,6 +541,7 @@ async function main(cfg: Cfg): Promise<void> {
       replayPassMs: number; flushMs: number;
       encodeMs: number; embedMs: number; argmaxMs: number; tailCpuMs: number;
       readbackMs: number; tokenMs: number;
+      gpuCat: Record<string, { ms: number; n: number }> | null;
     }> => {
       model.resetState();
       model.setOptimistic(optimistic);
@@ -541,6 +550,13 @@ async function main(cfg: Cfg): Promise<void> {
       // gli host.
       model.setKfan(kfan);
       const p0 = model.perf(), m0 = model.moeStats!();
+      // gpuTime per PASSATA (goal engine-velocita-decode, it.10): i contatori
+      // sono cumulativi come `perf` e `moeStats`, quindi il braccio si ottiene
+      // per differenza. Senza, l'aggregato di fine run mescola kfan-off e
+      // kfan-on e la ripartizione per categoria non si puo' attribuire — e
+      // dedurre lo split sarebbe la quinta divisione spacciata per misura di
+      // questo goal.
+      const g0 = model.gpuTimeStats ? model.gpuTimeStats() : null;
       const t = performance.now();
       const argmax: number[] = [];
       // Un token SPORCO fa alzare `step` (degrado definito, I2: non si campiona
@@ -560,6 +576,13 @@ async function main(cfg: Cfg): Promise<void> {
       }
       const ms = performance.now() - t;
       const p1 = model.perf(), m1 = model.moeStats!();
+      const g1 = model.gpuTimeStats ? model.gpuTimeStats() : null;
+      const gpuCat: Record<string, { ms: number; n: number }> | null = g0 && g1
+        ? Object.fromEntries(Object.entries(g1.byCat).map(([k2, v2]) => {
+          const a = g0.byCat[k2] ?? { ms: 0, n: 0 };
+          return [k2, { ms: v2.ms - a.ms, n: v2.n - a.n }];
+        }).filter(([, v2]) => (v2 as { n: number }).n > 0))
+        : null;
       // routing della PASSATA = cumulativo dopo meno cumulativo prima: la
       // struttura è la stessa del gate di it.14, dove il numero che porta il
       // peso è l'istogramma chiave per chiave e non il top-1.
@@ -582,6 +605,7 @@ async function main(cfg: Cfg): Promise<void> {
         encodeMs: p1.encodeMs - p0.encodeMs, embedMs: p1.embedMs - p0.embedMs,
         argmaxMs: p1.argmaxMs - p0.argmaxMs, tailCpuMs: p1.tailCpuMs - p0.tailCpuMs,
         readbackMs: p1.readbackMs - p0.readbackMs, tokenMs: p1.tokenMs - p0.tokenMs,
+        gpuCat,
       };
     };
     // TRE passate, non due. La prima è FREDDA per forza (la cache parte vuota)
