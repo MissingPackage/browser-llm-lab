@@ -884,3 +884,82 @@ piu' calcolo. E' il fatto che la riga 7 deve consegnare al goal successivo
 insieme a `deltanet:recurrence`.
 
 **RIGA 6 CHIUSA. Resta solo la riga 7: il consuntivo.**
+
+## it.11 — RIGA 7 CHIUSA, E IL CONSUNTIVO HA TROVATO DUE DIFETTI (2026-08-15)
+
+Il consuntivo (`docs/engine/kquant-consuntivo-2026-08-15.md`, 589 righe, nove
+sezioni) e' stato scritto leggendo **il codice e gli artefatti**, non il journal
+— ed e' per questo che ha trovato due cose che dieci iterazioni non avevano
+visto. Le ho chiuse entrambe invece di lasciarle scritte: **si sistema, non si
+recinta**, e chiudere un goal su una clausola «soddisfatta in parte» sarebbe
+stato esattamente il difetto che quel ruling vieta.
+
+### Difetto 1 — la clausola di PORTABILITA' era soddisfatta a meta', e su un formato CABLATO
+
+Il contratto chiede che il fabbisogno di workgroup storage di **ogni** kernel
+nuovo entri nel `Math.max` CALCOLATO. Nel `Math.max` di `engineNeeds` entravano
+**due termini scritti a mano** — q4_0 e q5_K — mentre i kind del prefill erano
+diventati sei. **Il q4_1, cablato e in produzione dalla riga 3, non aveva un
+termine proprio**; non l'avevano i tre formati del 35B.
+
+Non rompeva niente e il numero lo dice: il massimo resta dominato da
+`QWEN_WORKGROUP_STORAGE_BYTES = 30.848` (path fuso 0.5B) contro i 5.632 del
+termine piu' alto. **Ma la soglia mentiva**: il termine q5_K e' pinnato nei test
+perche' sfonda a **M=97**, mentre il **q6_K (352·M) sfonda a M=88** — prima — e
+nessun test se ne sarebbe accorto, perche' quel termine nel massimo non entrava.
+Innocuo finche' i tre sono `wired: false`; il giorno del cablaggio non piu'.
+
+**Chiuso col meccanismo, non con un termine in piu' a mano**: i termini vengono
+da `PREFILL_GEMM_KINDS`, con le shape in un
+`Record<PrefillGemmKind, (M) => PrefillGemmOpts>` — la stessa garanzia di
+`PREFILL_GEMM_SPEC`, cioe' chi allunga l'elenco senza scrivere la shape ottiene
+un errore di compilazione invece di un tetto sbagliato in silenzio. Le shape
+sono quelle VERE, e sono le stesse dei casi ktest: le sole misurate.
+
+**I nove test rossi che ne sono usciti li ho riscritti sulla verita' nuova, non
+aggirati**: la soglia M=97 resta come proprieta' della formula del q5_K, e il
+valore negoziato lo alza il termine piu' ripido — il q6_K a M=88. Piu' un gate
+nuovo: **ogni** kind dell'elenco ha il suo termine nel `consumer`, e il valore e'
+il loro massimo. Cosi' il difetto non si ripete col settimo formato.
+`tests/gpulimits.test.ts`: **38 test verdi**.
+
+### Difetto 2 — il checkpoint si auto-attribuiva a DUE goal diversi
+
+`goal: "engine-ttft"` e la sua `phase` erano **costanti incise nel builder**,
+mentre `metrica.goal` leggeva gia' correttamente `engine-kquant`. Due campi che
+si contraddicono nello stesso file: chi legge il primo accredita questo
+risultato al goal sbagliato.
+
+**E' il residuo esatto della malattia curata in it.9 nel blocco ACCANTO** —
+baseline e barra di engine-ttft incise nel builder, che avrebbero pubblicato una
+discesa di 5,108x mescolando due contratti. it.9 aveva spostato quei due nel
+ratchet e lasciato questi due. Ora anche `goal` e `phase` vengono da
+`contratto.goal` / `contratto.fase`: **il builder non incide piu' nessun nome di
+goal.** Checkpoint ricostruito e verificato.
+
+### Il gate rifatto, perche' l'albero e' cambiato dopo averlo dichiarato verde
+
+Le due correzioni toccano codice di produzione (`gpulimits.ts`) DOPO che la riga
+6 aveva dichiarato il gate di merge verde. Chiudere il goal su quel gate sarebbe
+stato chiuderlo su un gate stantio, che e' la stessa forma dei byte ricopiati.
+**Ktest rieseguito sull'albero finale: 111 PASS / 0 FAIL.** Suite: **1019 passed
+| 10 skipped** (erano 1017: -1 test riscritto, +3 nuovi), `tsc` exit 0.
+
+### Cosa il consuntivo dice che il journal non diceva
+
+- **I quindici segmenti NON toccati dalla leva sono cresciuti del 4-8%, tutti
+  nello stesso verso.** Ne' journal ne' digest lo nominavano. Non e' attribuito
+  (run diverse, sonda perturbante, totali per-chunk x395) ma rende **non
+  interpretabili** le differenze piccole della tabella prima/dopo — mentre le due
+  che contano (-95,3% e -71,6%) stanno un ordine di grandezza fuori da quella
+  deriva. Scritto nel consuntivo perche' chi legge la tabella non ci caschi.
+- **La tabella di it.2 e' superata e non era marcata tale**: dava il q6_K
+  `[512,2048]` a 5,36x, l'artefatto finale di it.3 da' **6,13x** — il braccio
+  legacy e' cambiato di 3x fra le due run. it.3 supersede it.2; chi legge solo
+  it.2 prende il numero sbagliato.
+- **I byte "prima" di `ffn-down` sono derivati, non misurati**: il checkpoint del
+  14 agosto pubblicava due sole categorie di banda, quindi i 520,9 GB vengono
+  dall'aritmetica del contratto — che usa **396 chunk invece di 395**, da cui
+  373,7 GB contro i 372,8 a 395. Marcato "derivata" nel documento.
+
+**RIGA 7 CHIUSA. GOAL `engine-kquant` CHIUSO su tutte e sette le righe.**

@@ -2,71 +2,82 @@
 
 ## 1. Next decidable
 
-**GOAL ATTIVO: `engine-kquant`. Righe 1-6 CHIUSE. LE BARRE SONO PASSATE E IL
-GATE DI MERGE E' VERDE. RESTA SOLO LA RIGA 7: il consuntivo.**
-Chartered 2026-08-14. `.harness/goals/engine-kquant/{GOAL.md,PHASES.md}`.
+**GOAL `engine-kquant` CHIUSO — tutte e sette le righe, il 2026-08-15.**
+Nessun goal attivo. La prossima decisione e' del PI: quale goal chartare.
 
-**IL RISULTATO DEL GOAL, MISURATO** (riga 5, it.9):
+**IL RISULTATO, MISURATO:**
 
     TTFT a caldo   32.127 -> 17.153 ms   = 1,873x
     barra 22.500   PASSATA · nice-to-have 18.000  PASSATO
     prefill        197,25 -> 369,72 tok/s
     gemm:deltanet-out  12.169 -> 572,8 ms      (barra 2.000)
-    gemm:ffn-down       4.971 -> 1.413,4 ms    (barra 2.000; 1.187,6 + 225,8 q41)
+    gemm:ffn-down       4.971 -> 1.413,4 ms    (barra 2.000)
 
-La proiezione del micro-banco (~16,9 s) ha sbagliato dell'**1,5%**.
+La proiezione del micro-banco di fase 0 (~16,9 s) ha sbagliato dell'**1,5%**.
 
-**IL GATE DI MERGE, tutto misurato su questo albero** (riga 6, it.10):
+**IL GATE DI MERGE, rifatto sull'albero FINALE** (dopo le correzioni di it.11):
 
     ktest                      111 PASS / 0 FAIL
-    top-1 braccio sequenziale  1012/1024 = 98,828%   (barra >= 1012)
-    top-1 braccio a chunk      1012/1024 = 98,828%
+    top-1 vs oracolo           1012/1024 su ENTRAMBI i bracci
     sequenze generate          8/8 IDENTICHE, zero token di differenza
-    decode 4B a ctx 6333       47,06 tok/s           (barra 45,5)
-    vitest                     1017 passed | 10 skipped, exit 0
-    tsc                        exit 0
+    decode 4B a ctx 6333       47,06 tok/s   (barra 45,5)
+    vitest 1019 passed | 10 skipped · tsc exit 0
 
-**LA RIGA 7 E' L'ULTIMA**: `docs/engine/kquant-consuntivo-2026-08-15.md` voce
-per voce con l'artefatto accanto a ogni clausola del DONE WHEN, la nuova
-ripartizione del tempo per segmento, e il termine che diventa primo **nominato
-con la sua misura fresca**. Piu' `GLOSSARY.md` coi termini coniati (`wired` /
-`wiredWhy`, la separazione misurato-vs-cablato). Poi merge, e la potatura dei
-35 worktree in `.claude/worktrees` (1,2 GB) che il PI ha chiesto a goal chiuso.
+Consuntivo: `docs/engine/kquant-consuntivo-2026-08-15.md` (589 righe, clausola
+per clausola). Consegna al goal successivo:
+`docs/engine/kquant-consegna-35b-2026-08-15.md` (423 righe).
 
 **IL TERMINE CHE E' DIVENTATO PRIMO**: `deltanet:recurrence`, **1.732,1 ms** =
-10,11% del prefill. E accanto va il fatto piu' grande: **GPU nei pass 46,5%,
-fuori 53,5%** — piu' della meta' del prefill non e' piu' calcolo. Il goal
-successivo che volesse ancora TTFT non lo trova nei kernel.
+10,11% del prefill. E il fatto piu' grande accanto: **GPU nei pass 46,5%, fuori
+53,5%** — piu' della meta' del prefill non e' piu' calcolo. **Un goal che
+volesse ancora TTFT non lo trova nei kernel.**
 
-**UNA CLAUSOLA E' STATA INTERPRETATA, ed e' registrata**: il contratto chiede il
-GLM b12 «entro +-5%» di 13,172 / 31,26 / 14,74; il misurato sta FUORI da tutte e
-tre le parti **in meglio** (15,330 / 37,542 / 12.279). Letta come banda di
-RUMORE per la non-regressione, non come requisito a due code. **Non e' una
-vittoria di questo goal**: host diverso (riferimento `user-session-light`, run
-`quiescent`) e il decode +16,4% non e' spiegabile da questo lavoro — a M=1 la
-forma multi-riga perde ed e' esclusa dal decode per costruzione.
+## 2. Cosa il goal consegna a chi viene dopo
 
-Comandi — **tutti eseguiti come stanno scritti**:
+**LE DUE TRAPPOLE, scritte perche' non si paghino due volte:**
+1. **Il flag `wired` e' per FORMATO, non per shape.** Q4_K, Q6_K e Q8_0 sono
+   portati e verificati su GPU vera ma NON cablati. Il giorno in cui il goal 35B
+   accendera' `q8_0` per i suoi tensori attn (N=4096), i **48 siti
+   `ssm_alpha`/`ssm_beta` del 4B con N=32** entrerebbero nello stesso istante,
+   perche' `prefillGemmCheck` guarda kind, K e fette ma **non N**. Serve un
+   predicato sulla shape PRIMA di girare quel flag.
+2. **Il prefill del 35B NON gira su `moeprefillplan.ts`** (refuso del contratto
+   corretto in it.8): `planMoeChunk` ha un solo consumatore di produzione,
+   `glmmodel.ts:1368`, che e' il GLM. Il 35B ripete per riga la catena del
+   DECODE (`q35gpumodel.ts:2743-2778`): 40 round-trip di readback per chunk, 512
+   dispatch per layer. Il piano CPU-side e' gia' parametrico su
+   `{nExpert, nExpertUsed}` e regge `{256, 8}`: **il lavoro e' quel ramo `moe`.**
+
+**IL COLLO DEL 35B NON E' IL KERNEL, E' LA RESIDENCY**: 19,45 GiB di modello
+contro ~16 GB di scheda, expert Q4_K 17.666.408.448 B.
+
+**LA REGOLA CHE IL 15 AGOSTO HA COMPRATO A CARO PREZZO** (tre difetti, una sola
+malattia — trattare un comando come documentazione invece che come codice):
+**un comando lasciato per la ripresa si esegue come sta scritto prima di
+lasciarlo, e i flag di un runner si leggono dal SORGENTE, mai eseguendolo.**
+- `BASE_URL` mancante nel comando di ripresa dell'HANDOFF (il ktest di default
+  parla alla 5173);
+- `--prefill-m 16` mancante nel comando di evidenza del contratto (default
+  `null` ⇒ prefill SEQUENZIALE: 91.230 ms invece di 17.126, una run buttata);
+- un `--help` dato a un runner che non lo conosce, che ha eseguito il bench coi
+  default **e ucciso una run di conformita' in corso**.
+E `--conf-prefill-m` NON e' `--prefill-m` (quest'ultimo esce al gate dei due
+bracci senza arrivare al replay golden); `--prefill-batch` del GLM e' un
+BOOLEANO 0/1, non una M.
+
+Comandi, tutti eseguiti come stanno scritti:
 
     setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
     BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs   # 111 PASS / 0 FAIL
     node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --prefill-m 16 --declared quiescent
-    node scripts/q35-conf-run.mjs --out results/engine/<seq>.json                    # braccio sequenziale
+    node scripts/q35-conf-run.mjs --out results/engine/<seq>.json
     node scripts/q35-conf-run.mjs --conf-prefill-m 16 --out results/engine/<chunk>.json
     node scripts/glm-bench-run.mjs --prompt 6 --ngen 64 --reps 3 --budget-gib 12 --select optimistic --prefill-batch 1 --host-state quiescent --out results/engine/<glm>.json
     node scripts/build-ttft-checkpoint.mjs <bench.json> <segmenti.json> <out.json> --ratchet <ratchet.json>
 
-**TRE FLAG NON OPZIONALI, E LA REGOLA CHE NE ESCE.** `BASE_URL` sul ktest
-(default 5173); `--prefill-m 16` sul bench (default `null` ⇒ prefill
-SEQUENZIALE, 91.230 ms invece di 17.126); `--conf-prefill-m` sul conf, che NON
-e' `--prefill-m` (quest'ultimo esce al gate dei due bracci senza arrivare al
-replay golden). E `--prefill-batch` del GLM e' un BOOLEANO 0/1, non una M.
-**La regola: un comando lasciato per la ripresa si esegue come sta scritto prima
-di lasciarlo, e i flag di un runner si leggono dal SORGENTE — mai eseguendolo.**
-Il 15 agosto questo progetto ha pagato tre volte lo stesso conto: `BASE_URL`
-mancante nell'HANDOFF, `--prefill-m` mancante nel contratto, e un `--help` dato
-a un runner che non lo conosce — che ha eseguito il bench coi default e ucciso
-una run di conformita' in corso.
+**IN SOSPESO PER IL PI**: la potatura dei 35 worktree in `.claude/worktrees`
+(1,2 GB) — chiesta a goal chiuso, non ancora eseguita perche' e' una
+cancellazione.
 
 **IL REPERTO DA NON PERDERE**: la guardia doppia del cablaggio
 (`route.via !== "legacy" && kk === "<formato>"`) **ha intercettato un caso

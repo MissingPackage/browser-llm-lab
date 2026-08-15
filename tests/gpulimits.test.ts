@@ -8,7 +8,7 @@
 // massimo dell'adapter chiesto senza consumatore).
 import {
   attnDecodeWgsl, attnDecodeLegacyBatchWgsl, attnDecodeWorkgroupStorageBytes, attnPrefillChunkWgsl,
-  prefillGemmWorkgroupStorageBytes,
+  prefillGemmWorkgroupStorageBytes, PREFILL_GEMM_KINDS,
   qwenFusedChunkWorkgroupStorageBytes, qwenGemvResidualWorkgroupStorageBytes,
 } from "../src/engine/kernels/wgsl";
 import { PREFILL_M, PREFILL_M_DENSE05B } from "../src/engine/prefillplan";
@@ -364,7 +364,7 @@ describe("workgroup storage: il GEMM multi-riga del prefill", () => {
   const GEMM = (M: number) => ({ kind: "q4_0" as const, K: 2560, N: 9216, M, splits: 4 });
   // il termine come lo dichiara il consumer: LETTO dal testo, non dedotto
   const gemmTerm = (consumer: string): { M: number; via: string; bytes: number } => {
-    const m = /prefillGemm splitK M=(\d+) \(([^)]+)\) = (\d+) B/.exec(consumer);
+    const m = /prefillGemm q4_0 splitK M=(\d+) \(([^)]+)\) = (\d+) B/.exec(consumer);
     if (!m) throw new Error(`il consumer non nomina il GEMM del prefill: ${consumer}`);
     return { M: Number(m[1]), via: m[2], bytes: Number(m[3]) };
   };
@@ -595,13 +595,19 @@ describe("workgroup storage: il GEMM q5_K del prefill (ssm_out)", () => {
   const Q5K = (M: number) => ({ kind: "q5_K" as const, K: 4096, N: 2560, M, splits: 4 });
   /** il termine q5_K come lo dichiara il consumer: LETTO dal testo, non dedotto */
   const q5kTerm = (consumer: string): { M: number; via: string; bytes: number } => {
-    const m = /prefillGemmQ5K \(ssm_out\) splitK M=(\d+) \(([^)]+)\) = (\d+) B/.exec(consumer);
+    const m = /prefillGemm q5_K splitK M=(\d+) \(([^)]+)\) = (\d+) B/.exec(consumer);
     if (!m) throw new Error(`il consumer non nomina il GEMM q5_K del prefill: ${consumer}`);
     return { M: Number(m[1]), via: m[2], bytes: Number(m[3]) };
   };
+  /** il termine di UN kind qualsiasi, letto dal testo del consumer */
+  const kindTerm = (consumer: string, kind: string): number => {
+    const m = new RegExp(`prefillGemm ${kind} splitK M=\\d+ \\([^)]+\\) = (\\d+) B`).exec(consumer);
+    if (!m) throw new Error(`il consumer non nomina il GEMM ${kind}: ${consumer}`);
+    return Number(m[1]);
+  };
   // il termine q4_0, per verificare che i due convivano senza confondersi
   const gemmQ4Term = (consumer: string): number => {
-    const m = /prefillGemm splitK M=(\d+) \(([^)]+)\) = (\d+) B/.exec(consumer);
+    const m = /prefillGemm q4_0 splitK M=(\d+) \(([^)]+)\) = (\d+) B/.exec(consumer);
     if (!m) throw new Error(`il consumer non nomina il GEMM q4_0 del prefill: ${consumer}`);
     return Number(m[3]);
   };
@@ -620,7 +626,7 @@ describe("workgroup storage: il GEMM q5_K del prefill (ssm_out)", () => {
   // esattamente quello che la formula produce — per ogni via e per ogni M.
   it("il need NOMINA il GEMM q5_K col valore della formula, e segue M e la via", () => {
     const need = storageNeed({ ctxMax: 6400 });
-    expect(need.consumer).toContain("prefillGemmQ5K");
+    expect(need.consumer).toContain("prefillGemm q5_K");
     expect(q5kTerm(need.consumer)).toEqual({
       M: PREFILL_M, via: "peggiore fra idot e f32",
       bytes: prefillGemmWorkgroupStorageBytes(Q5K(PREFILL_M)),
@@ -661,26 +667,42 @@ describe("workgroup storage: il GEMM q5_K del prefill (ssm_out)", () => {
       .toBeLessThan(QWEN_WORKGROUP_STORAGE_BYTES);
   });
 
-  // (d) la soglia in cui lo ALZEREBBE, pinnata come per il q4_0
-  // (GEMM(121)/GEMM(120)): il termine q5_K e' piu' ripido, quindi sfonda prima.
-  it("il termine entra nel value negoziato: soglia a M=97 (a 96 no)", () => {
+  // (d) LA SOGLIA NON E' PIU' QUELLA DEL q5_K, e il perche' e' il senso di
+  // questo blocco dopo la riga 7 di engine-kquant. Il q5_K sfonda il tetto a
+  // M=97 (320·97 = 31.040 > 30.848) e resta vero come proprieta' della SUA
+  // formula; ma il valore negoziato lo alza chi e' piu' ripido di lui, e dal
+  // porting dei tre formati del 35B quello e' il **q6_K a 352·M, che sfonda a
+  // M=88**. Prima di quel porting il `Math.max` conteneva due termini scritti a
+  // mano (q4_0 e q5_K): il q4_1, CABLATO e in produzione, non c'era, e nessun
+  // test se ne sarebbe accorto. Ora i termini vengono da `PREFILL_GEMM_KINDS`.
+  it("la soglia del q5_K resta una proprieta' della sua formula: M=97 (a 96 no)", () => {
     expect(prefillGemmWorkgroupStorageBytes(Q5K(97))).toBeGreaterThan(QWEN_WORKGROUP_STORAGE_BYTES);
     expect(prefillGemmWorkgroupStorageBytes(Q5K(96))).toBeLessThan(QWEN_WORKGROUP_STORAGE_BYTES);
-    expect(storageNeed({ ctxMax: 6400, prefillM: 97 }).value)
+  });
+
+  it("il value negoziato lo alza il termine PIU' RIPIDO, che dal 2026-08-15 e' il q6_K: soglia M=88 (a 87 no)", () => {
+    expect(storageNeed({ ctxMax: 6400, prefillM: 88 }).value)
       .toBeGreaterThan(QWEN_WORKGROUP_STORAGE_BYTES);
-    expect(storageNeed({ ctxMax: 6400, prefillM: 96 }).value).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
-    // ...ed e' il termine q5_K a farlo salire, non quello q4_0: a M=97 il q4_0
-    // sta ancora sotto il tetto, e il value coincide col solo termine q5_K.
-    const need = storageNeed({ ctxMax: 6400, prefillM: 97 });
+    expect(storageNeed({ ctxMax: 6400, prefillM: 87 }).value).toBe(QWEN_WORKGROUP_STORAGE_BYTES);
+    // ...e a M=88 non sono ancora sfondati ne' il q4_0 ne' il q5_K: se un domani
+    // il termine che comanda cambiasse, questa riga cade e lo dice.
+    const need = storageNeed({ ctxMax: 6400, prefillM: 88 });
     expect(gemmQ4Term(need.consumer)).toBeLessThan(QWEN_WORKGROUP_STORAGE_BYTES);
-    expect(need.value).toBe(q5kTerm(need.consumer).bytes);
-    expect(need.value).toBe(prefillGemmWorkgroupStorageBytes(Q5K(97)));
-    // a ogni M il value e' il maggiore fra il path fuso e i termini dichiarati:
-    // ne' sotto (dichiarazione muta) ne' sopra (requisito gonfiato)
-    for (const M of [8, 16, 32, 96, 97, 121, 256]) {
+    expect(q5kTerm(need.consumer).bytes).toBeLessThan(QWEN_WORKGROUP_STORAGE_BYTES);
+    expect(need.value).toBe(kindTerm(need.consumer, "q6_K"));
+  });
+
+  // (e) IL GATE DEL MECCANISMO: ogni kind del prefill ha il suo termine nel
+  // consumer, e il value e' il maggiore fra il path fuso e TUTTI loro. E' cio'
+  // che rende impossibile ripetere il difetto: un formato nuovo che entrasse in
+  // `PREFILL_GEMM_KINDS` senza il suo termine fa cadere questo test, non il
+  // device in validazione di pipeline.
+  it("OGNI kind di PREFILL_GEMM_KINDS ha il suo termine, e il value e' il loro massimo", () => {
+    for (const M of [8, 16, 32, 87, 88, 96, 97, 121, 256]) {
       const n = storageNeed({ ctxMax: 6400, prefillM: M });
-      expect(n.value, `M=${M}`).toBe(Math.max(
-        QWEN_WORKGROUP_STORAGE_BYTES, gemmQ4Term(n.consumer), q5kTerm(n.consumer).bytes));
+      const termini = PREFILL_GEMM_KINDS.map((k) => kindTerm(n.consumer, k));
+      expect(termini.length, `M=${M}`).toBe(PREFILL_GEMM_KINDS.length);
+      expect(n.value, `M=${M}`).toBe(Math.max(QWEN_WORKGROUP_STORAGE_BYTES, ...termini));
     }
   });
 });

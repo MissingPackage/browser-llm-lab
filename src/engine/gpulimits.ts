@@ -24,7 +24,8 @@
 import {
   attnDecodeWorkgroupStorageBytes, prefillGemmWorkgroupStorageBytes,
   qwenFusedChunkWorkgroupStorageBytes, qwenGemvResidualWorkgroupStorageBytes,
-  type PrefillGemmOpts,
+  PREFILL_GEMM_KINDS,
+  type PrefillGemmOpts, type PrefillGemmKind,
 } from "./kernels/wgsl";
 import { mlaPartialsLen } from "./mlasplit";
 import { PREFILL_M, PREFILL_M_DENSE05B } from "./prefillplan";
@@ -134,6 +135,43 @@ const prefillGemmShape = (M: number): PrefillGemmOpts =>
  */
 const prefillGemmQ5KShape = (M: number): PrefillGemmOpts =>
   ({ kind: "q5_K", K: 4096, N: 2560, M, splits: 4 });
+
+/**
+ * UNA SHAPE REALE PER OGNI KIND, e il `Record` e' il punto (goal engine-kquant
+ * riga 7). Fino al 2026-08-15 qui c'erano DUE termini scritti a mano — q4_0 e
+ * q5_K — mentre i kind del prefill erano diventati sei: il `q4_1` **cablato e
+ * in produzione** non aveva un termine proprio nel `Math.max`, e non l'avevano
+ * i tre formati portati per il 35B.
+ *
+ * Perche' non bastava aggiungerne uno a mano: il termine q5_K sfonda il tetto a
+ * M=97 ed e' pinnato nei test, ma il q6_K (352·M) lo sfonderebbe a **M=88** —
+ * PRIMA — e nessun test se ne sarebbe accorto. Oggi e' inerte (5.632 B contro i
+ * 30.848 del path fuso 0.5B, che domina) e lo e' finche' quei kind restano
+ * `wired: false`; il giorno del cablaggio non lo sarebbe piu'.
+ *
+ * `Record<PrefillGemmKind, …>` e' la stessa garanzia di `PREFILL_GEMM_SPEC`:
+ * chi allunga `PREFILL_GEMM_KINDS` senza scrivere la shape qui sotto non
+ * ottiene un tetto sbagliato in silenzio, ottiene un errore di compilazione.
+ *
+ * Le shape sono QUELLE VERE, non una qualunque valida: K/N/`splits` non entrano
+ * nel fabbisogno (la memoria di gruppo tiene le sole attivazioni della tile,
+ * quindi il termine dipende dal solo M) ma la formula VALIDA i suoi argomenti,
+ * e scrivere la shape vera dice a chi legge QUALE kernel si sta dichiarando.
+ * Sono le stesse shape dei casi ktest, cioe' le sole misurate.
+ */
+const PREFILL_GEMM_SHAPES: Record<PrefillGemmKind, (M: number) => PrefillGemmOpts> = {
+  q4_0: prefillGemmShape,
+  q5_K: prefillGemmQ5KShape,
+  // `blk.0-3.ffn_down` del 4B: 288 blocchi da 32, 4 fette a BK=2.
+  q4_1: (M) => ({ kind: "q4_1", K: 9216, N: 2560, M, splits: 4 }),
+  // expert `ffn_gate`/`ffn_up` del 35B: 8 superblocchi da 256, 4 fette.
+  q4_K: (M) => ({ kind: "q4_K", K: 2048, N: 512, M, splits: 4 }),
+  // expert `ffn_down` del 35B: 2 superblocchi, 2 fette — la fetta piu' corta
+  // che il piano possa produrre, e il termine piu' RIPIDO dei sei (352·M).
+  q6_K: (M) => ({ kind: "q6_K", K: 512, N: 2048, M, splits: 2 }),
+  // `attn_*` del 35B: 64 blocchi da 32, 4 fette, PER pari (il ciclo avanza a 2).
+  q8_0: (M) => ({ kind: "q8_0", K: 2048, N: 4096, M, splits: 4 }),
+};
 
 /**
  * mlaAttnDecode (kernel MLA MONOLITICO): scores[ctxMax] + red[64].
@@ -249,15 +287,25 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
   const prefillM = o.prefillM ?? PREFILL_M;
   const prefillGemmVia = o.prefillGemmIdot === undefined
     ? undefined : o.prefillGemmIdot ? "idot" as const : "f32" as const;
-  const prefillGemmBytes = prefillGemmWorkgroupStorageBytes(prefillGemmShape(prefillM), prefillGemmVia);
   const prefillGemmViaLabel = prefillGemmVia ? `via ${prefillGemmVia}` : "peggiore fra idot e f32";
-  // Il GEMM di prefill Q5_K (`ssm_out`): STESSA formula, STESSA via, STESSO M —
-  // shape diversa. Un termine a parte perché il fabbisogno non coincide con
-  // quello q4_0 (320·M contro 256·M sul peggiore), e sommarli o confonderli
-  // dichiarerebbe un kernel che non esiste. Il valore che segue è lo stesso che
-  // entra nel `Math.max` e lo stesso che compare nel `consumer`: si calcola una
-  // volta, come tutti gli altri termini di questa funzione.
-  const prefillGemmQ5KBytes = prefillGemmWorkgroupStorageBytes(prefillGemmQ5KShape(prefillM), prefillGemmVia);
+  // UN TERMINE PER FORMATO — e non coincidono fra loro, che è la ragione per cui
+  // sono termini distinti e non uno solo: sul q4_0 la via cara è la f32 (256·M
+  // contro 72·M), sul q5_K e sul q4_K si INVERTE (320·M sulla via intera, che
+  // deve tenere i parziali di scala E minimo per ogni sotto-blocco da 32), e il
+  // q6_K è il più ripido di tutti (352·M, il `xh` in più). Confonderli o
+  // sommarli dichiarerebbe un kernel che non esiste: due GEMM di prefill non
+  // girano mai insieme nello stesso workgroup, quindi il tetto lo negozia il
+  // PIÙ ALTO. I valori che seguono sono gli stessi che entrano nel `Math.max` e
+  // gli stessi che compaiono nel `consumer`: si calcolano una volta.
+  // TUTTI i kind, non i due scritti a mano: un termine per formato, dalla stessa
+  // formula e con la stessa via. Il piu' alto e' quello che negozia il tetto —
+  // sommarli dichiarerebbe un kernel che non esiste (due GEMM di prefill non
+  // girano mai insieme nello stesso workgroup).
+  const prefillGemmPerKind = PREFILL_GEMM_KINDS.map((k) => ({
+    kind: k,
+    bytes: prefillGemmWorkgroupStorageBytes(PREFILL_GEMM_SHAPES[k](prefillM), prefillGemmVia),
+  }));
+  const prefillGemmMaxBytes = Math.max(...prefillGemmPerKind.map((x) => x.bytes));
   // I DUE rami di `attnDecodeWgsl` — decode e batch (prefill a chunk) — hanno
   // la STESSA formula dal task T1-kernel-batch-streaming. Un solo termine, letto
   // una volta sola dal file del kernel: due chiamate identiche nel `Math.max`
@@ -332,13 +380,15 @@ export function engineNeeds(o: EngineNeedsOpts): LimitNeed[] {
       // accorge chi la alza e non il device in validazione di pipeline.
       value: Math.max(
         QWEN_WORKGROUP_STORAGE_BYTES,
-        prefillGemmBytes,
-        prefillGemmQ5KBytes,
+        prefillGemmMaxBytes, // TUTTI i kind del prefill, non i due scritti a mano
         attnDecodeBytes, // decode E batch: una formula sola (vedi sopra)
         o.mlaAttention === false ? 0 : mlaWorkgroupStorageBytes(o.ctxMax),
       ),
       hard: true,
-      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, prefillGemm splitK M=${prefillM} (${prefillGemmViaLabel}) = ${prefillGemmBytes} B, prefillGemmQ5K (ssm_out) splitK M=${prefillM} (${prefillGemmViaLabel}) = ${prefillGemmQ5KBytes} B, attnDecode (streaming, costante in ctxMax) = ${attnDecodeBytes} B, attnDecode batch (prefill a chunk, streaming, costante in ctxMax) = ${attnDecodeBytes} B${o.mlaAttention === false ? "" : `, mlaAttnDecode ${mlaWorkgroupStorageBytes(o.ctxMax)} B`} a ctxMax ${o.ctxMax})`,
+      consumer: `max(rmsPairGemmSiluChunkFast ${QWEN_WORKGROUP_STORAGE_BYTES} B, `
+        + prefillGemmPerKind.map((x) =>
+          `prefillGemm ${x.kind} splitK M=${prefillM} (${prefillGemmViaLabel}) = ${x.bytes} B`).join(", ")
+        + `, attnDecode (streaming, costante in ctxMax) = ${attnDecodeBytes} B, attnDecode batch (prefill a chunk, streaming, costante in ctxMax) = ${attnDecodeBytes} B${o.mlaAttention === false ? "" : `, mlaAttnDecode ${mlaWorkgroupStorageBytes(o.ctxMax)} B`} a ctxMax ${o.ctxMax})`,
     },
   ];
   if (o.arenaBuffers !== undefined) {

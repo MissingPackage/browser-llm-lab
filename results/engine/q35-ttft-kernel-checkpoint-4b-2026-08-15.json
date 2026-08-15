@@ -2,8 +2,8 @@
  "schemaVersion": 2,
  "kind": "q35-ttft-kernel-checkpoint",
  "date": "2026-08-15",
- "goal": "engine-ttft",
- "phase": "riga 5 — la discesa massima, contabilizzata",
+ "goal": "engine-kquant",
+ "phase": "riga 5 — la misura di chiusura, contabilizzata",
  "model": "Qwen3.5-4B-Q4_0.gguf",
  "modelSha256": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
  "deviceLabel": "4090-linux",
@@ -363,8 +363,8 @@
   "nota": "il picco e' fp32 su GEMM densa (riga 1, it.2). Il prefill gira su pesi QUANTIZZATI, quindi questa quota non e' un'efficienza: e' la distanza da un tetto che questo carico non tocca per costruzione. Serve a dire che il collo non e' l'ALU."
  },
  "ratchetCorrettezza": {
-  "ktest": "111 PASS / 0 FAIL",
-  "vitest": "1017 passed | 10 skipped",
+  "ktest": "111 PASS / 0 FAIL — RIESEGUITO sull albero finale dopo le correzioni della riga 7",
+  "vitest": "1019 passed | 10 skipped",
   "tsc": "pulito",
   "top1SequenzialeVsOracolo": "1012/1024 = 98,828% — MISURATO su questo albero il 2026-08-15, results/engine/q35-conf-4b-riga6-seq-2026-08-15.json (8 prompt x 128 posizioni, host quiescent). Pari al riferimento di fase D (1012/1024): la barra e' >= 1012, quindi PASSA.",
   "top1PrefillAChunkVsOracolo": "1012/1024 = 98,828% — MISURATO su questo albero il 2026-08-15, results/engine/q35-conf-4b-riga6-chunk-2026-08-15.json (--conf-prefill-m 16). Identico al braccio sequenziale anche nella ripartizione per prompt [125,125,125,127,128,127,127,128], non solo nel totale.",

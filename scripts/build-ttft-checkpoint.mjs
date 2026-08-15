@@ -212,8 +212,14 @@ const out = {
   // LA DATA E' QUELLA DELLA RUN, non una stringa nel builder: un checkpoint
   // rifatto oggi con la data di ieri e' la stessa malattia dei byte ricopiati.
   date: b.date ?? s.date ?? new Date().toISOString().slice(0, 10),
-  goal: "engine-ttft",
-  phase: "riga 5 — la discesa massima, contabilizzata",
+  // IL GOAL LO DICE IL RATCHET, non una stringa nel builder. Fino al 2026-08-15
+  // qui c'era `"engine-ttft"` inciso, mentre `metrica.goal` (piu' sotto) leggeva
+  // gia' il contratto vero: lo stesso file si auto-attribuiva a DUE goal diversi.
+  // E' il residuo esatto della malattia curata nel blocco accanto — la baseline
+  // e la barra di engine-ttft incise nel builder, che avrebbero pubblicato una
+  // discesa di 5,108x mescolando due contratti.
+  goal: r.contratto.goal,
+  phase: r.contratto.fase ?? "riga di chiusura — la discesa, contabilizzata",
   model: b.model,
   modelSha256: b.modelSha256,
   deviceLabel: "4090-linux",

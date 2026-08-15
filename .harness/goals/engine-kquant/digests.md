@@ -204,3 +204,25 @@ il goal e cosa e' in dubbio.
   per segmento e' derivata invece che ricopiata.
 - **GPU nei pass 46,5%, fuori 53,5%**: piu' della meta' del prefill non e' piu'
   calcolo. Da consegnare alla riga 7 insieme a `deltanet:recurrence`.
+
+## it.11 — riga 7 CHIUSA, GOAL CHIUSO (2026-08-15)
+
+- **Consuntivo consegnato**: `docs/engine/kquant-consuntivo-2026-08-15.md`, 589
+  righe, nove sezioni, clausola per clausola con l'artefatto accanto.
+- **Scritto leggendo il CODICE, non il journal — e ha trovato due difetti che
+  dieci iterazioni non avevano visto.** Chiusi entrambi, non lasciati scritti:
+  (1) la clausola di portabilita' era soddisfatta a meta' e proprio su un
+  formato CABLATO (il q4_1 non aveva un termine nel `Math.max`; il q6_K
+  sfonderebbe il tetto a M=88, prima del q5_K pinnato a M=97, e nessun test se
+  ne sarebbe accorto); (2) il checkpoint si auto-attribuiva a DUE goal diversi,
+  residuo esatto della malattia curata in it.9 nel blocco accanto.
+- **Chiusi col meccanismo, non a mano**: i termini del tetto vengono
+  da `PREFILL_GEMM_KINDS` con le shape in un `Record` (un kind nuovo senza shape
+  non compila), e il builder non incide piu' nessun nome di goal.
+- **Gate rifatto sull'albero finale** perche' le correzioni toccano produzione:
+  **ktest 111 PASS / 0 FAIL**, vitest **1019 passed | 10 skipped**, tsc exit 0.
+- Il consuntivo dice tre cose che il journal non diceva: i 15 segmenti non
+  toccati sono cresciuti del 4-8% tutti nello stesso verso (non attribuito, ma
+  rende non interpretabili le differenze piccole); la tabella di it.2 e'
+  superata da it.3 e non era marcata; i byte "prima" di `ffn-down` sono derivati
+  e usano 396 chunk invece di 395.
