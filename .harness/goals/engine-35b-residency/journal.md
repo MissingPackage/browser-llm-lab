@@ -22,9 +22,96 @@ finché il token pulito non è misurato.
 Playwright vivi. Sono della sessione `personal-site-47`; il PI ha chiesto di
 accordarmi con lei invece di chiudere. Messaggio inviato, in attesa.
 
+## it.2 — la finestra: le due run, e C0-4 è CONFERMATA (2026-08-15)
+
+`personal-site-47` ha liberato la GPU (stava facendo screenshot di anteprime
+tema). Verificato da qui prima di partire: `pgrep -af
+"type=gpu-process|/opt/google/chrome/chrome|chromium|headless_shell"` **vuoto**;
+i cinque `@playwright/mcp` sono server node senza figli Chrome — il mio check
+precedente guardava il pattern sbagliato, e la correzione viene da lei. Dev
+server 200 su `curl`, 22 GB di RAM disponibili. Entrambe le run exit 0.
+
+### Run A — il token pulito è 43,59 ms, non 21,1
+
+`results/engine/q35-optimistic-35b-cleantoken-2026-08-15.json`, pass
+`optimistic-warm`, **0 miss · 0 dirty · 0 replay** — un token pulito misurato:
+
+    tokenMs          43,585 ms/token      (it.35, 2026-08-11: 43,736)
+    readbackWaitMs   40,753  = 93,5%      (it.35: 40,977)
+    encodeMs          1,188
+    argmaxMs          0,399
+    tailCpuMs         0,200
+    mediana su 3      44,000               (it.35: 44,316)
+
+**Coincide con la misura del 2026-08-11 entro lo 0,7%.** Due conseguenze:
+
+1. **C0-4 è confermata e la mia stima di stamattina era sbagliata.** Il token
+   pulito vale **22,9 tok/s**. Togliere il 100% della tassa di residency **non
+   raggiunge la barra dei 30**. Le righe 2 e 3, da sole, non chiudono il goal.
+2. **I kernel di `engine-kquant` non hanno mosso il 35B di un ms** (43,74 →
+   43,59, dentro il rumore). Era previsto e ora è verificato: il 35B non ha un
+   byte di q4_0 e `PREFILL_GEMM_WIRED_KINDS` ne copre lo 0%
+   (consegna §2). Il decode del 35B non è mai stato toccato da quel goal.
+
+**Il termine che decide il goal è cambiato**: sul token pulito `readbackWait` è
+il **93,5%**, con `submitsPerToken: 1` e `readbacksPerToken: 1`. Non è overhead,
+è la GPU che lavora 40,75 ms su un solo pass — i 320 GEMV expert per token. La
+leva su quel termine **è quella che il contratto ha dichiarato fuori scope**: la
+forma a gather K-quant della consegna §4.2-4.4, stimata a ~2,6× di dispatch.
+
+### Run B — i sette contatori reggono su GPU vera, e `namedFrac` = 0,9995
+
+`results/engine/q35-optimistic-35b-arena4-2026-08-15.json`, arena strozzata a
+4 GiB, `--opt-cold`. Pass `optimistic-warm` (39 token, regime sporco al 100%):
+
+    tokenMs        561,97 ms/token
+    tailCpuMs      509,71  = 90,7%
+      repairMs     391,8   /token  (15.278,8 totali)
+        fetchRepairMs  275,4 /token (10.740,2) = 70,3% del repair
+        flushMs          0,38 /token — trascurabile, misurato e non assunto
+      replayPassMs   117,7 /token  (4.588,6)
+      accounting       0,29 /token (11,42)
+    namedFrac      0,9995        ← done-when della riga 1: ≥ 0,95. PASSATO.
+
+**Il 43% anonimo è diventato lo 0,05%.**
+
+**Validazione dei contatori — il controllo che li qualifica.** L'avvertenza è di
+`personal-site-47`: con contatori nuovi lo zero è ambiguo per costruzione, e
+«misurato zero» va distinto da «mai scritto» prima di fidarsi. Applicata così:
+
+- **`fetchRepairCalls` deve valere esattamente `misses`** (il codice fa una
+  `readExpert` per miss). Torna in tutte e tre le passate dove il path gira:
+  **4227=4227 · 3283=3283 · 2752=2752**. Un contatore nel posto sbagliato non
+  ci azzecca tre volte su tre.
+- **Ogni zero ha un gemello non-zero in un'altra passata, per una ragione
+  strutturale dichiarabile prima**: `fetchRepairMs` è 0 in tutto il run A
+  perché lì la passata fredda è `sync`, che usa l'altro sito; `fetchPrepMs` è 0
+  nelle passate ottimistiche. I due si accendono in modo complementare — più
+  forte di «non è zero».
+
+**Tre reperti nuovi, non richiesti dal done-when:**
+
+1. **Il costo per fetch è 3,27 ms, non 5,98.** I 5,98 erano una mia derivazione
+   dal buco anonimo della chat, che conteneva anche i pass di replay: la
+   strumentazione ha corretto la derivazione una seconda volta. Su
+   5.855.674.368 byte in 10.740 ms = **545 MB/s**.
+2. **Il RAGGRUPPAMENTO delle richieste vale 2,1×.** `fetchPrepMs`/chiamata =
+   18.981,7/2.752 = **6,90 ms** contro i **3,27 ms** del repair. Stessi byte,
+   stesso server, stesso `readExpert`: cambia solo quante `readRange` stanno
+   nella stessa `Promise.all` — 24 in `prepLayer` (8 expert × 3 tensori),
+   qualche centinaio nel repair (tutti i miss del prefisso). **È un 2× che la
+   riga 2 può prendere senza cambiare sorgente dei byte**, ed è un ingresso che
+   il contratto non aveva.
+3. **`namedFrac` è indefinito quando non c'è repair** (in A: `tailCpuMs` 0,1996
+   con repair e replay a zero ⇒ 0/0,1996 = 0, che *sembra* un fallimento del
+   done-when e non lo è: senza miss il 100% di `tailCpu` È contabilità). La
+   clausola ≥ 0,95 va letta **solo nel regime sporco**. Da precisare nel
+   done-when, altrimenti la riga 1 si dichiara fallita su una passata pulita.
+
 ---
 
 ## PRONTO PER LA FINESTRA — i due comandi, verificati dal sorgente
+## [ESEGUITI in it.2 — lasciati per tracciabilità]
 
 Preparati mentre aspetto, così la finestra si spende eseguendo. **Nessuno dei
 due è stato eseguito.** Flag letti da `scripts/q35-conf-run.mjs:11-40` e da

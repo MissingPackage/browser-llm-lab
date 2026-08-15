@@ -42,14 +42,32 @@ nell'unità di riparazione del decode ottimistico.
      Il token pulito va MISURATO (riga 1), non ottenuto per differenza da
      aggregati che mescolano pass iniziale e replay.
 
-     **CONSEGUENZA SULLA FATTIBILITÀ, da dichiarare adesso e non a metà goal.**
-     Se il token pulito è ~43 ms, togliere il 100% della tassa di residency
-     porta a **~23 tok/s: SOTTO la barra dei 30**. In quel caso le righe 2 e 3
-     non chiudono il goal da sole e serve una quarta leva — il pass stesso, dove
-     `readbackWait` era il **94%** del token pulito di it.35. Se invece è ~21 ms
-     la barra si prende con le righe 2 e 3. **La riga 1 non è più solo la
-     baseline: è la misura che decide se questo contratto è eseguibile come
-     scritto.** Nessuna riga successiva parte prima che quel numero esista.
+     **MISURATO in it.2, e la risposta è quella sfavorevole.**
+     `results/engine/q35-optimistic-35b-cleantoken-2026-08-15.json`, pass
+     `optimistic-warm`, **0 miss · 0 dirty · 0 replay**:
+
+       tokenMs         43,585 ms/token   = 22,9 tok/s   (it.35: 43,736)
+       readbackWaitMs  40,753  = 93,5% del token pulito
+       encodeMs         1,188 · argmaxMs 0,399 · tailCpuMs 0,200
+       submitsPerToken 1 · readbacksPerToken 1
+
+     Coincide col 2026-08-11 entro lo 0,7% — e conferma di passaggio che i
+     kernel di `engine-kquant` non hanno mosso il 35B di un ms, come previsto
+     (0% di copertura, consegna §2).
+
+     **QUINDI: LE RIGHE 2 E 3 NON POSSONO CHIUDERE QUESTO GOAL.** Togliere il
+     100% della tassa di residency lascia il 35B a **22,9 tok/s, sotto la barra
+     dei 30**. Non è una stima: è il token pulito misurato due volte a quattro
+     giorni di distanza, su due alberi diversi.
+
+     **IL TERMINE CHE DECIDE IL GOAL È CAMBIATO, ed è quello che il contratto ha
+     dichiarato fuori scope.** Sul token pulito `readbackWait` è il 93,5%, con
+     UN submit e UN readback: non è overhead, è la GPU che lavora 40,75 ms sui
+     320 GEMV expert del token. La leva su quel termine è la **forma a gather
+     K-quant** della consegna §4.2-4.4 (~2,6× di dispatch), che questo contratto
+     aveva messo fuori scope perché «varrebbe il 16% del token». Quel giudizio
+     era basato sulla stima ritrattata. **Serve un ruling del PI sulla barra o
+     sullo scope** — è funzione obiettivo, non meccanismo: docket item 3.
 
      RESTA VERO, e non dipende dalla sottrazione ritrattata: il pavimento di
      banda su questa scheda è ~2,9 ms/token (~1,66 GB di pesi attivi, 4090

@@ -33,6 +33,68 @@ che me lo dica.
 C0-4, C0-4 dipende dalla misura, la misura dipende da questo item. È uno
 stop-by-design, non una pausa.
 
+> **CHIUSO in it.2, e con una correzione a mio carico.** Il PI ha indicato la
+> via giusta: accordarsi con la sessione che li stava usando
+> (`personal-site-47`, screenshot di anteprime tema per il sito personale)
+> invece di chiudere. Ha liberato la GPU in pochi minuti, le due run sono
+> passate, e mi ha corretto un errore di diagnosi: **guardavo il pattern
+> sbagliato**. `pgrep @playwright/mcp` conta i *server node*, che sono idle e
+> non tengono VRAM; i processi da guardare sono i browser
+> (`type=gpu-process`, `/opt/google/chrome/chrome`, `chromium`,
+> `headless_shell`). Dei «quattro Chrome vivi» che avevo dichiarato al PI, uno
+> solo era un browser reale. **Da riusare: per sapere se l'host è quiescente si
+> contano i processi BROWSER, non i server MCP.**
+
+**RULING:** _ (item chiuso senza bisogno di ruling)
+
+## item 3 — la barra dei 30 tok/s non è raggiungibile nello scope chartato (io → PI, it.2)
+
+**PI: serve un ruling. È funzione obiettivo, quindi non è mio.**
+
+**Il fatto, misurato due volte su due alberi diversi:** il token PULITO del 35B
+— zero miss, zero replay, nessuna tassa di residency — costa **43,585 ms =
+22,9 tok/s** (`q35-optimistic-35b-cleantoken-2026-08-15.json`, oggi) e **43,736
+ms** (`q35-vramplan-35b-it35.json`, 2026-08-11). Coincidono entro lo 0,7%.
+
+**Conseguenza secca**: le righe 2 e 3 di questo goal aggrediscono la tassa di
+residency. Anche portandola a **zero** — che nessuno sa fare — il 35B resta a
+22,9 tok/s. **La barra dei 30 non è raggiungibile con lo scope che ho
+chartato.**
+
+**Dove sta il tempo adesso**: sul token pulito, `readbackWait` è il **93,5%**
+(40,75 ms su 43,59), con `submitsPerToken: 1` e `readbacksPerToken: 1`. Non è
+overhead: è la GPU che lavora su un solo pass, i 320 GEMV expert del token.
+
+**La sola leva nota su quel termine** è la forma a gather K-quant della
+consegna §4.2-4.4 (~2,6× di dispatch, ~1,27× di traffico pesi). **Questo
+contratto l'ha messa FUORI SCOPE**, con questa motivazione: «oggi varrebbero il
+16% del token». Quel 16% era calcolato sulla stima del token pulito a 21,1 ms
+che ho poi ritrattato. **Sul numero vero la stessa leva vale sul 93,5%.** La
+mia esclusione era sbagliata, e l'ordine della consegna §6 — residency prima,
+kernel dopo — resta giusto su *cos'è primo nel profilo*, ma non basta a
+raggiungere *questa barra*.
+
+**Le tre uscite che vedo** (non scelgo io):
+1. **Tenere la barra a 30 e allargare lo scope** alla forma a gather: il goal
+   diventa residency + kernel, ~3-4 iterazioni in più, ed è l'unica strada che
+   porta ai 30. Le righe 2 e 3 restano necessarie (senza, il regime sporco
+   mangia qualunque guadagno sul pass).
+2. **Tenere lo scope e abbassare la barra** a ciò che la residency può dare:
+   il tetto è 22,9 tok/s, quindi una barra onesta starebbe sui ~20. Chiude un
+   goal vero e misurabile, ma **lascia il 35B sotto la soglia di usabilità**
+   della funzione obiettivo del progetto — cioè non risolve il problema per cui
+   il goal esiste.
+3. **Spezzare in due goal**: questo si chiude sulla residency con barra ~20, e
+   il gather K-quant diventa il goal successivo con barra 30. Più righe
+   chiuse, più consuntivi, e il 35B resta inusabile fino alla fine del secondo.
+
+**La mia lettura, che non è un ruling**: la 1. La 2 chiude un goal senza
+risolvere il problema, e la 3 fa la stessa cosa spendendo di più. Ma è la tua
+funzione obiettivo.
+
+**Nel frattempo NON parto con la riga 2**: il meccanismo giusto per la fetch
+dipende da quanto margine serve, e quello lo decide questo ruling.
+
 **RULING:** _
 
 ## item 2 — `blankNonCode` è duplicato in sette file di test (io → PI, it.1)
