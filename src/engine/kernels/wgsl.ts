@@ -3218,11 +3218,20 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 // con la stessa testa `arenaHeadWgsl` dei gemelli.
 
 // gate+up+silu dell'expert per le righe raccolte: h[m][k] = silu(g)·u
-export function pairGemvSiluGatherWgsl(opts: { K: number; N: number }): string {
+//
+// `nUsed` = il top-K della famiglia, ed e' lo STRIDE degli slot: la riga m
+// occupa `nUsed` slot consecutivi e `kslot` sceglie quale. Era scritto `4u` a
+// mano (GLM e' top-4); il 35B e' top-8. I TRE kernel della famiglia devono
+// essere generati con lo STESSO `nUsed` — un disaccordo non lancia, indirizza
+// slot sbagliati e produce numeri plausibili. Il test
+// `engine-moegather-nused.test.ts` lo verifica.
+export function pairGemvSiluGatherWgsl(opts: { K: number; N: number; nUsed?: number }): string {
   const { K, N } = opts;
+  const nUsed = opts.nUsed ?? 4;
   const blocksPerRow = K / 32;
   if (N % 4 !== 0) throw new Error("pairGemvSiluGather: N non multiplo di 4");
   if (K % 32 !== 0) throw new Error("pairGemvSiluGather: K non multiplo di 32");
+  if (!Number.isInteger(nUsed) || nUsed < 1) throw new Error(`pairGemvSiluGather: nUsed non valido (${nUsed})`);
   return `
 @group(0) @binding(0) var<storage, read> gQs4: array<vec4<u32>>;
 @group(0) @binding(1) var<storage, read> gScales: array<u32>;
@@ -3293,18 +3302,20 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   }
   if (lane == 0u && r < ${N}u) {
     let g = redG[sub * 16u];
-    hSlots[(m * 4u + kslot) * ${N}u + r] = (g / (1.0 + exp(-g))) * redU[sub * 16u];
+    hSlots[(m * ${nUsed}u + kslot) * ${N}u + r] = (g / (1.0 + exp(-g))) * redU[sub * 16u];
   }
 }`;
 }
 
 // down dell'expert per le righe raccolte: SCRIVE y[m][k] NON pesato — il peso
 // lo applica moeCombine, in ordine k (contratto di identita' del piano).
-export function gemvDownSlotsWgsl(opts: { kind: "q4_0" | "q4_1"; K: number; N: number }): string {
+export function gemvDownSlotsWgsl(opts: { kind: "q4_0" | "q4_1"; K: number; N: number; nUsed?: number }): string {
   const { kind, K, N } = opts;
+  const nUsed = opts.nUsed ?? 4;
   const blocksPerRow = K / 32;
   if (N % 4 !== 0) throw new Error("gemvDownSlots: N non multiplo di 4");
   if (K % 32 !== 0) throw new Error("gemvDownSlots: K non multiplo di 32");
+  if (!Number.isInteger(nUsed) || nUsed < 1) throw new Error(`gemvDownSlots: nUsed non valido (${nUsed})`);
   const scE = kind === "q4_0" ? "scales[gb >> 1u]" : "scales[gb]";
   const body = kind === "q4_0"
     ? `
@@ -3348,7 +3359,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   let gk = gather[wid.z];
   let m = gk & 0xffffu;
   let kslot = gk >> 16u;
-  let hB = (m * 4u + kslot) * K;
+  let hB = (m * ${nUsed}u + kslot) * K;
   for (var i = t; i < K / 4u; i = i + 64u) {
     xn4[i] = vec4(hSlots[hB + i * 4u], hSlots[hB + i * 4u + 1u], hSlots[hB + i * 4u + 2u], hSlots[hB + i * 4u + 3u]);
   }
@@ -3372,7 +3383,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
     workgroupBarrier();
     stride = stride >> 1u;
   }
-  if (lane == 0u && r < ${N}u) { ySlots[(m * 4u + kslot) * ${N}u + r] = red[sub * 16u]; }
+  if (lane == 0u && r < ${N}u) { ySlots[(m * ${nUsed}u + kslot) * ${N}u + r] = red[sub * 16u]; }
 }`;
 }
 

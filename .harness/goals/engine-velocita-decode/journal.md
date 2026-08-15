@@ -167,3 +167,71 @@ La **baseline nel regime sporco vero** (89,7% di token sporchi) vuole una
 generazione lunga, non 39 token: al `full` sono 6.461 token e il solo pass
 sync-cold sarebbe ~2 ore. Non entra in una finestra di 5 minuti e non serve per
 C0-4. Va pianificata a parte, con `--max-gen` scelto sui numeri di A e B.
+
+---
+
+## it.3 — riga 2: il conflitto `accum`/slot NON esiste, e il top-K è parametrico
+
+### Il reperto di fattibilità, che vale più del codice di oggi
+
+Il contratto e la consegna §4.4c dichiaravano un ostacolo di design sulla riga
+più grossa del goal: «il down del 35B usa `accum: true` col peso letto dalla
+`Sel`, mentre il contratto a slot pretende che il down SCRIVA non pesato e che
+sia la combine a sommare in ordine k — **sono due contratti diversi sullo stesso
+tensore**», con la bit-identità come gate secco. **Letto il codice, non è
+vero.** Le due catene calcolano la stessa espressione nello stesso ordine:
+
+    35B decode      encodeExperts (q35gpumodel.ts:2099-2108):
+                    for k2 = 0..topK ASCENDENTE, ogni down fa
+                    `y[r] = y[r] + sel.w * partial[0]`  (wgsl.ts:2215)
+    contratto slot  moeCombineWgsl (wgsl.ts:3397-3399):
+                    for k = 0..N_USED ASCENDENTE, `t = t + wBuf[..] * ySlots[..]`
+
+**Stessa somma, stesso ordine k crescente, stessi f32.** L'unica differenza è
+*dove* sta l'accumulatore (memoria fra dispatch nel primo, registro nel loop nel
+secondo) e il fatto che il secondo passa `partial` per la memoria — ma
+`partial[0]` è già f32, quindi store+load è senza perdita.
+
+**Il rischio residuo è UNO e ha già la sua macchineria in casa: la contrazione
+FMA.** `y + w*partial` e `t + w*y` possono contrarsi o no in modo diverso nei
+due WGSL. È esattamente ciò che i *floor test* di `engine-kquant` riga 2 fanno:
+ri-derivare la tolleranza dal testo WGSL generato con e senza contrazione.
+**La riga 2 non ha l'ostacolo di design che le era stato attribuito**, e il suo
+gate è un floor test invece che una riprogettazione.
+
+*Nota su come l'errore era nato: il §4.4c descriveva correttamente due
+MECCANISMI diversi e ne ha inferito due SEMANTICHE diverse. È la terza volta in
+questo goal che un'inferenza non verificata regge una decisione — dopo i 21,1 ms
+e dopo il 16% del gather. Il correttivo è lo stesso: leggere il codice invece di
+leggere la descrizione del codice.*
+
+### Il codice: `nUsed` parametrico
+
+`pairGemvSiluGatherWgsl` e `gemvDownSlotsWgsl` avevano lo stride degli slot
+scritto `4u` a mano in tre punti (`wgsl.ts:3296`, `:3351`, `:3375`) mentre
+`moeCombineWgsl` era già parametrico. Ora tutti e tre prendono `nUsed`,
+default 4.
+
+`tests/engine-moegather-nused.test.ts`, 5 casi. Il primo è la non-regressione
+GLM nella forma più forte disponibile senza GPU: **a default il testo WGSL
+generato è IDENTICO** (`expect(pairD).toBe(pair4)`), quindi il GLM non cambia
+di un byte e non serve una run per dirlo. Il terzo lega i tre kernel fra loro:
+un disaccordo di stride **non lancia e non fa fallire la compilazione** — legge
+slot sbagliati e produce numeri plausibili, la classe di difetto che i gate a
+tolleranza lasciano passare.
+
+**EVIDENZA**: `npx vitest run` **1030 passed | 10 skipped** (78 file, +5 casi) ·
+`npx tsc --noEmit` exit 0. Nessuna misura GPU in questa iterazione: non serviva
+(il GLM è identico per costruzione, il 35B non è ancora cablato).
+
+### Cosa resta della riga 2
+
+1. **Le versioni K-quant dei due kernel a gather** — il pezzo grosso.
+   `pairGemvSiluGatherWgsl` ha il layout q4_0 cablato nel corpo (`gQs4` +
+   `gScales`, nibble − 8); i K-quant hanno un buffer solo e superblocchi da 256.
+   L'aritmetica da riusare è quella verificata da `engine-kquant` riga 4 —
+   unpack, offset, termine `Σx` — **non** la sua geometria multi-riga.
+2. **I sotto-range su slab K-quant**: `slotTensorRanges` (`residency.ts:189`)
+   esiste già; la vista legacy `slotBindRanges` **lancia** sui K-quant.
+3. **Il cablaggio sul 35B** al posto del `for m2` di `q35gpumodel.ts:2763-2774`.
+4. **Il floor test FMA** + i casi ktest per formato + la misura su GLM E 35B.
