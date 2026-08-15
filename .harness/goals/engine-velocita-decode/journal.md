@@ -235,3 +235,83 @@ tolleranza lasciano passare.
    esiste già; la vista legacy `slotBindRanges` **lancia** sui K-quant.
 3. **Il cablaggio sul 35B** al posto del `for m2` di `q35gpumodel.ts:2763-2774`.
 4. **Il floor test FMA** + i casi ktest per formato + la misura su GLM E 35B.
+
+---
+
+## it.4 — riga 2: il gather K-quant esiste, e non è costato aritmetica
+
+### Il pezzo «grosso» non lo era
+
+La consegna §4.2.1 diceva: «le tre versioni K-quant dei due kernel a gather non
+esistono … è qui che l'aritmetica verificata dalla riga 4 si riusa». Dava per
+scontato che si dovesse **portare l'aritmetica K-quant dentro
+`pairGemvSiluGatherWgsl`**, che ha il layout q4_0 cablato nel corpo.
+
+Ho fatto il contrario, ed è molto meno codice: **ho aggiunto il modo `gather`
+ai GEMV K-quant già verificati** (`gemvQ4KWgsl`, `gemvQ6KWgsl`). Quei generatori
+erano già fattorizzati per questo — un corpo aritmetico unico e i punti di
+variazione isolati (`head`, `pre`, `XR`, `YR`, `xRowPre`, `tailAcc`), messi lì
+dal modo `batch`. **Il gather è un terzo asse sugli stessi punti**, non un
+kernel nuovo.
+
+Il diff generato, plain contro gather (q4_K, K=2048 N=512), è **esattamente**:
+
+    testa      + `@binding(2) gather`, y da binding 2 a 3
+    preambolo  + gk / mRow / kslot / xR   (4 righe)
+    lettura x    `x[xBase+…]` → `x[xR + xBase+…]`   (2 righe)
+    scrittura    `y[r]` → `y[(mRow*nUsed + kslot)*N + r]`
+
+Unpack dei superblocchi, offset, termine `Σx`, riduzione: **non una riga
+toccata.** `tests/engine-kquant-gather.test.ts` lo pretende nella forma più
+forte disponibile: **normalizza** il sorgente gather riportandolo alla forma
+plain e chiede **uguaglianza esatta**. Un'asserzione a campione («contiene
+ancora `nibLo`») lascerebbe passare una modifica dentro il corpo; questa no.
+
+**Conseguenza pratica**: i casi ktest del gather validano l'INDIRIZZAMENTO, non
+ri-validano l'aritmetica — che è già passata su GPU vera in `engine-kquant`
+riga 4. La riga 2 costa un cablaggio, non una riscrittura numerica.
+
+### Le tre combinazioni che non esistono, e perché lanciano
+
+`assertGatherCombo` le nomina con la ragione nel messaggio:
+- **gather + arena**: nel gather l'expert lo fissa il DISPATCH (bindings a
+  sotto-range, `slotTensorRanges`), l'arena lo risolve da `Sel`. Il gather è
+  PLAIN per scelta, come i gemelli q4_0 del GLM;
+- **gather + batch**: si contenderebbero `wid.z`;
+- **gather + accum**: il contratto a slot vuole la scrittura **non pesata** —
+  se il kernel pesasse, la somma dei k passerebbe dal `moeCombine` al kernel e
+  l'ordine delle somme f32 non sarebbe più quello del decode, che è il gate di
+  bit-identità. Il caso [5] del test verifica che nella riga di scrittura non
+  compaia `sel.w`.
+
+### DECISIONE PRESA, non escalata: niente fusione gate+up per ora
+
+Il gemello q4_0 del GLM fonde gate+up+silu in UN kernel; il mio riuso no, perché
+i GEMV K-quant sono per una matrice sola. Catena per expert:
+
+    GLM q4_0 (fuso)     pair(gate+up+silu) · down · combine        = 3
+    K-quant (oggi)      gate · up · silu · down · combine          = 5
+    35B per riga (ora)  (gate·up·silu·down) × 8 expert × 16 righe  = 512/layer
+
+**Cosa farei se nessuno rispondesse: questo.** Il salto che conta è da
+**per-riga** a **per-expert** — da 512 dispatch per layer a ~2·|unione|+1 ≈ 203
+— ed è ortogonale alla fusione. Fondere gate+up sarebbe un secondo ordine
+(5 → 3 per expert su un termine già collassato) e costerebbe un kernel nuovo
+con aritmetica nuova, cioè esattamente ciò che questa iterazione ha evitato.
+Pareto: prima il collasso, la fusione solo se la misura della riga 4 la chiede.
+Registrata qui, nessun ruling necessario.
+
+**EVIDENZA**: `npx vitest run` **1043 passed | 10 skipped** (79 file, +13 casi)
+· `npx tsc --noEmit` exit 0. Nessuna GPU: il path in produzione è invariato per
+costruzione (caso [2]: senza `gather` il testo è quello di ieri byte per byte).
+
+### Cosa resta della riga 2
+
+1. **I sotto-range su slab K-quant**: `slotTensorRanges` (`residency.ts:189`)
+   esiste; la vista legacy `slotBindRanges` **lancia** sui K-quant. Da usare nei
+   call site nuovi.
+2. **Il cablaggio sul 35B**, al posto del `for m2` di `q35gpumodel.ts:2763-2774`,
+   con `planMoeChunk` (già parametrico su `{nExpert, nExpertUsed}`).
+3. **Il floor test FMA** (il rischio residuo isolato in it.3) + i casi ktest di
+   indirizzamento per formato.
+4. **La misura su GLM E 35B** — la regola delle ≥ 2 famiglie.

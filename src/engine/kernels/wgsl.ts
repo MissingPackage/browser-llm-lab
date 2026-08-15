@@ -2151,6 +2151,29 @@ export function kquantWorkSplit(sbPerRow: number, groupsPerSb: number): {
 }
 
 /**
+ * Modo GATHER dei GEMV K-quant: `wid.z` indicizza `gather`, che porta
+ * `m | kslot<<16`. `nUsed` e' lo stride degli slot — lo STESSO numero che
+ * `moeCombineWgsl` riceve, altrimenti i due kernel indirizzano slot diversi
+ * senza che niente lanci (v. `tests/engine-moegather-nused.test.ts`).
+ */
+export interface KGatherOpts { nUsed: number }
+
+/** le combinazioni di modi che non esistono, con la ragione nel messaggio */
+function assertGatherCombo(
+  fam: string,
+  o: { arena: boolean; accum?: boolean; batch?: boolean; gather?: KGatherOpts },
+): void {
+  if (!o.gather) return;
+  if (o.arena) {
+    throw new Error(`${fam}: gather e arena non si combinano — nel gather l'expert lo fissa il dispatch (bindings a sotto-range), l'arena lo risolve da Sel`);
+  }
+  if (o.batch === true) throw new Error(`${fam}: gather e batch non si combinano — userebbero entrambi wid.z`);
+  if (o.accum === true) throw new Error(`${fam}: gather e accum non si combinano — il contratto a slot vuole la scrittura NON pesata, e' moeCombine a sommare w*y in ordine k`);
+  const n = o.gather.nUsed;
+  if (!Number.isInteger(n) || n < 1) throw new Error(`${fam}: gather.nUsed non valido (${n})`);
+}
+
+/**
  * CODA ACCUMULANTE, opzione `accum` (goal fase-D fase 4, it.21). Senza, il
  * kernel SCRIVE la riga: `y[r] = dot`. Con, ci ACCUMULA sopra il proprio
  * contributo pesato — `y[r] = y[r] + sel.w * dot` — col peso preso dalla `Sel`
@@ -2169,11 +2192,33 @@ export function kquantWorkSplit(sbPerRow: number, groupsPerSb: number): {
  * contributo e' zero, come lo era col guard esplicito di quell'axpy.
  *
  * Esige il regime d'arena: senza `Sel` non c'e' nessun peso da leggere.
+ *
+ * MODO GATHER (goal engine-velocita-decode, riga 2). Terza variante degli
+ * STESSI assi di `batch`: `wid.z` non e' piu' la riga, e' l'indice nel buffer
+ * `gather` che porta `m | kslot<<16`. Il kernel legge la riga `m` di una
+ * matrice [M,K] e scrive nello slot `(m*nUsed + kslot)` — il contratto a slot
+ * di `moeprefillplan.ts:29-36`: il down SCRIVE non pesato, e' `moeCombine` a
+ * sommare `w·y` in ordine k. Serve al path expert raggruppato per expert
+ * (un dispatch per expert sulle sole righe che lo selezionano) invece che per
+ * riga.
+ *
+ * E' PLAIN, non d'arena, ed e' una scelta e non una mancanza: nel gather
+ * l'expert e' fissato DAL DISPATCH, quindi i pesi arrivano da un binding a
+ * sotto-range (`slotTensorRanges`, `residency.ts:189`) e non c'e' nessuna `Sel`
+ * da risolvere. E' la stessa forma dei gemelli q4_0 del GLM
+ * (`pairGemvSiluGatherWgsl`), che il commento di famiglia dichiara PLAIN.
+ *
+ * L'ARITMETICA NON CAMBIA DI UN CARATTERE: `gather` tocca solo da dove viene
+ * `x` e dove va `y`. `tests/engine-kquant-gather.test.ts` lo verifica
+ * confrontando il corpo generato con quello del kernel senza gather.
  */
-export function gemvQ4KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean }): string {
-  const { K, N, arena, accum, batch } = opts;
+export function gemvQ4KWgsl(opts: {
+  K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean; gather?: KGatherOpts;
+}): string {
+  const { K, N, arena, accum, batch, gather } = opts;
   if (batch === true && arena) throw new Error("q4K: batch e arena non si combinano (l'arena e' il path expert, il batch il prefill)");
   if (accum === true && !arena) throw new Error("q4K: accum esige il regime d'arena (il peso viene da Sel)");
+  assertGatherCombo("q4K", { arena: arena !== undefined, accum, batch, gather });
   if (K % 256 !== 0) throw new Error("gemvQ4K: K non multiplo di 256");
   const sbPerRow = K / 256;
   // OCCUPAZIONE (fase 4-bis, it.22). Prima l'unita' di lavoro era il
@@ -2195,7 +2240,16 @@ export function gemvQ4KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; ac
 var<private> gBase: u32;
 var<private> gBi: u32;
 fn blkw(i: u32) -> u32 { return ldw(gBi, gBase + i); }`
-    : `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+    : gather
+      // ORDINE DEI BINDING CONGELATO nel modo gather: [0 blocks, 1 x,
+      // 2 gather, 3 y]. `y` si sposta da 2 a 3 e `gather` ne prende il posto:
+      // chi costruisce il bind group segue QUESTO elenco, non quello plain.
+      ? `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read> gather: array<u32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+fn blkw(i: u32) -> u32 { return blocks[i]; }`
+      : `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
 @group(0) @binding(1) var<storage, read> x: array<f32>;
 @group(0) @binding(2) var<storage, read_write> y: array<f32>;
 fn blkw(i: u32) -> u32 { return blocks[i]; }`;
@@ -2207,10 +2261,17 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   if (!ok) { return; }`
     : "";
   // batch (fase 4): wid.z = riga; x e y sono matrici [M, K] e [M, N].
-  // Senza, il testo emesso e' identico byte per byte.
-  const XR = batch ? "xR + " : "";
-  const YR = batch ? `wid.z * ${N}u + ` : "";
-  const xRowPre = batch ? `\n  let xR = wid.z * ${K}u;` : "";
+  // gather (engine-velocita-decode riga 2): wid.z indicizza `gather`, che porta
+  // `m | kslot<<16`; x resta [M,K], y e' l'array degli slot e la scrittura NON
+  // e' pesata (contratto a slot: e' moeCombine a sommare w*y in ordine k).
+  // Senza nessuno dei due il testo emesso e' identico byte per byte.
+  const XR = batch || gather ? "xR + " : "";
+  const YR = gather
+    ? `(mRow * ${gather.nUsed}u + kslot) * ${N}u + `
+    : batch ? `wid.z * ${N}u + ` : "";
+  const xRowPre = gather
+    ? `\n  let gk = gather[wid.z];\n  let mRow = gk & 0xffffu;\n  let kslot = gk >> 16u;\n  let xR = mRow * ${K}u;`
+    : batch ? `\n  let xR = wid.z * ${K}u;` : "";
   const tailAcc = accum === true
     ? `y[${YR}r] = y[${YR}r] + sel.w * partial[0];`
     : `y[${YR}r] = partial[0];`;
@@ -2354,10 +2415,13 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 
 // Q6_K: 53 word/superblocco (210 B + 2 pad) = [ql 128 B][qh 64 B][scales int8
 // 16 B][d f16]. w = d·sc_int8·(q6 − 32), q6 = nibble | 2 bit alti.
-export function gemvQ6KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean }): string {
-  const { K, N, arena, accum, batch } = opts;
+export function gemvQ6KWgsl(opts: {
+  K: number; N: number; arena?: KArenaOpts; accum?: boolean; batch?: boolean; gather?: KGatherOpts;
+}): string {
+  const { K, N, arena, accum, batch, gather } = opts;
   if (batch === true && arena) throw new Error("q6K: batch e arena non si combinano (l'arena e' il path expert, il batch il prefill)");
   if (accum === true && !arena) throw new Error("q6K: accum esige il regime d'arena (il peso viene da Sel)");
+  assertGatherCombo("q6K", { arena: arena !== undefined, accum, batch, gather });
   // OCCUPAZIONE (fase 4-bis, it.22): stessa correzione del q4_K. Qui il
   // superblocco si divide in 2 gruppi da 128 e ogni giro di `l` copre 4 quant;
   // l'unita' diventa un pezzo da `lpu6` valori di l dentro un gruppo, scelto
@@ -2375,7 +2439,16 @@ export function gemvQ6KWgsl(opts: { K: number; N: number; arena?: KArenaOpts; ac
 var<private> gBase: u32;
 var<private> gBi: u32;
 fn blkw(i: u32) -> u32 { return ldw(gBi, gBase + i); }`
-    : `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+    : gather
+      // ORDINE DEI BINDING CONGELATO nel modo gather: [0 blocks, 1 x,
+      // 2 gather, 3 y]. `y` si sposta da 2 a 3 e `gather` ne prende il posto:
+      // chi costruisce il bind group segue QUESTO elenco, non quello plain.
+      ? `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read> gather: array<u32>;
+@group(0) @binding(3) var<storage, read_write> y: array<f32>;
+fn blkw(i: u32) -> u32 { return blocks[i]; }`
+      : `@group(0) @binding(0) var<storage, read> blocks: array<u32>;
 @group(0) @binding(1) var<storage, read> x: array<f32>;
 @group(0) @binding(2) var<storage, read_write> y: array<f32>;
 fn blkw(i: u32) -> u32 { return blocks[i]; }`;
@@ -2387,10 +2460,17 @@ fn blkw(i: u32) -> u32 { return blocks[i]; }`;
   if (!ok) { return; }`
     : "";
   // batch (fase 4): wid.z = riga; x e y sono matrici [M, K] e [M, N].
-  // Senza, il testo emesso e' identico byte per byte.
-  const XR = batch ? "xR + " : "";
-  const YR = batch ? `wid.z * ${N}u + ` : "";
-  const xRowPre = batch ? `\n  let xR = wid.z * ${K}u;` : "";
+  // gather (engine-velocita-decode riga 2): wid.z indicizza `gather`, che porta
+  // `m | kslot<<16`; x resta [M,K], y e' l'array degli slot e la scrittura NON
+  // e' pesata (contratto a slot: e' moeCombine a sommare w*y in ordine k).
+  // Senza nessuno dei due il testo emesso e' identico byte per byte.
+  const XR = batch || gather ? "xR + " : "";
+  const YR = gather
+    ? `(mRow * ${gather.nUsed}u + kslot) * ${N}u + `
+    : batch ? `wid.z * ${N}u + ` : "";
+  const xRowPre = gather
+    ? `\n  let gk = gather[wid.z];\n  let mRow = gk & 0xffffu;\n  let kslot = gk >> 16u;\n  let xR = mRow * ${K}u;`
+    : batch ? `\n  let xR = wid.z * ${K}u;` : "";
   const tailAcc = accum === true
     ? `y[${YR}r] = y[${YR}r] + sel.w * partial[0];`
     : `y[${YR}r] = partial[0];`;
