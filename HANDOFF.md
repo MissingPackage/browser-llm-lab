@@ -2,17 +2,17 @@
 
 ## 1. Next decidable
 
-**GOAL `engine-velocita-decode` ATTIVO — FERMO SU UN RULING (docket item 4).**
+**GOAL `engine-velocita-decode` ATTIVO.** Riga 2c chiusa (leva atterrata),
+riga 2d in **RE-PLAN**.
 
-**IL RISULTATO, MISURATO**: il decode del 35B e' passato da **22,58 a 28,90
-tok/s** (+28%) col KFAN — il collasso dei topK expert in un giro di dispatch
-invece che uno per volta, 5 dispatch per layer invece di 33. A/B nello stesso
-processo, stessa cache, bracci interleavati; **gate argmax 39/39 identici**.
-Barra 30 tok/s = 33,33 ms/token: **mancano 1,27 ms**.
-Artefatto: `results/engine/q35-kfan-ab-2026-08-15c.json`.
+**IL RISULTATO, MISURATO**: decode del 35B da **22,58 a 28,90 tok/s (+28%)** col
+KFAN — il collasso dei topK expert in UN giro di dispatch, 5 per layer invece di
+33. A/B nello stesso processo, stessa cache, bracci interleavati; **gate argmax
+39/39 identici**. `results/engine/q35-kfan-ab-2026-08-15c.json`.
+**Barra 30 tok/s = 33,33 ms/token: mancano 1,27 ms.**
 
 **IL PRIMO TERMINE E' CAMBIATO** (`q35-kfan-gputime-2026-08-15b.json`, ms/token
-per braccio, sonda accesa che perturba):
+PER BRACCIO, sonda accesa che perturba):
 
     categoria   kfan OFF  kfan ON
     expert        8,951    5,151    <- era il primo
@@ -22,35 +22,56 @@ per braccio, sonda accesa che perturba):
 
 `ssmGemv` e' la proiezione DeltaNet: **non e' MoE, e ce l'hanno anche 4B e 9B**.
 
-**LA DECISIONE CHE ASPETTA IL PI** — docket item 4. Il kfan e' cablato su UNA
-famiglia (q35gpumodel). La regola che ho scritto io («una leva vale solo se
-misurata su >= 2 famiglie») manderebbe a cablarlo anche sul GLM: due iterazioni,
-una TERZA scrittura a mano dello stesso modo in una terza famiglia di
-generatori (`pairGemvSiluFastWgsl`, `gemvAccumFastWgsl` — verificato che sono
-fattorizzati allo stesso modo), **sul secondo termine**. Mentre il primo termine
-e' scoperto ed e' globale per costruzione. Tre uscite nel docket.
+**LA RIGA 2d — stima 2-3 iterazioni, CINQUE consumate.** Ha prodotto, tutto in
+albero e verde: la verifica di riuso (il kernel veloce ESISTE ed e' ktest-ato,
+3,26x a M=1 — non va scritto), il predicato su N in `kernelVerdict` coi suoi
+casi, il cablaggio del q8_0 con 11 test aggiornati e tre resi piu' stringenti.
+**MA il valore atterrato e' sul PREFILL del 35B, che questo goal ha dichiarato
+fuori scope: la barra e' sul decode, e il decode non e' stato toccato.**
+
+**LE SHAPE, ESATTE** (`q35shape.ts:86-89` + meta dell'header dump, K=2048):
+
+    attn_qkv   N=8192  AMMESSO   66,32% dei pesi dei quattro
+    attn_gate  N=4096  AMMESSO   33,16%
+    ssm_beta   N=32    ESCLUSO    0,26%
+    ssm_alpha  N=32    ESCLUSO    0,26%      -> ammessi 99,48%
+
+**Anche il 35B ha `ssm_alpha`/`ssm_beta` a N=32, come il 4B**: il predicato non
+protegge la peculiarita' di un modello, protegge quella coppia di tensori
+nell'architettura ovunque compaia.
+
+**LE DUE TRAPPOLE DEL PASSO CHE RESTA, pagate in it.17:**
+1. **`gemvB` NON e' il decode**, e' il prefill. `loadW` restituisce due
+   emettitori: `push` -> `gemv` (decode, `q35gpumodel.ts:862`, sei righe) e
+   `pushB` -> `gemvB` (prefill, dove sta la rotta). Non c'e' un ramo da aprire:
+   c'e' una rotta da costruire altrove. `gemv` emette UN dispatch, la forma
+   split-K ne vuole TRE piu' due buffer che nel decode non esistono.
+2. **Il 3,26x e' misurato contro `base-batch-z`**, non contro cio' che `gemv`
+   emette (non-batch, e senza il `vec4Rows2` che vale solo per q4_0). Il
+   guadagno del decode va MISURATO, non ereditato dal banco.
 
 **COSA E' IN ALBERO E FUNZIONA**: kfan su `gemvQ4KWgsl`/`gemvQ6KWgsl`
 (`kfan: {nUsed, xPerK}`), `moeCombineWgsl({weightsFromSel})`, il cablaggio nel
-ramo ottimistico di `q35gpumodel.ts`, `setKfan()` per l'A/B a caldo, il flag
-`--kfan` in `q35-conf-run.mjs` col `kfanGate` sull'argmax, e la ripartizione
-`gpuCat` per passata. Tutto spento di default.
+ramo ottimistico di `q35gpumodel.ts`, `setKfan()` per l'A/B a caldo, `--kfan` in
+`q35-conf-run.mjs` col `kfanGate` sull'argmax, `gpuCat` per passata, il
+predicato `PREFILL_GEMM_ROWS_PER_WG` e il q8_0 cablato. Il kfan e' spento di
+default.
 
-**DUE DIFETTI TOLTI SULLA STRADA** (non erano nel brief):
-1. **`setInFlight(true)` senza `finally`** (`q35gpumodel.ts`, ramo ottimistico):
-   fra submit e readback c'e' `popErrorScope`, che lancia. Senza il `finally` il
-   flag I1 restava alzato e OGNI passata successiva del processo moriva su
-   «ensure con token in volo» — **e l'errore riportato era quello del braccio
-   SANO**, il primo a inciamparci. Un errore in un braccio azzerava il run e ne
-   falsificava l'attribuzione.
+**TRE DIFETTI TOLTI SULLA STRADA** (non erano nel brief):
+1. **`setInFlight(true)` senza `finally`**: fra submit e readback c'e'
+   `popErrorScope`, che lancia. Il flag I1 restava alzato e OGNI passata
+   successiva moriva su «ensure con token in volo» — **e l'errore riportato era
+   quello del braccio SANO**, il primo a inciamparci.
 2. **`pCombine` con layout AUTO** e un offset dinamico passato a
-   `setBindGroup`: errore di validazione WebGPU. Ora layout esplicito con
-   `hasDynamicOffset`.
+   `setBindGroup`: errore di validazione WebGPU.
+3. **`arenaSlotWgsl`** era una costante con l'indice di Sel cablato; ora e' una
+   funzione col default invariato.
 
-**LA LEZIONE DEL GOAL, quattro volte**: una divisione non e' una misura.
-21,1 ms (token pulito), 16% (il gather), «due contratti diversi» (accum/slot),
-30,9 us per dispatch (era 8,65). Ogni volta un numero derivato reggeva una
-decisione. **Il correttivo che ha funzionato: leggere il codice, o misurare.**
+**LA LEZIONE DEL GOAL, CINQUE volte**: una divisione non e' una misura, e una
+descrizione del codice non e' il codice. 21,1 ms (token pulito), «16%» (il
+gather), «due contratti diversi» (accum/slot), 30,9 us per dispatch (era 8,65),
+e «gemvB e' il decode» (e' il prefill). **Il correttivo che ha funzionato ogni
+volta: leggere il codice, o misurare.**
 
 ---
 
