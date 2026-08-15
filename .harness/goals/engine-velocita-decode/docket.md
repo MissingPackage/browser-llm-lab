@@ -226,3 +226,43 @@ una leva» invece che «pattern replicato a mano».
    mappa decisionale generale su riuso vs duplicazione, e soprattutto **il
    trigger** — perché una regola scritta ieri non si è attivata oggi.
 4. Piano riordinato secondo l'ordine che ha dato: v. `PHASES.md` righe 2d e 3.
+
+## item 5 — cosa chiude la riga 2d, e cosa chiude il goal (io → PI, it.17)
+
+**PI: tre uscite, presentate in chat il 2026-08-15 sera e messe qui perché una
+decisione che resta in chat, alla ripresa, è indistinguibile da un abbandono.**
+
+**Lo stato**: decode 35B **22,58 → 28,90 tok/s (+28%)**, gate argmax 39/39.
+Barra 30 = 33,33 ms/token, **mancano 1,27 ms**. La riga 2d è a **cinque
+iterazioni su 2-3 stimate** e il valore che ha atterrato è sul **prefill** del
+35B, che il goal ha dichiarato fuori scope.
+
+**Il costo del passo che resta, misurato leggendo il codice**: `gemv`
+(`q35gpumodel.ts:862`, il decode) emette UN dispatch; la forma split-K ne vuole
+TRE (quantizza x → GEMM a fette → combine) più due buffer che nel decode non
+esistono. E il 3,26× del banco è contro `base-batch-z`, non contro ciò che
+`gemv` emette: **il guadagno va misurato, non ereditato.**
+
+**Le tre uscite:**
+
+1. **Costruire la rotta nel decode e misurarla** — 2-3 iterazioni. È l'unica
+   che punta ai 1,27 ms mancanti con la leva già identificata. *Rischio: la
+   riga arriverebbe a 7-8 iterazioni su 2-3, e il guadagno reale è ignoto
+   finché non lo si misura contro il kernel giusto.*
+2. **Chiudere il goal sul +28%** e fare della rotta nel decode un goal suo, con
+   la sua misura e la sua barra. Il 35B resta sotto i 30, ma il risultato è
+   reale, verificato e consegnabile — e la riga 2d chiuderebbe con ciò che ha
+   davvero prodotto (il predicato, il q8_0 cablato) invece di trascinare.
+3. **Andare sul secondo reperto**: `router` **2,88 ms/token** per scegliere 8
+   expert su 256, cioè **72 µs a layer** per una riduzione minuscola. Il
+   rapporto fra lavoro e tempo è così fuori scala che vale un'occhiata prima di
+   progettare qualsiasi cosa — e 2,88 ms sono più del doppio dei 1,27 che
+   mancano.
+
+**La mia lettura, che non è un ruling**: la **3 prima della 1**. Il router è il
+termine con il rapporto lavoro/tempo più assurdo dell'intero profilo, non è
+stato guardato da nessuno, e da solo basterebbe alla barra. Guardarlo costa
+un'iterazione; costruire la rotta nel decode ne costa tre e ha un guadagno che
+non conosco. Pareto.
+
+**RULING:** _

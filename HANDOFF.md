@@ -5,6 +5,13 @@
 **GOAL `engine-velocita-decode` ATTIVO.** Riga 2c chiusa (leva atterrata),
 riga 2d in **RE-PLAN**.
 
+**LA PROSSIMA DECISIONE E' DEL PI — `docket.md` item 5**, tre uscite: costruire
+la rotta nel decode (2-3 it, punta ai 1,27 ms mancanti, guadagno ignoto finche'
+non misurato contro il kernel giusto) · chiudere il goal sul +28% e fare della
+rotta un goal suo · **andare sul `router`, 2,88 ms/token per scegliere 8 expert
+su 256 (72 us a layer), mai guardato e da solo piu' del doppio di cio' che
+manca**. La mia lettura: la terza prima della prima.
+
 **IL RISULTATO, MISURATO**: decode del 35B da **22,58 a 28,90 tok/s (+28%)** col
 KFAN — il collasso dei topK expert in UN giro di dispatch, 5 per layer invece di
 33. A/B nello stesso processo, stessa cache, bracci interleavati; **gate argmax
