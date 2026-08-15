@@ -337,6 +337,16 @@ async function chat(turn: number, user: string, system: string | null, s: Sampli
         replays: perf1.replays - perf0.replays,
         replayLayers: perf1.replayLayers - perf0.replayLayers,
         repairMs: perf1.repairMs - perf0.repairMs,
+        // scomposizione del repair: `repairMs` = fetch + pack + upload + flush
+        // + eviction, e `tailCpuMs` = repair + replay + contabilità. Senza
+        // questi cinque il 43% del turno resta anonimo (goal 35b-residency).
+        fetchRepairMs: perf1.fetchRepairMs - perf0.fetchRepairMs,
+        fetchRepairCalls: perf1.fetchRepairCalls - perf0.fetchRepairCalls,
+        fetchRepairBytes: perf1.fetchRepairBytes - perf0.fetchRepairBytes,
+        fetchPrepMs: perf1.fetchPrepMs - perf0.fetchPrepMs,
+        fetchPrepCalls: perf1.fetchPrepCalls - perf0.fetchPrepCalls,
+        replayPassMs: perf1.replayPassMs - perf0.replayPassMs,
+        flushMs: perf1.flushMs - perf0.flushMs,
         encodeMs: perf1.encodeMs - perf0.encodeMs,
         readbackMs: perf1.readbackMs - perf0.readbackMs,
         argmaxMs: perf1.argmaxMs - perf0.argmaxMs,

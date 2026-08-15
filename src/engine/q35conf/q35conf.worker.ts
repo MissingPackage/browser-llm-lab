@@ -88,6 +88,9 @@ const pass2json = (
   r: {
     submits: number; readbacks: number; hits: number; misses: number; ms: number;
     dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
+    fetchRepairMs: number; fetchRepairCalls: number; fetchRepairBytes: number;
+    fetchPrepMs: number; fetchPrepCalls: number;
+    replayPassMs: number; flushMs: number;
     encodeMs: number; embedMs: number; argmaxMs: number; tailCpuMs: number;
     readbackMs: number; tokenMs: number;
   },
@@ -99,6 +102,21 @@ const pass2json = (
   msPerToken: r.ms / n,
   dirtyTokens: r.dirtyTokens, replays: r.replays, replayLayers: r.replayLayers,
   repairMs: r.repairMs,
+  // SCOMPOSIZIONE DEL REPAIR (goal 35b-residency, riga 1). `repairMs` da solo
+  // non basta: sul 35B il 43% del tempo di parete stava dentro `repairMs` ma
+  // fuori da pack+upload, e nessun contatore lo nominava. `namedFrac` è la
+  // clausola del done-when resa verificabile nell'artefatto invece che a mano:
+  // quanta parte di `tailCpuMs` i contatori sanno spiegare.
+  repair: {
+    fetchRepairMs: r.fetchRepairMs, fetchRepairCalls: r.fetchRepairCalls,
+    fetchRepairBytes: r.fetchRepairBytes,
+    msPerFetch: r.fetchRepairCalls > 0 ? r.fetchRepairMs / r.fetchRepairCalls : null,
+    fetchPrepMs: r.fetchPrepMs, fetchPrepCalls: r.fetchPrepCalls,
+    replayPassMs: r.replayPassMs, flushMs: r.flushMs,
+    // per differenza, mai per assunzione: ciò che resta è contabilità vera
+    accountingMs: r.tailCpuMs - r.repairMs - r.replayPassMs,
+    namedFrac: r.tailCpuMs > 0 ? (r.repairMs + r.replayPassMs) / r.tailCpuMs : null,
+  },
   // FASE 4-TER: il token fuori dai pass GPU, per voce e per token
   cpu: {
     encodeMs: r.encodeMs / n, embedMs: r.embedMs / n, argmaxMs: r.argmaxMs / n,
@@ -494,6 +512,9 @@ async function main(cfg: Cfg): Promise<void> {
       argmax: number[]; submits: number; readbacks: number; hits: number; misses: number;
       routing: Record<string, number>; ms: number; error: string | null;
       dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
+      fetchRepairMs: number; fetchRepairCalls: number; fetchRepairBytes: number;
+      fetchPrepMs: number; fetchPrepCalls: number;
+      replayPassMs: number; flushMs: number;
       encodeMs: number; embedMs: number; argmaxMs: number; tailCpuMs: number;
       readbackMs: number; tokenMs: number;
     }> => {
@@ -532,6 +553,12 @@ async function main(cfg: Cfg): Promise<void> {
         hits: m1.hits - m0.hits, misses: m1.misses - m0.misses, routing, ms, error,
         dirtyTokens: p1.dirtyTokens - p0.dirtyTokens, replays: p1.replays - p0.replays,
         replayLayers: p1.replayLayers - p0.replayLayers, repairMs: p1.repairMs - p0.repairMs,
+        fetchRepairMs: p1.fetchRepairMs - p0.fetchRepairMs,
+        fetchRepairCalls: p1.fetchRepairCalls - p0.fetchRepairCalls,
+        fetchRepairBytes: p1.fetchRepairBytes - p0.fetchRepairBytes,
+        fetchPrepMs: p1.fetchPrepMs - p0.fetchPrepMs,
+        fetchPrepCalls: p1.fetchPrepCalls - p0.fetchPrepCalls,
+        replayPassMs: p1.replayPassMs - p0.replayPassMs, flushMs: p1.flushMs - p0.flushMs,
         encodeMs: p1.encodeMs - p0.encodeMs, embedMs: p1.embedMs - p0.embedMs,
         argmaxMs: p1.argmaxMs - p0.argmaxMs, tailCpuMs: p1.tailCpuMs - p0.tailCpuMs,
         readbackMs: p1.readbackMs - p0.readbackMs, tokenMs: p1.tokenMs - p0.tokenMs,

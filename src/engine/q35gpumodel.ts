@@ -200,21 +200,51 @@ export interface Q35GpuModel {
    * repair+replay: token con almeno un miss, giri rigiocati (piu' di uno per
    * token = cascata), somma dei layer MoE rigiocati, e il tempo CPU di
    * fetch+upload+flush. La tassa GPU del replay sta gia' dentro `submits`.
+   *
+   * SCOMPOSIZIONE DEL REPAIR (goal engine-35b-residency, riga 1). Sul turno
+   * misurato il 2026-08-15 (`results/chat/chat-35b-2026-08-15T16-25-12.json`)
+   * il 43% del tempo di parete non aveva un nome: stava dentro `repairMs` ma
+   * fuori da `packMs`+`uploadMs`, e `readMs` non lo vedeva perche' misura
+   * `readRaw` DENTRO `ensure` mentre il 35B fa l'I/O PRIMA (l'avvertenza e' a
+   * `residency.ts:250-257`). I contatori qui sotto chiudono la somma:
+   *
+   *   tailCpuMs = repairMs + replayPassMs + contabilita' (account/routing)
+   *   repairMs  = fetchRepairMs + packMs + uploadMs + flushMs + eviction
+   *
+   * `fetchRepairMs`/`Calls`/`Bytes` = la `await Promise.all(readExpert)` del
+   * repair, che sul 35B e' 3 fetch Range HTTP per expert. `fetchPrepMs`/`Calls`
+   * = la stessa await nel path `prepLayer` (sync + prefill a chunk): CONTATA A
+   * PARTE di proposito, i due regimi sono diversi — nel repair i miss si
+   * scoprono a fine pass, in `prepLayer` sono noti prima del layer, e mescolarli
+   * renderebbe illeggibile quale dei due paga. `replayPassMs` = i `runPass` di
+   * replay awaited dentro il loop di repair, cioe' la parte di `tailCpuMs` che
+   * e' lavoro GPU rifatto e non contabilita'. `flushMs` = `flushSlotTable` al
+   * sito del repair (quello di `prepLayer` non e' contato: e' l'altro path).
    */
   perf(): {
     tokens: number; embedMs: number; readbackMs: number; argmaxMs: number;
     submits: number; readbacks: number;
     dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
+    fetchRepairMs: number; fetchRepairCalls: number; fetchRepairBytes: number;
+    fetchPrepMs: number; fetchPrepCalls: number;
+    replayPassMs: number; flushMs: number;
     /**
      * FASE 4-TER (it.28): il token FUORI dai pass GPU, decomposto.
      * `encodeMs` = registrare i ~2400 dispatch nel command buffer e fare il
      * submit (CPU pura, e la GPU non ha ancora cominciato: e' seriale col
      * lavoro GPU, non sovrapposta). `readbackMs` = attesa delle mapAsync, che
-     * NON e' overhead ma per lo piu' la GPU che lavora. `tailCpuMs` = la
-     * contabilita' di fine token (derivazione dei miss da Sel, routing,
-     * noteResidentHit). `embedMs` e `argmaxMs` erano gia' li'. `tokenMs` e' il
-     * totale di parete, cosi' il residuo non misurato si vede per differenza
-     * invece di essere assunto zero.
+     * NON e' overhead ma per lo piu' la GPU che lavora. `embedMs` e `argmaxMs`
+     * erano gia' li'. `tokenMs` e' il totale di parete, cosi' il residuo non
+     * misurato si vede per differenza invece di essere assunto zero.
+     *
+     * `tailCpuMs` — CORRETTO il 2026-08-15, il commento precedente lo
+     * sottostimava dell'84%. Diceva «la contabilita' di fine token (derivazione
+     * dei miss da Sel, routing, noteResidentHit)», ma `tTail` e' preso PRIMA
+     * del `while (cur.missCount > 0)`: `tailCpuMs` include il repair E i
+     * `runPass` di replay awaited dentro il loop. Sul turno del 2026-08-15
+     * valeva 121.691 ms su 144.744 di `tokenMs` — l'84,07%, non un residuo di
+     * contabilita'. La contabilita' vera e' ora ottenibile per differenza:
+     * `tailCpuMs − repairMs − replayPassMs`.
      */
     encodeMs: number; tokenMs: number; tailCpuMs: number;
     /**
@@ -1991,18 +2021,32 @@ export async function createQ35GpuModel(
           const tRep = performance.now();
           // L'I/O sta FUORI dalla cache (il 35B legge per Range): si `await`ta
           // solo ciò che manca e poi si consegnano i byte già in mano.
+          // MISURATO A PARTE (goal 35b-residency, riga 1): `readMs` di
+          // `residency.ts` NON vede questa await — è l'I/O che sta prima di
+          // `ensure`, e sul turno del 2026-08-15 era il 43% del tempo di parete
+          // senza avere un nome. Ogni `readExpert` sono 3 fetch Range HTTP.
           const got = await Promise.all(misses.map((ms) => readExpert(ms.l, ms.e)));
+          perfAcc.fetchRepairMs += performance.now() - tRep;
+          perfAcc.fetchRepairCalls += misses.length;
+          for (const g of got) perfAcc.fetchRepairBytes += g.gate.length + g.up.length + g.down.length;
           misses.forEach((ms, i) => {
             cache.ensure(ms.l, ms.e, () => got[i], pinned);
             repaired.add(cache.keyOf(ms.l, ms.e));
           });
           // UN flush, DOPO le writeBuffer degli slab: il dato prima della
           // tabella che lo indirizza (R5 del design d'arena).
+          const tFlush = performance.now();
           cache.flushSlotTable();
+          perfAcc.flushMs += performance.now() - tFlush;
           perfAcc.repairMs += performance.now() - tRep;
           perfAcc.replays++;
           perfAcc.replayLayers += nMoeLayer - cur.firstDirty;
+          // Il pass rigiocato è lavoro GPU RIFATTO, non contabilità di fine
+          // token: senza questo contatore finiva nel residuo anonimo di
+          // `tailCpuMs` (correzione C0-2 del goal).
+          const tReplay = performance.now();
           cur = await runPass(cur.firstDirty, false);
+          perfAcc.replayPassMs += performance.now() - tReplay;
         }
         account(nMoeLayer, cur.su);
         perfAcc.tailCpuMs += performance.now() - tTail;
@@ -2047,7 +2091,14 @@ export async function createQ35GpuModel(
         const missing: number[] = [];
         for (const e of sel.experts) if (!cache.isResident(l, e)) missing.push(e);
         if (missing.length > 0) {
+          // Contato SEPARATAMENTE da `fetchRepairMs` (correzione C0-3 del goal
+          // 35b-residency): qui i miss sono noti PRIMA del layer, nel repair si
+          // scoprono a fine pass. Sono due regimi, e sommarli renderebbe
+          // illeggibile quale dei due paga.
+          const tFetch = performance.now();
           const got = await Promise.all(missing.map((e) => readExpert(l, e)));
+          perfAcc.fetchPrepMs += performance.now() - tFetch;
+          perfAcc.fetchPrepCalls += missing.length;
           missing.forEach((e, i) => raw.set(e, got[i]));
         }
         // i top-K del token devono coesistere: nessuno di loro può essere
@@ -2113,6 +2164,11 @@ export async function createQ35GpuModel(
   const perfAcc = {
     tokens: 0, embedMs: 0, readbackMs: 0, argmaxMs: 0, submits: 0, readbacks: 0,
     dirtyTokens: 0, replays: 0, replayLayers: 0, repairMs: 0,
+    // scomposizione del repair (goal 35b-residency, riga 1): senza questi il
+    // 43% del tempo di parete del 35B non ha un nome
+    fetchRepairMs: 0, fetchRepairCalls: 0, fetchRepairBytes: 0,
+    fetchPrepMs: 0, fetchPrepCalls: 0,
+    replayPassMs: 0, flushMs: 0,
     encodeMs: 0, tokenMs: 0, tailCpuMs: 0,
     // testa MTP (it.53): tenuti FUORI da `tokenMs`, perche' il draft e' un
     // submit a parte e sommarlo al token confonderebbe due costi diversi.
