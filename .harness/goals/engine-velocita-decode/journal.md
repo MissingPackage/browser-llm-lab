@@ -792,3 +792,66 @@ ruling del PI vieta.
 **EVIDENZA**: `npx vitest run` **1069 passed | 10 skipped** · `npx tsc --noEmit`
 exit 0 · due run GPU su host quiescente
 (`q35-kfan-gputime-2026-08-15{,b}.json`).
+
+---
+
+## it.11 — RE-PLAN: la riga 2c è a 2x della stima e sta per diventare un pattern replicato a mano
+
+Nessun codice, e la ragione sta nel protocollo: al superamento della stima il
+passo decidibile diventa **la ri-pianificazione, presentata al PI**, non
+un'altra iterazione conforme. Riga 2c: **5 iterazioni su 2-3 stimate**, con la
+barra non raggiunta e il primo termine che nel frattempo si è spostato FUORI
+dalla riga.
+
+### Il reperto di fattibilità sul GLM
+
+Il GLM non condivide i generatori col 35B. Il 35B usa `gemvQ4KWgsl`/`gemvQ6KWgsl`
+(gate e up separati); il GLM usa **`pairGemvSiluFastWgsl`** (gate+up+silu FUSI,
+`wgsl.ts:3100`) e **`gemvAccumFastWgsl`** (`:3277`). Letti entrambi: sono
+fattorizzati come i K-quant — `head`/`pre`/`body`/tail — quindi il kfan ci
+entrerebbe con **le stesse tre modifiche** (indice di `Sel`, ingresso per-k,
+scrittura nello slot al posto dell'accumulo pesato).
+
+**Ed è esattamente il problema.** Sarebbe la **terza** volta che scrivo lo
+stesso modo a mano in una famiglia di generatori diversa:
+
+    gemvQ4KWgsl   kfan  ✅ it.6
+    gemvQ6KWgsl   kfan  ✅ it.6
+    pairGemvSiluFastWgsl  ❌
+    gemvAccumFastWgsl     ❌
+
+Quattro siti, due coperti: è la forma «pattern applicato al 50%» che in questa
+repo ha una regola sua. E il costo non è solo la scrittura: sono quattro copie
+della stessa invariante (lo stride degli slot, il miss che scrive zero, la
+scrittura non pesata) che nessun compilatore confronta.
+
+### E soprattutto: la riga 2c non è più dove sta il tempo
+
+Misurato in it.10, braccio kfan-ON: **`ssmGemv` 6,98 ms/token contro `expert`
+5,15.** Il primo termine del decode del 35B non è più il MoE. Cablare il kfan
+sul GLM è **completare una leva sul secondo termine**, mentre il primo è
+scoperto e — questo è il punto — **è globale per costruzione**: la proiezione
+DeltaNet ce l'hanno 4B, 9B e 35B, quindi una leva lì soddisfa la regola delle
+≥ 2 famiglie senza doverla cablare due volte.
+
+### Perché NON decido da solo, e il test se lo sia chiesto davvero
+
+Il discriminante del protocollo: *cosa farei se nessuno rispondesse?* Ho
+oscillato, e l'oscillazione è il segnale. La regola «≥ 2 famiglie» **l'ho
+scritta io** come forma meccanica del ruling del PI; adesso quella regola mi
+manda a spendere due iterazioni sul secondo termine di un modello che non è il
+collo, mentre il primo termine è globale e scoperto. **Se applico la mia regola
+alla lettera vado contro l'intento che voleva codificare** — che era «massimo
+risultato, leve globali, Pareto».
+
+Questa non è scelta di meccanismo (mia): è cosa conta come leva globale, cioè
+la funzione obiettivo. Va al PI.
+
+### Stato per la ripresa
+
+- Riga 2c: **leva atterrata e verde** — 22,58 → 28,90 tok/s, gate argmax 39/39,
+  cablata su q35gpumodel, `setKfan` per l'A/B. **Debito: una famiglia sola.**
+- Barra 30 tok/s: **mancano 1,27 ms/token.**
+- Primo termine misurato: `ssmGemv` 6,98 ms/token (era `expert`).
+- Secondo reperto non toccato: `router` 2,88 ms/token per un top-8 su 256,
+  72 µs a layer — sproporzionato.

@@ -2,97 +2,55 @@
 
 ## 1. Next decidable
 
-**GOAL `engine-velocita-decode` ATTIVO** (chartato il 2026-08-15 come
-`engine-35b-residency`, RI-SCOPATO lo stesso giorno su ruling del PI).
-Riga 1 chiusa. **Prossimo passo: riga 2, la forma a gather universale.**
+**GOAL `engine-velocita-decode` ATTIVO — FERMO SU UN RULING (docket item 4).**
 
-**LA TESI DEL GOAL, dopo che la misura ha demolito quella precedente**: il
-decode del motore accelera con **leve globali**, non con ottimizzazioni per
-modello. Barra: **35B >= 30 tok/s**, le altre tre famiglie non regrediscono.
-**REGOLA MECCANICA su ogni riga: una leva vale solo se misurata su >= 2
-famiglie.**
+**IL RISULTATO, MISURATO**: il decode del 35B e' passato da **22,58 a 28,90
+tok/s** (+28%) col KFAN — il collasso dei topK expert in un giro di dispatch
+invece che uno per volta, 5 dispatch per layer invece di 33. A/B nello stesso
+processo, stessa cache, bracci interleavati; **gate argmax 39/39 identici**.
+Barra 30 tok/s = 33,33 ms/token: **mancano 1,27 ms**.
+Artefatto: `results/engine/q35-kfan-ab-2026-08-15c.json`.
 
-**IL NUMERO CHE HA RI-SCOPATO IL GOAL:**
+**IL PRIMO TERMINE E' CAMBIATO** (`q35-kfan-gputime-2026-08-15b.json`, ms/token
+per braccio, sonda accesa che perturba):
 
-    token PULITO del 35B (0 miss, 0 dirty, 0 replay: residency AZZERATA)
-      tokenMs        43,585 ms  =  22,9 tok/s     <- il TETTO della residency
-      readbackWait   40,753 ms  =  93,5% del token pulito
-      submits/token  1 · readbacks/token 1
-    q35-optimistic-35b-cleantoken-2026-08-15.json (oggi, albero post-kquant)
-    q35-vramplan-35b-it35.json  43,736 ms (2026-08-11) — coincidono entro 0,7%
+    categoria   kfan OFF  kfan ON
+    expert        8,951    5,151    <- era il primo
+    ssmGemv       7,767    6,980    <- e' il primo ADESSO
+    router        3,221    2,883       (72 us a layer per un top-8 su 256!)
+    TOT GPU      30,878   24,902
 
-Togliere il 100% della tassa di residency lascia il 35B **sotto la barra**. Il
-termine che decide e' il **pass**, e la leva su di esso e' la forma a gather
-K-quant della consegna §4.2-4.4 — che il contratto aveva messo fuori scope con
-«varrebbe il 16% del token», stima NON misurata: sul numero vero vale il 93,5%.
-Il PI l'aveva gia' chiesta durante `engine-kquant`.
+`ssmGemv` e' la proiezione DeltaNet: **non e' MoE, e ce l'hanno anche 4B e 9B**.
 
-**LA RIGA CHE MUOVE LA BARRA E' LA 2c — KFAN**, trovata in it.5 col controllo
-di fattibilita' prima di spendere. Aritmetica dal token pulito:
+**LA DECISIONE CHE ASPETTA IL PI** — docket item 4. Il kfan e' cablato su UNA
+famiglia (q35gpumodel). La regola che ho scritto io («una leva vale solo se
+misurata su >= 2 famiglie») manderebbe a cablarlo anche sul GLM: due iterazioni,
+una TERZA scrittura a mano dello stesso modo in una terza famiglia di
+generatori (`pairGemvSiluFastWgsl`, `gemvAccumFastWgsl` — verificato che sono
+fattorizzati allo stesso modo), **sul secondo termine**. Mentre il primo termine
+e' scoperto ed e' globale per costruzione. Tre uscite nel docket.
 
-    readbackWait                       40,753 ms/token
-    dispatch expert   (8x4+1) x 40 layer  = 1.320  ->  30,9 us l'uno
-    byte di pesi expert per token          566,2 MB -> 13,9 GB/s EFFETTIVI
-    a 576 GB/s quegli stessi byte             0,98 ms
+**COSA E' IN ALBERO E FUNZIONA**: kfan su `gemvQ4KWgsl`/`gemvQ6KWgsl`
+(`kfan: {nUsed, xPerK}`), `moeCombineWgsl({weightsFromSel})`, il cablaggio nel
+ramo ottimistico di `q35gpumodel.ts`, `setKfan()` per l'A/B a caldo, il flag
+`--kfan` in `q35-conf-run.mjs` col `kfanGate` sull'argmax, e la ripartizione
+`gpuCat` per passata. Tutto spento di default.
 
-**41x sopra il pavimento di banda: il decode e' dispatch/occupancy-bound**, non
-compute ne' bandwidth. Nel decode l'asse con 8 elementi NON e' la riga, e' il
-top-K: con `wid.z = k` si passa da **1.320 a 200 dispatch/token**, occupazione
-x8. E' piccolo e verificato sul codice: `selBuf` e' gia' `array<Sel>` in storage
-e le topK entry di un (riga, layer) sono contigue, quindi il preambolo diventa
-`selBuf[moeIdx.selIdx + wid.z]` — una riga. La corsa sull'accumulo la risolve il
-contratto a slot di it.4. Il divieto `batch && arena` (`wgsl.ts:2175`, `:2360`)
-va affrontato introducendo `kfan` come modo A SE', non allentando la guardia.
+**DUE DIFETTI TOLTI SULLA STRADA** (non erano nel brief):
+1. **`setInFlight(true)` senza `finally`** (`q35gpumodel.ts`, ramo ottimistico):
+   fra submit e readback c'e' `popErrorScope`, che lancia. Senza il `finally` il
+   flag I1 restava alzato e OGNI passata successiva del processo moriva su
+   «ensure con token in volo» — **e l'errore riportato era quello del braccio
+   SANO**, il primo a inciamparci. Un errore in un braccio azzerava il run e ne
+   falsificava l'attribuzione.
+2. **`pCombine` con layout AUTO** e un offset dinamico passato a
+   `setBindGroup`: errore di validazione WebGPU. Ora layout esplicito con
+   `hasDynamicOffset`.
 
-**ATTENZIONE — la riga 2 (gather per righe) NON muove la barra del decode**, ed
-e' stato corretto in it.5: il gather raggruppa le RIGHE di un chunk, e nel
-decode le righe sono una. Il ~2,6x della consegna §4.4 e' «per chunk da M=16»:
-e' una leva di PREFILL e di GLM. Cio' che it.3 e it.4 hanno costruito serve
-comunque tutto — il `nUsed` parametrico e' il nUsed della combine, e il
-contratto a slot e' cio' che rende possibile il collasso dei k senza corse.
-
-**LE ALTRE DUE RIGHE APERTE:**
-- **riga 2 — gather per righe.** Fatta per due terzi: `nUsed` parametrico
-  (it.3) e modo `gather` sui GEMV K-quant senza toccare l'aritmetica (it.4,
-  provato normalizzando il sorgente e chiedendo uguaglianza esatta col plain).
-  Resta il cablaggio sul prefill a chunk e la misura su GLM.
-- **riga 2b — raggruppamento delle richieste di I/O**, chiesto dal PI come leva
-  globale. **Misurato: 2,1x** (6,90 ms/fetch con 24 richieste concorrenti in
-  `prepLayer`, 3,27 ms con qualche centinaio nel repair). Va nel path condiviso
-  `range()`/`readRange` (`chat.worker.ts:62`, `q35conf.worker.ts:186`), NON nei
-  call site del 35B, e l'effetto va misurato **anche sul LOAD** di 4B/9B/GLM.
-
-**CIO' CHE LA RIGA 1 HA GIA' CONSEGNATO, e vale comunque vada il ruling:**
-il 43% del tempo di parete del 35B che non aveva un nome adesso ce l'ha.
-`namedFrac` **0,9995** (done-when: >= 0,95) — il residuo anonimo e' lo 0,05%.
-
-    regime sporco (arena 4 GiB, 100% token sporchi), per token:
-      fetchRepairMs  275,4 ms = 70,3% del repair   <- la fetch HTTP degli expert
-      replayPassMs   117,7 ms
-      flushMs          0,38 · contabilita' 0,29
-    costo per fetch  3,27 ms  (NON i 5,98 che avevo derivato dal buco anonimo)
-
-**IL REPERTO CHE LA RIGA 2 DEVE USARE**: il raggruppamento delle richieste vale
-**2,1x** — 6,90 ms/fetch con 24 richieste concorrenti (`prepLayer`: 8 expert x 3
-tensori) contro 3,27 ms con qualche centinaio nella stessa `Promise.all` (il
-repair). Stessi byte, stesso server, stesso `readExpert`. E' un 2x che si prende
-senza cambiare la sorgente dei byte.
-
-**DUE LANDMINE NUOVE, pagate oggi:**
-1. **Per sapere se l'host e' quiescente si contano i processi BROWSER**
-   (`type=gpu-process`, `/opt/google/chrome/chrome`, `chromium`,
-   `headless_shell`), **non i server MCP**: `pgrep @playwright/mcp` conta
-   processi node idle che non tengono un byte di VRAM. Ho dichiarato al PI
-   «quattro Chrome vivi» quando ne era vivo uno.
-2. **`namedFrac` e' indefinito su una passata a 0 miss** (0/0: senza repair il
-   100% di `tailCpu` E' contabilita'). La clausola >= 0,95 va letta SOLO nel
-   regime sporco, altrimenti dichiara fallita una riga riuscita.
-
-**LA MACCHINA E' CONDIVISA.** La GPU se la contendono piu' sessioni Claude
-(oggi: `personal-site-47`, screenshot Playwright per il sito personale del PI).
-Prima di un bench: `ListAgents`, poi `SendMessage` per accordarsi. Ha funzionato
-— finestra ottenuta in pochi minuti, e il secondo paio d'occhi ha migliorato
-sia il check dell'host sia la validazione dei contatori.
+**LA LEZIONE DEL GOAL, quattro volte**: una divisione non e' una misura.
+21,1 ms (token pulito), 16% (il gather), «due contratti diversi» (accum/slot),
+30,9 us per dispatch (era 8,65). Ogni volta un numero derivato reggeva una
+decisione. **Il correttivo che ha funzionato: leggere il codice, o misurare.**
 
 ---
 

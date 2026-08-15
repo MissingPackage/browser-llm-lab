@@ -145,3 +145,48 @@ difetto va tolto, non sorvegliato. Chiedo solo se toglierlo QUI (fuori brief,
 sette file) o come item d'igiene a sé.
 
 **RULING:** _
+
+## item 4 — la regola che ho scritto io mi manda contro l'intento che voleva codificare (io → PI, it.11)
+
+**PI: serve un ruling. È cosa conta come «leva globale», cioè funzione
+obiettivo.**
+
+**Il fatto**: il KFAN ha portato il decode del 35B da **22,58 a 28,90 tok/s**,
+gate argmax 39/39, ma è cablato su **una famiglia sola** (`q35gpumodel.ts`).
+
+**La regola che ho scritto** dopo il tuo ruling del 2026-08-15 — «una leva vale
+solo se misurata su ≥ 2 famiglie» — mi manda a cablarlo anche sul GLM.
+
+**Cosa costerebbe**, verificato leggendo i due generatori: il GLM non condivide
+i kernel col 35B (usa `pairGemvSiluFastWgsl` con gate+up FUSI e
+`gemvAccumFastWgsl`). Sono fattorizzati allo stesso modo, quindi il kfan ci
+entra con le stesse tre modifiche — ma sarebbe la **terza scrittura a mano dello
+stesso modo in una terza famiglia di generatori**, quattro siti di cui due
+coperti, e quattro copie della stessa invariante che nessun compilatore
+confronta. ~2 iterazioni.
+
+**Perché esito**: it.10 ha misurato che **il primo termine non è più il MoE**.
+Braccio kfan-ON: `ssmGemv` 6,98 ms/token contro `expert` 5,15. `ssmGemv` è la
+proiezione DeltaNet — **non è MoE, e ce l'hanno 4B, 9B e 35B**, quindi una leva
+lì è globale *per costruzione* e soddisfa la regola senza cablarla due volte.
+
+Cablare il kfan sul GLM significa **completare una leva sul secondo termine
+mentre il primo è scoperto**. Applicare la mia regola alla lettera va contro
+l'intento che voleva codificare — «massimo risultato, leve globali, Pareto».
+
+**Le tre uscite** (non scelgo io):
+1. **Vai su `ssmGemv`** e lascia il kfan a una famiglia, dichiarandolo nel
+   consuntivo. Attacca il primo termine, è globale per costruzione, e il debito
+   GLM diventa un item d'igiene. *Rischio: il kfan resta una leva non
+   generalizzata, cioè la cosa che il tuo ruling voleva evitare.*
+2. **Chiudi prima il debito GLM** (~2 iterazioni), poi `ssmGemv`. Rispetta la
+   regola alla lettera. *Costo: due iterazioni sul secondo termine.*
+3. **Cambia la regola**: «≥ 2 famiglie» diventa «la leva è globale *per
+   costruzione*, e il cablaggio su altre famiglie è un item d'igiene con la sua
+   priorità». Più onesta rispetto all'intento, ma è una modifica a un criterio
+   che hai imposto tu — non la faccio da solo.
+
+**La mia lettura, che non è un ruling**: la 3, e poi la 1. Ma la regola l'hai
+voluta tu proprio perché da solo avevo sbagliato questo giudizio una volta.
+
+**RULING:** _
