@@ -16,9 +16,20 @@ dichiarato, **su tutte e quattro le famiglie**. **Barra: 35B ≥ 30 tok/s**
 35B **22,9 tok/s** come TETTO della sola residency (token pulito 43,585 ms,
 it.2) — la barra richiede per costruzione la leva sul pass.
 
-**LA REGOLA CHE VALE SU OGNI RIGA**: una leva è misurata su **≥ 2 famiglie**.
-Una riga che migliora un modello solo non chiude. È la forma meccanica del
-ruling del PI, ed è qui perché sulle intenzioni ho già fallito in questo goal.
+**LA REGOLA CHE VALE SU OGNI RIGA — CORRETTA DAL PI in it.12.** Diceva «una
+leva è misurata su ≥ 2 famiglie»: era una mia riformulazione, ed era **una
+metrica di copertura al posto di un principio di riuso**. Mi ha mandato a
+pianificare la terza scrittura a mano dello stesso kernel. La regola vera:
+
+> **Riusa ciò che c'è già. Costruisci globale quando possibile, poi estendi.
+> Propaga i fix sul vecchio quando serve.** E per l'ordine: *prima* le
+> ottimizzazioni globali e riusabili — i modelli nuovi le ereditano da soli —
+> *poi*, solo se non bastano o se l'architettura è diversa, quelle specifiche.
+
+**Il trigger operativo è la RIPETIZIONE, non la copertura**: se sto per scrivere
+a mano la seconda copia di una forma, la domanda è se va fattorizzata; alla
+terza non è più una domanda. Il veicolo esiste già ed è `pattern-migration`
+(`fix-dont-fence`, 2026-08-14).
 
 ---
 

@@ -179,11 +179,14 @@ regredisce.
 
 DONE WHEN (all measurable):
 
-- **LA REGOLA CHE VALE SU OGNI RIGA, e viene prima delle righe: OGNI LEVA È
-  MISURATA SU ≥ 2 FAMIGLIE DI MODELLI.** Una riga che migliora un modello solo o
-  un formato solo non chiude, anche se il suo numero è bello. È la forma
-  meccanica del ruling del PI, messa qui perché sulle intenzioni ho già fallito
-  una volta in questo stesso goal.
+- **LA REGOLA CHE VALE SU OGNI RIGA — riscritta dal PI in it.12, perché la mia
+  versione era sbagliata.** Avevo scritto «ogni leva è misurata su ≥ 2 famiglie»:
+  copertura, non riuso. La regola vera è **riusa ciò che c'è già, costruisci
+  globale quando possibile e poi estendi, propaga i fix sul vecchio quando
+  serve** — e l'ordine del lavoro è *prima le ottimizzazioni globali e
+  riusabili* (i modelli nuovi le ereditano da soli), *poi* le specifiche, solo
+  se non bastano o se l'architettura è diversa. Il trigger operativo è la
+  **ripetizione**: la seconda copia scritta a mano è una domanda, la terza no.
 
 - **STRUMENTAZIONE PRIMA DI QUALUNQUE OTTIMIZZAZIONE**: i termini del token
   scomposti e nominati, `nominati / tailCpuMs ≥ 0,95` **nel regime sporco**.

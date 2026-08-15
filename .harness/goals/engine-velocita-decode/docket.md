@@ -190,3 +190,39 @@ l'intento che voleva codificare — «massimo risultato, leve globali, Pareto».
 voluta tu proprio perché da solo avevo sbagliato questo giudizio una volta.
 
 **RULING:** _
+
+**RULING (PI, 2026-08-15):** nessuna delle tre uscite — **la premessa era
+sbagliata, e l'ha corretta lui.**
+
+> «La mia regola non era di maggiore di 2 famiglie. Semplicemente dicevo di
+> riutilizzare quello che c'è già, costruire globalmente quando possibile e poi
+> estendere, e propagare fix sul vecchio quando necessario. Proprio ieri in una
+> sessione abbiamo avuto questa discussione, ti sei segnato la memoria fix don't
+> fence e abbiamo anche aggiunto un workflow nuovo all'harness apposta per
+> queste situazioni.»
+>
+> «Dai la priorità alle ottimizzazioni globali e riutilizzabili, poi quando
+> aggiungeremo nuovi modelli le riutilizzeranno automaticamente e solo in quel
+> caso, se non bastasse, o se avessero architetture diverse, faremmo delle
+> ottimizzazioni specifiche per loro.»
+
+**Perché le mie tre uscite erano tutte sbagliate**: stavano tutte dentro la
+cornice della COPERTURA («quante famiglie ho toccato»), mentre il criterio è il
+RIUSO («quante volte ho scritto la stessa cosa»). La risposta non era né cablare
+il GLM né saltarlo: era **non scrivere il `kfan` quattro volte a mano**.
+
+**L'aggravante, registrata perché è il vero difetto**: il principio era già in
+casa. `fix-dont-fence` (2026-08-14) e il workflow `pattern-migration` sono stati
+aggiunti il giorno prima **per questa identica situazione**. Avevo la memoria in
+contesto e il workflow nella lista. Non è mancata la regola: **non l'ho
+riconosciuta applicabile**, perché avevo catalogato il caso come «copertura di
+una leva» invece che «pattern replicato a mano».
+
+**Azioni prese:**
+1. Memoria `global-levers-not-per-model-optimizations` **riscritta** con la
+   regola vera e con la proxy sbagliata dentro, come reperto.
+2. La regola «≥ 2 famiglie» **tolta** da `GOAL.md` e `PHASES.md` e sostituita.
+3. Intervista chiesta a `harness-c1` su richiesta esplicita del PI: definire una
+   mappa decisionale generale su riuso vs duplicazione, e soprattutto **il
+   trigger** — perché una regola scritta ieri non si è attivata oggi.
+4. Piano riordinato secondo l'ordine che ha dato: v. `PHASES.md` righe 2d e 3.
