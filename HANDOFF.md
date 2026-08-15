@@ -75,9 +75,17 @@ Comandi, tutti eseguiti come stanno scritti:
     node scripts/glm-bench-run.mjs --prompt 6 --ngen 64 --reps 3 --budget-gib 12 --select optimistic --prefill-batch 1 --host-state quiescent --out results/engine/<glm>.json
     node scripts/build-ttft-checkpoint.mjs <bench.json> <segmenti.json> <out.json> --ratchet <ratchet.json>
 
-**IN SOSPESO PER IL PI**: la potatura dei 35 worktree in `.claude/worktrees`
-(1,2 GB) — chiesta a goal chiuso, non ancora eseguita perche' e' una
-cancellazione.
+**POTATURA FATTA** (2026-08-15, chiesta dal PI a goal chiuso): i 35 worktree di
+workflow in `.claude/worktrees` sono stati rimossi, **1,2 GB liberati**. Prima
+di cancellare sono stati controllati uno per uno: due avevano commit non
+raggiungibili da main, ed erano entrambi impalcatura dichiarata («base: patch
+t1+t2+t7 — *non parte della mia patch*», «commit locale al worktree per isolare
+la diff»), coi genitori gia' in main. **Quattro file esistevano solo li'** —
+`engine-q35prefillwiring.test.ts`, `engine-prefillroute.test.ts`,
+`engine-gemvquant-shape.test.ts`, `gemv-quant-5114160.golden.json` — e sono
+stati messi al sicuro in `~/worktree-salvage-2026-08-15/` invece di sparire.
+Restano 35 branch `worktree-wf_*` (soli riferimenti: `.git` pesa 23 MB in
+tutto); si cancellano con `git branch -D` se danno fastidio all'elenco.
 
 **IL REPERTO DA NON PERDERE**: la guardia doppia del cablaggio
 (`route.via !== "legacy" && kk === "<formato>"`) **ha intercettato un caso
