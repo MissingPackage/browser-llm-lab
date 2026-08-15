@@ -1,13 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { dequantQ5_K, f16ToF32, Q5_K_BLOCK_BYTES } from "../src/engine/quant";
+import { writeSync } from "node:fs";
+import {
+  dequantQ5_K, f16ToF32, Q5_K_BLOCK_BYTES,
+  dequantQ4_1, Q4_1_BLOCK_BYTES, Q4_1_BLOCK_WEIGHTS,
+} from "../src/engine/quant";
 import {
   prefillGemmQ5KSplitKIdotWgsl, prefillGemmQ5KSplitKWgsl,
+  prefillGemmQ41SplitKIdotWgsl, prefillGemmQ41SplitKWgsl,
   prefillQuantXQ8Wgsl, prefillSplitKCombineWgsl, prefillGemmSplitsFor,
 } from "../src/engine/kernels/wgsl";
 import {
   PREFILL_Q5K_KTEST_CASE,
   PREFILL_GEMM_Q5K_IDOT_REL_TOL, PREFILL_GEMM_Q5K_IDOT_ABS_TOL,
   PREFILL_GEMM_Q5K_F32_REL_TOL, PREFILL_GEMM_Q5K_F32_ABS_TOL,
+  PREFILL_Q41_KTEST_CASE,
+  PREFILL_GEMM_Q41_IDOT_REL_TOL, PREFILL_GEMM_Q41_IDOT_ABS_TOL,
+  PREFILL_GEMM_Q41_F32_REL_TOL, PREFILL_GEMM_Q41_F32_ABS_TOL,
 } from "../src/engine/prefillkquant";
 
 // PREFILL GEMM q5_K: struttura del WGSL + pavimento aritmetico f32 delle DUE
@@ -284,23 +292,31 @@ const e = (v: number): string => v.toExponential(3);
 
 // I DUE PAVIMENTI PER BRACCIO, STAMPATI: sono la derivazione che i commenti di
 // prefillkquant.ts citano, e vanno letti anche quando il file e' verde (e' cosi'
-// che ci si accorge che un pavimento si e' mosso prima che sfondi il 20x). A
-// livello di modulo e non dentro un `it`, perche' il reporter non mostra lo
-// stdout dei test che passano.
-/* eslint-disable no-console */
-console.log(`[idot] senzaFMA rel=${e(idotNoFma.rel)} abs=${e(idotNoFma.abs)} | ` +
+// che ci si accorge che un pavimento si e' mosso prima che sfondi il 20x).
+//
+// SCRITTURA DIRETTA SU fd 1, non `console.log`. Vitest 4 sceglie da solo il
+// reporter `agent` quando gira dentro una sessione di coding agent (`isAgent`
+// di std-env: CLAUDECODE/AI_AGENT/...), e quel reporter e' `silent:
+// "passed-only"` — cioe' butta via lo stdout dei file che PASSANO, che e'
+// esattamente il caso in cui questi numeri servono. Spostare i log a livello di
+// modulo invece che dentro un `it` non basta: l'intercettazione e' sulla
+// `console`, non sul task. `writeSync(1, ...)` scavalca l'intercettazione e
+// arriva allo stdout vero del processo, e la derivazione resta leggibile
+// ovunque il gate giri.
+const say = (line: string): void => { writeSync(1, `${line}\n`); };
+
+say(`[idot] senzaFMA rel=${e(idotNoFma.rel)} abs=${e(idotNoFma.abs)} | ` +
   `conFMA rel=${e(idotFma.rel)} abs=${e(idotFma.abs)} | ` +
   `floor rel=${e(floorIdotRel)} abs=${e(floorIdotAbs)} | ` +
   `tol rel=${e(PREFILL_GEMM_Q5K_IDOT_REL_TOL)} (${(PREFILL_GEMM_Q5K_IDOT_REL_TOL / floorIdotRel).toFixed(1)}x) ` +
   `abs=${e(PREFILL_GEMM_Q5K_IDOT_ABS_TOL)} (${(PREFILL_GEMM_Q5K_IDOT_ABS_TOL / floorIdotAbs).toFixed(1)}x)`);
-console.log(`[f32]  senzaFMA rel=${e(f32NoFma.rel)} abs=${e(f32NoFma.abs)} | ` +
+say(`[f32]  senzaFMA rel=${e(f32NoFma.rel)} abs=${e(f32NoFma.abs)} | ` +
   `conFMA rel=${e(f32Fma.rel)} abs=${e(f32Fma.abs)} | ` +
   `floor rel=${e(floorF32Rel)} abs=${e(floorF32Abs)} | ` +
   `tol rel=${e(PREFILL_GEMM_Q5K_F32_REL_TOL)} (${(PREFILL_GEMM_Q5K_F32_REL_TOL / floorF32Rel).toFixed(1)}x) ` +
   `abs=${e(PREFILL_GEMM_Q5K_F32_ABS_TOL)} (${(PREFILL_GEMM_Q5K_F32_ABS_TOL / floorF32Abs).toFixed(1)}x)`);
-console.log(`[MUTATA senza -dmin*Sigma x] idot rel=${e(idotMut.rel)} abs=${e(idotMut.abs)} | ` +
+say(`[MUTATA senza -dmin*Sigma x] idot rel=${e(idotMut.rel)} abs=${e(idotMut.abs)} | ` +
   `f32 rel=${e(f32Mut.rel)} abs=${e(f32Mut.abs)}`);
-/* eslint-enable no-console */
 
 // ---------------------------------------------------------------------------
 
@@ -426,5 +442,384 @@ describe("discriminante: la tolleranza non copre un difetto strutturale", () => 
   it("omettere -dmin*Sigma(x) sfonda le tolleranze della via f32 di 10x", () => {
     expect(f32Mut.rel / PREFILL_GEMM_Q5K_F32_REL_TOL).toBeGreaterThan(10);
     expect(f32Mut.abs / PREFILL_GEMM_Q5K_F32_ABS_TOL).toBeGreaterThan(10);
+  });
+});
+
+// ===========================================================================
+// PREFILL GEMM q4_1 — la riga 3 di engine-kquant, sullo stesso impianto a due
+// meta' del q5_K qui sopra e NON come suo corollario.
+//
+// Il q4_1 sta in questo file e non in uno suo perche' l'ANTI-RICOPIATURA vuole
+// i due pavimenti calcolati fianco a fianco: le quattro tolleranze q5_K sono
+// gia' scritte e la tentazione, su un formato che condivide geometria di
+// blocco e quantizzatore, e' di riusarle. Il blocco `pavimenti q4_1 !=
+// pavimenti q5_K` piu' in basso confronta VARIABILI, non letterali: se un
+// domani qualcuno ricopiasse i numeri dell'uno sull'altro, quello e' il posto
+// in cui la cosa fa rumore.
+//
+// COSA CAMBIA DAVVERO rispetto al q5_K (e per cui il pavimento e' un altro
+// numero, non lo stesso numero misurato due volte):
+//   - il formato e' a BLOCCHI da 32, non a superblocchi da 256: K=9216 fa 288
+//     blocchi per riga, che `prefillGemmSplitsFor` divide in 4 fette da PER=72
+//     (contro i 16 superblocchi in 4 fette da 4 del q5_K). Dentro una fetta la
+//     catena di somme f32 e' 144 addizioni arrotondate contro 64;
+//   - l'aritmetica e' `w = d*q + m` con q in [0,15] e NESSUN offset -8, quindi
+//     il terzo termine si SOMMA (`+ m*Sigma(x)`) invece di sottrarsi come il
+//     `- dmin*Sigma(x)` del q5_K;
+//   - le due scale d e m stanno in UNA parola (`unpack2x16float`), non in due
+//     header di superblocco con le scale a 6 bit;
+//   - le uscite hanno un ordine di grandezza diverso: |y| medio 1,93e2 qui
+//     contro 5,37e3 sul caso q5_K. E' la ragione per cui i due pavimenti non si
+//     confrontano a occhio — quello ASSOLUTO del q4_1 e' ~20x piu' BASSO,
+//     quello RELATIVO ~39x piu' ALTO, e nessuno dei due si ricava dall'altro.
+//
+// La META' (c) — la mutazione che omette `m*Sigma(x)` — e' il discriminante
+// dello STESSO difetto strutturale del q5_K letto sull'altro formato: senza
+// quel termine il kernel calcola un q4_0 con i nibble non centrati, che e' il
+// modo piu' facile di sbagliare questo port.
+// ===========================================================================
+
+const C41 = PREFILL_Q41_KTEST_CASE;
+const K41 = C41.K, N41 = C41.N, M41 = C41.M, SPLITS41 = C41.splits;
+const BPR41 = K41 / Q4_1_BLOCK_WEIGHTS;   // blocchi da 32 per riga di pesi
+const PER41 = BPR41 / SPLITS41;           // blocchi per fetta
+const OPTS41 = { kind: "q4_1", K: K41, N: N41, M: M41, splits: SPLITS41 } as const;
+
+// Dati del caso, stesse convenzioni del q5_K: byte casuali + scale f16 sanate.
+// Gli offset sanati sono [1, 3] come li' — ma li' erano `d` e `dmin` del
+// superblocco da 176 B, qui sono `d` e `m` del blocco da 20 B: stessa
+// preparazione, due layout diversi, ed e' `Q4_1_BLOCK_BYTES` a tenerli distinti.
+const nBlocks41 = BPR41 * N41;
+const src41 = randBytes(nBlocks41 * Q4_1_BLOCK_BYTES, C41.seedBlocks);
+fixScalesAt(src41, Q4_1_BLOCK_BYTES, [1, 3]);
+const w41 = new Float32Array(nBlocks41 * Q4_1_BLOCK_WEIGHTS);
+dequantQ4_1(src41, 0, nBlocks41, w41);
+const x41 = randF32(M41 * K41, C41.seedX);
+
+// Emulazione di `prefillQuantXQ8Wgsl` — lo STESSO quantizzatore del q5_K e del
+// q4_0 (blocchi da 32, amax/127): quel che cambia a valle e' come il
+// moltiplicatore usa `xsum`, non come le attivazioni vengono preparate.
+const xq41 = new Int8Array(M41 * K41);
+const xsc41 = new Float32Array(M41 * BPR41);
+const xsum41 = new Float32Array(M41 * BPR41);  // f32(Sigma q) * sc, come `xsum` nel kernel
+const xdq41 = new Float64Array(M41 * K41);     // le attivazioni dopo il giro i8
+// NIENTE `Sigma(x)` precalcolato qui, al contrario del q5_K: la via f32 del
+// q4_1 accumula `sx` in REGISTRI dentro il ciclo (`dot(vec4<f32>(1.0), xa)`),
+// perche' senza `dot4I8Packed` non c'e' niente da condividere fra le righe. Il
+// termine e' lo stesso, l'ordine delle somme no — e l'ordine e' proprio cio'
+// che il pavimento misura.
+for (let b = 0; b < M41 * BPR41; b++) {
+  let amax = 0;
+  for (let i = 0; i < 32; i++) amax = Math.max(amax, Math.abs(x41[b * 32 + i]));
+  const sc = f(amax / 127);
+  const inv = sc > 0 ? f(1 / sc) : 0;
+  xsc41[b] = sc;
+  let sq = 0;
+  for (let i = 0; i < 32; i++) {
+    const q = Math.min(127, Math.max(-127, roundTiesEven(f(x41[b * 32 + i] * inv))));
+    xq41[b * 32 + i] = q;
+    xdq41[b * 32 + i] = q * sc;
+    sq += q;
+  }
+  xsum41[b] = f(sq * sc);
+}
+
+// Riferimenti f64 dal dequant esatto (`dequantQ4_1`), nel layout d'uscita del
+// kernel: y[m*N + r].
+const refIdot41 = new Float64Array(M41 * N41);
+const refF3241 = new Float64Array(M41 * N41);
+for (let r = 0; r < N41; r++) {
+  for (let m = 0; m < M41; m++) {
+    let ai = 0, af = 0;
+    for (let i = 0; i < K41; i++) {
+      const wi = w41[r * K41 + i];
+      ai += wi * xdq41[m * K41 + i];
+      af += wi * x41[m * K41 + i];
+    }
+    refIdot41[m * N41 + r] = ai;
+    refF3241[m * N41 + r] = af;
+  }
+}
+
+// `prefillSplitKCombineWgsl` con le 4 fette del q4_1, in f32 e in ordine s.
+function combine41(part: Float32Array): Float32Array {
+  const y = new Float32Array(M41);
+  for (let m = 0; m < M41; m++) {
+    let v = 0;
+    for (let s = 0; s < SPLITS41; s++) v = f(v + part[s * M41 + m]);
+    y[m] = v;
+  }
+  return y;
+}
+
+// `dot()` del WGSL su vec4, modellato come somma sequenziale dei quattro
+// termini nell'ordine lessicale delle componenti: `fma` = true lascia esatto il
+// prodotto e arrotonda una volta sola, `fma` = false arrotonda anche il
+// prodotto. E' la stessa coppia di modelli del q5_K, applicata dentro `dot`.
+function dot4(
+  a: Float64Array, ao: number, b: Float32Array | Float64Array, bo: number, fma: boolean,
+): number {
+  let v = 0;
+  for (let i = 0; i < 4; i++) v = f(v + term(a[ao + i], b[bo + i], fma));
+  return v;
+}
+
+const qn41 = new Int32Array(32);     // i 32 nibble del blocco, in [0,15]
+const qf41 = new Float64Array(32);
+const ones41 = new Float64Array([1, 1, 1, 1]);
+
+// `prefillGemmQ41SplitKIdotWgsl`, una riga di pesi r: prodotto scalare INTERO
+// esatto (i nibble non superano 15, le attivazioni sono i8) e poi
+// `acc + d*f32(idot)*xss + m*xsum` associato a sinistra, come lo scrive il WGSL.
+// Il passo a due blocchi per giro non cambia l'aritmetica — cambia solo quali
+// blocchi stanno in memoria di gruppo — quindi qui i blocchi si scorrono uno
+// per uno nello stesso ordine.
+function emulateIdot41Row(r: number, fma: boolean, dropMin: boolean): Float32Array {
+  const part = new Float32Array(SPLITS41 * M41);
+  const acc = new Float64Array(M41);
+  for (let s = 0; s < SPLITS41; s++) {
+    acc.fill(0);
+    for (let gb = s * PER41; gb < s * PER41 + PER41; gb++) {
+      const o = (r * BPR41 + gb) * Q4_1_BLOCK_BYTES;
+      const d = f16ToF32(src41[o] | (src41[o + 1] << 8));
+      const mm = f16ToF32(src41[o + 2] | (src41[o + 3] << 8));
+      // nibble basso -> elementi 0..15, nibble alto -> 16..31: la stessa
+      // mappatura di `dequantQ4_1` e dei quartetti `lo`/`hi` del kernel
+      for (let j = 0; j < 16; j++) {
+        const by = src41[o + 4 + j];
+        qn41[j] = by & 0x0f;
+        qn41[16 + j] = by >> 4;
+      }
+      for (let m = 0; m < M41; m++) {
+        const b = m * BPR41 + gb;
+        let idot = 0;
+        for (let l = 0; l < 32; l++) idot += qn41[l] * xq41[b * 32 + l];
+        let a = acc[m];
+        a = f(a + term(f(d * idot), xsc41[b], fma));
+        if (!dropMin) a = f(a + term(mm, xsum41[b], fma));
+        acc[m] = a;
+      }
+    }
+    for (let m = 0; m < M41; m++) part[s * M41 + m] = acc[m];
+  }
+  return combine41(part);
+}
+
+// `prefillGemmQ41SplitKWgsl`: `qx` e `sx` accumulati in f32 a colpi di `dot()`
+// su vec4 nell'ordine del loop (lo[wi] contro gli elementi 4wi..4wi+3, hi[wi]
+// contro i 16+4wi..), poi `acc + d*qx + m*sx`.
+function emulateF3241Row(r: number, fma: boolean, dropMin: boolean): Float32Array {
+  const part = new Float32Array(SPLITS41 * M41);
+  const acc = new Float64Array(M41);
+  for (let s = 0; s < SPLITS41; s++) {
+    acc.fill(0);
+    for (let gb = s * PER41; gb < s * PER41 + PER41; gb++) {
+      const o = (r * BPR41 + gb) * Q4_1_BLOCK_BYTES;
+      const d = f16ToF32(src41[o] | (src41[o + 1] << 8));
+      const mm = f16ToF32(src41[o + 2] | (src41[o + 3] << 8));
+      for (let j = 0; j < 16; j++) {
+        const by = src41[o + 4 + j];
+        qf41[j] = by & 0x0f;
+        qf41[16 + j] = by >> 4;
+      }
+      for (let m = 0; m < M41; m++) {
+        const base = m * K41 + gb * 32;
+        let qx = 0, sx = 0;
+        for (let wi = 0; wi < 4; wi++) {
+          qx = f(qx + dot4(qf41, wi * 4, x41, base + wi * 4, fma));
+          qx = f(qx + dot4(qf41, 16 + wi * 4, x41, base + 16 + wi * 4, fma));
+          sx = f(sx + dot4(ones41, 0, x41, base + wi * 4, fma));
+          sx = f(sx + dot4(ones41, 0, x41, base + 16 + wi * 4, fma));
+        }
+        let a = acc[m];
+        a = f(a + term(d, qx, fma));
+        if (!dropMin) a = f(a + term(mm, sx, fma));
+        acc[m] = a;
+      }
+    }
+    for (let m = 0; m < M41; m++) part[s * M41 + m] = acc[m];
+  }
+  return combine41(part);
+}
+
+// stessa `compare` del ktest worker (denominatore `max(|ref|, 1e-6)`), sulle
+// dimensioni del caso q4_1
+function measure41(
+  emul: (r: number, fma: boolean, dropMin: boolean) => Float32Array,
+  ref: Float64Array, fma: boolean, dropMin: boolean,
+): Err {
+  let abs = 0, rel = 0;
+  for (let r = 0; r < N41; r++) {
+    const y = emul(r, fma, dropMin);
+    for (let m = 0; m < M41; m++) {
+      const ee = ref[m * N41 + r], dd = Math.abs(y[m] - ee);
+      abs = Math.max(abs, dd);
+      rel = Math.max(rel, dd / Math.max(Math.abs(ee), 1e-6));
+    }
+  }
+  return { abs, rel };
+}
+
+const idot41NoFma = measure41(emulateIdot41Row, refIdot41, false, false);
+const idot41Fma = measure41(emulateIdot41Row, refIdot41, true, false);
+const idot41Mut = measure41(emulateIdot41Row, refIdot41, true, true);
+const f3241NoFma = measure41(emulateF3241Row, refF3241, false, false);
+const f3241Fma = measure41(emulateF3241Row, refF3241, true, false);
+const f3241Mut = measure41(emulateF3241Row, refF3241, true, true);
+
+const floorQ41IdotRel = Math.max(idot41NoFma.rel, idot41Fma.rel);
+const floorQ41IdotAbs = Math.max(idot41NoFma.abs, idot41Fma.abs);
+const floorQ41F32Rel = Math.max(f3241NoFma.rel, f3241Fma.rel);
+const floorQ41F32Abs = Math.max(f3241NoFma.abs, f3241Fma.abs);
+
+say(`[q41 idot] senzaFMA rel=${e(idot41NoFma.rel)} abs=${e(idot41NoFma.abs)} | ` +
+  `conFMA rel=${e(idot41Fma.rel)} abs=${e(idot41Fma.abs)} | ` +
+  `floor rel=${e(floorQ41IdotRel)} abs=${e(floorQ41IdotAbs)} | ` +
+  `tol rel=${e(PREFILL_GEMM_Q41_IDOT_REL_TOL)} (${(PREFILL_GEMM_Q41_IDOT_REL_TOL / floorQ41IdotRel).toFixed(1)}x) ` +
+  `abs=${e(PREFILL_GEMM_Q41_IDOT_ABS_TOL)} (${(PREFILL_GEMM_Q41_IDOT_ABS_TOL / floorQ41IdotAbs).toFixed(1)}x)`);
+say(`[q41 f32]  senzaFMA rel=${e(f3241NoFma.rel)} abs=${e(f3241NoFma.abs)} | ` +
+  `conFMA rel=${e(f3241Fma.rel)} abs=${e(f3241Fma.abs)} | ` +
+  `floor rel=${e(floorQ41F32Rel)} abs=${e(floorQ41F32Abs)} | ` +
+  `tol rel=${e(PREFILL_GEMM_Q41_F32_REL_TOL)} (${(PREFILL_GEMM_Q41_F32_REL_TOL / floorQ41F32Rel).toFixed(1)}x) ` +
+  `abs=${e(PREFILL_GEMM_Q41_F32_ABS_TOL)} (${(PREFILL_GEMM_Q41_F32_ABS_TOL / floorQ41F32Abs).toFixed(1)}x)`);
+say(`[q41 MUTATA senza +m*Sigma x] idot rel=${e(idot41Mut.rel)} abs=${e(idot41Mut.abs)} | ` +
+  `f32 rel=${e(f3241Mut.rel)} abs=${e(f3241Mut.abs)}`);
+
+// ---------------------------------------------------------------------------
+
+describe("prefill gemm q4_1: struttura del WGSL generato", () => {
+  const idot41 = prefillGemmQ41SplitKIdotWgsl(OPTS41);
+  const f32k41 = prefillGemmQ41SplitKWgsl(OPTS41);
+
+  it("il caso del ktest e' la geometria che il piano sceglie da solo", () => {
+    // 288 blocchi da 32 si dividono in 4 fette da BK=2: e' il piano a dirlo,
+    // non il caso a imporlo
+    expect(prefillGemmSplitsFor(K41, N41, "q4_1")).toBe(SPLITS41);
+    expect(prefillGemmSplitsFor(9216, 200, "q4_1")).toBe(4);
+    expect(K41 % 64).toBe(0);
+    // N%64 != 0 e' VOLUTO: e' cio' che esercita la guardia `r < N_ROWS`
+    expect(N41 % 64).not.toBe(0);
+    expect(200 % 64).not.toBe(0);
+    expect(idot41).toContain("if (r < N_ROWS) {");
+    expect(f32k41).toContain("if (r < N_ROWS) {");
+  });
+
+  it("le costanti dei due kernel sono quelle che l'emulazione presume", () => {
+    for (const s of [idot41, f32k41]) {
+      expect(s).toContain("const BPR = 288u;");    // K=9216 / 32
+      expect(s).toContain("const PER = 72u;");     // 288 blocchi / 4 fette
+      expect(s).toContain("const N_ROWS = 200u;");
+      expect(s).toContain("const M_ROWS = 16u;");
+    }
+    expect(BPR41).toBe(288);
+    expect(PER41).toBe(72);
+    // niente `enable packed_4x8_integer_dot_product`: e' una language feature,
+    // non un'estensione — scriverlo fa fallire la compilazione
+    expect(idot41).not.toContain("enable packed_4x8_integer_dot_product");
+    expect(f32k41).not.toContain("enable packed_4x8_integer_dot_product");
+  });
+
+  it("gli array di workgroup sono quelli delle due vie", () => {
+    // via intera: due blocchi di attivazioni i8 (M x 16 parole) + le due
+    // riduzioni per (riga di chunk, blocco), fra cui `xsum` = Sigma(x) del
+    // termine costante che il q4_0 non ha
+    expect(idot41).toContain("var<workgroup> xs: array<u32, 256>;");
+    expect(idot41).toContain("var<workgroup> xss: array<f32, 32>;");
+    expect(idot41).toContain("var<workgroup> xsum: array<f32, 32>;");
+    // via f32: le stesse attivazioni lette dense, e Sigma(x) in registri
+    expect(f32k41).toContain("var<workgroup> xs: array<vec4<f32>, 256>;");
+    expect(f32k41).not.toContain("var<workgroup> xsum:");
+  });
+
+  it("quantizzatore e combine emulati sono quelli veri", () => {
+    expect(prefillQuantXQ8Wgsl({ K: K41, M: M41 })).toContain(`const BLOCKS = ${M41 * BPR41}u;`);
+    expect(prefillQuantXQ8Wgsl({ K: K41, M: M41 })).toContain("let sc = amax / 127.0;");
+    expect(prefillSplitKCombineWgsl({ N: N41, M: M41, splits: SPLITS41 }))
+      .toContain(`const S = ${SPLITS41}u;`);
+    expect(prefillSplitKCombineWgsl({ N: N41, M: M41, splits: SPLITS41 }))
+      .toContain(`const TOTAL = ${M41 * N41}u;`);
+  });
+});
+
+describe("pavimento f32: prefill gemm q4_1 via intera (dot4I8Packed)", () => {
+  it("i due modelli di contrazione sono entrambi reali e vicini", () => {
+    for (const v of [idot41NoFma.rel, idot41Fma.rel, idot41NoFma.abs, idot41Fma.abs]) {
+      expect(v).toBeGreaterThan(0);
+    }
+    expect(floorQ41IdotRel).toBe(Math.max(idot41NoFma.rel, idot41Fma.rel));
+    expect(floorQ41IdotAbs).toBe(Math.max(idot41NoFma.abs, idot41Fma.abs));
+    expect(idot41NoFma.rel / idot41Fma.rel).toBeLessThan(10);
+    expect(idot41Fma.rel / idot41NoFma.rel).toBeLessThan(10);
+    expect(idot41NoFma.abs / idot41Fma.abs).toBeLessThan(10);
+    expect(idot41Fma.abs / idot41NoFma.abs).toBeLessThan(10);
+  });
+
+  it("REL: pavimento <= tolleranza <= 20x pavimento", () => {
+    expect(PREFILL_GEMM_Q41_IDOT_REL_TOL).toBeGreaterThanOrEqual(floorQ41IdotRel);
+    expect(PREFILL_GEMM_Q41_IDOT_REL_TOL).toBeLessThanOrEqual(20 * floorQ41IdotRel);
+  });
+
+  it("ABS: pavimento <= tolleranza <= 20x pavimento", () => {
+    expect(PREFILL_GEMM_Q41_IDOT_ABS_TOL).toBeGreaterThanOrEqual(floorQ41IdotAbs);
+    expect(PREFILL_GEMM_Q41_IDOT_ABS_TOL).toBeLessThanOrEqual(20 * floorQ41IdotAbs);
+  });
+});
+
+describe("pavimento f32: prefill gemm q4_1 via f32 (fallback)", () => {
+  it("i due modelli di contrazione sono entrambi reali e vicini", () => {
+    for (const v of [f3241NoFma.rel, f3241Fma.rel, f3241NoFma.abs, f3241Fma.abs]) {
+      expect(v).toBeGreaterThan(0);
+    }
+    expect(floorQ41F32Rel).toBe(Math.max(f3241NoFma.rel, f3241Fma.rel));
+    expect(floorQ41F32Abs).toBe(Math.max(f3241NoFma.abs, f3241Fma.abs));
+    expect(f3241NoFma.rel / f3241Fma.rel).toBeLessThan(10);
+    expect(f3241Fma.rel / f3241NoFma.rel).toBeLessThan(10);
+    expect(f3241NoFma.abs / f3241Fma.abs).toBeLessThan(10);
+    expect(f3241Fma.abs / f3241NoFma.abs).toBeLessThan(10);
+  });
+
+  it("REL: pavimento <= tolleranza <= 20x pavimento", () => {
+    expect(PREFILL_GEMM_Q41_F32_REL_TOL).toBeGreaterThanOrEqual(floorQ41F32Rel);
+    expect(PREFILL_GEMM_Q41_F32_REL_TOL).toBeLessThanOrEqual(20 * floorQ41F32Rel);
+  });
+
+  it("ABS: pavimento <= tolleranza <= 20x pavimento", () => {
+    expect(PREFILL_GEMM_Q41_F32_ABS_TOL).toBeGreaterThanOrEqual(floorQ41F32Abs);
+    expect(PREFILL_GEMM_Q41_F32_ABS_TOL).toBeLessThanOrEqual(20 * floorQ41F32Abs);
+  });
+});
+
+describe("anti-ricopiatura: i pavimenti q4_1 non sono quelli q5_K", () => {
+  // Il confronto e' fra VARIABILI misurate nello stesso run, non fra letterali:
+  // e' l'unico modo perche' resti vero anche se un domani i due casi cambiassero
+  // shape. Se qualcuno tarasse le tolleranze q4_1 ricopiando i numeri q5_K, il
+  // pavimento q4_1 resterebbe quello vero e il 20x lo direbbe — ma questo blocco
+  // lo dice PRIMA, sul pavimento stesso.
+  it("le due vie del q4_1 hanno pavimenti diversi dalle due vie del q5_K", () => {
+    expect(floorQ41IdotRel).not.toBe(floorIdotRel);
+    expect(floorQ41IdotAbs).not.toBe(floorIdotAbs);
+    expect(floorQ41F32Rel).not.toBe(floorF32Rel);
+    expect(floorQ41F32Abs).not.toBe(floorF32Abs);
+  });
+
+  it("i due casi sono due esperimenti diversi, non lo stesso scritto due volte", () => {
+    // K diverso e quattro seed distinti: i due pavimenti non possono coincidere
+    // per costruzione, e i due generatori non condividono un flusso
+    expect(C41.K).not.toBe(C.K);
+    expect(new Set([C41.seedBlocks, C41.seedX, C.seedBlocks, C.seedX]).size).toBe(4);
+  });
+});
+
+describe("discriminante q4_1: la tolleranza non copre un difetto strutturale", () => {
+  // La `compare` del ktest passa se `maxAbs <= absTol OPPURE maxRel <= relTol`:
+  // perche' la mutazione sia CATTURATA deve sfondare ENTRAMBE le tolleranze.
+  it("omettere +m*Sigma(x) sfonda le tolleranze della via intera di 10x", () => {
+    expect(idot41Mut.rel / PREFILL_GEMM_Q41_IDOT_REL_TOL).toBeGreaterThan(10);
+    expect(idot41Mut.abs / PREFILL_GEMM_Q41_IDOT_ABS_TOL).toBeGreaterThan(10);
+  });
+
+  it("omettere +m*Sigma(x) sfonda le tolleranze della via f32 di 10x", () => {
+    expect(f3241Mut.rel / PREFILL_GEMM_Q41_F32_REL_TOL).toBeGreaterThan(10);
+    expect(f3241Mut.abs / PREFILL_GEMM_Q41_F32_ABS_TOL).toBeGreaterThan(10);
   });
 });

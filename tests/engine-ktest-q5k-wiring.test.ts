@@ -283,8 +283,13 @@ describe("(c) ogni braccio chiama i suoi generatori con i binding congelati", ()
   ];
   for (const e of EXPECT) {
     it(`${e.gen}( ${e.times} volta/e, binding [${e.bindings.join(", ")}]`, () => {
-      const src = code(KTEST);
-      const calls = callsTo(src, e.gen);
+      // NEL CORPO DEL BANCO, non nel file: da riga 3 esiste anche il banco
+      // q4_1, che usa gli STESSI generatori condivisi (`prefillQuantXQ8Wgsl` e
+      // `prefillSplitKCombineWgsl`). Contarli su tutto il file misurava
+      // "quanti banchi esistono", non "come e' cablato questo" — e sarebbe
+      // tornato rosso a ogni banco nuovo, per una ragione che non ha niente a
+      // che vedere con cio' che il test difende.
+      const calls = callsTo(bankBody(code(KTEST)), e.gen);
       const all = calls.map((c) => `${KTEST}:${c.line}`);
       expect(calls.length, `${e.gen}( a ${all.join(", ") || "NESSUNA riga"}`).toBe(e.times);
       const bad = calls.flatMap((c) => {
