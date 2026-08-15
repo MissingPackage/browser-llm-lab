@@ -1000,3 +1000,70 @@ dalla shape. **È la seconda che li terrà fuori quando il q8_0 verrà cablato.*
    chieda al piano come fa il prefill. È il pezzo globale: una sede, tre
    famiglie.
 3. Misura su 35B, 4B e 9B — ereditata, non riscritta.
+
+---
+
+## it.15 — il flag `wired` del q8_0 è difeso da NOVE test, e questo cambia la stima
+
+**Provato e tornato indietro, con l'albero verde** (1075 passed, tsc exit 0).
+
+Girare `wired: true` per il q8_0 è **una riga**. Fa cadere **nove test in
+quattro file**, tutti scritti dal goal precedente per pinnare che quel formato
+NON è instradato:
+
+    tests/engine-prefillgemm.test.ts
+      [a]-port  «i kind con un kernel sono sei; quelli INSTRADATI restano
+                 q4_0, q5_K e q4_1»
+      [f]       conteggio: «kind instradati dal piano: expected 4 to be 3»
+    tests/engine-prefillgemmplan-notwired.test.ts
+      [w1] ×2   `PREFILL_GEMM_WIRED_KINDS` sottoinsieme proprio; e «la ragione
+                 del q8_0 NOMINA il fatto che lo esclude: N=32 sul 4B»
+      [w2]      «q8_0 K2048xN4096 (35B attn): il KERNEL accetta, il PIANO resta
+                 legacy»
+      [w3]      «...e il piano li lascia comunque sulla legacy, con la sua
+                 ragione»
+      [w5]      «a M=16 il rifiuto è del CABLAGGIO, a M=1 è dell'M»
+    tests/engine-prefillgemmplan.test.ts
+      [1]       «kind fuori dalle vie veloci: legacy, con una ragione ≥ 40
+                 caratteri che NOMINA il kind»
+    tests/engine-prefillgemm-nmin.test.ts
+      [6]       il mio, di it.14: usava il q8_0 come esempio di kind NON
+                 cablato — premessa che sparisce
+
+**Non è un contrattempo: è buona ingegneria del goal precedente.** Quel flag è
+la cosa che tiene il 4B lontano da una rotta sbagliata, e nove test lo dicono da
+angolazioni diverse. Girarlo è un atto deliberato con un costo reale, non una
+riga.
+
+### Perché non l'ho fatto adesso
+
+Nessuno dei nove è "sbagliato": ognuno pinna un valore che **cambia di
+proposito**, e ognuno ha un'intenzione da preservare mentre il valore si
+aggiorna. Alcuni cambiano premessa, non solo numero — `[w1]` pretende che la
+ragione del q8_0 nomini ciò che lo esclude, e da domani quella ragione dirà
+perché è INCLUSO; `[6]` mio ha bisogno di un altro kind non cablato (q4_K o
+q6_K, che restano fuori).
+
+Aggiornare nove caratterizzazioni **in fretta e a contesto profondo** è il modo
+tipico di indebolire un test invece di aggiornarlo — e un test che passa senza
+più difendere niente è peggio di un test rosso. *Pre-limit hand-back del
+protocollo: il dubbio è concreto, il confine è pulito.*
+
+### La stima della riga 2d si allunga, e va detto
+
+Era 2-3 iterazioni, tre consumate, e il cablaggio del q8_0 da solo è
+un'iterazione piena (flag + nove test + il ramo esplicito in `gemvB`). Poi resta
+il pezzo grosso, che è anche quello che porta il valore: **far uscire la rotta
+dal ramo condizionato al prefill**, perché oggi tutto questo serve solo la fase
+di lettura del prompt — **il decode non chiede al piano.**
+
+### Il reperto che vale oltre questo caso
+
+`PREFILL_GEMM_SPEC[kind].wired` non è un booleano: è **un'interfaccia con nove
+consumatori di test**. Chi lo gira paga la superficie, e la paga tutta insieme
+perché i test sono giustamente distribuiti su quattro file per angolazione. È il
+prezzo corretto di una decisione che cambia cosa il motore esegue — ma va
+messo nella stima, non scoperto girando il flag.
+
+**EVIDENZA**: albero invariato e verde, 1075 passed | 10 skipped, tsc exit 0.
+Nessun commit di codice: l'unico prodotto di questa iterazione è il reperto.
