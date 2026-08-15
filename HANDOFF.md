@@ -1,9 +1,64 @@
-# HANDOFF — browser-llm-lab   (aggiornato 2026-08-15)
+# HANDOFF — browser-llm-lab   (aggiornato 2026-08-15, sera)
 
 ## 1. Next decidable
 
+**GOAL `engine-35b-residency` CHARTATO il 2026-08-15 e FERMO SU UN RULING.**
+Riga 1 chiusa (strumentazione + due misure su GPU). Riga 2 non parte.
+
+**LA DECISIONE CHE ASPETTA IL PI — `docket.md` item 3.** La barra che ho messo
+al goal (decode 35B >= 30 tok/s) **non e' raggiungibile nello scope che ho
+chartato**, e lo dice una misura, non una stima:
+
+    token PULITO del 35B (0 miss, 0 dirty, 0 replay, tassa di residency ZERO)
+      tokenMs        43,585 ms  =  22,9 tok/s     <- SOTTO la barra dei 30
+      readbackWait   40,753 ms  =  93,5% del token pulito
+      submits/token  1 · readbacks/token 1
+    q35-optimistic-35b-cleantoken-2026-08-15.json (oggi, albero post-kquant)
+    q35-vramplan-35b-it35.json  43,736 ms (2026-08-11) — coincidono entro 0,7%
+
+Le righe 2 e 3 del goal aggrediscono la tassa di residency. Anche azzerandola —
+che nessuno sa fare — il 35B resta a 22,9 tok/s. **Il termine che decide e' ora
+il pass stesso**, e la sola leva nota su di esso e' la forma a gather K-quant
+della consegna §4.2-4.4, che il contratto ha messo FUORI SCOPE sulla base di una
+stima che ho poi ritrattato. Tre uscite nel docket item 3 (allargare lo scope /
+abbassare la barra / spezzare in due goal); la mia lettura e' la prima, ma e'
+funzione obiettivo e non la decido io.
+
+**CIO' CHE LA RIGA 1 HA GIA' CONSEGNATO, e vale comunque vada il ruling:**
+il 43% del tempo di parete del 35B che non aveva un nome adesso ce l'ha.
+`namedFrac` **0,9995** (done-when: >= 0,95) — il residuo anonimo e' lo 0,05%.
+
+    regime sporco (arena 4 GiB, 100% token sporchi), per token:
+      fetchRepairMs  275,4 ms = 70,3% del repair   <- la fetch HTTP degli expert
+      replayPassMs   117,7 ms
+      flushMs          0,38 · contabilita' 0,29
+    costo per fetch  3,27 ms  (NON i 5,98 che avevo derivato dal buco anonimo)
+
+**IL REPERTO CHE LA RIGA 2 DEVE USARE**: il raggruppamento delle richieste vale
+**2,1x** — 6,90 ms/fetch con 24 richieste concorrenti (`prepLayer`: 8 expert x 3
+tensori) contro 3,27 ms con qualche centinaio nella stessa `Promise.all` (il
+repair). Stessi byte, stesso server, stesso `readExpert`. E' un 2x che si prende
+senza cambiare la sorgente dei byte.
+
+**DUE LANDMINE NUOVE, pagate oggi:**
+1. **Per sapere se l'host e' quiescente si contano i processi BROWSER**
+   (`type=gpu-process`, `/opt/google/chrome/chrome`, `chromium`,
+   `headless_shell`), **non i server MCP**: `pgrep @playwright/mcp` conta
+   processi node idle che non tengono un byte di VRAM. Ho dichiarato al PI
+   «quattro Chrome vivi» quando ne era vivo uno.
+2. **`namedFrac` e' indefinito su una passata a 0 miss** (0/0: senza repair il
+   100% di `tailCpu` E' contabilita'). La clausola >= 0,95 va letta SOLO nel
+   regime sporco, altrimenti dichiara fallita una riga riuscita.
+
+**LA MACCHINA E' CONDIVISA.** La GPU se la contendono piu' sessioni Claude
+(oggi: `personal-site-47`, screenshot Playwright per il sito personale del PI).
+Prima di un bench: `ListAgents`, poi `SendMessage` per accordarsi. Ha funzionato
+— finestra ottenuta in pochi minuti, e il secondo paio d'occhi ha migliorato
+sia il check dell'host sia la validazione dei contatori.
+
+---
+
 **GOAL `engine-kquant` CHIUSO — tutte e sette le righe, il 2026-08-15.**
-Nessun goal attivo. La prossima decisione e' del PI: quale goal chartare.
 
 **IL RISULTATO, MISURATO:**
 
