@@ -960,7 +960,7 @@ export async function createQ35GpuModel(
     // ereditare un numero da un altro regime — l'errore che questo goal ha gia'
     // fatto quattro volte.
     if (decSplitkAvail && kk === "q8_0" && decPart !== null && decXq !== null && decXsc !== null) {
-      const route = planPrefillGemm({ kind: kk, K: w.k, N: w.n, M: 1, idot: prefillIdot });
+      const route = planPrefillGemm({ kind: kk, K: w.k, N: w.n, M: 1, idot: prefillIdot, regime: "decode" });
       if (route.via === "idot") {
         const o80 = { kind: kk, K: w.k, N: w.n, M: 1, splits: route.splits };
         push(prefillQuantXQ8Wgsl({ K: w.k, M: 1 }), [src, decXq, decXsc],

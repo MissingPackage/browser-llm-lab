@@ -19,6 +19,9 @@ const cfg = {
   optCold: q.get("optcold") === "1",
   // ?kfan=1 → A/B del collasso dei k nel decode ottimistico (riga 2c)
   kfan: q.get("kfan") === "1",
+  // ?splitk=1 → A/B della rotta split-K nel decode (riga 2d). Il braccio e'
+  // kfan+rotta contro kfan: isola UNA leva.
+  splitk: q.get("splitk") === "1",
   // ?gputime=1 → decomposizione del tempo GPU del token per categoria
   gpuTime: q.get("gputime") === "1",
   // ?nosnap=1 → misura: senza snapshot dello stato ricorrente (fase 4-ter)

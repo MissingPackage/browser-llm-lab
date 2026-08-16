@@ -1839,3 +1839,112 @@ quindi ora guardano gli identificatori.
 - **`splitkAvail()` sul 35B non è stato letto**: non so ancora quanti tensori il
   piano abbia davvero instradato. Va guardato PRIMA di leggere un A/B, altrimenti
   un risultato piatto è ambiguo.
+
+---
+
+## it.24 — la rotta è veloce e NON è ancora corretta: gate 38/39
+
+**Il gate viene prima del tempo, e non è passato.** Lo scrivo in testa perché il
+numero di velocità è il migliore di tutto il goal e non va letto.
+
+    GATE   argmax kfan-ON vs kfan+rotta   38/39   IDENTICI: NO
+           prima divergenza: token 21
+
+    tempo (che NON è un risultato finché il gate è rosso)
+           optimistic-warm            42,692 ms   23,42 tok/s
+           optimistic-warm-kfan       32,546 ms   30,73 tok/s
+           optimistic-warm-kfan-rotta 27,358 ms   36,55 tok/s   1,19x
+
+`results/engine/q35-splitk-ab-2026-08-16b.json`.
+
+**La regola del progetto è esplicita e me la applico**: se `argmaxIdentical` non
+è `true`, il ms/token del braccio non significa niente. Un motore che genera un
+token diverso non è un motore più veloce — è un altro motore.
+
+### Il primo A/B è servito lo stesso, e per il motivo per cui l'avevo protetto
+
+La prima run ha riportato **`available: false`**: il piano non aveva instradato
+nemmeno un tensore, e il braccio non è partito. Senza la guardia di it.23 avrei
+letto un A/B piatto e concluso «la leva non paga» invece di «la leva non è
+cablata». **È esattamente il caso per cui `splitkAvail` esiste**, ed è la prima
+volta in questo goal che una difesa costruita in anticipo ha intercettato la
+lettura sbagliata prima che la scrivessi.
+
+### Perché il piano rifiutava: una clausola di contratto di un altro goal
+
+`planPrefillGemm` respinge **ogni** kind a M=1 (`PREFILL_M1_LEGACY`). Quella
+clausola sta nel done-when della riga 2 di `engine-ttft`, e il suo stesso
+commento la dichiara **conservativa e non derivata**:
+
+> al banco a M=1 l'unica cella più lenta della legacy è `q5_K` sulla via f32
+> (0,56x), mentre `q5_K/idot` fa 3,47x e `q4_0/idot` 8,64x PIÙ VELOCI [...]
+> restringerla alla cella misurata è una decisione del PI, non
+> dell'implementatore.
+
+**Non l'ho ristretta.** Ho aggiunto a `planPrefillGemm` un parametro `regime`
+che vale `"prefill"` di default — quindi per tutti i chiamanti di prima il
+comportamento è identico byte per byte, e i loro test lo pinnano — e il decode
+chiede con `regime: "decode"`, portando la misura del suo regime (3,89x e 3,30x
+a M=1 contro il kernel che il decode emette davvero, pre-registrata in it.21).
+
+**La ragione strutturale della clausola non si applica al decode**, ed è il
+punto che rende la scopatura difendibile e non un cavillo. La clausola dice «a
+M=1 non c'è riuso dei pesi da ammortizzare, che è l'intero punto della forma
+multi-riga». Vero — ma a M=1 lo split-K **non vince per riuso dei pesi: vince
+per banda**. Il GEMV a un workgroup per riga sta al 9,6-23,4% del picco, lo
+split-K arriva al 91,0%.
+
+*Registro il confine*: è una decisione al limite fra meccanismo (mio) e
+contratto (del PI). L'ho presa perché non tocca il prefill di una virgola — e se
+il PI la vuole diversa, il posto dove intervenire è un parametro con un default,
+non una clausola riscritta. Quattro casi nuovi pinnano che il prefill a M=1
+resti legacy su tutti i kind, che il predicato sulla SHAPE valga in **entrambi**
+i regimi (`N=32` resta legacy anche nel decode, che è ciò che protegge i 48 siti
+del 4B), e che senza `dot4I8Packed` il decode non prenda la via intera.
+
+### Il cablaggio del quarto braccio
+
+`--splitk` su `q35-conf-run.mjs` implica `--optimistic` e `--kfan`: il braccio è
+**kfan+rotta contro kfan**, non contro il decode nudo — altrimenti il rapporto
+conterrebbe due leve e non ne isolerebbe nessuna. Interleavato con gli altri
+tre, stessa cache, stesso processo.
+
+### LA DOMANDA CHE APRE LA PROSSIMA ITERAZIONE, e non ha ancora risposta
+
+38/39 con divergenza al token 21: **bug o pareggio ravvicinato?**
+
+La rotta spezza K in fette e le ricombina, quindi cambia l'ordine delle somme
+del prodotto scalare: la bit-identità **non è pretendibile** e infatti il gate
+non la pretende. Ma un flip di argmax ammette due spiegazioni opposte:
+
+1. **pareggio ravvicinato**: i primi due logit di quel token distano meno
+   dell'errore di ri-associazione f32, e il flip è fisica;
+2. **bug**: un indice sui parziali, una fetta letta due volte, un `xsc`
+   sbagliato — e allora i 27,4 ms sono il tempo di un motore rotto.
+
+**Non lo so, e «sembra un pareggio» è precisamente la parola che in questo goal
+è già costata quattro volte.** Il discriminante, in ordine di costo:
+
+- **il divario dei primi due logit al token 21** nei due bracci: se è dell'ordine
+  di 1e-4 relativo è (1), se è largo è (2). `lastLogits()` esiste già
+  sull'interfaccia del modello — serve leggerlo nel punto giusto;
+- se resta ambiguo: **conformance top-1 contro l'oracolo** con la rotta accesa
+  (il gate della riga 6 pretende ≥ 1012/1024). Un bug d'indicizzazione
+  farebbe crollare quel numero; un pareggio ravvicinato no.
+
+### EVIDENZA
+
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1105 passed | 10 skipped**
+  (+4 casi sul regime)
+- `results/engine/q35-splitk-ab-2026-08-16.json` (il run con `available: false`,
+  tenuto: è il reperto della guardia che ha funzionato)
+- `results/engine/q35-splitk-ab-2026-08-16b.json` (l'A/B vero, gate 38/39)
+- host quiescente, 4 repliche interleavate, prima scartata
+
+### NON VERIFICATO
+
+- **Tutto ciò che riguarda la velocità della rotta.** 36,55 tok/s è il numero di
+  un braccio che non ha passato il gate di correttezza, e finché non lo passa
+  non entra in nessun consuntivo.
+- 4B e 9B non sono stati toccati: la leva è globale per costruzione (decide la
+  shape, non il modello) ma non è stata misurata altrove.

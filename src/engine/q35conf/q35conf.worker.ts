@@ -97,6 +97,21 @@ interface Cfg {
    * niente crash, niente NaN, solo argmax che divergono. Qui si vede subito.
    */
   kfan?: boolean;
+  /**
+   * ROTTA SPLIT-K nel decode (riga 2d): il QUARTO braccio, e si confronta col
+   * TERZO — cioe' con kfan acceso — non col decode nudo. Il kfan e' gia' in
+   * albero e misurato: mettere la rotta contro il decode senza kfan darebbe un
+   * rapporto che contiene due leve e non ne isola nessuna.
+   *
+   * Implica `kfan` per la stessa ragione per cui `kfan` implica `optimistic`.
+   *
+   * Come per il kfan, l'argmax fra il braccio kfan e il braccio kfan+rotta e'
+   * il PRIMO gate e non un extra: la rotta cambia l'ordine delle somme dentro
+   * il prodotto scalare (K spezzato in fette poi ricombinate), quindi un errore
+   * di indicizzazione non darebbe un crash — darebbe numeri plausibili e argmax
+   * che divergono.
+   */
+  splitk?: boolean;
 }
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
@@ -538,7 +553,7 @@ async function main(cfg: Cfg): Promise<void> {
     // ma NON la cache expert — è lo stesso strumento di it.16.
     const p = golden.prompts[0];
     const tokens = [...p.promptTokens, ...p.generated];
-    const runPass = async (optimistic: boolean, kfan = false): Promise<{
+    const runPass = async (optimistic: boolean, kfan = false, splitk = false): Promise<{
       argmax: number[]; submits: number; readbacks: number; hits: number; misses: number;
       routing: Record<string, number>; ms: number; error: string | null;
       dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
@@ -555,6 +570,10 @@ async function main(cfg: Cfg): Promise<void> {
       // cache. E' il punto dell'A/B — due run separate confronterebbero anche
       // gli host.
       model.setKfan(kfan);
+      // ROTTA SPLIT-K (riga 2d): stesso principio del kfan — si accende a caldo
+      // sullo STESSO modello. Il piano porta entrambi i bracci e l'encoder ne
+      // salta uno (`Step.arm`), quindi qui non si ricostruisce niente.
+      model.setSplitk(splitk);
       const p0 = model.perf(), m0 = model.moeStats!();
       // gpuTime per PASSATA (goal engine-velocita-decode, it.10): i contatori
       // sono cumulativi come `perf` e `moeStats`, quindi il braccio si ottiene
@@ -647,10 +666,20 @@ async function main(cfg: Cfg): Promise<void> {
     // confronto — se i bracci girassero in blocchi, l'ultimo pagherebbe il
     // DVFS accumulato dai primi.
     const kfanRuns: Awaited<ReturnType<typeof runPass>>[] = [];
+    // ROTTA SPLIT-K (riga 2d): il QUARTO braccio, kfan+rotta, interleavato come
+    // gli altri. `splitkAvail` si legge PRIMA del ciclo e finisce nel report:
+    // se il piano non ha instradato nessun tensore, un A/B piatto si leggerebbe
+    // «la leva non serve» invece di «la leva non e' cablata su questo modello»,
+    // e sarebbe la sesta inferenza non verificata di questo goal. Qui il braccio
+    // non parte proprio, e il report dice perche'.
+    const splitkAvail = model.splitkAvail();
+    const splitkOnRun = cfg.splitk === true && splitkAvail;
+    const splitkRuns: Awaited<ReturnType<typeof runPass>>[] = [];
     for (let r = 0; r < REPS; r++) {
       syncRuns.push(await runPass(false));
       optRuns.push(await runPass(true));
       if (cfg.kfan) kfanRuns.push(await runPass(true, true));
+      if (splitkOnRun) splitkRuns.push(await runPass(true, true, true));
       post({ type: "tick", msg: `rep ${r + 1}/${REPS}` });
     }
     const msOf = (rs: typeof syncRuns): number[] =>
@@ -682,6 +711,49 @@ async function main(cfg: Cfg): Promise<void> {
         submitsPerTokenKfanOn: kfanWarm.submits / Math.max(1, kfanWarm.argmax.length),
       };
     })() : null;
+    // IL GATE della rotta split-K, e anche questo viene PRIMA del tempo. Il
+    // termine di paragone e' il braccio KFAN, non l'ottimistico nudo: cosi' il
+    // rapporto isola una leva sola.
+    //
+    // Perche' l'argmax e' il gate giusto qui. La rotta spezza K in fette e le
+    // ricombina: cambia l'ORDINE delle somme del prodotto scalare, quindi la
+    // bit-identita' NON e' pretendibile e non la si pretende. Cio' che deve
+    // reggere e' la DECISIONE — il token scelto. Un errore di indicizzazione
+    // sui parziali o una fetta letta due volte non darebbero un crash: darebbero
+    // numeri plausibili e argmax che divergono, che e' esattamente cio' che
+    // questo campo vede.
+    const splitkWarm = splitkRuns.length > 0 ? splitkRuns[splitkRuns.length - 1] : null;
+    const msSplitk = splitkRuns.length > 1 ? disp(msOf(splitkRuns)) : null;
+    const splitkGate = {
+      requested: cfg.splitk === true,
+      // quanti tensori il piano ha davvero instradato: senza questo, un A/B
+      // piatto e' ambiguo fra «la leva non paga» e «la leva non c'e'»
+      available: splitkAvail,
+      ran: splitkWarm !== null,
+      skippedWhy: cfg.splitk === true && !splitkAvail
+        ? "il piano non ha instradato nessun tensore su questo modello (dot4I8Packed assente, "
+          + "oppure nessuna shape ammessa da planPrefillGemm): il braccio non e' partito, e un "
+          + "confronto piatto avrebbe detto la cosa sbagliata"
+        : null,
+      ...(splitkWarm ? (() => {
+        const nS = Math.min((kfanWarm ?? optim).argmax.length, splitkWarm.argmax.length);
+        const base = (kfanWarm ?? optim).argmax;
+        const eq = base.slice(0, nS).filter((v, i) => v === splitkWarm.argmax[i]).length;
+        const firstDiff = base.slice(0, nS).findIndex((v, i) => v !== splitkWarm.argmax[i]);
+        const msBase = kfanWarm ? msKfan : msOpt;
+        return {
+          comparedPasses: kfanWarm
+            ? "optimistic-warm+kfan (rotta OFF) vs optimistic-warm+kfan (rotta ON)"
+            : "optimistic-warm (rotta OFF) vs optimistic-warm (rotta ON) — SENZA kfan",
+          argmaxEqual: eq, argmaxCompared: nS, argmaxIdentical: nS > 0 && eq === nS,
+          firstDivergentToken: firstDiff < 0 ? null : firstDiff,
+          msPerTokenSplitkOff: msBase ? msBase.median : null,
+          msPerTokenSplitkOn: msSplitk ? msSplitk.median : null,
+          speedup: msBase && msSplitk ? msBase.median / msSplitk.median : null,
+          submitsPerTokenSplitkOn: splitkWarm.submits / Math.max(1, splitkWarm.argmax.length),
+        };
+      })() : {}),
+    };
     const n = tokens.length;
     const nCmp = Math.min(syncWarm.argmax.length, optim.argmax.length);
     const argmaxEqual = syncWarm.argmax.slice(0, nCmp).filter((v, i) => v === optim.argmax[i]).length;
@@ -717,8 +789,15 @@ async function main(cfg: Cfg): Promise<void> {
           ...pass2json(kfanWarm, Math.max(1, kfanWarm.argmax.length)),
           msPerTokenDisp: msKfan,
         }] : []),
+        ...(splitkWarm ? [{
+          pass: "optimistic-warm-kfan-splitk",
+          tokensDone: splitkWarm.argmax.length, error: splitkWarm.error,
+          ...pass2json(splitkWarm, Math.max(1, splitkWarm.argmax.length)),
+          msPerTokenDisp: msSplitk,
+        }] : []),
       ],
       kfanGate,
+      splitkGate,
       gate: {
         // il confronto che qualifica la fetta è A PARITÀ di residenza: pass 1
         // (sync, caldo) contro pass 2 (ottimistico, caldo)

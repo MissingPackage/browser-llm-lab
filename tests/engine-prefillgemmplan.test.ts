@@ -611,3 +611,47 @@ describe("[7] prefillGemmScratchFor: UN solo set di buffer, quindi il MAX", () =
     expect(f.xscF32).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// (6) IL REGIME: la clausola M=1 vale per il PREFILL, che e' chi l'ha scritta
+//     (goal engine-velocita-decode, it.24)
+//
+// `PREFILL_M1_LEGACY` sta nel done-when della riga 2 di `engine-ttft` e parla
+// di chunk di prefill. Il suo stesso commento la dichiara CONSERVATIVA e non
+// derivata. Il decode e' un altro regime, con la sua misura: 3,89x a M=1 su
+// K2048xN8192 contro il kernel che il decode emette davvero.
+//
+// Questi casi pinnano che scoparla NON l'abbia allentata per il prefill.
+// ---------------------------------------------------------------------------
+describe("[6] regime: il decode chiede a M=1, il prefill no", () => {
+  it("il DEFAULT e' prefill: chi non passa il regime vede il comportamento di prima", () => {
+    for (const kind of ["q4_0", "q5_K", "q8_0"] as const) {
+      expect(planPrefillGemm({ kind, K: 2048, N: 8192, M: 1, idot: true }).via).toBe("legacy");
+      expect(planPrefillGemm({ kind, K: 2048, N: 8192, M: 1, idot: true, regime: "prefill" }).via)
+        .toBe("legacy");
+    }
+  });
+
+  it("nel regime DECODE le due shape ammesse del 35B prendono la via intera", () => {
+    for (const N of [8192, 4096]) {
+      const r = planPrefillGemm({ kind: "q8_0", K: 2048, N, M: 1, idot: true, regime: "decode" });
+      expect(r.via, `N=${N}`).toBe("idot");
+      expect(r.splits, `N=${N}`).toBeGreaterThan(1);
+    }
+  });
+
+  it("il predicato sulla SHAPE vale in ENTRAMBI i regimi — N=32 resta legacy", () => {
+    // e' cio' che protegge i 48 siti `ssm_alpha`/`ssm_beta` del 4B: il regime
+    // apre la porta all'M, non alla geometria
+    const r = planPrefillGemm({ kind: "q8_0", K: 2048, N: 32, M: 1, idot: true, regime: "decode" });
+    expect(r.via).toBe("legacy");
+    expect(r.reason).toContain("N=32");
+  });
+
+  it("senza dot4I8Packed il decode NON prende la via intera: la f32 nel decode non e' misurata", () => {
+    const r = planPrefillGemm({ kind: "q8_0", K: 2048, N: 8192, M: 1, idot: false, regime: "decode" });
+    expect(r.via).toBe("f32");
+    // ed e' `gemv` a non instradarla: il piano la offre, il decode la rifiuta
+    // perche' nel suo regime non e' mai stata misurata (v. q35gpumodel.ts)
+  });
+});

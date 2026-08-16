@@ -74,6 +74,14 @@ if (process.argv.includes("--tier")) qs.set("policy", "tier");
 // ottimistici e differiscono SOLO per il kfan, altrimenti il confronto
 // misurerebbe due cose insieme.
 if (process.argv.includes("--kfan")) { qs.set("optimistic", "1"); qs.set("kfan", "1"); }
+// ROTTA SPLIT-K nel decode (goal engine-velocita-decode, riga 2d): A/B del
+// moltiplicatore a fette di K sui tensori che il piano ammette. Implica
+// --optimistic E --kfan, perche' il braccio si confronta col kfan acceso: il
+// kfan e' gia' in albero e misurato, e metterci contro il decode nudo darebbe
+// un rapporto che contiene due leve senza isolarne nessuna.
+if (process.argv.includes("--splitk")) {
+  qs.set("optimistic", "1"); qs.set("kfan", "1"); qs.set("splitk", "1");
+}
 // MISURA della fase 4-ter: quanto costa lo snapshot dello stato ricorrente
 // (62,8 MiB per token). Rompe il replay: solo a cache calda.
 if (process.argv.includes("--no-snapshot")) qs.set("nosnap", "1");

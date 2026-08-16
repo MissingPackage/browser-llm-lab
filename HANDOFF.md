@@ -154,11 +154,38 @@ un predicato solo, `stepOn`.
 il filtro sbagliasse girerebbero entrambi i bracci, il conteggio salirebbe e
 l'argmax cadrebbe.
 
-**LA PROSSIMA ITERAZIONE — il flag ACCESO non e' mai stato eseguito.** Serve
-`--splitk` su `q35-conf-run.mjs` (sul modello di `--kfan`), e poi **in
-quest'ordine**: leggere `splitkAvail()` (quanti tensori il piano ha davvero
-instradato — senza, un A/B piatto e' ambiguo) · gate **argmax 39/39** fra OFF e
-ON · `ssmGemv` dalla sonda · `decode.tokS` · infine 4B e 9B.
+**IL FLAG E' STATO ACCESO (it.24) E IL GATE E' ROSSO: argmax 38/39, prima
+divergenza al token 21.** Il tempo del braccio e' il migliore del goal —
+27,358 ms = **36,55 tok/s** contro i 32,546 del kfan — **e non va letto**: la
+regola del progetto dice che senza `argmaxIdentical` il ms/token di quel braccio
+non significa niente. Un motore che genera un token diverso non e' un motore
+piu' veloce.
+
+**LA DOMANDA DELLA PROSSIMA ITERAZIONE: bug o pareggio ravvicinato?** La rotta
+spezza K in fette e le ricombina, quindi cambia l'ordine delle somme: la
+bit-identita' non e' pretendibile e il gate non la pretende. Ma un flip di
+argmax ha due spiegazioni opposte — (1) i primi due logit di quel token distano
+meno dell'errore di ri-associazione f32, e il flip e' fisica; (2) un indice sui
+parziali o una fetta letta due volte, e allora i 27,4 ms sono il tempo di un
+motore rotto. **Il discriminante**, in ordine di costo: il **divario dei primi
+due logit al token 21** nei due bracci (`lastLogits()` c'e' gia'
+sull'interfaccia) — 1e-4 relativo ⇒ (1), largo ⇒ (2); se resta ambiguo, la
+**conformance top-1 contro l'oracolo** con la rotta accesa, che un bug
+d'indicizzazione farebbe crollare e un pareggio no.
+
+**La prima run ha dato `available: false`** — il piano non aveva instradato
+niente — e senza la guardia costruita in it.23 avrei letto un A/B piatto come
+«la leva non paga» invece di «la leva non e' cablata». Causa: `planPrefillGemm`
+respinge OGNI kind a M=1 (`PREFILL_M1_LEGACY`), clausola del done-when della
+riga 2 di `engine-ttft` che il suo stesso commento dichiara **conservativa e non
+derivata**. **Non l'ho ristretta**: ho aggiunto un parametro `regime` che vale
+`"prefill"` di default — comportamento identico byte per byte per tutti i
+chiamanti di prima — e il decode chiede col suo regime portando la misura del
+suo regime. La ragione strutturale della clausola («a M=1 non c'e' riuso dei
+pesi da ammortizzare») non si applica: a M=1 lo split-K non vince per riuso,
+vince per **banda** (9,6-23,4% del picco contro 91,0%). *Decisione al confine
+fra meccanismo e contratto, presa perche' non tocca il prefill di una virgola —
+se il PI la vuole diversa, il posto e' un default, non una clausola riscritta.*
 
 Le cinque iterazioni precedenti della riga hanno prodotto, tutto in albero e
 verde: la verifica di riuso (il kernel veloce ESISTE ed e' ktest-ato), il

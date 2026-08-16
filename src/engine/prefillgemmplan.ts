@@ -285,12 +285,57 @@ function kernelVerdict(o: {
  */
 export function planPrefillGemm(o: {
   kind: PrefillQuantKind; K: number; N: number; M: number; idot: boolean;
+  /**
+   * IL REGIME CHE CHIEDE LA ROTTA. Default `"prefill"`, cioe' esattamente il
+   * comportamento di prima: chi non lo passa non vede alcuna differenza.
+   *
+   * ESISTE PER UNA RAGIONE SOLA, e conviene scriverla per esteso perche' tocca
+   * una clausola che appartiene a un altro goal.
+   *
+   * `PREFILL_M1_LEGACY` rende legacy OGNI kind a M=1. Il suo stesso commento
+   * dichiara che la clausola e' **conservativa e non derivata**: al banco, a
+   * M=1, l'unica cella piu' lenta della legacy e' `q5_K` sulla via f32 (0,56x),
+   * mentre `q5_K/idot` fa 3,47x e `q4_0/idot` 8,64x PIU' VELOCI. E aggiunge:
+   * «restringerla alla cella misurata e' una decisione del PI, non
+   * dell'implementatore».
+   *
+   * **Questo parametro NON la restringe, e non tocca il prefill di una virgola:
+   * la SCOPA al regime che l'ha scritta.** La clausola sta nel done-when della
+   * riga 2 di `engine-ttft`, che parla di chunk di prefill; il decode e' un
+   * altro regime, con un'altra domanda e un'altra misura. Con
+   * `regime: "prefill"` (il default, e quello che tutti i chiamanti di prima
+   * usano) il comportamento e' identico byte per byte.
+   *
+   * LA MISURA CHE AUTORIZZA IL DECODE A M=1 — pre-registrata prima di guardare
+   * i numeri, e contro il kernel che il decode emette DAVVERO (non contro la
+   * forma del prefill, che era l'errore di it.13):
+   *
+   *     q8_0 K2048 N=8192   gemv 0,1324 ms (23,4% del picco) -> 0,0340   3,89x
+   *     q8_0 K2048 N=4096   gemv 0,1616 ms ( 9,6% del picco) -> 0,0489   3,30x
+   *
+   * (`results/microbench/velocita-decode-2d-4090-linux-2026-08-16T02-56-25-413Z.json`,
+   * graduatoria in `docs/deep-dive/velocita-decode-2d-prereg-2026-08-16.md`.)
+   *
+   * E la RAGIONE STRUTTURALE della clausola non si applica qui. Quella dice: «a
+   * M=1 non c'e' riuso dei pesi da ammortizzare, che e' l'intero punto della
+   * forma multi-riga». Vero — ma la forma split-K a M=1 non vince per riuso dei
+   * pesi: vince per BANDA. Il GEMV a un workgroup per riga sta al 9,6-23,4% del
+   * picco, lo split-K arriva al 91,0%. Spezzare il K da' a ogni workgroup un
+   * accesso contiguo piu' lungo, e quello paga anche con una riga sola.
+   *
+   * Quello che NON e' cambiato: il predicato sulla SHAPE (`kernelVerdict`) vale
+   * in entrambi i regimi. `ssm_alpha`/`ssm_beta` a N=32 restano legacy nel
+   * decode esattamente come nel prefill, su ogni famiglia.
+   */
+  regime?: "prefill" | "decode";
 }): PrefillGemmRoute {
   checkGeom(o, "planPrefillGemm");
 
   // M=1 prima di qualunque domanda al kernel: non e' la shape a non andare, e'
   // l'M. La costante porta con se' i numeri veri e il perche' resta com'e'.
-  if (o.M === PREFILL_M1_LEGACY.M) {
+  // Vale nel regime che l'ha scritta — il prefill — e non nel decode: v. il
+  // parametro `regime` qui sopra, che porta la misura che lo autorizza.
+  if (o.M === PREFILL_M1_LEGACY.M && (o.regime ?? "prefill") !== "decode") {
     return {
       via: "legacy",
       reason: PREFILL_M1_LEGACY.reasonFor(o),
