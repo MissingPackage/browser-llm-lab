@@ -1,0 +1,112 @@
+// La geometria parametrica riproduce ESATTAMENTE quella del GLM, e regge il
+// 35B che quella non reggeva (goal engine-velocita-decode, it.44).
+//
+// IL CASO CHE CONTA E' IL PRIMO: `slabfile.ts` calcola gli offset del GLM con
+// un'aritmetica chiusa su due corse contigue. Se il modulo parametrico non
+// producesse gli STESSI offset, un file slab gia' su disco diventerebbe
+// illeggibile — o peggio, leggibile e sbagliato. Qui si confrontano slab per
+// slab, tutti e 2.944, contro l'implementazione storica.
+//
+// IL SECONDO CASO E' LA RAGIONE PER CUI IL MODULO ESISTE: sul 35B le classi si
+// ALTERNANO (down q4_K sui layer 0-33, q6_K su 34, q4_K su 35-37, q6_K su
+// 38-39), quindi «layer <= confine» non le descrive. Verificato sull'header del
+// GGUF prima di scrivere una riga.
+import { describe, expect, it } from "vitest";
+import { slabGeometry, slabRangeOf, type SlabModelDesc } from "../src/engine/slabgeom";
+import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, mkSlabLayout, type SlabLayout } from "../src/engine/moe";
+import { GLM47_FLASH as G, GLM47_DOWN_EXPS_Q4_1_LAST } from "../src/engine/shape";
+import { slabRange, SLAB_HEADER_BYTES, N_SLABS, SLAB_DATA_BYTES } from "../src/engine/slabfile";
+
+const GLM_DESC: SlabModelDesc = {
+  fileName: "GLM-4.7-Flash-Q4_0.slabs.bin",
+  denseLead: G.denseLead, nLayer: G.nLayer, nExpert: G.nExpert,
+  layoutOf: (l) => (l <= GLM47_DOWN_EXPS_Q4_1_LAST ? SLAB_DOWN_Q4_1 : SLAB_DOWN_Q4_0),
+};
+
+describe("slabgeom: il GLM esce identico all'aritmetica storica", () => {
+  const g = slabGeometry(GLM_DESC);
+
+  it("stesso numero di slab e stessi byte di dati", () => {
+    expect(g.nSlabs).toBe(N_SLABS);
+    expect(g.dataBytes).toBe(SLAB_DATA_BYTES);
+  });
+
+  it("stesso offset e stessa taglia per TUTTI i 2.944 slab", () => {
+    let checked = 0;
+    for (let l = G.denseLead; l < G.nLayer; l++) {
+      for (let e = 0; e < G.nExpert; e++) {
+        const mine = slabRangeOf(g, l, e);
+        const hist = slabRange(l, e);
+        // il modulo parametrico non conosce l'header: il chiamante lo somma
+        expect(mine.offset + SLAB_HEADER_BYTES, `layer ${l} expert ${e}`).toBe(hist.offset);
+        expect(mine.bytes, `layer ${l} expert ${e}`).toBe(hist.bytes);
+        checked++;
+      }
+    }
+    expect(checked).toBe(N_SLABS);
+  });
+
+  it("le due classi restano nell'ordine del file: Q4_1 davanti", () => {
+    expect(g.classes.map((c) => c.id)).toEqual([SLAB_DOWN_Q4_1.id, SLAB_DOWN_Q4_0.id]);
+    expect(g.classes[0].base).toBe(0);
+  });
+
+  it("un layer denso e un expert fuori range LANCIANO, non restituiscono un offset", () => {
+    expect(() => slabRangeOf(g, 0, 0)).toThrow(/non e' MoE/);
+    expect(() => slabRangeOf(g, G.nLayer, 0)).toThrow(/non e' MoE/);
+    expect(() => slabRangeOf(g, G.denseLead, G.nExpert)).toThrow(/fuori da/);
+  });
+});
+
+describe("slabgeom: le classi ALTERNATE del 35B, che l'aritmetica del GLM non regge", () => {
+  // le taglie non contano per questo caso: conta che le classi si alternino
+  const A = mkSlabLayout("q4K", { kind: "q4_K", elems: 2048 * 512 },
+    { kind: "q4_K", elems: 2048 * 512 }, { kind: "q4_K", elems: 512 * 2048 });
+  const B = mkSlabLayout("q6K", { kind: "q4_K", elems: 2048 * 512 },
+    { kind: "q4_K", elems: 2048 * 512 }, { kind: "q6_K", elems: 512 * 2048 });
+  // la disposizione VERA, letta dall'header del GGUF in it.44
+  const q6 = new Set([34, 38, 39]);
+  const D: SlabModelDesc = {
+    fileName: "q35.slabs.bin", denseLead: 0, nLayer: 40, nExpert: 256,
+    layoutOf: (l) => (q6.has(l) ? B : A),
+  };
+  const g = slabGeometry(D);
+
+  it("trova due classi e le conta bene, benche' si alternino", () => {
+    expect(g.classes.map((c) => c.id)).toEqual(["q4K", "q6K"]);
+    expect(g.classes[0].nSlabs).toBe(37 * 256);
+    expect(g.classes[1].nSlabs).toBe(3 * 256);
+  });
+
+  it("ogni slab ha un offset DISTINTO e dentro l'area dati", () => {
+    const seen = new Set<number>();
+    for (let l = 0; l < 40; l++) {
+      for (let e = 0; e < 256; e++) {
+        const r = slabRangeOf(g, l, e);
+        expect(seen.has(r.offset), `offset ripetuto a layer ${l} expert ${e}`).toBe(false);
+        seen.add(r.offset);
+        expect(r.offset + r.bytes).toBeLessThanOrEqual(g.dataBytes);
+      }
+    }
+    expect(seen.size).toBe(40 * 256);
+  });
+
+  it("i layer q6_K NON sono contigui: e' il motivo per cui il confine del GLM non basta", () => {
+    // con «layer <= confine» il 34 e il 38-39 finirebbero nella classe sbagliata
+    expect(g.classOfLayer[33]).toBe(0);
+    expect(g.classOfLayer[34]).toBe(1);
+    expect(g.classOfLayer[35]).toBe(0);
+    expect(g.classOfLayer[38]).toBe(1);
+    // e i ranghi dentro la classe saltano i layer dell'altra
+    expect(g.rankOfLayer[35]).toBe(34);
+    expect(g.rankOfLayer[38]).toBe(1);
+  });
+
+  it("due layout con lo stesso id e taglie diverse LANCIANO", () => {
+    const clash: SlabModelDesc = {
+      ...D,
+      layoutOf: (l) => (l === 0 ? A : ({ ...B, id: A.id } as SlabLayout)),
+    };
+    expect(() => slabGeometry(clash)).toThrow(/due taglie/);
+  });
+});

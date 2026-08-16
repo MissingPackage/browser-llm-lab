@@ -3441,3 +3441,73 @@ slab direttamente», che il PI ha già approvato.
   strada 2; è irrilevante per la 1.
 - Se `ExpertOpfsStore` scriva davvero fino alla quota: non ho provato a scrivere
   10 GiB.
+
+---
+
+## it.44 — la geometria del GLM non generalizza, e l'ho scoperto prima di scriverla
+
+Fetta 1 della riga «pre-pack»: parametrizzare la geometria del file slab sul
+modello. **Il controllo di eseguibilità l'ha cambiata prima che diventasse
+codice sbagliato.**
+
+### L'assunzione che non regge
+
+`slabfile.ts` calcola gli offset con un'aritmetica chiusa che assume **due
+size-class CONTIGUE**: prima tutti gli slab della classe A (i primi layer), poi
+quelli della classe B. Sul GLM è vero, e `GLM47_DOWN_EXPS_Q4_1_LAST` è
+letteralmente il confine fra le due corse.
+
+Letto l'header del 35B **prima** di generalizzare:
+
+    gate  0-39 q4_K
+    up    0-39 q4_K
+    down  0-33 q4_K · 34 q6_K · 35-37 q4_K · 38-39 q6_K
+
+**Le classi si alternano.** Un `layer <= confine` non le descrive, e portare
+quell'aritmetica sul 35B avrebbe dato **offset validi e sbagliati** — cioè pesi
+plausibili invece di un errore, che è la classe di difetto che questo progetto
+paga più cara.
+
+### La forma che generalizza, e cosa NON cambia
+
+Il file resta raggruppato **per classe** — tutti gli slab della classe 0, poi
+quelli della 1 — così ogni classe è contigua e l'offset resta aritmetica, non
+una tabella per slab. Cambia solo **come si trova il posto di un layer dentro la
+sua classe**: invece di dedurlo da un confine, si precalcola un **rango per
+layer**. Sono `nLayer` interi (40, o 47 sul GLM), non `nLayer × nExpert`.
+
+`slabgeom.ts`, modulo puro: `SlabModelDesc` → `slabGeometry()` → `slabRangeOf()`.
+L'ordine delle classi è quello di **prima apparizione** scendendo dai layer:
+deterministico, dipende solo dal descrittore, e **conserva la disposizione del
+GLM senza che nessuno debba dichiararla**.
+
+### Il caso che rende il refactor sicuro
+
+Otto casi, e il primo è quello che conta: **tutti e 2.944 gli slab del GLM
+confrontati uno per uno** contro `slabRange` storica — stesso offset, stessa
+taglia. Se il modulo parametrico divergesse anche di un byte, un file slab già
+su disco diventerebbe illeggibile, o peggio leggibile e sbagliato.
+
+Gli altri pinnano che sul 35B ogni slab abbia un offset **distinto** e dentro
+l'area dati, che i layer q6_K NON siano contigui (33→classe 0, 34→classe 1,
+35→classe 0, 38→classe 1) e che due layout con lo stesso id e taglie diverse
+**lancino** invece di produrre un offset.
+
+*Nota di disegno: `slabRangeOf` non conosce l'header e restituisce offset
+nell'area dati; è il chiamante a sommarlo. Serve a poter confrontare il modulo
+con l'aritmetica del GLM senza sapere quanto è grande il suo header — cioè a
+rendere il caso di equivalenza scrivibile.*
+
+### EVIDENZA
+
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1125 passed | 10 skipped** (+8)
+- la disposizione delle classi del 35B letta dall'header del GGUF, non assunta
+
+### NON VERIFICATO
+
+- **`slabfile.ts` non è ancora stato riscritto sopra `slabgeom`**: il modulo
+  nuovo esiste e prova di essere equivalente, ma il consumatore (`glmsource`)
+  usa ancora l'aritmetica vecchia. La sostituzione è la prossima fetta, ed è
+  ora a rischio basso perché l'equivalenza è pinnata slab per slab.
+- Il descrittore del 35B non esiste ancora: `denseLead`, e quali layer siano
+  q6_K, vanno presi dallo shape e dall'header invece che scritti a mano.
