@@ -4,13 +4,18 @@
 
 **GOAL `engine-velocita-decode` ATTIVO. LA BARRA E' SUPERATA, IL GOAL NO.**
 
-**IL RISULTATO, MISURATO** (`results/engine/q35-router-par-ab-2026-08-16.json`):
+**IL RISULTATO, MISURATO** (`results/engine/q35-splitk-f32-ab-2026-08-16.json`):
 
-    decode 35B   22,58  ->  28,90  ->  30,74 tok/s
-                 (base)    (kfan)     (router parallelo, it.18)
-    barra 30 tok/s = 33,33 ms/token · siamo a 32,531 ms
-    dispersione [32,143-32,732] = [30,55-31,11] tok/s: TUTTA sopra la barra
-    gate argmax 39/39 IDENTICI, routingDiff 0
+    decode 35B   22,58  ->  28,90  ->  30,74  ->  39,15 tok/s
+                 base      kfan      router     rotta split-K (f32)
+    barra 30 SUPERATA CON MARGINE · nice-to-have 45: mancano 5,85 tok/s
+    dispersione [25,146-26,402 ms] = [37,88-39,77] tok/s
+    gate argmax 39/39 IDENTICI, routingDiff 0 · 1,73x dall'inizio del goal
+
+**ATTENZIONE ALLA LETTURA**: kfan e rotta sono **spenti di default**. Il 39,15 e'
+il numero di due bracci accesi a caldo per l'A/B, non di cio' che il motore fa
+oggi da solo. Accendere i due flag di default e' una decisione della riga di
+chiusura (riga 4), non delle righe che li hanno prodotti.
 
 **IL LAVORO E' FERMO SU UNA DECISIONE TUA — docket item 7, tre uscite.** Non ho
 altro di decidibile su questo goal senza quel ruling: la riga 4 (la barra su
@@ -161,41 +166,28 @@ regola del progetto dice che senza `argmaxIdentical` il ms/token di quel braccio
 non significa niente. Un motore che genera un token diverso non e' un motore
 piu' veloce.
 
-**RISPOSTA (it.25): non e' un pareggio e non e' un bug — e' la QUANTIZZAZIONE
-DELLE ATTIVAZIONI.** Sonda dei logit al token 21:
+**RISPOSTA, E CHIUSA (it.25 la diagnosi, it.26 la prova).** Il flip non era un
+pareggio ne' un bug: era la **quantizzazione delle attivazioni**. La via `idot`
+quantizza anche la x a int8 (`pesi × q8_0`), e al token 21 spostava un logit di
+0,4284 su 17,53 (2,44%) — piu' del divario di 0,2766 fra i primi due candidati.
+Una ri-associazione f32 su K=2048 sta a 1e-6..1e-4, due-tre ordini sotto. Il
+banco lo dichiarava gia' con una tolleranza di 2e-2 per i bracci idot contro
+1e-3 per gli altri (`ttRunner.ts:568`): il numero era in casa.
 
-    OFF (kfan)        top1 248046 v 17,527882 | top2 2899 v 17,251318
-    ON  (kfan+rotta)  top1   2899 v 17,169683 | top2 248046 v 17,099520
-    swapped true   ·   divario da ribaltare 0,2766   ·   spostamento 0,4284
+**La prova**: cambiata UNA cosa — la rotta usa la forma **f32**, niente
+quantizzatore, due dispatch invece di tre — e il gate e' tornato **39/39**.
 
-**La perturbazione e' PIU' GRANDE del divario che deve ribaltare**: non e' un
-pareggio che oscilla. E 2,4e-2 sta due-tre ordini sopra una ri-associazione f32
-(1e-6..1e-4): la causa e' che la via `idot` **quantizza le attivazioni a int8**
-(`pesi × q8_0`). Il banco lo dichiarava gia' — `ttRunner.ts:568` usa tolleranza
-**2e-2 per i bracci idot** contro 1e-3 per gli altri. Il numero era in casa.
+**E la f32 e' anche PIU' VELOCE nel motore**, non il 2,4% piu' lenta come al
+banco: 25,543 contro 27,358 ms. Il banco cronometra il solo GEMM, il motore paga
+anche i dispatch, e la via intera ne vuole tre per tensore contro due — **60
+dispatch in meno per token**. *Reperto riusabile: un kernel piu' veloce al banco
+puo' essere piu' lento nel motore se porta un dispatch in piu'.*
 
-*Se avessi guardato solo `swapped` avrei chiuso «e' un pareggio» e promosso un
-braccio che sposta i logit del 2,4%: e' per questo che `deltaTop1Rel` sta
-accanto e non da solo.*
-
-**LA VIA D'USCITA E' GIA' MISURATA E COSTA IL 2,4%.** it.23 aveva escluso
-`via: "f32"` scrivendo «nel decode non e' mai stata misurata» — sbagliato, it.21
-l'aveva misurata nella stessa tabella:
-
-    N=8192  base-decode 0,1324  ->  idot 0,0340 (3,89x)  ·  f32 0,0348 (3,80x)
-    N=4096  base-decode 0,1616  ->  idot 0,0489 (3,30x)  ·  f32 0,0497 (3,25x)
-
-**PROSSIMA ITERAZIONE**: instradare `via: "f32"` nel decode (il ramo esiste in
-`gemvB`, va portato in `gemv`: niente quantX, due dispatch invece di tre) e
-rifare l'A/B. **argmax 39/39** ⇒ ipotesi confermata e si prende la f32;
-**ancora 38/39** ⇒ torna in gioco il bug e il passo dopo e' la conformance top-1
-contro l'oracolo. In nessuno dei due casi i 36,55 tok/s diventano un risultato.
-
-**Se la f32 passa**, resta una domanda che e' TUA e non di meccanismo: il decode
-puo' quantizzare le attivazioni per prendersi l'ultimo 2,4%? Il prefill lo fa
-gia' ed e' passato dal gate giusto (top-1 vs oracolo ≥ 1012/1024). La porto nel
-docket solo se la f32 fallisce — se passa, e' un'ottimizzazione futura da 2,4%
-e non una decisione bloccante.
+**La via intera resta CABLATA E SPENTA** (`DEC_SPLITK_IDOT = false`, con la
+misura al call-site): se un giorno si decide che il decode puo' quantizzare le
+attivazioni, si riaccende cambiando una parola — e il gate da usare sara' la
+conformance top-1 contro l'oracolo, non l'argmax fra bracci. Non e' nel docket:
+la f32 ha passato il gate, quindi il residuo e' un'ottimizzazione da 2,4%.
 
 **La prima run ha dato `available: false`** — il piano non aveva instradato
 niente — e senza la guardia costruita in it.23 avrei letto un A/B piatto come

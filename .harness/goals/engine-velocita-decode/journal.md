@@ -2048,3 +2048,85 @@ la f32 fallisce** — se passa, la domanda diventa un'ottimizzazione futura da
 - `npx tsc --noEmit` exit 0 · `npx vitest run` **1105 passed | 10 skipped**
 - Il flag `--logit-probe` è a parte proprio perché perturba: le run di velocità
   restano pulite.
+
+---
+
+## it.26 — IPOTESI CONFERMATA: gate 39/39 e 39,15 tok/s
+
+**Il gate è verde, e questa volta il tempo si può leggere.**
+
+    GATE   argmax kfan-ON vs kfan+rotta   39/39   IDENTICI: SI
+           firstDivergentToken: nessuno · routingDiff 0
+
+    optimistic-warm             42,771 ms   23,38 tok/s
+    optimistic-warm-kfan        32,282 ms   30,98 tok/s
+    optimistic-warm-kfan-rotta  25,543 ms   39,15 tok/s    1,264x
+      dispersione [25,146 - 26,402] = [37,88 - 39,77] tok/s
+
+`results/engine/q35-splitk-f32-ab-2026-08-16.json`. Barra 30, nice-to-have 45.
+
+### L'ipotesi di it.25 era giusta, e la prova è che il flip è sparito
+
+Cambiata **una** cosa: la rotta usa la forma **f32** invece della via intera.
+Niente quantizzatore delle attivazioni, due dispatch invece di tre. Il token 21
+non diverge più, e nessun altro. **La divergenza era la quantizzazione delle
+attivazioni**, non un indice sui parziali: il cablaggio era corretto dal primo
+giorno.
+
+### La sorpresa: la f32 è più veloce, non il 2,4% più lenta
+
+Al banco la f32 perdeva il 2,4% sul kernel (0,0348 contro 0,0340 a N=8192). Nel
+motore **vince**: 25,543 contro i 27,358 del braccio intero di it.24.
+
+La ragione è che il banco cronometra **il solo GEMM**, mentre il motore paga
+anche i dispatch. La via intera ne vuole TRE per tensore (quantX → GEMM →
+combine), la f32 ne vuole DUE: **60 dispatch in meno per token** (30 layer × 2
+tensori ammessi). *Le due run non sono perfettamente confrontabili — sono due
+processi e due stati termici — ma il segno è coerente col conto dei dispatch, e
+il numero che conta è comunque quello del braccio che passa il gate.*
+
+**Il reperto riusabile**: un kernel più veloce al banco può essere più lento nel
+motore se porta con sé un dispatch in più. Il banco misura il kernel, non la
+rotta.
+
+### Cosa NON ho deciso, e sta in una costante con la sua misura accanto
+
+`DEC_SPLITK_IDOT = false` in `q35gpumodel.ts`, con il perché scritto al
+call-site: la via intera resta **cablata e spenta**. Non è una riga cancellata —
+se il PI decide che il decode può quantizzare le attivazioni, si riaccende
+cambiando una parola, e il gate da usare non sarà l'argmax fra bracci ma la
+conformance top-1 contro l'oracolo (che è come il prefill ha ottenuto lo stesso
+permesso). **Quella domanda non la porto nel docket**, come dichiarato in it.25:
+la f32 ha passato il gate, quindi il residuo è un'ottimizzazione futura e non
+una decisione bloccante.
+
+### Dove siamo, in una riga
+
+    22,58  ->  28,90  ->  30,74  ->  39,15 tok/s
+    base       kfan       router     rotta split-K
+                          parallelo  (f32, senza quantizzare le attivazioni)
+
+**1,73× dall'inizio del goal**, barra 30 superata con margine, nice-to-have 45
+a portata: mancano 5,85 tok/s, cioè 3,4 ms/token.
+
+### EVIDENZA
+
+- `results/engine/q35-splitk-f32-ab-2026-08-16.json` — host quiescente,
+  4 repliche interleavate, prima scartata, **gate argmax 39/39** e
+  `routingDiff 0`
+- `node .harness/tools/engine-ktest.mjs` **111 PASS / 0 FAIL** dopo il cambio a
+  `gemv`; `q35-model-4b-argmax` resta a **570 dispatch/token** con argmax 6/6
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1105 passed | 10 skipped**
+
+### NON VERIFICATO
+
+- **La rotta è SPENTA di default** (`splitkEnabled = false`), come il kfan. Il
+  39,15 è il numero di un braccio acceso a caldo, non di ciò che il motore fa
+  oggi da solo. Accendere i due flag di default è una decisione della riga di
+  chiusura, non di questa.
+- **4B e 9B non sono stati misurati con la rotta accesa.** La leva è globale per
+  costruzione (decide la shape, non il modello) ma «per costruzione» non è una
+  misura, ed è precisamente l'errore che il PI ha già corretto una volta in
+  questo goal.
+- `ssmGemv` dalla sonda non è stato riletto: so che il token cala di 6,7 ms, non
+  ho la conferma per categoria che venga da lì.

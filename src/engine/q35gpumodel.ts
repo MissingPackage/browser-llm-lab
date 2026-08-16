@@ -833,6 +833,16 @@ export async function createQ35GpuModel(
    * specifica di un modello, che e' precisamente cio' che il ruling del PI
    * vieta (memoria `global-levers-not-per-model-optimizations`).
    */
+  /**
+   * LA VIA INTERA NEL DECODE: spenta, e con la misura accanto (it.25).
+   * `false` ⇒ la rotta split-K del decode usa la forma f32, che non quantizza
+   * le attivazioni. V. il commento esteso al call-site in `gemv`. Riaccenderla
+   * e' una parola, ed e' una decisione del PI perche' cambia cosa il motore
+   * calcola, non come lo calcola.
+   */
+  const DEC_SPLITK_IDOT = false;
+  // La rotta esiste ovunque esista il moltiplicatore a fette: `prefillIdot` qui
+  // dice che il DEVICE sa fare la via intera, non che il decode la usi.
   const decSplitkAvail = prefillIdot;
   const decPart = decSplitkAvail ? empty(PREFILL_SPLITS_MEASURED * prefillMaxN * 4) : null;
   const decXq = decSplitkAvail ? empty(Math.ceil(prefillMaxN / 4) * 4) : null;
@@ -959,20 +969,57 @@ export async function createQ35GpuModel(
     // prefill, ma nel decode non e' mai stata misurata e instradarla sarebbe
     // ereditare un numero da un altro regime — l'errore che questo goal ha gia'
     // fatto quattro volte.
-    if (decSplitkAvail && kk === "q8_0" && decPart !== null && decXq !== null && decXsc !== null) {
-      const route = planPrefillGemm({ kind: kk, K: w.k, N: w.n, M: 1, idot: prefillIdot, regime: "decode" });
-      if (route.via === "idot") {
-        const o80 = { kind: kk, K: w.k, N: w.n, M: 1, splits: route.splits };
+    if (decSplitkAvail && kk === "q8_0" && decPart !== null) {
+      const route = planPrefillGemm({
+        kind: kk, K: w.k, N: w.n, M: 1,
+        // LA VIA INTERA NON ENTRA NEL DECODE, e il perche' e' MISURATO (it.25).
+        // `idot` quantizza anche le ATTIVAZIONI a int8 (`pesi × q8_0`), mentre
+        // il GEMV legacy moltiplica attivazioni f32 per pesi int8. Non e' un
+        // riordino di somme: e' un altro schema numerico. Al token 21 dell'A/B
+        // ha spostato un logit di 0,4284 su 17,53 (2,44%) — piu' del divario
+        // di 0,2766 che separava i primi due candidati — e l'argmax e' caduto
+        // a 38/39. Una ri-associazione f32 su K=2048 sta a 1e-6..1e-4: due-tre
+        // ordini di grandezza sotto. Il banco lo diceva gia', con una tolleranza
+        // di 2e-2 per i bracci idot contro 1e-3 per tutti gli altri
+        // (`ttRunner.ts:568`).
+        //
+        // La f32 costa il 2,4% in piu' e NON quantizza le attivazioni:
+        //   N=8192  gemv 0,1324 -> idot 0,0340 (3,89x) · f32 0,0348 (3,80x)
+        //   N=4096  gemv 0,1616 -> idot 0,0489 (3,30x) · f32 0,0497 (3,25x)
+        // Prendere il 3,80x senza cambiare cosa il motore calcola e' lo scambio
+        // giusto, e il 2,4% che resta e' una domanda per il PI — «il decode puo'
+        // quantizzare le attivazioni?» — non una decisione di meccanismo.
+        //
+        // La costante e' `false` e non una riga cancellata di proposito: se quel
+        // ruling arriva, il cablaggio della via intera e' gia' qui sotto e si
+        // riaccende cambiando una parola.
+        idot: prefillIdot && DEC_SPLITK_IDOT,
+        regime: "decode",
+      });
+      const o80 = { kind: kk, K: w.k, N: w.n, M: 1, splits: route.splits };
+      const combine = (): void => push(prefillSplitKCombineWgsl({ N: w.n, M: 1, splits: route.splits }),
+        [decPart, dst], prefillCombineGrid({ N: w.n, M: 1 }), false, "splitk");
+      // Il braccio spento sta NELLO STESSO piano: `setSplitk` sceglie a caldo
+      // quale dei due l'encoder esegue, e l'A/B resta dentro un processo solo
+      // — stessa cache, bracci interleavati (v. `Step.arm`).
+      const bothArms = (): void => {
+        combine();
+        push(gemvQuantWgsl(use), [w.qs, w.scales, src, dst], gemvQuantGrid(use), false, "legacy");
+      };
+      if (route.via === "idot" && decXq !== null && decXsc !== null) {
         push(prefillQuantXQ8Wgsl({ K: w.k, M: 1 }), [src, decXq, decXsc],
           prefillQuantXGrid({ K: w.k, M: 1 }), false, "splitk");
         push(prefillGemmQ80SplitKIdotWgsl(o80), [w.qs, w.scales, decXq, decPart, decXsc],
           prefillGemmGrid(o80), false, "splitk");
-        push(prefillSplitKCombineWgsl({ N: w.n, M: 1, splits: route.splits }), [decPart, dst],
-          prefillCombineGrid({ N: w.n, M: 1 }), false, "splitk");
-        // Il braccio spento sta NELLO STESSO piano: `setSplitk` sceglie a caldo
-        // quale dei due l'encoder esegue, e l'A/B resta dentro un processo solo
-        // — stessa cache, bracci interleavati (v. `Step.arm`).
-        push(gemvQuantWgsl(use), [w.qs, w.scales, src, dst], gemvQuantGrid(use), false, "legacy");
+        bothArms();
+        return;
+      }
+      if (route.via === "f32") {
+        // DUE dispatch invece di tre: niente quantizzatore delle attivazioni,
+        // il kernel legge `src` in f32 direttamente.
+        push(prefillGemmQ80SplitKWgsl(o80), [w.qs, w.scales, src, decPart],
+          prefillGemmGrid(o80), false, "splitk");
+        bothArms();
         return;
       }
     }
