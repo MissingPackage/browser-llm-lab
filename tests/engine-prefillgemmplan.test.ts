@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  PREFILL_IDOT_FEATURE, PREFILL_M1_LEGACY, prefillGemmCapsFor, planPrefillGemm,
+  PREFILL_IDOT_FEATURE, PREFILL_M1_LEGACY, DEC_SPLITK_MIN_N, prefillGemmCapsFor, planPrefillGemm,
   prefillGemmScratchFor, prefillPlanDispatches,
   type PrefillSite,
 } from "../src/engine/prefillgemmplan";
@@ -646,6 +646,30 @@ describe("[6] regime: il decode chiede a M=1, il prefill no", () => {
     const r = planPrefillGemm({ kind: "q8_0", K: 2048, N: 32, M: 1, idot: true, regime: "decode" });
     expect(r.via).toBe("legacy");
     expect(r.reason).toContain("N=32");
+  });
+
+  it("[pavimento] il decode rifiuta N sotto DEC_SPLITK_MIN_N, misurato perdente", () => {
+    // q8_0 K=2048 N=512 e' `ffn_gate/up_shexp` del 35B: al banco da' 0,92x
+    // contro il gemv del decode, cioe' PERDE. Era instradata, e il segmento
+    // migliorava lo stesso perche' il `down` (2,45x) copriva la perdita.
+    const r = planPrefillGemm({ kind: "q8_0", K: 2048, N: 512, M: 1, idot: true, regime: "decode" });
+    expect(r.via).toBe("legacy");
+    expect(r.reason).toContain("pavimento del DECODE");
+    expect(r.reason).toContain("0,92x");
+  });
+
+  it("[pavimento] vale SOLO nel decode: il prefill instrada le stesse N a M righe", () => {
+    // a M=16 c'e' riuso dei pesi da ammortizzare e la forma vince comunque:
+    // trascinare il pavimento del decode nel prefill sarebbe una regressione
+    const r = planPrefillGemm({ kind: "q8_0", K: 2048, N: 512, M: 16, idot: true });
+    expect(r.via).toBe("idot");
+  });
+
+  it("[pavimento] sopra la soglia il decode instrada: 2048 e' il primo punto MISURATO che vince", () => {
+    // K=512 N=2048 e' `ffn_down_shexp`, misurato 2,45x
+    expect(planPrefillGemm({ kind: "q8_0", K: 512, N: 2048, M: 1, idot: true, regime: "decode" }).via)
+      .toBe("idot");
+    expect(DEC_SPLITK_MIN_N).toBe(2048);
   });
 
   it("senza dot4I8Packed il decode NON prende la via intera: la f32 nel decode non e' misurata", () => {

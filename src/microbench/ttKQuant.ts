@@ -1074,6 +1074,26 @@ export const KQUANT_SHAPES: readonly KQuantShape[] = [
   // su 30 dispatch = 233 us a layer) e ce l'hanno anche 4B e 9B: e' li' che una
   // leva sarebbe globale per costruzione.
   { family: "q8_0", K: 2048, N: 8192, label: "35B attn_qkv del DECODE (66,32% dei pesi di ssmGemv, il primo termine)", Ms: [1, 8, 16] },
+  // LE SHAPE PICCOLE DEL Q8_0 — `shexp` del 35B (it.38), e mancavano.
+  //
+  // Il predicato ammette tutto cio' che ha N >= PREFILL_GEMM_ROWS_PER_WG = 64,
+  // quindi la rotta split-K del decode instrada ANCHE questi due. Ma il banco
+  // aveva misurato il q8_0 solo a N=4096 e N=8192, dove rende 3,3-3,9x. Sulle
+  // shape piccole analoghe dei K-quant la stessa forma fa 0,20-0,56x — cioe'
+  // PERDE, e di molto. Se perde anche qui, la rotta sta rallentando un segmento
+  // da 2,089 ms/token e nessuno se n'e' accorto perche' i guadagni sulle shape
+  // grandi lo coprono.
+  //
+  // E' esattamente la cella che il banco non aveva e il motore esegue: la
+  // ragione per cui questa riga esiste.
+  //
+  // Ms = [1, 8, 16] e non solo [1] benche' la domanda sia sul DECODE: il caso
+  // [b2] pretende che ogni shape copra le tre M, ed e' un invariante giusto —
+  // anche il prefill instrada questi due tensori, quindi misurarli a una M sola
+  // lascerebbe scoperto proprio il regime in cui la forma multi-riga dovrebbe
+  // vincere. Dare tre M costa qualche secondo di banco e non indebolisce niente.
+  { family: "q8_0", K: 2048, N: 512, label: "35B ffn_gate/up_shexp — INSTRADATA dalla rotta, mai misurata qui", Ms: [1, 8, 16] },
+  { family: "q8_0", K: 512, N: 2048, label: "35B ffn_down_shexp — INSTRADATA dalla rotta, mai misurata qui", Ms: [1, 8, 16] },
 ];
 
 export interface KQuantVariant {

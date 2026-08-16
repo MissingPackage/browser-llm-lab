@@ -128,6 +128,35 @@ export type PrefillGemmVia = "idot" | "f32" | "legacy";
  * una decisione del PI, non dell'implementatore: sta nel consuntivo della riga
  * come divergenza aperta, non risolta qui in silenzio.
  */
+/**
+ * PAVIMENTO SU N DELLA ROTTA NEL DECODE — misurato, non scelto (it.38).
+ *
+ * Il predicato generale ammette `N >= PREFILL_GEMM_ROWS_PER_WG` (64), che e' la
+ * soglia sotto cui il kernel lavorerebbe a meno di mezzo workgroup. Per il
+ * PREFILL va bene: a M righe c'e' riuso dei pesi da ammortizzare e la forma
+ * vince comunque. Per il DECODE no. Al banco, a M=1, sulle shape vere e contro
+ * il kernel che il decode emette davvero:
+ *
+ *     q8_0  K=2048  N= 512   0,92x   PERDE    (ffn_gate/up_shexp del 35B)
+ *     q8_0  K= 512  N=2048   2,45x   vince    (ffn_down_shexp)
+ *     q8_0  K=2048  N=4096   3,25x   vince
+ *     q8_0  K=2048  N=8192   3,80x   vince
+ *
+ * COSA HA TROVATO: la riga da 0,92x **era instradata** dalla rotta e nessuno se
+ * n'era accorto, perche' il segmento `shexp` migliora lo stesso (−0,174
+ * ms/token) — il guadagno sul `down` copre la perdita su `gate` e `up`.
+ * Escluderli restituisce ~0,048 ms/token: poco, e sotto il rumore dell'A/B. Ma
+ * un predicato che instrada una forma che il banco dichiara perdente e'
+ * sbagliato anche quando il totale torna, e il giorno che qualcuno estende la
+ * rotta ai K-quant — dove alle stesse shape si misura 0,20-0,57x — quel
+ * predicato diventerebbe una regressione vera.
+ *
+ * PERCHE' 2048 E NON 1024: fra 512 e 2048 non ho misure. Mettere la soglia dove
+ * non ho guardato sarebbe scegliere un numero invece di misurarlo; il valore sta
+ * sul primo punto MISURATO che vince.
+ */
+export const DEC_SPLITK_MIN_N = 2048;
+
 export const PREFILL_M1_LEGACY = {
   /** L'M su cui la clausola scatta. */
   M: 1,
@@ -339,6 +368,20 @@ export function planPrefillGemm(o: {
     return {
       via: "legacy",
       reason: PREFILL_M1_LEGACY.reasonFor(o),
+      splits: 0, partialFloats: 0, wgStorageBytes: 0, xqU32: 0, xscF32: 0,
+    };
+  }
+
+  // Il pavimento del DECODE, e vale SOLO li': v. `DEC_SPLITK_MIN_N`. Sta qui e
+  // non in `kernelVerdict` perche' non e' una proprieta' del kernel — il kernel
+  // su N=512 e' corretto — ma di quale regime ci guadagna.
+  if ((o.regime ?? "prefill") === "decode" && o.N < DEC_SPLITK_MIN_N) {
+    return {
+      via: "legacy",
+      reason: `N=${o.N} sotto il pavimento del DECODE (${DEC_SPLITK_MIN_N}): a M=1 questa forma `
+        + `e' stata MISURATA perdente (q8_0 K=2048 N=512 da' 0,92x contro il gemv del decode), `
+        + `mentre sopra il pavimento vince da 2,45x a 3,80x. Il PREFILL non ha questo limite: `
+        + `a M righe c'e' riuso dei pesi da ammortizzare e la forma vince comunque`,
       splits: 0, partialFloats: 0, wgStorageBytes: 0, xqU32: 0, xscF32: 0,
     };
   }

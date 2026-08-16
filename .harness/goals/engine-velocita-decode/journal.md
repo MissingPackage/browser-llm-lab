@@ -3039,3 +3039,94 @@ compito.
 Sola lettura di artefatti esistenti (`q35-splitk-f32-ab-2026-08-16.json`,
 `q35-ioinside-arena4-2026-08-16.json`), nessuna GPU, albero invariato rispetto a
 `2ddb0d9`.
+
+---
+
+## it.38 — la rotta instradava una shape che perde: 39,15 → 40,06 tok/s
+
+**Prima iterazione sotto la priorità nuova del PI** (*«la leva che ci porti più
+vicino ai 45 tok/s sul 35B; il GLM è secondario»*). Registrata sul docket: gli
+item 7, 8 e 9 sono deprioritizzati perché vivono tutti nel regime **sporco**,
+mentre i 45 sono un numero **a caldo con zero miss**.
+
+### Prima cosa: ho escluso la leva ovvia leggendo il banco che avevo già
+
+Il termine più grosso rimasto è `expert` (5,204 ms). Estendergli la rotta
+sembrava naturale. **Il banco dice che perde:**
+
+    q4_K K=2048 N= 512   idot 0,90x   f32 0,20x
+    q4_K K= 512 N=2048   idot 1,36x   f32 0,56x
+    q6_K K= 512 N=2048   idot 1,25x   f32 0,42x
+
+Il 3,3-3,9× della rotta vive sulle shape **grandi**; gli expert sono piccoli e
+lo split-K non ha niente da ammortizzare. **Due-tre iterazioni risparmiate, a
+costo di una lettura.**
+
+### La cosa che ho trovato guardando lì: instradavo una shape perdente
+
+`shexp` è **Q8_0 a N=512 (gate/up) e N=2048 (down)**, e il predicato ammette
+tutto ciò che ha `N ≥ 64`. **Quindi la rotta li instradava tutti e tre** — ma il
+banco aveva misurato il q8_0 solo a N=4096 e N=8192.
+
+Aggiunte le due celle mancanti:
+
+    q8_0 K=2048 N= 512   0,92x   PERDE     ← gate/up_shexp, INSTRADATA
+    q8_0 K= 512 N=2048   2,45x   vince     ← down_shexp
+    q8_0 K=2048 N=4096   3,25x   vince
+    q8_0 K=2048 N=8192   3,80x   vince
+
+**Il segmento migliorava lo stesso** (2,177 → 2,089) perché il guadagno sul
+`down` copriva la perdita su `gate` e `up`. *Un predicato che instrada una forma
+che il banco dichiara perdente è sbagliato anche quando il totale torna* — e il
+giorno che qualcuno estende la rotta ai K-quant, dove alle stesse shape si
+misura 0,20-0,57×, quel predicato diventerebbe una regressione vera.
+
+### La correzione, e il pavimento è misurato non scelto
+
+`DEC_SPLITK_MIN_N = 2048`, applicato **solo con `regime: "decode"`** — il
+prefill non ha questo limite perché a M righe c'è riuso dei pesi da
+ammortizzare, e trascinarcelo sarebbe una regressione.
+
+**2048 e non 1024**: fra 512 e 2048 non ho misure, e mettere la soglia dove non
+ho guardato sarebbe scegliere un numero invece di misurarlo. Sta sul primo punto
+**misurato** che vince.
+
+### Il risultato, e il conto chiude per la ragione giusta
+
+    optimistic-warm-kfan          32,227 ms   31,03 tok/s
+    optimistic-warm-kfan-splitk   24,963 ms   40,06 tok/s     ← era 25,543 / 39,15
+    gate argmax 39/39 IDENTICI
+
+    atteso dal solo kernel                              0,048 ms
+    + 60 dispatch tolti (2 tensori x 30 layer)  x 8,65 us  0,519 ms
+    = atteso                                            0,567 ms
+      MISURATO                                          0,580 ms
+
+**Il banco prevedeva 0,048 e la misura ha dato 0,580, dodici volte tanto — e
+non è rumore**: la rotta usa **due** dispatch dove il gemv ne usa uno, quindi
+escluderla da due tensori per trenta layer toglie 60 dispatch. È la terza volta
+che questa distinzione sposta un numero: **il banco misura il kernel, il motore
+paga la rotta.**
+
+### Dove siamo verso i 45
+
+    24,963 ms oggi · 22,22 ms per i 45 tok/s · mancano 2,74 ms
+
+E `expert` (5,204 ms, il primo termine) **non** si attacca con questa leva: è
+misurato.
+
+### EVIDENZA
+
+- `results/microbench/velocita-decode-2d-4090-linux-2026-08-16T09-56-32-138Z.json`
+  (le due celle nuove) · `results/engine/q35-splitk-floor-2026-08-16.json`
+  (gate 39/39, host quiescente, 4 repliche interleavate)
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1113 passed | 10 skipped** (+3)
+- Il caso `[b2]` del banco pretende che ogni shape copra M = 1, 8, 16: **non
+  l'ho indebolito**, ho dato le tre M anche alle due shape nuove. Costa qualche
+  secondo e misura anche il regime di prefill, dove quei tensori passano.
+
+### NON VERIFICATO
+
+- Fra N=512 e N=2048 non c'è nessuna misura: il pavimento è conservativo per
+  costruzione e potrebbe lasciare sul tavolo le shape intermedie, se ne
+  esistessero. Sul 35B non ce ne sono.
