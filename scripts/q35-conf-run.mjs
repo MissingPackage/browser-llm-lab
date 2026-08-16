@@ -27,7 +27,13 @@ if (!existsSync(golden)) {
   console.error(`[q35conf] golden assente: ${golden} (genera con tools/oracle-moe/run-golden-q35.sh)`);
   process.exit(2);
 }
-copyFileSync(golden, join(ROOT, "public/models/q35/golden-full.json"));
+// SCRATCH DELLA RUN, e il nome lo dice. Si chiamava `golden-full.json` e il
+// nome mentiva: ci finiva QUALUNQUE golden — `--golden-kind smoke --model 35b`
+// ci scriveva 39 token. Il ktest leggeva lo stesso file credendolo il full del
+// 4B e misurava l'accept-rate della testa MTP su una finestra da 37 invece che
+// da 62, contro un riferimento preso su 62 (goal engine-velocita-decode it.19).
+// Il ktest ora ha il suo fixture, che nessun runner scrive.
+copyFileSync(golden, join(ROOT, "public/models/q35/golden-run.json"));
 mkdirSync(PROFILE, { recursive: true });
 
 const qs = new URLSearchParams();

@@ -313,7 +313,34 @@ prossima iterazione, prima di qualsiasi altra leva. Chiedo solo se preferisci
 che vada invece sotto `engine-fase-d`, che è il goal proprietario di quel
 codice.
 
-**RULING:** _
+> **CHIUSO in it.19 SENZA BISECT, e la domanda che avevo fatto era mal posta.**
+> Non era una regressione del modello e non stava in nessuno dei commit it.13-17:
+> **il test leggeva un altro campione.** `public/models/q35/golden-full.json` ha
+> un nome, **due scrittori** (`q35-conf-run.mjs` e `q35-bench-run.mjs`, che ci
+> copiano il golden della loro run, qualunque modello e qualunque
+> `--golden-kind`) e **due lettori** — di cui uno, `q35conf.worker.ts`, verifica
+> lo SHA, e l'altro, il ktest, non verificava niente. Il file conteneva il
+> golden **smoke del 35B**, 39 token: il caso misurava l'accept-rate su 37
+> confronti e lo confrontava col riferimento preso su 62. **L'avevo avvelenato
+> io in it.18** lanciando l'A/B con `--golden-kind smoke`.
+>
+> **Corretto alla radice**: lo scratch dei bench si chiama ora `golden-run.json`,
+> il ktest ha il suo fixture `golden-q35-4b-full.json` che nessun runner scrive
+> e che `engine-ktest.mjs` copia dal repo a ogni avvio, e il caso MTP **verifica
+> la finestra** invece di assumerla (`tokens.length !== W` ⇒ FAIL che nomina la
+> causa vera). Sette casi statici in
+> `tests/engine-golden-fixture-isolation.test.ts` pinnano che i due ruoli
+> restino file diversi.
+>
+> **Gate**: `111 PASS / 0 FAIL`, `q35-mtp-draft-4b` **31/62 = 50,0%** — il
+> riferimento, cifra per cifra.
+>
+> **Recidiva, non sfortuna**: `engine-fase-d` it.53 aveva già visto lo stesso
+> sintomo («13/38 = 34,2% — un numero giusto su una finestra sbagliata») e
+> l'aveva risolto puntando il file giusto **senza togliere la collisione**.
+
+**RULING:** _ (item chiuso senza bisogno di ruling — la domanda su dove
+bookkeeparlo è decaduta col bisect)
 
 ## item 7 — il GLM b12 non riproduce più il suo riferimento, e la causa è la LETTURA (io → PI, it.18)
 

@@ -1374,3 +1374,99 @@ ipotizzare.
   lo stesso protocollo sullo stesso golden, non perché sia il consuntivo.
 - 4B e 9B non hanno router (sono densi): la leva non li tocca, e il done-when
   «misurata su ≥2 famiglie» qui vale come «le due famiglie CHE HANNO un router».
+
+---
+
+## it.19 — il FAIL non era una regressione: era un file con un nome che mentiva
+
+**Il gate di merge è tornato verde: `111 PASS / 0 FAIL`**, e
+`q35-mtp-draft-4b` riporta **31/62 = 50,0%** — cifra per cifra il riferimento
+CPU f64 di `engine-fase-d` it.51/53. Nessun bisect eseguito.
+
+### Come si è chiusa in dieci minuti invece che in due iterazioni
+
+Il docket item 6 stimava 1-2 iterazioni di bisect fra it.13 e it.17, ~30 min di
+GPU. **Prima di spenderli ho letto il test**, e la prima riga utile era questa
+(`ktest.worker.ts`, `testQ35MtpDraft4B`):
+
+    const tokens = [...p.promptTokens, ...p.generated].slice(0, W);   // W = 64
+
+Il verdetto stampava `12/37`. `tot = tokens.length − 2`, quindi
+**`tokens.length` era 39, non 64**: il golden dava una finestra da 39 token. Non
+un modello che sbaglia di più — **un altro campione.**
+
+### La causa: un nome, due scrittori, due lettori
+
+    public/models/q35/golden-full.json
+      <- scrive  scripts/q35-conf-run.mjs      (il golden della SUA run)
+      <- scrive  scripts/q35-bench-run.mjs     (il golden della SUA run)
+      -> legge   q35conf.worker.ts             (ma verifica lo SHA: protetto)
+      -> legge   ktest.worker.ts               (nessun controllo: esposto)
+
+`copyFileSync(golden, ".../golden-full.json")` ci copia **qualunque** golden:
+`--model 35b --golden-kind smoke` ci lascia 39 token. Il file trovato oggi era
+byte per byte `golden-q35-35b-smoke-2026-08-10.json`. Il full del 4B che il
+ktest si aspetta ne ha **6.461** per il prompt 0.
+
+**L'ho avvelenato io in it.18**, lanciando l'A/B del 35B con `--golden-kind
+smoke`; e it.2 aveva fatto lo stesso il 15. Il `111 PASS` di `engine-kquant` era
+riproducibile solo perché l'ultima run di bench, per caso, era stata una 4B
+full. **Il gate dipendeva da quale bench fosse girato per ultimo.**
+
+### Il precedente, che rende questa una recidiva e non una sfortuna
+
+`engine-fase-d` it.53 aveva già incontrato **lo stesso sintomo**: *«alla prima
+esecuzione ho puntato `golden-smoke.json` [...] e l'accept è uscito 13/38 =
+34,2% — un numero giusto su una finestra sbagliata»*. Allora fu risolto
+puntando il file giusto. **La collisione è rimasta**, e ha riaperto la stessa
+ferita da un'altra direzione (non il file puntato a mano: il file riscritto da
+qualcun altro).
+
+### La correzione, alla radice e non sul sintomo
+
+1. **Lo scratch dei bench si chiama `golden-run.json`** — il nome dice che è
+   volatile. I due runner ci copiano; `q35conf.worker.ts` legge lì (e continua
+   a verificare lo SHA, la difesa che aveva già).
+2. **Il ktest ha il suo fixture, `golden-q35-4b-full.json`, che nessun runner
+   scrive.** A metterlo lì è `engine-ktest.mjs`, che lo copia dal repo a ogni
+   avvio: un `copyFileSync`, e la dipendenza da «quale bench è girato per
+   ultimo» sparisce.
+3. **Il caso MTP verifica la finestra**: `tokens.length !== W` ⇒ FAIL che dice
+   *«FINESTRA SBAGLIATA [...] è il golden sbagliato, NON una regressione del
+   modello»*. È la difesa che mancava: un test che pinna un riferimento preso su
+   una finestra deve dichiarare di aver ottenuto quella finestra.
+4. Il file avvelenato è stato rimosso da `public/models/q35/`.
+5. `tests/engine-golden-fixture-isolation.test.ts`, 7 casi, pinna che i due
+   ruoli restino file diversi e che il golden nel repo copra davvero i 64 token.
+
+### Il reperto che vale oltre questo caso
+
+**Il difetto ha prodotto un FAIL con un numero plausibile in un gate di merge.**
+Non un crash, non un NaN, non un file mancante: 32,4% contro 50%, esattamente la
+forma di una regressione del modello. Mi è costato **mezz'ora di GPU per
+escluderlo** — due esecuzioni intere del parco kernel con `git stash` — e la
+diagnosi vera è arrivata leggendo il codice, non misurando.
+
+*Il metodo che ha funzionato, e quello che ha sprecato tempo*: il `git stash` +
+riesecuzione ha stabilito CHE non era mio (utile, e necessario per non
+attribuirmi un rosso). Ma la CAUSA l'ha data la lettura di quattro righe di
+test. In it.18 avevo la stessa informazione sotto gli occhi — `12/37` accanto a
+un riferimento `31/62` — e ho letto «accept-rate diverso» invece di
+«denominatore diverso».
+
+### EVIDENZA
+
+- `node .harness/tools/engine-ktest.mjs` → **`PASS 111 · FAIL 0`**, adapter
+  nvidia lovelace; `q35-mtp-draft-4b` **31/62 = 50,0%**, 63 draft a 4,80 ms
+- `npx tsc --noEmit` exit 0
+- `npx vitest run` **1094 passed | 10 skipped** (erano 1087: +7 casi nuovi)
+- i quattro casi router di it.18 invariati cifra per cifra anche in questa run
+
+### NON VERIFICATO
+
+- **Docket item 7 resta aperto**: il GLM b12 a 11,35 tok/s contro i 15,330 del
+  riferimento, con `readMsPerToken` 2,47 → 17,5. È l'ultimo rosso del gate di
+  merge (riga 6) ed è la prossima iterazione.
+- Le run di conformance/bench NON sono state rieseguite dopo il rename dello
+  scratch: il path cambia in tre file e il test statico lo pinna, ma la prova
+  d'esecuzione arriverà con la prossima run che usa quei runner.

@@ -26,6 +26,22 @@
 //   3. il conteggio PASS/FAIL lo stampa il driver, cosi' chi legge non deve
 //      dedurlo da un grep sulla tabella.
 import { chromium } from "playwright";
+import { copyFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+
+// IL FIXTURE DEL KTEST SE LO PROVVEDE IL KTEST (it.19 di engine-velocita-decode).
+// `q35-mtp-draft-4b` confronta un accept-rate col riferimento CPU preso sui
+// primi 64 token del prompt 0 del golden FULL del 4B. Prima leggeva
+// `/models/q35/golden-full.json` — che e' lo scratch in cui q35-conf-run.mjs e
+// q35-bench-run.mjs copiano il golden della LORO run: bastava una run
+// `--golden-kind smoke` perche' il ktest misurasse su 37 token invece che su
+// 62 e riportasse un FAIL che sembrava una regressione del modello.
+// Il fixture ora ha un nome suo, e a metterlo li' e' questo runner: copiarlo
+// dal repo a ogni avvio costa un `copyFileSync` e toglie la dipendenza da
+// quale bench sia girato per ultimo.
+const KTEST_ROOT = new URL("../..", import.meta.url).pathname;
+const GOLDEN_SRC = join(KTEST_ROOT, "results/engine/golden/q35/golden-q35-4b-full-2026-08-10.json");
+const GOLDEN_DST = join(KTEST_ROOT, "public/models/q35/golden-q35-4b-full.json");
 
 const PROFILE = process.env.E2E_PROFILE ?? "/tmp/blab-e2e-profile";
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:5173";
@@ -44,6 +60,14 @@ const die = (why, code = 2) => {
   console.error("[ktest] NESSUN VERDETTO — questa run non e' un gate superato.");
   process.exit(code);
 };
+
+if (existsSync(GOLDEN_SRC)) {
+  copyFileSync(GOLDEN_SRC, GOLDEN_DST);
+} else if (!existsSync(GOLDEN_DST)) {
+  // non e' un `die`: il resto del parco kernel non dipende da questo file, e
+  // il caso che lo usa fallisce da solo dicendo cosa manca
+  console.error(`[ktest] ATTENZIONE: golden 4B full assente (${GOLDEN_SRC}) — q35-mtp-draft-4b fallira' dichiarandolo`);
+}
 
 let browser = null;
 try {

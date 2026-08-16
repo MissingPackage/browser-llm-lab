@@ -704,13 +704,19 @@ async function testQ35MtpHeadReal(g: Gpu): Promise<KResult> {
  * (it.49). Riferimento CPU sulla stessa finestra: 31/62 = 50,0% (it.51).
  */
 async function testQ35MtpDraft4B(g: Gpu): Promise<KResult[]> {
-  // golden-FULL e non lo smoke: lo smoke ha 40 token in tutto, e il confronto
-  // col riferimento CPU vuole la STESSA finestra (i primi 64 token del prompt 0
-  // — identici nei due golden, e' lo stesso corpus).
-  const goldenRes = await fetch("/models/q35/golden-full.json");
+  // FIXTURE PROPRIO, e non lo scratch dei runner di bench. Fino a it.19 questo
+  // test leggeva `/models/q35/golden-full.json`, che e' il file in cui
+  // `q35-conf-run.mjs` e `q35-bench-run.mjs` copiano il golden DELLA LORO RUN:
+  // una run `--golden-kind smoke --model 35b` ci lasciava 39 token, e questo
+  // test misurava l'accept-rate su una finestra da 37 confrontandola con un
+  // riferimento preso su 62. Falliva stampando un numero perfettamente
+  // plausibile (32,4%), e nessuno poteva ricondurlo a chi aveva scritto il file.
+  // `.harness/tools/engine-ktest.mjs` provvede questo path prima di aprire la
+  // pagina; nessun runner lo scrive.
+  const goldenRes = await fetch("/models/q35/golden-q35-4b-full.json");
   const headRes = await fetch("/models/Qwen3.5-4B-MTP-Q4_0.gguf", { headers: { Range: "bytes=0-15" } });
   if (!goldenRes.ok || headRes.status !== 206) {
-    return [{ kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN, note: "manca golden-full.json o il symlink del GGUF MTP in public/models" }];
+    return [{ kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN, note: "manca golden-q35-4b-full.json (lo copia engine-ktest.mjs) o il symlink del GGUF MTP in public/models" }];
   }
   const golden = (await goldenRes.json()) as { prompts: { promptTokens: number[]; generated: number[] }[] };
   const URL_GGUF = "/models/Qwen3.5-4B-MTP-Q4_0.gguf";
@@ -743,6 +749,21 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult[]> {
   const loadS = ((performance.now() - t0) / 1000).toFixed(1);
   const p = golden.prompts[0];
   const tokens = [...p.promptTokens, ...p.generated].slice(0, W);
+  // LA FINESTRA SI VERIFICA, non si assume. Il riferimento con cui il verdetto
+  // si confronta (31/62 = 50,0%) e' stato preso sui primi 64 token del prompt 0:
+  // su una finestra piu' corta questo test misura un'altra cosa e la confronta
+  // con quel numero — che e' esattamente il modo in cui ha mentito fino a it.19,
+  // dando 12/37 = 32,4% e sembrando una regressione del modello. Un test che
+  // pinna un riferimento su una finestra deve dichiarare di averla ottenuta.
+  if (tokens.length !== W) {
+    model.destroy();
+    return [{
+      kernel: "q35-mtp-draft-4b", pass: false, maxAbs: NaN, maxRel: NaN,
+      note: `FINESTRA SBAGLIATA: il golden da' ${tokens.length} token per il prompt 0, ne servono ${W} `
+        + `(il riferimento 31/62 e' su quella finestra). Il fixture e' /models/q35/golden-q35-4b-full.json `
+        + `e lo copia engine-ktest.mjs: se e' corto, e' il golden sbagliato — NON una regressione del modello.`,
+    }];
+  }
   const t1 = performance.now();
   const am: number[] = [], draft: number[] = [];
   for (let t = 0; t + 1 < tokens.length; t++) {

@@ -54,7 +54,9 @@ if (!existsSync(golden)) {
   console.error(`[q35bench] golden assente: ${golden}`);
   process.exit(2);
 }
-copyFileSync(golden, join(ROOT, "public/models/q35/golden-full.json"));
+// SCRATCH DELLA RUN — v. la nota in q35-conf-run.mjs: il nome `golden-full`
+// mentiva e il ktest ci si e' rotto sopra (it.19).
+copyFileSync(golden, join(ROOT, "public/models/q35/golden-run.json"));
 
 // Il CONTESTO in cui il decode gira e' l'asse che domina il ms/token su questa
 // architettura (it.59: ~10,4 us per posizione, cioe' 65,8 ms su 100,5 a

@@ -171,7 +171,13 @@ async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
   const M = MODELS[cfg.model ?? "4b"];
   URL_GGUF = M.url;
-  const golden = (await (await fetch("/models/q35/golden-full.json")).json()) as Golden;
+  // `golden-run.json` e' lo SCRATCH che il runner di questa run ha appena
+  // scritto (q35-conf-run.mjs / q35-bench-run.mjs), non un fixture stabile: si
+  // chiamava `golden-full.json` e quel nome ha ingannato il ktest, che lo
+  // leggeva credendolo il full del 4B (it.19). Qui il contenuto e' comunque
+  // verificato dallo SHA sotto — la trappola era per chi il controllo non
+  // ce l'aveva.
+  const golden = (await (await fetch("/models/q35/golden-run.json")).json()) as Golden;
   if (golden.modelSha256 !== M.sha) throw new Error(`q35conf: SHA GGUF del golden (${golden.modelSha256.slice(0, 8)}) diverso dal pinnato per ${cfg.model ?? "4b"}`);
 
   const prompts = golden.prompts.filter((_, i) => !cfg.prompts || cfg.prompts.includes(i));

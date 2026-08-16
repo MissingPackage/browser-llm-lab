@@ -12,25 +12,43 @@
     dispersione [32,143-32,732] = [30,55-31,11] tok/s: TUTTA sopra la barra
     gate argmax 39/39 IDENTICI, routingDiff 0
 
-**LA PROSSIMA COSA DA FARE E' MIA, NON TUA: sbloccare il gate di merge.** La
-riga 6 pretende «ktest tutti PASS» e «GLM b12 entro ±5%», e **oggi sono
-rossi tutti e due — per cause preesistenti, misurate, non causate da it.18**
-(entrambe discriminate con `git stash` + riesecuzione, non con un'ipotesi):
+**LA PROSSIMA COSA DA FARE E' MIA, NON TUA: resta UN rosso sul gate di merge.**
+La riga 6 pretende «ktest tutti PASS» (**tornato verde in it.19: `111 PASS /
+0 FAIL`**) e «GLM b12 entro ±5%», che è l'ultimo aperto:
 
-- **`q35-mtp-draft-4b`** FAIL nel ktest (accept-rate 12/37 = 32,4% contro 50%).
-  Identico sull'albero senza it.18. Ultimo verde noto: `111 PASS / 0 FAIL` alla
-  chiusura di `engine-kquant`. **Sospettato numero uno: it.16, che ha cablato il
-  q8_0 nel prefill senza mai eseguire una run GPU.** Docket item 6, ~1-2 it.
 - **GLM b12 a 11,35 tok/s** contro i 15,330 del riferimento del 2026-08-15
-  (−26%). **Non è calcolo**: `missesPerToken` ed `evictionsPerToken` sono
-  identici cifra per cifra, `gpuBusy` pure — si muove solo `readMsPerToken`,
-  **2,47 → 17,5 ms/token (7×)**. Ipotesi prima: page cache dell'host (92 GB di
-  OPFS contro 31 GB di RAM). Docket item 7, ~1 it per discriminare.
+  (−26%). **Non è calcolo, e non è it.18**: `missesPerToken` ed
+  `evictionsPerToken` sono identici cifra per cifra, `gpuBusy` pure — si muove
+  solo `readMsPerToken`, **2,47 → 17,5 ms/token (7×)**. Ipotesi prima: page
+  cache dell'host (92 GB di OPFS in `~/.cache/blab-glmroute-profile` contro
+  31 GB di RAM). **Docket item 7, ~1 it per discriminare** con una run ripetuta
+  a caldo contro una a freddo.
 
-**LE DUE DECISIONI CHE SONO TUE** stanno nei due item: se il bisect del MTP va
-sotto questo goal o sotto `engine-fase-d` (item 6), e cosa dichiara un
-riferimento se il suo numero dipende dalla page cache (item 7 — quella è
-funzione obiettivo, non meccanismo).
+**LA DECISIONE CHE E' TUA** (item 7): se il numero di un riferimento dipende
+dalla page cache dell'host, **cosa dichiara quel riferimento**? È funzione
+obiettivo, non meccanismo, e non la tocco da solo.
+
+**IL ROSSO DEL KTEST NON ERA UNA REGRESSIONE — era un file con un nome che
+mentiva** (it.19, chiuso senza il bisect che avevo stimato 1-2 iterazioni).
+`public/models/q35/golden-full.json` aveva **un nome, due scrittori**
+(`q35-conf-run.mjs` e `q35-bench-run.mjs`, che ci copiano il golden della LORO
+run — qualunque modello, qualunque `--golden-kind`) **e due lettori**, di cui
+uno solo verificava lo SHA. Ci stava il golden **smoke del 35B**: 39 token
+invece di 6.461, quindi il caso MTP misurava l'accept-rate su 37 confronti
+contro un riferimento preso su 62. **L'avevo avvelenato io in it.18** lanciando
+l'A/B con `--golden-kind smoke`, e il `111 PASS` di `engine-kquant` era
+riproducibile solo perché l'ultima run di bench era stata, per caso, una 4B
+full. Corretto alla radice: scratch dei bench → `golden-run.json`, fixture del
+ktest → `golden-q35-4b-full.json` (lo copia `engine-ktest.mjs`, nessun runner lo
+scrive), e il caso **verifica la finestra** invece di assumerla. Ora
+`q35-mtp-draft-4b` dà **31/62 = 50,0%**, il riferimento cifra per cifra.
+
+**IL REPERTO DA RICORDARE**: il difetto produceva **un FAIL con un numero
+plausibile in un gate di merge** — 32,4% contro 50%, esattamente la forma di una
+regressione del modello. Escluderlo è costato mezz'ora di GPU (due parchi
+kernel interi con `git stash`); la causa l'hanno data **quattro righe di test
+lette**. `engine-fase-d` it.53 aveva già visto lo stesso sintomo e l'aveva
+risolto puntando il file giusto **senza togliere la collisione**.
 
 **COM'ERA LA LEVA, perché è il reperto riusabile.** `router` costava **2,883
 ms/token su 40 dispatch = 72 µs a layer** per scegliere 8 expert su 256, contro

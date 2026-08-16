@@ -21,8 +21,9 @@ tutta la dispersione sopra. Due leve, entrambe sul pass: `kfan` (riga 2c,
 22,58 → 28,90) e il router parallelo (riga 2e, 28,90 → 30,74). **Il goal non è
 chiuso**: mancano la riga 4 (la barra su tutte e quattro le famiglie, con
 `decodeContext` dichiarato) e la riga 6, che è un gate di merge oggi **rosso su
-due voci preesistenti** — `q35-mtp-draft-4b` nel ktest e il GLM b12 fuori banda.
-Docket item 6 e 7.
+UNA voce**: il GLM b12 fuori banda (docket item 7). Il ktest è tornato verde in
+it.19 — `111 PASS / 0 FAIL` — e il suo rosso non era una regressione ma un
+fixture avvelenato da un runner di bench (docket item 6, chiuso).
 
 **LA REGOLA CHE VALE SU OGNI RIGA — CORRETTA DAL PI in it.12.** Diceva «una
 leva è misurata su ≥ 2 famiglie»: era una mia riformulazione, ed era **una
