@@ -2889,3 +2889,74 @@ della sua uscita 3 (assorbire la 2b nella riga 3).
 
 - Perché la singola lettura costi 3,2× dentro il motore. Due candidate, nessuna
   promossa, e la misura che le separa è nominata.
+
+---
+
+## it.36 — fermo la diagnosi dell'I/O, e la ragione è che l'ultima misura non cambierebbe cosa si costruisce
+
+Avevo schedulato l'esperimento che separa le due candidate rimaste: far girare
+il probe **mentre la GPU lavora**, per distinguere la contesa nel worker dalle
+pause fra raffiche. **Non lo faccio, e non perché sia caro.**
+
+### L'argomento
+
+Le due candidate rimaste sono:
+
+1. **contesa** col lavoro GPU nello stesso worker;
+2. **pause** fra una raffica e l'altra, durante le quali il motore calcola.
+
+**Portano alla stessa correzione.** Se è la contesa, la cura è non chiedere byte
+mentre la GPU tiene occupato il worker; se sono le pause, è non fermarsi fra una
+raffica e l'altra. Entrambe si scrivono **sovrapponendo la lettura al calcolo**,
+cioè il meccanismo che la **riga 3** ha già in contratto — *«sovrapporre
+l'`ensure` del layer L+1 al calcolo del layer L»*.
+
+Una misura che non cambia cosa si costruisce è diagnosi che non paga. Il
+protocollo lo dice al contrario ma è la stessa cosa: *la prossima misura serve a
+decidere, e se la decisione è già determinata la misura è ornamento.*
+
+*Registro anche l'attrito onesto: cinque iterazioni su questa riga, tre
+formulazioni mie corrette, e la voglia di fare «l'ultima misura» era forte. È
+esattamente il punto in cui una riga di misura diventa un hobby.*
+
+### Cosa la riga 2b ha PRODOTTO, in una tabella
+
+Cinque esperimenti controllati, tutti sullo stesso lettore e sullo stesso file:
+
+    it.30  cinque copie del lettore → una sede sola, e una copia aveva già perso
+           il controllo di lunghezza (ha poi parato due letture vuote vere)
+    it.31  i byte per chiamata sono uguali nei due regimi (1,7826-1,7847 MB):
+           il 2,1× non era un artefatto di taglie diverse
+    it.32  la curva banda/richieste-in-volo: ginocchio a 2-4, tetto ~700 MB/s
+           ⇒ il done-when a 1,5 ms/fetch NON è raggiungibile su HTTP
+    it.33  continuo contro raffiche: 0,98× a 24 ⇒ RAGGRUPPARE NON PAGA
+    it.35  parallelismo fino a 136,5 e località irrilevante ⇒ non c'è tetto di
+           connessioni e non conta dove sono le fette
+
+**La domanda del PI aveva un «se» e ora ha una risposta**: *«aggiungi il
+raggruppamento delle richieste http se può dare un boost globale al motore»* —
+**no, su questo trasporto**. Il canale non è il collo, e ciò che resta (3,2× di
+latenza per lettura dentro il motore, a parallelismo confrontabile) è una
+proprietà di **come il motore usa l'I/O**, che è materia della riga 3.
+
+### Cosa resta in albero, e vale oltre questa riga
+
+- **`ggufrange.ts`**: un lettore solo per cinque chiamanti, col controllo di
+  lunghezza per tutti — ha già parato due letture vuote reali del server.
+- **I contatori del lettore**: parallelismo effettivo, latenza, in volo massimo,
+  letture fallite. Le prossime misure di I/O di questo progetto li hanno già.
+- **`--io-probe`**: una spazzata del canale che gira **prima** del load, in
+  secondi, con tre dimensioni (finestra, forma, località). Il costo di
+  rispondere alla prossima domanda sull'I/O è ora una run da pochi secondi.
+
+### EVIDENZA
+
+Iterazione di sola scrittura: nessuna GPU, albero invariato rispetto a
+`5fff88a` a parte GLOSSARY e PHASES.
+
+### NON VERIFICATO — e resta dichiarato, non chiuso
+
+Perché la singola lettura costi 3,2× dentro il motore. Due candidate, nessuna
+promossa, **e la misura che le separa è nominata e non fatta** — con la ragione
+scritta qui sopra. Se un giorno la riga 3 non risolvesse il divario, quella
+misura è il primo posto dove tornare.
