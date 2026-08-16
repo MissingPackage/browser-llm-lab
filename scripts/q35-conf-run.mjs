@@ -87,6 +87,11 @@ if (process.argv.includes("--splitk")) {
 // tempo (una scansione del vocabolario per token entra nel ms misurato):
 // con questo flag il report NON e' un riferimento di velocita'.
 if (process.argv.includes("--logit-probe")) qs.set("logitprobe", "1");
+// CURVA BANDA/RICHIESTE-IN-VOLO (riga 2b, it.32): NON carica il modello, gira in
+// una manciata di secondi. Serve a trovare il ginocchio prima di cablare una
+// finestra di concorrenza — due punti dicono che la leva esiste, non dove
+// smette di pagare.
+if (process.argv.includes("--io-probe")) qs.set("ioprobe", "1");
 // MISURA della fase 4-ter: quanto costa lo snapshot dello stato ricorrente
 // (62,8 MiB per token). Rompe il replay: solo a cache calda.
 if (process.argv.includes("--no-snapshot")) qs.set("nosnap", "1");

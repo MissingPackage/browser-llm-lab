@@ -436,3 +436,57 @@ non far peggiorare — la funzione obiettivo, non il meccanismo. E il ruling
 permanente sulle metriche («non peggiorano mai, banda ±5%») l'hai scritto tu.
 
 **RULING:** _
+
+## item 8 — il done-when della riga 2b non è raggiungibile sul trasporto che ha (io → PI, it.32)
+
+**PI: serve un ruling. È la taglia di una riga del contratto, non il suo
+meccanismo.**
+
+**Il fatto, misurato** (`q35-io-probe-2026-08-16.json`, curva
+banda-contro-richieste-in-volo sullo stesso lettore e sullo stesso file, stessi
+offset per ogni finestra, riscaldamento scartato):
+
+    tetto del canale HTTP oggi      ~696 MB/s   (massimo a 48 richieste in volo)
+    ginocchio della curva            2-4 richieste in volo
+    repair reale                     539 MB/s
+    prep reale                      ~250 MB/s
+
+**Il done-when chiede «< 1,5 ms per fetch».** Un `readExpert` legge **1,7836 MB**
+(misurato in it.31, non più assunto), quindi 1,5 ms significa **1.189 MB/s**.
+
+    HTTP, al suo massimo misurato    696 MB/s  ⇒  2,56 ms   = 1,7x FUORI dal target
+    OPFS, misurato in it.20        1.372 MB/s  ⇒  1,30 ms   ✓
+
+**Anche portando il `prep` al massimo che il canale dà, il done-when resta fuori
+di 1,7×.** Non è un problema di raggruppamento: è il trasporto.
+
+**Perché è un ruling e non una decisione mia**: il contratto elenca la sorgente
+non-HTTP fra i *candidati* — «coalescing, finestra di concorrenza, sorgente
+non-HTTP (OPFS)» — cioè come un'alternativa fra pari da misurare. La misura dice
+che **è l'unica strada al numero**, e questo cambia la taglia della riga:
+raggruppare richieste è una fetta, spostare la sorgente è un'altra cosa. Il 35B
+sono **19,46 GiB** che in OPFS vanno prima importati, con tutto ciò che comporta
+(spazio su disco, tempo di import, la gestione della cache che it.20 ha già
+mostrato essere delicata).
+
+**Le tre uscite:**
+
+1. **Tieni il numero e allarga la riga alla sorgente OPFS.** È l'unica che
+   arriva a 1,5 ms. Costo: la fetta di import + il cambio di sorgente, e il
+   goal cresce di parecchio.
+2. **Abbassa il done-when a ciò che il trasporto può dare.** Portare il `prep`
+   al livello del `repair` vale ~2× ed è la sovrapposizione della riga 3; un
+   done-when onesto su HTTP starebbe sui **~2,6-3,3 ms**. Chiude una riga vera e
+   misurabile senza inventare scope.
+3. **Chiudi la riga 2b dichiarandola assorbita dalla riga 3.** it.31 e it.32
+   concordano che la leva vera è tenere la pipeline piena attraverso i layer,
+   che è il meccanismo già in contratto nella riga 3. Due righe che costruiscono
+   la stessa cosa sono una scrittura doppia.
+
+**La mia lettura, che non è un ruling**: la **3, e poi la 2 come done-when della
+riga 3**. La 1 è vera ma è un goal suo — e il PI ha già detto una volta, in
+questo stesso goal, che le leve globali vengono prima delle specifiche: il
+cambio di sorgente tocca tutti i modelli e merita di essere deciso come tale,
+non infilato in una riga che parlava di raggruppare richieste HTTP.
+
+**RULING:** _

@@ -113,6 +113,8 @@ interface Cfg {
    * che divergono.
    */
   splitk?: boolean;
+  /** riga 2b (it.32): la curva banda-contro-richieste-in-volo. Non carica il modello. */
+  ioProbe?: boolean;
   /**
    * SONDA DEI LOGIT (riga 2d, it.25): per ogni token registra i DUE candidati
    * di testa con i loro valori. Serve a discriminare, quando l'argmax di due
@@ -222,10 +224,101 @@ let URL_GGUF: string = MODELS["4b"].url;
 
 const range = ggufRangeReader(() => URL_GGUF, "q35conf");
 
+/**
+ * LA CURVA BANDA-CONTRO-RICHIESTE-IN-VOLO (riga 2b, it.32).
+ *
+ * PERCHE' ESISTE. it.31 ha misurato che gli stessi byte, letti dallo stesso
+ * lettore e dallo stesso server, rendono **235-268 MB/s quando le richieste in
+ * volo sono 24** (il `prep`, che fetcha un layer per volta) e **539 MB/s quando
+ * sono centinaia** (il `repair`, che fetcha l'intero token). Due punti dicono
+ * che la leva esiste; non dicono **dove smette di pagare**. Cablare una
+ * finestra su due punti sarebbe scegliere un numero a caso e chiamarlo misura.
+ *
+ * IL DISEGNO, e cosa tiene fisso. Stessi identici offset e stessa taglia per
+ * ogni finestra — cambia SOLO quante richieste stanno in volo. Una passata di
+ * riscaldamento gira prima di tutte e viene scartata, cosi' nessuna finestra
+ * paga da sola il primo contatto col file. La taglia e' quella VERA di un range
+ * di expert del 35B (1,7836 MB per `readExpert` su tre tensori ⇒ ~594 KB l'uno,
+ * misurato in it.31), non una taglia tonda scelta per comodita'.
+ *
+ * NON usa il modello: gira prima del load e legge offset arbitrari del GGUF.
+ * Costa una manciata di secondi, non i dieci minuti di una run vera.
+ */
+async function ioProbe(cfg: Cfg): Promise<void> {
+  const RANGE_BYTES = 594_533;           // 1,7836 MB / 3, la taglia vera (it.31)
+  const N = 256;                          // richieste per finestra
+  const WINDOWS = [1, 2, 4, 8, 16, 24, 48, 96, 192, 256];
+  // offset distinti e distanti, per non rileggere le stesse pagine: coprono il
+  // file a passo fisso dopo l'header.
+  //
+  // LA TAGLIA DEL FILE SI CHIEDE AL SERVER, non si assume. Il primo disegno
+  // usava un passo fisso di 32 MiB e con 256 richieste sforava la fine del 35B:
+  // il server rispondeva 206 con ZERO byte e il probe moriva su «Range corto
+  // 0/594533». Il controllo di lunghezza — quello che it.30 ha dato a tutti e
+  // cinque i lettori — ha preso l'errore invece di lasciar misurare letture
+  // vuote a banda infinita.
+  const BASE = 64 * 1024 * 1024;
+  const probe1 = await fetch(URL_GGUF, { headers: { Range: "bytes=0-0" } });
+  const cr = probe1.headers.get("Content-Range") ?? "";
+  const size = Number(/\/(\d+)$/.exec(cr)?.[1] ?? 0);
+  if (!(size > BASE + RANGE_BYTES)) {
+    throw new Error(`io-probe: taglia del file non leggibile da Content-Range ("${cr}")`);
+  }
+  const span = size - BASE - RANGE_BYTES;
+  const offs = Array.from({ length: N }, (_, i) => BASE + Math.floor((i * span) / N));
+
+  /** N letture con al piu' `w` in volo. Ritorna i ms totali. */
+  const pass = async (w: number): Promise<number> => {
+    const t = performance.now();
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const i = next++;
+        if (i >= offs.length) return;
+        await range(offs[i], RANGE_BYTES);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(w, offs.length) }, worker));
+    return performance.now() - t;
+  };
+
+  progress(`io-probe: riscaldamento (${N} range da ${(RANGE_BYTES / 1e6).toFixed(2)} MB)`);
+  await pass(64);                         // scartata: nessuna finestra paga il primo contatto
+
+  const mb = (N * RANGE_BYTES) / 1e6;
+  const points: Array<{ inFlight: number; ms: number; mbPerSec: number; msPerRange: number }> = [];
+  for (const w of WINDOWS) {
+    const ms = await pass(w);
+    points.push({ inFlight: w, ms, mbPerSec: mb / (ms / 1000), msPerRange: ms / N });
+    progress(`io-probe: ${w} in volo -> ${(mb / (ms / 1000)).toFixed(1)} MB/s`);
+  }
+  const best = points.reduce((a, b) => (b.mbPerSec > a.mbPerSec ? b : a));
+  // il GINOCCHIO: la finestra piu' piccola che arriva al 95% del massimo. E' il
+  // numero che serve — oltre, si paga concorrenza senza comprare banda.
+  const knee = points.find((p) => p.mbPerSec >= 0.95 * best.mbPerSec) ?? best;
+  post({
+    type: "done",
+    report: {
+      kind: "q35-io-probe", schemaVersion: 1, date: new Date().toISOString().slice(0, 10),
+      model: cfg.model ?? "4b", url: URL_GGUF,
+      declared: "stessi offset e stessa taglia per ogni finestra: cambia SOLO il numero di "
+        + "richieste in volo. Passata di riscaldamento scartata. Taglia = quella vera di un "
+        + "range di expert del 35B (594.533 B, da fetchPrepBytes/3 misurato in it.31).",
+      rangeBytes: RANGE_BYTES, rangesPerWindow: N, mbPerWindow: mb, fileBytes: size,
+      points,
+      best: { inFlight: best.inFlight, mbPerSec: best.mbPerSec },
+      knee: { inFlight: knee.inFlight, mbPerSec: knee.mbPerSec, criterio: "prima finestra a >= 95% del massimo" },
+      // i due regimi che la riga 2b confronta, per leggere la curva nel punto giusto
+      riferimenti: { prepInFlight: 24, repairInFlight: "centinaia", prepMBs: "235-268", repairMBs: 539 },
+    },
+  });
+}
+
 async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
   const M = MODELS[cfg.model ?? "4b"];
   URL_GGUF = M.url;
+  if (cfg.ioProbe) { await ioProbe(cfg); return; }
   // `golden-run.json` e' lo SCRATCH che il runner di questa run ha appena
   // scritto (q35-conf-run.mjs / q35-bench-run.mjs), non un fixture stabile: si
   // chiamava `golden-full.json` e quel nome ha ingannato il ktest, che lo

@@ -2534,3 +2534,100 @@ di più: è la seconda metà.
 - Non ho misurato la curva banda-contro-richieste-in-volo: so che 24 rendono
   meno di «centinaia», non so dove sta il ginocchio. Serve prima di scegliere
   una finestra, altrimenti si cabla un numero preso a caso.
+
+---
+
+## it.32 — la curva smentisce la mia attribuzione di it.31, e il done-when della riga 2b non è raggiungibile su HTTP
+
+Costruito il probe (`--io-probe`: gira **prima** del load, in una manciata di
+secondi, sullo stesso lettore e sullo stesso file). Stessi offset e stessa
+taglia per ogni finestra, passata di riscaldamento scartata: cambia **solo**
+quante richieste stanno in volo.
+
+    in volo     MB/s   ms/range
+          1    190,8      3,115
+          2    431,3      1,378
+          4    525,6      1,131
+          8    491,9      1,209
+         16    512,9      1,159
+         24    525,0      1,132
+         48    695,9      0,854   <- massimo
+         96    626,0      0,950
+        192    684,7      0,868
+        256    588,2      1,011
+
+`results/engine/q35-io-probe-2026-08-16.json`, file 19,46 GiB, range 594.533 B
+(la taglia vera di it.31), 256 richieste per finestra.
+
+### La smentita, e riguarda una conclusione che ho scritto ieri
+
+**Il ginocchio è a 2-4 richieste in volo.** Oltre, la curva è piatta e rumorosa
+fra 490 e 696 MB/s. Quindi:
+
+    probe a 24 in volo        525,0 MB/s
+    prep REALE a 24 in volo   235-268 MB/s
+
+**Stesso numero di richieste in volo, banda doppia.** it.31 aveva misurato bene
+il 2× fra `prep` e `repair`, ma ne aveva attribuito la causa alla *forma della
+concorrenza*. **Non è quella**: a parità di richieste in volo il canale rende il
+doppio di quello che il `prep` ottiene.
+
+### Cosa resta come causa, e perché la leva cambia forma
+
+Il `prep` non fa una lettura lunga: fa **raffiche**. Otto `readExpert` (24
+range), aspetta che finiscano tutte, poi calcola il layer, poi ne fa altre otto.
+Il tempo di una raffica è il **massimo** delle sue latenze, non la media — e il
+canale non arriva mai al regime stazionario che il probe misura su 256 richieste
+di fila.
+
+**La leva non è «più richieste insieme»: è «non fermarsi».** Tenere la pipeline
+piena attraverso i layer, cioè il prefetch — che è **esattamente il meccanismo
+della riga 3** («sovrapporre l'`ensure` del layer L+1 al calcolo del layer L»).
+
+La convergenza fra 2b e 3 che avevo notato in it.31 regge, ma **per una ragione
+diversa da quella che avevo scritto**, e la ragione cambia cosa si costruisce:
+non una finestra di concorrenza da cablare, ma la sovrapposizione.
+
+*Terza volta in questo goal che una causa «plausibile e coerente coi dati» era
+sbagliata. Il correttivo che ha funzionato di nuovo: misurare la variabile da
+sola, tenendo fisso tutto il resto.*
+
+### IL FATTO CHE TOCCA IL CONTRATTO: il done-when non è raggiungibile su HTTP
+
+Il done-when della riga 2b chiede **< 1,5 ms per fetch**. Un `readExpert` legge
+1,7836 MB (misurato in it.31), quindi 1,5 ms significa **1.189 MB/s**.
+
+    tetto misurato oggi su HTTP     ~696 MB/s   ⇒  2,56 ms   (il DOPPIO del target)
+    repair reale                     539 MB/s   ⇒  3,31 ms
+    prep reale                      ~250 MB/s   ⇒  7,13 ms
+    OPFS, misurato in it.20         1.372 MB/s  ⇒  1,30 ms   ✓
+
+**Anche portando il `prep` al massimo che il canale HTTP dà, il done-when resta
+fuori di 1,7×.** La sorgente non-HTTP che il contratto elenca fra i candidati
+non è un'alternativa fra pari: **è l'unica strada al numero**.
+
+Va detto al PI perché cambia la taglia della riga: «raggruppare le richieste»
+è un giorno di lavoro, «spostare la sorgente su OPFS» è un'altra cosa — e il
+35B legge 19,46 GiB, che in OPFS vanno prima importati.
+
+**Docket item 8.**
+
+### EVIDENZA
+
+- `results/engine/q35-io-probe-2026-08-16.json`, host quiescente
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1110 passed | 10 skipped**
+- *Il primo disegno del probe sforava la fine del file* (passo fisso di 32 MiB ×
+  256 = 8,2 GiB oltre l'header): il server rispondeva 206 con **zero byte** e il
+  controllo di lunghezza che it.30 ha dato a tutti e cinque i lettori ha preso
+  l'errore. Senza, avrei misurato letture vuote a banda infinita. La taglia ora
+  si chiede al `Content-Range`.
+
+### NON VERIFICATO
+
+- Il probe misura il canale, **non il path del motore**: non ho provato che
+  tenere la pipeline piena porti il `prep` a 525 MB/s. È l'ipotesi, e va
+  misurata sul motore.
+- La curva è rumorosa sopra le 48 richieste (588-696): con una passata sola per
+  finestra non distinguo il massimo vero dal rumore. Per scegliere un numero
+  servirebbero repliche; per la conclusione «il ginocchio è basso e il tetto è
+  ~700» non servono.

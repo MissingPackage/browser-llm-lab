@@ -1,0 +1,89 @@
+{
+ "kind": "q35-io-probe",
+ "schemaVersion": 1,
+ "date": "2026-08-16",
+ "model": "35b",
+ "url": "/models/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+ "declared": "stessi offset e stessa taglia per ogni finestra: cambia SOLO il numero di richieste in volo. Passata di riscaldamento scartata. Taglia = quella vera di un range di expert del 35B (594.533 B, da fetchPrepBytes/3 misurato in it.31).",
+ "rangeBytes": 594533,
+ "rangesPerWindow": 256,
+ "mbPerWindow": 152.200448,
+ "fileBytes": 20893015008,
+ "points": [
+  {
+   "inFlight": 1,
+   "ms": 797.5100000053644,
+   "mbPerSec": 190.84456370324662,
+   "msPerRange": 3.1152734375209548
+  },
+  {
+   "inFlight": 2,
+   "ms": 352.8850000053644,
+   "mbPerSec": 431.30325176101644,
+   "msPerRange": 1.3784570312709548
+  },
+  {
+   "inFlight": 4,
+   "ms": 289.5600000023842,
+   "mbPerSec": 525.6266335085882,
+   "msPerRange": 1.1310937500093132
+  },
+  {
+   "inFlight": 8,
+   "ms": 309.38499999046326,
+   "mbPerSec": 491.9451427984277,
+   "msPerRange": 1.208535156212747
+  },
+  {
+   "inFlight": 16,
+   "ms": 296.7300000041723,
+   "mbPerSec": 512.9257169745557,
+   "msPerRange": 1.1591015625162981
+  },
+  {
+   "inFlight": 24,
+   "ms": 289.90000000596046,
+   "mbPerSec": 525.0101690130069,
+   "msPerRange": 1.132421875023283
+  },
+  {
+   "inFlight": 48,
+   "ms": 218.71499998867512,
+   "mbPerSec": 695.8848181783637,
+   "msPerRange": 0.8543554687057622
+  },
+  {
+   "inFlight": 96,
+   "ms": 243.13500000536442,
+   "mbPerSec": 625.9915191010834,
+   "msPerRange": 0.9497460937709548
+  },
+  {
+   "inFlight": 192,
+   "ms": 222.2800000011921,
+   "mbPerSec": 684.7239877595094,
+   "msPerRange": 0.8682812500046566
+  },
+  {
+   "inFlight": 256,
+   "ms": 258.75,
+   "mbPerSec": 588.2142917874396,
+   "msPerRange": 1.0107421875
+  }
+ ],
+ "best": {
+  "inFlight": 48,
+  "mbPerSec": 695.8848181783637
+ },
+ "knee": {
+  "inFlight": 48,
+  "mbPerSec": 695.8848181783637,
+  "criterio": "prima finestra a >= 95% del massimo"
+ },
+ "riferimenti": {
+  "prepInFlight": 24,
+  "repairInFlight": "centinaia",
+  "prepMBs": "235-268",
+  "repairMBs": 539
+ }
+}

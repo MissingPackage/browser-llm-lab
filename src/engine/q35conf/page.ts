@@ -22,6 +22,8 @@ const cfg = {
   // ?splitk=1 → A/B della rotta split-K nel decode (riga 2d). Il braccio e'
   // kfan+rotta contro kfan: isola UNA leva.
   splitk: q.get("splitk") === "1",
+  // ?ioprobe=1 → curva banda/richieste-in-volo (riga 2b). Non carica il modello.
+  ioProbe: q.get("ioprobe") === "1",
   // ?logitprobe=1 → i due candidati di testa per token, per discriminare un
   // flip di argmax fra pareggio ravvicinato e bug. PERTURBA il tempo.
   logitProbe: q.get("logitprobe") === "1",
