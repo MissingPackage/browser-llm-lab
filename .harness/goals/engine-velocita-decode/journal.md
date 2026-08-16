@@ -2960,3 +2960,82 @@ Perché la singola lettura costi 3,2× dentro il motore. Due candidate, nessuna
 promossa, **e la misura che le separa è nominata e non fatta** — con la ragione
 scritta qui sopra. Se un giorno la riga 3 non risolvesse il divario, quella
 misura è il primo posto dove tornare.
+
+---
+
+## it.37 — la riga 3 è malformata sui fatti: il suo done-when passa senza che nessuno scriva una riga
+
+Aperta la riga 3. **Prima di spendere**, il controllo di eseguibilità che il
+protocollo impone — *«un done-when rotto sui fatti prende un item di docket PRIMA
+di qualunque spesa: eseguire un contratto degenere alla lettera è il bug, non la
+diligenza»*. Tutto da artefatti che avevo già: **zero GPU**.
+
+### Il difetto
+
+Il done-when chiede `replayLayers / (tokens × nLayer) ≤ 0,20`
+**«sull'artefatto di riferimento»**. L'artefatto di riferimento è l'arena da
+12 GiB. Lì:
+
+    arena 12, optimistic-warm      miss 0   replays 0   replayLayers 0   ⇒ ratio 0,000
+    arena  4, optimistic-warm   miss 3283 replays 111 replayLayers 3702  ⇒ ratio 2,373
+
+**A 12 GiB il working set ci sta, non c'è un miss, quindi non c'è un replay: il
+rapporto vale zero e la clausola è soddisfatta da sola.** Tre-quattro iterazioni
+di lavoro chiuderebbero contro un numero che è già a posto senza il lavoro.
+
+*È la stessa forma del difetto che la riga 1 aveva e che it.2 aveva preso:
+`namedFrac` valeva 0/0 su una passata pulita, e la clausola letta lì avrebbe
+dichiarato fallita una riga riuscita. Qui la degenerazione va nella direzione
+opposta — dichiara riuscita una riga non fatta — ed è la più pericolosa delle due.*
+
+**E il numero di partenza del contratto non è quello vero**: dice «oggi 0,87»,
+misurato a 2,373 nel regime dove la clausola ha senso.
+
+### La premessa della riga, rimisurata come il contratto stesso esige
+
+Il contratto dice: *«Il path `sync` esistente è il termine di paragone, non il
+bersaglio [...] ma quel confronto è PRIMA della riga 2, e la riga 2 ne cambia il
+segno. Rimisurare i due bracci prima di scegliere.»*
+
+    arena 12 (caldo)    sync 133,35    ottimistico  42,77    ottimistico 3,12x meglio
+    arena  4 (sporco)   sync 980,25    ottimistico 556,05    ottimistico 1,76x meglio
+
+**Il segno non è cambiato: l'ottimistico vince in entrambi i regimi.** La
+premessa che apriva la riga a un ripensamento sul path è smentita, e questo
+*restringe* la riga invece di allargarla — non si tratta di scegliere fra due
+path, ma di ridurre il costo del replay dentro quello che già vince.
+
+### Dov'è il bersaglio vero, col numero
+
+Nel regime sporco, braccio ottimistico:
+
+    token           556,0 ms
+    repair+replay   393,4 ms  =  71% del token
+    dirtyTokens     39/39     (a 4 GiB ogni token è sporco)
+    replays         111 su 39 token = 2,85 giri di replay per token
+
+**Il 71% del token sporco è riparazione.** È lì che la riga 3 ha da lavorare, ed
+è un numero misurato in un regime dove il fenomeno esiste — non a 12 GiB dove
+non esiste affatto.
+
+### Cosa propongo, e perché non lo decido io
+
+Il done-when va **ri-ancorato al regime in cui il fenomeno esiste**: stessa
+clausola, ma su un artefatto a **arena strozzata** dichiarata, con il valore di
+partenza vero (2,373) invece di 0,87. Aggiungerei una seconda clausola sul
+termine che pesa davvero — la quota di `repair+replay` sul token — perché il
+rapporto sui layer può scendere mentre il tempo no.
+
+**Non lo riscrivo da solo: è un done-when, cioè contratto.** `docket item 9`.
+
+**Cosa farei senza risposta**: eseguirei la riga contro il regime sporco
+comunque, perché contro quello a 12 GiB non c'è niente da eseguire. Ma la soglia
+numerica la metti tu — 0,20 su un valore di partenza di 2,373 è un obiettivo
+diverso da 0,20 su 0,87, e sceglierla io sarebbe scegliere la difficoltà del mio
+compito.
+
+### EVIDENZA
+
+Sola lettura di artefatti esistenti (`q35-splitk-f32-ab-2026-08-16.json`,
+`q35-ioinside-arena4-2026-08-16.json`), nessuna GPU, albero invariato rispetto a
+`2ddb0d9`.

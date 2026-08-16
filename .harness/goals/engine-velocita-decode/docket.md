@@ -513,3 +513,62 @@ non infilato in una riga che parlava di raggruppare richieste HTTP.
 > lì la riga 2b non ha più niente da dire: quel pezzo è la riga 3.
 
 **RULING:** _
+
+## item 9 — il done-when della riga 3 è degenere sull'artefatto che nomina (io → PI, it.37)
+
+**PI: serve un ruling. È un done-when, cioè contratto — e la soglia decide la
+difficoltà del compito.**
+
+**Il fatto**, letto da artefatti già in `results/` (nessuna GPU spesa):
+
+    arena 12 (il riferimento)   miss 0   replays 0   replayLayers 0   ⇒ ratio 0,000
+    arena  4                 miss 3283 replays 111 replayLayers 3702 ⇒ ratio 2,373
+
+Il done-when chiede `replayLayers / (tokens × nLayer) ≤ 0,20` **«sull'artefatto
+di riferimento»**, e l'artefatto di riferimento è l'arena da 12 GiB. **Lì il
+working set ci sta, non c'è un miss, quindi non c'è un replay: il rapporto vale
+zero e la clausola è già soddisfatta.** Tre-quattro iterazioni chiuderebbero
+contro un numero a posto senza il lavoro.
+
+**Precedente in questo stesso goal**: la riga 1 aveva la stessa forma di difetto
+(`namedFrac` = 0/0 su passata pulita) e it.2 l'ha preso scrivendo la precisazione
+in `PHASES.md`. Lì la degenerazione dichiarava *fallita* una riga riuscita; qui
+dichiara *riuscita* una riga non fatta, che è la più pericolosa delle due.
+
+**E il valore di partenza è sbagliato**: il contratto dice «oggi 0,87», misurato
+**2,373** nel regime dove la clausola ha senso.
+
+**Il bersaglio vero, misurato** (arena 4, braccio ottimistico): il token costa
+556,0 ms di cui **393,4 di repair+replay, il 71%**; 39/39 token sporchi; 2,85
+giri di replay per token.
+
+**In più, la premessa della riga è smentita.** Il contratto dice «la riga 2 ne
+cambia il segno, rimisurare i due bracci prima di scegliere». Rimisurati:
+
+    arena 12   sync 133,35   ottimistico  42,77   ottimistico 3,12x meglio
+    arena  4   sync 980,25   ottimistico 556,05   ottimistico 1,76x meglio
+
+Il segno **non** è cambiato. Questo *restringe* la riga: non si sceglie fra due
+path, si riduce il replay dentro quello che già vince.
+
+**Le tre uscite:**
+
+1. **Ri-ancora il done-when al regime sporco**: stessa clausola, artefatto ad
+   arena strozzata **dichiarata**, valore di partenza 2,373. Serve una soglia
+   nuova — 0,20 partendo da 2,373 è un compito diverso da 0,20 partendo da 0,87.
+2. **Cambia la grandezza**: la clausola sui layer può scendere mentre il tempo
+   no. Il termine che pesa è la **quota di `repair+replay` sul token** (oggi
+   71%). Una soglia lì misura ciò che l'utente sente.
+3. **Entrambe**: la clausola sui layer come gate strutturale, la quota di tempo
+   come gate di risultato.
+
+**La mia lettura, che non è un ruling**: la **3**, con la quota di tempo come
+clausola che decide e quella sui layer come controllo che il meccanismo sia
+cambiato davvero. **La soglia numerica la metti tu**: sceglierla io sarebbe
+scegliere quanto è difficile il mio compito.
+
+**Cosa faccio senza risposta**: eseguo la riga contro il regime sporco comunque
+— contro quello a 12 GiB non c'è niente da eseguire — e riporto i numeri senza
+dichiarare passato nessun gate.
+
+**RULING:** _
