@@ -3370,3 +3370,74 @@ invariato rispetto a `49ba7c8`.
 - Se `ExpertOpfsStore` regga un file da **17 GiB**: il GLM ne scrive uno molto
   più piccolo, e OPFS ha limiti di quota per origine. Va guardato PRIMA della
   fetta 2, perché se la quota non basta cambia il disegno, non un dettaglio.
+
+---
+
+## it.43 — la quota OPFS è 10 GiB e la persistenza è NEGATA: lo store da 17 GiB non ci sta
+
+Era la cosa che avevo dichiarato di voler guardare **prima** di costruirci
+sopra, «perché se la quota non basta cambia il disegno, non un dettaglio».
+Non bastava.
+
+### La misura
+
+Aggiunta al probe (che gira prima del load, in secondi) e poi ripetuta dalla
+**pagina**, perché `navigator.storage.persist()` non è esposto nei worker — un
+vincolo che vale la pena sapere e che ha fatto tornare `null` la prima volta.
+
+    quota                    10,00 GiB
+    usage                       552 B
+    persisted (prima)         false
+    persist() concessa        FALSE      ← negata
+    quota dopo                10,00 GiB  ← invariata
+
+**Lo slab degli expert del 35B è 17,07 GiB. Non ci sta, e chiedere la
+persistenza non alza il tetto.**
+
+### La contraddizione che NON ho risolto, e la scrivo perché conta
+
+Nello stesso profilo, su disco, ogni origine (`localhost:5173`, `:5199`, `:5200`)
+ha **32,89 GB** in OPFS: il GGUF del GLM da 17,22 GB più il suo file slab da
+15,68 GB. E funziona da un goal intero — mentre `estimate()` per `localhost:5199`
+riporta **10 GiB di quota e 552 byte di uso**.
+
+**Non so conciliare le due cose.** Le ipotesi che vedo — bucket di storage
+diversi da quello che `estimate()` conta, oppure extent condivisi che `du` conta
+tre volte — non le ho verificate, e non le spaccio per spiegazioni.
+
+**La conseguenza pratica è la stessa comunque**: non si progetta uno store da 17
+GiB su un numero che non si capisce. Se la capacità c'è, va dimostrata scrivendo
+davvero; se non c'è, il disegno cade dopo che è stato costruito — che è il modo
+più caro di scoprirlo.
+
+### Cosa sopravvive, e una delle due è meglio dell'originale
+
+Il ruling del PI era «accetta entrambi e converte al primo caricamento». **La
+prima metà regge, la seconda incontra questo muro**: convertire lato client
+richiede un posto dove scrivere, e in un browser quel posto è OPFS.
+
+1. **Slab SERVITO** — convertito offline da uno script, servito come il GGUF via
+   HTTP Range. **Zero OPFS, zero quota, funziona oggi.** Ed è precisamente ciò
+   che il PI aveva chiesto all'inizio — «lo slab su disco invece del GGUF» —
+   prima che io lo deviassi verso una cache. *La misura mi ha riportato al suo
+   disegno.*
+2. **Cache OPFS parziale** — solo gli expert più caldi, dentro i 10 GiB (il 59%
+   del parco). Degrada bene ma è complessa, e vale solo se la capacità vera
+   resta 10 GiB.
+
+**La 1 non ha bisogno di nessun ruling nuovo**: è il caso «il motore accetta uno
+slab direttamente», che il PI ha già approvato.
+
+### EVIDENZA
+
+- `results/engine/q35-opfs-quota-2026-08-16.json` e `-b.json` (probe, worker)
+- misura dalla **pagina** con `persist()`: quota 10.737.418.792 B, granted
+  `false`, quota invariata dopo
+- `npx tsc --noEmit` exit 0
+
+### NON VERIFICATO
+
+- **La contraddizione qui sopra.** È la prima cosa da chiarire se si vuole la
+  strada 2; è irrilevante per la 1.
+- Se `ExpertOpfsStore` scriva davvero fino alla quota: non ho provato a scrivere
+  10 GiB.

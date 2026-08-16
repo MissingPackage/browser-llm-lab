@@ -315,6 +315,41 @@ async function ioProbe(cfg: Cfg): Promise<void> {
     return { ms, fails: f.n, parallelism: effectiveParallelism(io), maxInFlight: io.maxInFlight };
   };
 
+  // LA QUOTA OPFS, chiesta e non dedotta (it.43). Serve a sapere se uno store di
+  // slab da ~18 GB ci sta PRIMA di progettarlo: se la quota non basta cambia il
+  // disegno, non un dettaglio. `estimate()` e' l'unica fonte autorevole — lo
+  // spazio libero del disco non lo e', perche' il browser applica un suo tetto
+  // per origine.
+  const st = navigator.storage && navigator.storage.estimate
+    ? await navigator.storage.estimate()
+    : null;
+  const persisted = navigator.storage && navigator.storage.persisted
+    ? await navigator.storage.persisted()
+    : null;
+  // E SE CHIEDIAMO LA PERSISTENZA? Con `persisted: false` Chrome tratta lo
+  // storage come "best effort" e il tetto e' piu' basso; `persist()` puo'
+  // alzarlo. Va CHIESTO e rimisurato, perche' la differenza fra i due regimi
+  // decide se uno store da 18 GB e' possibile o no — non e' un dettaglio di
+  // configurazione, e' il disegno.
+  let persistGranted: boolean | null = null;
+  let quotaAfter: number | null = null;
+  if (navigator.storage && navigator.storage.persist) {
+    try {
+      persistGranted = await navigator.storage.persist();
+      const st2 = await navigator.storage.estimate();
+      quotaAfter = st2.quota ?? null;
+    } catch { persistGranted = null; }
+  }
+  const quota = st
+    ? {
+        quotaBytes: st.quota ?? null, usageBytes: st.usage ?? null, persisted,
+        persistGranted, quotaAfterPersistBytes: quotaAfter,
+      }
+    : { quotaBytes: null, usageBytes: null, persisted, why: "navigator.storage.estimate non esposto" };
+  progress(`io-probe: quota OPFS ${st?.quota ? (st.quota / 2 ** 30).toFixed(1) + " GiB" : "n/d"}`
+    + ` · in uso ${st?.usage ? (st.usage / 2 ** 30).toFixed(1) + " GiB" : "n/d"}`
+    + ` · persistente ${persisted}`);
+
   progress(`io-probe: riscaldamento (${N} range da ${(RANGE_BYTES / 1e6).toFixed(2)} MB)`);
   await pass(64, offs);                   // scartata: nessuna finestra paga il primo contatto
 
@@ -388,6 +423,7 @@ async function ioProbe(cfg: Cfg): Promise<void> {
         + "richieste in volo. Passata di riscaldamento scartata. Taglia = quella vera di un "
         + "range di expert del 35B (594.533 B, da fetchPrepBytes/3 misurato in it.31).",
       rangeBytes: RANGE_BYTES, rangesPerWindow: N, mbPerWindow: mb, fileBytes: size,
+      quota,
       points,
       // la stessa quantita' di byte, letta a raffiche invece che in continuo:
       // e' la forma del `prep`, e serve a dire se la causa e' la forma o il

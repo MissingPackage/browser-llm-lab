@@ -647,3 +647,21 @@ farlo, non lo farà. Cancellare il file di un modello non è una cosa che un
 motore fa da solo, e il costo di sbagliarsi è un download da 19 GiB.
 
 **RULING:** entrambi i formati, conversione al primo caricamento (PI, 2026-08-16)
+
+> **VINCOLO TROVATO in it.43, e tocca la SECONDA meta' del ruling.** La quota
+> OPFS misurata per l'origine e' **10,00 GiB**, `persist()` viene **negata** e il
+> tetto non si alza. Lo slab degli expert del 35B e' **17,07 GiB**: non ci sta.
+>
+> «Convertire al primo caricamento» richiede un posto dove scrivere, e in un
+> browser quel posto e' OPFS. Quindi la seconda meta' del ruling, cosi' com'e',
+> non e' eseguibile sul 35B.
+>
+> **La prima meta' regge e basta a se stessa**: il motore accetta uno slab
+> DIRETTAMENTE, convertito offline da uno script e servito come il GGUF via HTTP
+> Range. Zero OPFS, zero quota. **Ed e' il disegno che il PI aveva chiesto
+> all'inizio** — «lo slab su disco invece del GGUF» — prima che io lo deviassi
+> verso una cache. La misura mi ha riportato al suo disegno.
+>
+> **Non chiedo un ruling nuovo**: procedo sulla prima meta', che e' gia'
+> approvata. Se un giorno servisse la conversione lato client, l'item torna
+> aperto con la contraddizione di it.43 da chiarire per prima.

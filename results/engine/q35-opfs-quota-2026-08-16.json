@@ -1,0 +1,206 @@
+{
+ "kind": "q35-io-probe",
+ "schemaVersion": 1,
+ "date": "2026-08-16",
+ "model": "35b",
+ "url": "/models/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+ "declared": "stessi offset e stessa taglia per ogni finestra: cambia SOLO il numero di richieste in volo. Passata di riscaldamento scartata. Taglia = quella vera di un range di expert del 35B (594.533 B, da fetchPrepBytes/3 misurato in it.31).",
+ "rangeBytes": 594533,
+ "rangesPerWindow": 256,
+ "mbPerWindow": 152.200448,
+ "fileBytes": 20893015008,
+ "quota": {
+  "quotaBytes": 10737418792,
+  "usageBytes": 552,
+  "persisted": false
+ },
+ "points": [
+  {
+   "inFlight": 1,
+   "ms": 1288.9099999964237,
+   "mbPerSec": 118.08462033844279,
+   "msPerRange": 5.03480468748603,
+   "fails": 0,
+   "parallelism": 0.9984831909294708,
+   "maxInFlight": 1
+  },
+  {
+   "inFlight": 2,
+   "ms": 338.3699999898672,
+   "mbPerSec": 449.8047935826396,
+   "msPerRange": 1.3217578124604188,
+   "fails": 0,
+   "parallelism": 1.9942218739516666,
+   "maxInFlight": 2
+  },
+  {
+   "inFlight": 4,
+   "ms": 295.85999999940395,
+   "mbPerSec": 514.434016089727,
+   "msPerRange": 1.1557031249976717,
+   "fails": 0,
+   "parallelism": 3.977014602397445,
+   "maxInFlight": 4
+  },
+  {
+   "inFlight": 8,
+   "ms": 277.5300000011921,
+   "mbPerSec": 548.410795226989,
+   "msPerRange": 1.0841015625046566,
+   "fails": 0,
+   "parallelism": 7.904491649493301,
+   "maxInFlight": 8
+  },
+  {
+   "inFlight": 16,
+   "ms": 318.61500000953674,
+   "mbPerSec": 477.6939189788439,
+   "msPerRange": 1.244589843787253,
+   "fails": 0,
+   "parallelism": 15.632903843114432,
+   "maxInFlight": 16
+  },
+  {
+   "inFlight": 24,
+   "ms": 272.89000000059605,
+   "mbPerSec": 557.7355271342576,
+   "msPerRange": 1.0659765625023283,
+   "fails": 0,
+   "parallelism": 22.84848373748816,
+   "maxInFlight": 24
+  },
+  {
+   "inFlight": 48,
+   "ms": 264.1350000053644,
+   "mbPerSec": 576.2221893990152,
+   "msPerRange": 1.0317773437709548,
+   "fails": 0,
+   "parallelism": 43.93270359352452,
+   "maxInFlight": 48
+  },
+  {
+   "inFlight": 96,
+   "ms": 225.38500000536442,
+   "mbPerSec": 675.2909377127025,
+   "msPerRange": 0.8804101562709548,
+   "fails": 0,
+   "parallelism": 84.94564734697745,
+   "maxInFlight": 96
+  },
+  {
+   "inFlight": 192,
+   "ms": 249.4050000011921,
+   "mbPerSec": 610.2541969859166,
+   "msPerRange": 0.9742382812546566,
+   "fails": 0,
+   "parallelism": 122.93402164910556,
+   "maxInFlight": 192
+  },
+  {
+   "inFlight": 256,
+   "ms": 220.125,
+   "mbPerSec": 691.4273617262919,
+   "msPerRange": 0.85986328125,
+   "fails": 0,
+   "parallelism": 137.70913592285925,
+   "maxInFlight": 256
+  }
+ ],
+ "bursts": [
+  {
+   "burst": 8,
+   "ms": 337.4050000011921,
+   "mbPerSec": 451.0912642061091,
+   "msPerRange": 1.3179882812546566,
+   "fails": 0
+  },
+  {
+   "burst": 24,
+   "ms": 311.40499998629093,
+   "mbPerSec": 488.7540277346232,
+   "msPerRange": 1.216425781196449,
+   "fails": 0
+  },
+  {
+   "burst": 48,
+   "ms": 263.02500000596046,
+   "mbPerSec": 578.6539226178156,
+   "msPerRange": 1.027441406273283,
+   "fails": 0
+  },
+  {
+   "burst": 96,
+   "ms": 258.5199999958277,
+   "mbPerSec": 588.7376141205956,
+   "msPerRange": 1.0098437499837019,
+   "fails": 0
+  }
+ ],
+ "adjacent": [
+  {
+   "inFlight": 4,
+   "ms": 303.23499999940395,
+   "mbPerSec": 501.92242979965755,
+   "fails": 0,
+   "parallelism": 3.978842697163324
+  },
+  {
+   "inFlight": 8,
+   "ms": 304.46000000834465,
+   "mbPerSec": 499.90293633261666,
+   "fails": 0,
+   "parallelism": 7.885777631482913
+  },
+  {
+   "inFlight": 24,
+   "ms": 277.8949999958277,
+   "mbPerSec": 547.6904874225341,
+   "fails": 0,
+   "parallelism": 23.00453424947706
+  },
+  {
+   "inFlight": 48,
+   "ms": 252.64000000059605,
+   "mbPerSec": 602.4400253310675,
+   "fails": 0,
+   "parallelism": 44.8977972164161
+  }
+ ],
+ "confronto": [
+  {
+   "n": 8,
+   "continuoMBs": 548.410795226989,
+   "raffichaMBs": 451.0912642061091
+  },
+  {
+   "n": 24,
+   "continuoMBs": 557.7355271342576,
+   "raffichaMBs": 488.7540277346232
+  },
+  {
+   "n": 48,
+   "continuoMBs": 576.2221893990152,
+   "raffichaMBs": 578.6539226178156
+  },
+  {
+   "n": 96,
+   "continuoMBs": 675.2909377127025,
+   "raffichaMBs": 588.7376141205956
+  }
+ ],
+ "best": {
+  "inFlight": 256,
+  "mbPerSec": 691.4273617262919
+ },
+ "knee": {
+  "inFlight": 96,
+  "mbPerSec": 675.2909377127025,
+  "criterio": "prima finestra a >= 95% del massimo"
+ },
+ "riferimenti": {
+  "prepInFlight": 24,
+  "repairInFlight": "centinaia",
+  "prepMBs": "235-268",
+  "repairMBs": 539
+ }
+}
