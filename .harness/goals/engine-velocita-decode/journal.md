@@ -3198,3 +3198,92 @@ host ci sono 1,1 TB liberi, ma è spazio dell'utente e va chiesto, non preso.
   grande del sorgente, la seconda copia costa più di 17 GiB e il conto dello
   spazio cambia. **Da misurare prima di proporre lo store**, non dopo.
 - Il pre-pack non tocca i ~38 s di repair+replay del turno: quelli sono la riga 3.
+
+---
+
+## it.41 — il pre-pack esiste già, è nel modulo condiviso, e il path Qwen non l'ha mai adottato
+
+Stavo per misurare quanto costerebbe scrivere un convertitore. **Non serve
+scriverlo: il meccanismo è in casa da un goal intero.**
+
+### Cosa ho trovato, riga per riga
+
+`residency.ts:110-121` — l'interfaccia della cache **prevede già** lo slab
+pre-impacchettato, e lo dice:
+
+    export type ExpertReader =
+      | ((layer, expert) => ExpertRawBytes)              // forma storica: byte grezzi
+      | { raw: (…) => ExpertRawBytes;
+          slab?: (…) => Uint8Array; }                    // slab GIA' impacchettato
+
+`glmsource.ts:111-115` — la sorgente GLM lo implementa, con il commento che
+nomina esattamente il problema di oggi:
+
+> «Slab GIÀ impacchettato (repack all'import). `ExpertCache` lo usa per saltare
+> `packExpertSlab` nel path caldo — i 41,4 ms/token che il goal deve togliere.»
+
+E ha anche `ensureSlabs`, che **genera il file slab se manca, scrivendo su un
+temporaneo e rinominando alla fine**: un'interruzione non lascia mai un file
+valido a metà.
+
+`glmmodel.ts:871` — il GLM passa `{ raw, slab }`.
+
+**`q35gpumodel.ts:2357` e `:2444` passano la funzione nuda.** Il 35B — il modello
+che il PI usa — impacchetta a ogni miss, sempre. **7,11 s per sessione, misurati
+in it.40, che il GLM non paga da un goal intero.**
+
+### Perché non me n'ero accorto, ed è il difetto che conta
+
+`packExpertSlab` è nel modulo condiviso, l'interfaccia che lo salta è nel modulo
+condiviso, e il consumatore che la usa è in un altro file. Cercando «pack» nel
+path del 35B si trova la chiamata; **non si trova la sua assenza altrove.** Un
+grep dice cosa c'è, non cosa manca — è la terza volta in questo goal (i cinque
+lettori, il contatore `fetchPrepBytes`, e ora questo).
+
+*E la forma è precisamente quella che il ruling del PI descrive: «riusa quello
+che c'è già, costruisci globale quando possibile, poi estendi, propaga i fix sul
+vecchio quando serve». Qui il globale è costruito e l'estensione non è mai
+avvenuta.*
+
+### Cosa NON è un copia-incolla
+
+`glmsource.ts` sono 197 righe **specifiche del GLM**: `slabRange` con la sua
+geometria, due sole classi (q4_0/q4_1), l'indice degli expert del suo GGUF. Il
+35B ha classi q4_K e q6_K e un'altra geometria.
+
+**Quindi la mossa giusta non è scrivere `q35source.ts` accanto**: sarebbe la
+seconda copia dello stesso meccanismo, cioè il difetto che questo goal ha appena
+tolto dall'I/O (cinque lettori → uno). La mossa è **fattorizzare lo store di
+slab fuori da `glmsource`** e farlo ereditare a entrambi.
+
+### E come si incastra con l'idea del PI
+
+Il PI vuole **lo slab al posto del GGUF**, una copia sola. `ensureSlabs`
+implementa la cache **accanto**, cioè la doppia copia — che era la mia proposta e
+che lui ha giustamente contestato.
+
+Non sono in conflitto, sono due passi:
+
+1. **Fattorizzare e adottare** (2-3 it): il 35B smette di impacchettare nel path
+   caldo. Costo: lo store accanto, +17 GiB. Beneficio: −7,11 s per sessione e
+   38.625 richieste → 12.875.
+2. **Sostituire il GGUF** (dopo): it.40 ha misurato che lo slab pesa **1,0005×**
+   il GGUF, quindi la sostituzione è a costo zero di spazio. Serve il
+   convertitore e la decisione di prodotto che il PI non ha ancora dato (solo
+   modelli convertiti, o conversione al primo caricamento?).
+
+**Il passo 1 non pregiudica il 2** — anzi, `ensureSlabs` *è* il convertitore, già
+scritto e già crash-safe.
+
+### EVIDENZA
+
+Sola lettura di codice: `residency.ts:110-121`, `glmsource.ts:111-197`,
+`glmmodel.ts:871`, `q35gpumodel.ts:1500, 2357, 2444`. Nessuna GPU, albero
+invariato rispetto a `04be246`.
+
+### NON VERIFICATO
+
+- Quanto della geometria di `glmsource` è davvero generalizzabile: l'ho letta,
+  non l'ho fattorizzata. La stima di 2-3 iterazioni è una stima.
+- Se `ExpertCache.ensure` usi davvero il ramo `slab` senza altre condizioni:
+  ho letto il tipo, non il corpo.
