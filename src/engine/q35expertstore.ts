@@ -13,6 +13,7 @@ import { tensorByteSize, GGML_TYPE, type GgufTensorInfo } from "./gguf";
 import { mkSlabLayout, type QuantKind, type SlabLayout } from "./moe";
 import type { ExpertRawBytes, MoeModelConfig } from "./residency";
 import type { Q35Shape } from "./q35shape";
+import { slabDescOf, type SlabModelDesc } from "./slabgeom";
 
 /** Il nome GGUF di un tensore expert: l'unico posto che lo scrive per q35. */
 export const q35ExpertTensor = (layer: number, which: "gate" | "up" | "down"): string =>
@@ -82,6 +83,30 @@ export function q35MoeConfig(shape: Q35Shape, info: (name: string) => GgufTensor
       return L;
     },
   };
+}
+
+/**
+ * Il descrittore del file slab per un modello della famiglia (it.46).
+ *
+ * E' un adattatore di due righe sopra `q35MoeConfig`, ed e' voluto: quella
+ * funzione **legge dall'header** quale layer ha il `down` in q4_K e quale in
+ * q6_K, layer per layer. Scrivere qui una lista come «i q6_K sono 34, 38, 39»
+ * sarebbe vero per QUESTO file e falso per il prossimo — e la lista sbagliata
+ * non darebbe un errore, darebbe slab letti all'offset di un'altra classe.
+ *
+ * Il nome del file porta lo SHA del GGUF sorgente: due quantizzazioni dello
+ * stesso modello — UD-Q4_K_S e, poniamo, Q5_K_M — hanno geometrie diverse e non
+ * devono sovrascriversi il file a vicenda. L'header porta lo SHA e lo
+ * rifiuterebbe comunque, ma un rifiuto che costa una rigenerazione da 17 GiB e'
+ * peggio di un nome distinto.
+ */
+export function q35SlabDesc(
+  shape: Q35Shape, info: (name: string) => GgufTensorInfo, sourceSha256: string,
+): SlabModelDesc {
+  if (!/^[0-9a-f]{64}$/.test(sourceSha256)) {
+    throw new Error("q35SlabDesc: SHA-256 sorgente non valido");
+  }
+  return slabDescOf(q35MoeConfig(shape, info), `q35-${sourceSha256.slice(0, 16)}.slabs.bin`);
 }
 
 /**

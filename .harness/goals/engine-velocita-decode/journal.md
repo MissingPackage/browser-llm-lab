@@ -3585,3 +3585,77 @@ in meno* dev'essere rifiutato.
   smontata, solo in un altro posto.
 - La rigenerazione del file GLM v1→v2 non è stata eseguita: succederà al
   prossimo load del GLM, e il suo `reason` sarà «versione di layout 1 ≠ 2».
+
+---
+
+## it.46 — il descrittore si DERIVA, e vale per entrambe le famiglie
+
+Fetta 3. Doveva essere «costruisci il descrittore del 35B leggendo i tipi
+dall'header». **Leggendo il codice si è ridotta a due righe, e ha semplificato
+anche il GLM.**
+
+### `q35MoeConfig` faceva già tutto
+
+`q35expertstore.ts:48` costruisce la config di residenza **dedotta dal file**:
+scorre i layer, legge il tipo del tensore `down`, e ne ricava classi, mappa
+layer→classe e layout. Lancia perfino se gate/up variassero, invece di far
+collidere due layout nella stessa classe.
+
+Quindi il descrittore non è codice nuovo — è un adattatore:
+
+    slabDescOf(cfg, fileName) = { fileName, denseLead, nLayer, nExpert,
+                                  layoutOf: (l) => cfg.layout(cfg.classOf(l)) }
+
+### E il GLM ci passa pure, il che ha tolto l'ultimo confine cablato
+
+In it.45 avevo scritto `GLM_SLAB_DESC` con
+`layoutOf: l => l <= GLM47_DOWN_EXPS_Q4_1_LAST ? … : …` — cioè avevo **spostato**
+il confine, non tolto. Il GLM ha già `MOE_CFG_GLM47`, quindi:
+
+    export const GLM_SLAB_DESC = slabDescOf(MOE_CFG_GLM47, "GLM-4.7-Flash-Q4_0.slabs.bin");
+
+**E i 2.944 slab escono ancora identici all'aritmetica v1.** È la prova che la
+derivazione è giusta: se `classOf`/`layout` del GLM non concordassero col
+confine storico, il caso di equivalenza cadrebbe.
+
+*Una sede, due famiglie, e i modelli nuovi la ereditano senza toccare niente —
+che è la forma che il ruling del PI chiede.*
+
+### Il descrittore del 35B, e il nome del file
+
+`q35SlabDesc(shape, info, sha)` → `slabDescOf(q35MoeConfig(shape, info), …)`.
+
+Il nome del file porta **lo SHA del GGUF sorgente**: due quantizzazioni dello
+stesso modello — UD-Q4_K_S e, poniamo, Q5_K_M — hanno geometrie diverse. L'header
+porta già lo SHA e le rifiuterebbe, ma un rifiuto che costa una rigenerazione da
+17 GiB è peggio di un nome distinto.
+
+### Il caso che legge il GGUF vero
+
+Cinque casi che aprono il file da 20 GB e verificano che la geometria che ne
+esce sia quella osservata:
+
+    due classi, nell'ordine di prima apparizione:  q4k, q6k
+    i layer q6_K:  [34, 38, 39]     ← LETTI dal file, non scritti nel test
+    40 × 256 slab, senza buchi né sovrapposizioni
+    il file peserebbe 16,5-17,5 GiB — il parco expert, non il modello intero
+    il nome porta lo SHA, e uno SHA non valido LANCIA
+
+Il caso sui q6_K non scrive `[34, 38, 39]` come *input*: li **estrae** dalla
+geometria e li confronta. Se un giorno il file cambiasse, fallirebbe dicendo
+quali sono davvero.
+
+### EVIDENZA
+
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1129 passed | 11 skipped** (+5)
+- l'equivalenza del GLM sui 2.944 slab regge **dopo** il passaggio alla
+  derivazione: è il controllo che rende sicuro il cambio
+
+### NON VERIFICATO
+
+- **Nessuno costruisce ancora il file slab del 35B.** Le tre fette hanno reso il
+  formato parametrico e il descrittore derivabile; manca la sorgente che
+  importa, genera e legge — cioè il gemello di `GlmOpfsSource`, che per il 35B
+  deve leggere via HTTP Range e (per il ruling item 10 + it.43) servire uno slab
+  **già convertito** invece di generarlo in OPFS.
+- Il file GLM v1 non è ancora stato rigenerato: succederà al prossimo load.

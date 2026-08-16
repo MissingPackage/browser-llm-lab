@@ -25,6 +25,7 @@
 // dedurlo da un confine, si precalcola **una volta** un rango per layer.
 // Sono `nLayer` interi, non `nLayer × nExpert`.
 import type { SlabLayout } from "./moe";
+import type { MoeModelConfig } from "./residency";
 
 /** Cosa serve sapere di un modello per disporre i suoi slab in un file. */
 export interface SlabModelDesc {
@@ -129,3 +130,28 @@ export function slabRangeOf(
   const within = g.rankOfLayer[layer] * g.desc.nExpert + expert;
   return { offset: c.base + within * c.bytes, bytes: c.bytes };
 }
+
+/**
+ * Il descrittore, DERIVATO dalla config di residenza del modello (it.46).
+ *
+ * PERCHE' NON SI SCRIVE A MANO. `MoeModelConfig` sa gia' quali classi esistono
+ * e quale layer sta in quale classe — e per la famiglia Qwen quella config e'
+ * **dedotta dall'header del GGUF** (`q35MoeConfig` legge il tipo del tensore
+ * `down` layer per layer). Scrivere qui una lista tipo «i q6_K sono 34, 38, 39»
+ * sarebbe la stessa assunzione che it.44 ha smontato, spostata in un altro
+ * posto: vera oggi su questo file, falsa al prossimo modello.
+ *
+ * Vale per ENTRAMBE le famiglie: il GLM ha `MOE_CFG_GLM47`, il 35B ha
+ * `q35MoeConfig(shape, info)`. Una sede, due modelli — e i modelli nuovi la
+ * ereditano senza toccare niente.
+ *
+ * `fileName` resta un parametro perche' e' l'unica cosa che la config NON sa:
+ * due modelli diversi non devono sovrascriversi il file slab a vicenda.
+ */
+export const slabDescOf = (cfg: MoeModelConfig, fileName: string): SlabModelDesc => ({
+  fileName,
+  denseLead: cfg.denseLead,
+  nLayer: cfg.nLayer,
+  nExpert: cfg.nExpert,
+  layoutOf: (l) => cfg.layout(cfg.classOf(l)),
+});

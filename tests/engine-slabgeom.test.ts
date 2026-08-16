@@ -135,3 +135,78 @@ describe("slabgeom: le classi ALTERNATE del 35B, che l'aritmetica del GLM non re
     expect(() => slabGeometry(clash)).toThrow(/due taglie/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// IL DESCRITTORE DEL 35B, costruito dal GGUF VERO (it.46).
+//
+// I casi qui sopra usano una disposizione delle classi scritta a mano — vanno
+// bene per provare l'aritmetica, non per provare che il modello sia quello.
+// Questo legge l'header del file e verifica che la geometria che ne esce sia
+// quella osservata: q6_K sui layer 34, 38, 39 e q4_K su tutti gli altri.
+//
+// Si salta se il GGUF non c'e' (CI, macchine pulite): un caso che dipende da un
+// file da 20 GB non deve rompere una suite che gira ovunque.
+// ---------------------------------------------------------------------------
+import { existsSync, openSync, readSync, closeSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { parseGguf } from "../src/engine/gguf";
+import { validateQwen35 } from "../src/engine/q35shape";
+import { q35SlabDesc } from "../src/engine/q35expertstore";
+import { slabFileBytes } from "../src/engine/slabfile";
+
+const Q35_PATH = join(homedir(), ".cache/blab-models/q35/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf");
+const SHA35 = "a8138f183e3993f12cdc23afd2babb8cdb084e64088ce4a256d49101d47b949c";
+
+describe.skipIf(!existsSync(Q35_PATH))("slabgeom: il descrittore del 35B viene dall'header, non da una lista", () => {
+  const fd = openSync(Q35_PATH, "r");
+  const b = Buffer.alloc(64 * 1024 * 1024);
+  readSync(fd, b, 0, b.length, 0);
+  closeSync(fd);
+  const f = parseGguf(b.buffer.slice(b.byteOffset, b.byteOffset + b.length) as ArrayBuffer);
+  const { shape, byName } = validateQwen35(f);
+  const info = (n: string) => {
+    const t = byName.get(n);
+    if (!t) throw new Error(`tensore ${n} assente`);
+    return t;
+  };
+  const g = slabGeometry(q35SlabDesc(shape, info, SHA35));
+
+  it("trova DUE classi e le mette nell'ordine di prima apparizione", () => {
+    expect(g.classes.map((c) => c.id)).toEqual(["q4k", "q6k"]);
+  });
+
+  it("i layer q6_K sono 34, 38 e 39 — LETTI dal file, non scritti qui", () => {
+    const q6 = [...Array(shape.nLayer).keys()].filter((l) => g.classes[g.classOfLayer[l]].id === "q6k");
+    expect(q6).toEqual([34, 38, 39]);
+    // e sono ALTERNATI: fra il 34 e il 38 ci sono tre layer dell'altra classe,
+    // cioe' esattamente cio' che l'aritmetica a confine del GLM non regge
+    expect(g.classOfLayer[35]).toBe(g.classOfLayer[33]);
+  });
+
+  it("copre tutti i 40 x 256 expert, senza buchi e senza sovrapposizioni", () => {
+    expect(g.nSlabs).toBe(shape.nLayer * (shape.nExpert as number));
+    const rs = [];
+    for (let l = 0; l < shape.nLayer; l++) {
+      for (let e = 0; e < (shape.nExpert as number); e++) rs.push(slabRangeOf(g, l, e));
+    }
+    rs.sort((a, b) => a.offset - b.offset);
+    expect(rs[0].offset).toBe(0);
+    for (let i = 1; i < rs.length; i++) {
+      expect(rs[i].offset, `slab ${i}`).toBe(rs[i - 1].offset + rs[i - 1].bytes);
+    }
+    expect(rs[rs.length - 1].offset + rs[rs.length - 1].bytes).toBe(g.dataBytes);
+  });
+
+  it("il file peserebbe ~17 GiB, cioe' il parco expert e non il modello intero", () => {
+    const giB = slabFileBytes(g) / 2 ** 30;
+    expect(giB).toBeGreaterThan(16.5);
+    expect(giB).toBeLessThan(17.5);
+  });
+
+  it("il nome del file porta lo SHA: due quantizzazioni non si sovrascrivono", () => {
+    const d = q35SlabDesc(shape, info, SHA35);
+    expect(d.fileName).toContain(SHA35.slice(0, 16));
+    expect(() => q35SlabDesc(shape, info, "non-uno-sha")).toThrow(/SHA-256/);
+  });
+});

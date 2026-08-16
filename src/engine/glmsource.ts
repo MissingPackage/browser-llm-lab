@@ -5,12 +5,12 @@
 import { parseGguf, tensorByteSize, type GgufTensorInfo } from "./gguf";
 import { validateGlm47Flash, GLM47_FLASH_SHA256 } from "./shape";
 import { ExpertOpfsStore, GgufExpertIndex, downIsQ4_1, EXPERT_GATE_UP_BYTES, EXPERT_DOWN_Q4_0_BYTES, EXPERT_DOWN_Q4_1_BYTES } from "./expertstore";
-import { GLM47_FLASH as G, GLM47_DOWN_EXPS_Q4_1_LAST } from "./shape";
+import { GLM47_FLASH as G } from "./shape";
 import { packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "./moe";
 import {
   SLAB_HEADER_BYTES, buildSlabHeader, parseSlabHeader, slabFileReason, slabFileRange,
 } from "./slabfile";
-import { slabGeometry, type SlabModelDesc } from "./slabgeom";
+import { slabGeometry, slabDescOf, type SlabModelDesc } from "./slabgeom";
 
 /**
  * IL DESCRITTORE DEL GLM, e sta qui perche' e' dato del GLM — `slabfile.ts` non
@@ -18,16 +18,13 @@ import { slabGeometry, type SlabModelDesc } from "./slabgeom";
  * resta, ma come REGOLA di questo modello invece che come aritmetica del
  * formato: sul 35B le classi si alternano e un confine non le descrive.
  */
-export const GLM_SLAB_DESC: SlabModelDesc = {
-  fileName: "GLM-4.7-Flash-Q4_0.slabs.bin",
-  denseLead: G.denseLead, nLayer: G.nLayer, nExpert: G.nExpert,
-  layoutOf: (l) => (l <= GLM47_DOWN_EXPS_Q4_1_LAST ? SLAB_DOWN_Q4_1 : SLAB_DOWN_Q4_0),
-};
+export const GLM_SLAB_DESC: SlabModelDesc = slabDescOf(
+  MOE_CFG_GLM47, "GLM-4.7-Flash-Q4_0.slabs.bin");
 const GLM_SLAB_GEOM = slabGeometry(GLM_SLAB_DESC);
 const SLAB_FILE_NAME = GLM_SLAB_DESC.fileName;
 const N_SLABS = GLM_SLAB_GEOM.nSlabs;
 import type { GlmWeightSource } from "./glmmodel";
-import type { ExpertRawBytes } from "./residency";
+import { MOE_CFG_GLM47, type ExpertRawBytes } from "./residency";
 
 // Byte su disco del GGUF canonico (verifier C1 it.1; il model_size di
 // llama-bench è la sola sezione dati).
