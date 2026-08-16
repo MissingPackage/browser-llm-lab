@@ -5,12 +5,27 @@
 import { parseGguf, tensorByteSize, type GgufTensorInfo } from "./gguf";
 import { validateGlm47Flash, GLM47_FLASH_SHA256 } from "./shape";
 import { ExpertOpfsStore, GgufExpertIndex, downIsQ4_1, EXPERT_GATE_UP_BYTES, EXPERT_DOWN_Q4_0_BYTES, EXPERT_DOWN_Q4_1_BYTES } from "./expertstore";
-import { GLM47_FLASH as G } from "./shape";
+import { GLM47_FLASH as G, GLM47_DOWN_EXPS_Q4_1_LAST } from "./shape";
 import { packExpertSlab, SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "./moe";
 import {
-  SLAB_FILE_NAME, SLAB_HEADER_BYTES, N_SLABS, buildSlabHeader, parseSlabHeader,
-  slabFileReason, slabRange,
+  SLAB_HEADER_BYTES, buildSlabHeader, parseSlabHeader, slabFileReason, slabFileRange,
 } from "./slabfile";
+import { slabGeometry, type SlabModelDesc } from "./slabgeom";
+
+/**
+ * IL DESCRITTORE DEL GLM, e sta qui perche' e' dato del GLM — `slabfile.ts` non
+ * conosce piu' nessun modello (it.45). Il confine `GLM47_DOWN_EXPS_Q4_1_LAST`
+ * resta, ma come REGOLA di questo modello invece che come aritmetica del
+ * formato: sul 35B le classi si alternano e un confine non le descrive.
+ */
+export const GLM_SLAB_DESC: SlabModelDesc = {
+  fileName: "GLM-4.7-Flash-Q4_0.slabs.bin",
+  denseLead: G.denseLead, nLayer: G.nLayer, nExpert: G.nExpert,
+  layoutOf: (l) => (l <= GLM47_DOWN_EXPS_Q4_1_LAST ? SLAB_DOWN_Q4_1 : SLAB_DOWN_Q4_0),
+};
+const GLM_SLAB_GEOM = slabGeometry(GLM_SLAB_DESC);
+const SLAB_FILE_NAME = GLM_SLAB_DESC.fileName;
+const N_SLABS = GLM_SLAB_GEOM.nSlabs;
 import type { GlmWeightSource } from "./glmmodel";
 import type { ExpertRawBytes } from "./residency";
 
@@ -115,7 +130,7 @@ export class GlmOpfsSource implements GlmWeightSource {
    */
   expertSlab(layer: number, expert: number): Uint8Array {
     if (!this.slabs) throw new Error("glmsource: file slab non disponibile");
-    const r = slabRange(layer, expert);
+    const r = slabFileRange(GLM_SLAB_GEOM, layer, expert);
     const dst = r.bytes === SLAB_DOWN_Q4_1.bytes ? this.slabBuf41 : this.slabBuf40;
     return this.slabs.read(r.offset, r.bytes, dst);
   }
@@ -136,7 +151,7 @@ export class GlmOpfsSource implements GlmWeightSource {
     let slabs = await deps.openStore(SLAB_FILE_NAME);
     const size = slabs.size();
     const header = size >= SLAB_HEADER_BYTES ? parseSlabHeader(slabs.read(0, SLAB_HEADER_BYTES)) : null;
-    const reason = slabFileReason(header, size, GLM47_FLASH_SHA256);
+    const reason = slabFileReason(header, size, GLM47_FLASH_SHA256, GLM_SLAB_GEOM);
     if (!reason) return { slabs, reason: null, ms: 0 };
 
     onProgress?.(`file slab da rigenerare (${reason}) — repack di ${N_SLABS} expert…`);
@@ -144,7 +159,7 @@ export class GlmOpfsSource implements GlmWeightSource {
     const tmpName = `${SLAB_FILE_NAME}.tmp`;
     const tmp = await deps.openStore(tmpName);
     tmp.truncate(0);
-    tmp.write(buildSlabHeader(GLM47_FLASH_SHA256), 0);
+    tmp.write(buildSlabHeader(GLM_SLAB_GEOM, GLM47_FLASH_SHA256), 0);
     const gate = new Uint8Array(EXPERT_GATE_UP_BYTES);
     const up = new Uint8Array(EXPERT_GATE_UP_BYTES);
     const down40 = new Uint8Array(EXPERT_DOWN_Q4_0_BYTES);
@@ -161,7 +176,7 @@ export class GlmOpfsSource implements GlmWeightSource {
           store.read(r.down.offset, r.down.bytes, dbuf),
           layout,
         );
-        tmp.write(slab, slabRange(l, e).offset);
+        tmp.write(slab, slabFileRange(GLM_SLAB_GEOM, l, e).offset);
         if (++done % 256 === 0) onProgress?.(`repack ${done}/${N_SLABS} expert…`);
       }
     }

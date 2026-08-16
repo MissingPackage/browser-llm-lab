@@ -13,12 +13,36 @@ import { GLM47_FLASH as G, GLM47_FLASH_SHA256, validateGlm47Flash } from "../src
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../src/engine/moe";
 import { downIsQ4_1 } from "../src/engine/expertstore";
 import {
-  N_SLABS, N_SLABS_Q4_0, N_SLABS_Q4_1, SLAB_DATA_BYTES, SLAB_FILE_BYTES,
   SLAB_HEADER_BYTES, SLAB_LAYOUT_VERSION, buildSlabHeader, parseSlabHeader,
-  slabFileReason, slabIndex, slabRange,
+  slabFileReason, slabFileRange, slabFileBytes,
 } from "../src/engine/slabfile";
+import { slabGeometry } from "../src/engine/slabgeom";
+import { GLM_SLAB_DESC } from "../src/engine/glmsource";
 
 const SHA = GLM47_FLASH_SHA256;
+
+// La geometria del GLM, derivata dal suo descrittore (it.45): `slabfile.ts` non
+// conosce piu' nessun modello, quindi i numeri che questi casi pinnavano come
+// costanti del modulo ora si chiedono alla geometria. **Restano gli stessi
+// numeri**, ed e' il punto: il refactor non doveva spostare un byte.
+const GEO = slabGeometry(GLM_SLAB_DESC);
+const N_SLABS = GEO.nSlabs;
+const N_SLABS_Q4_1 = GEO.classes[0].nSlabs;
+const N_SLABS_Q4_0 = GEO.classes[1].nSlabs;
+const SLAB_DATA_BYTES = GEO.dataBytes;
+const SLAB_FILE_BYTES = slabFileBytes(GEO);
+const slabRange = (l: number, e: number): { offset: number; bytes: number } =>
+  slabFileRange(GEO, l, e);
+/** l'indice sequenziale non e' piu' un'API: si deriva dall'offset dentro la classe */
+const slabIndex = (l: number, e: number): number => {
+  if (l < 0 || l >= GEO.desc.nLayer) throw new Error(`slabfile: layer ${l} fuori dal modello`);
+  const ci = GEO.classOfLayer[l];
+  if (ci < 0) throw new Error(`slabfile: layer ${l} non e' MoE`);
+  if (e < 0 || e >= GEO.desc.nExpert) throw new Error(`slabfile: expert ${e} fuori range`);
+  let before = 0;
+  for (let i = 0; i < ci; i++) before += GEO.classes[i].nSlabs;
+  return before + GEO.rankOfLayer[l] * GEO.desc.nExpert + e;
+};
 const allExperts = function* (): Generator<[number, number]> {
   for (let l = G.denseLead; l < G.nLayer; l++) for (let e = 0; e < G.nExpert; e++) yield [l, e];
 };
@@ -82,41 +106,48 @@ describe("indice e offset degli slab", () => {
 
 describe("header e invalidazione", () => {
   it("roundtrip build → parse", () => {
-    const h = parseSlabHeader(buildSlabHeader(SHA))!;
+    const h = parseSlabHeader(buildSlabHeader(GEO, SHA))!;
     expect(h.layoutVersion).toBe(SLAB_LAYOUT_VERSION);
     expect(h.sourceSha256).toBe(SHA);
-    expect(h.nSlabsQ4_1).toBe(N_SLABS_Q4_1);
-    expect(h.nSlabsQ4_0).toBe(N_SLABS_Q4_0);
+    // v2: la LISTA delle classi invece di due coppie cablate — ma i numeri del
+    // GLM restano gli stessi, ed e' il punto del refactor
+    expect(h.classes.map((c) => c.nSlabs)).toEqual([N_SLABS_Q4_1, N_SLABS_Q4_0]);
+    expect(h.classes.map((c) => c.bytes)).toEqual([SLAB_DOWN_Q4_1.bytes, SLAB_DOWN_Q4_0.bytes]);
     expect(h.dataBytes).toBe(SLAB_DATA_BYTES); // > 2^32: low/high word
   });
 
   it("un header valido e la taglia giusta ⇒ nessuna rigenerazione", () => {
-    expect(slabFileReason(parseSlabHeader(buildSlabHeader(SHA)), SLAB_FILE_BYTES, SHA)).toBeNull();
+    expect(slabFileReason(parseSlabHeader(buildSlabHeader(GEO, SHA)), SLAB_FILE_BYTES, SHA, GEO)).toBeNull();
   });
 
   it("ogni motivo di rigenerazione e' DICHIARATO, non silenzioso", () => {
-    const h = parseSlabHeader(buildSlabHeader(SHA))!;
-    expect(slabFileReason(null, SLAB_FILE_BYTES, SHA)).toMatch(/magic/);
-    expect(slabFileReason({ ...h, layoutVersion: 99 }, SLAB_FILE_BYTES, SHA)).toMatch(/versione di layout/);
-    expect(slabFileReason(h, SLAB_FILE_BYTES, "0".repeat(64))).toMatch(/SHA-256/);
-    expect(slabFileReason({ ...h, nSlabsQ4_0: 1 }, SLAB_FILE_BYTES, SHA)).toMatch(/conteggio slab/);
-    expect(slabFileReason({ ...h, slabBytesQ4_0: 1 }, SLAB_FILE_BYTES, SHA)).toMatch(/taglia/);
-    expect(slabFileReason(h, SLAB_FILE_BYTES - 1, SHA)).toMatch(/file di/);
+    const h = parseSlabHeader(buildSlabHeader(GEO, SHA))!;
+    const cls = (i: number, patch: Partial<{ nSlabs: number; bytes: number }>) =>
+      ({ ...h, classes: h.classes.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
+    expect(slabFileReason(null, SLAB_FILE_BYTES, SHA, GEO)).toMatch(/magic/);
+    expect(slabFileReason({ ...h, layoutVersion: 99 }, SLAB_FILE_BYTES, SHA, GEO)).toMatch(/versione di layout/);
+    expect(slabFileReason(h, SLAB_FILE_BYTES, "0".repeat(64), GEO)).toMatch(/SHA-256/);
+    expect(slabFileReason(cls(1, { nSlabs: 1 }), SLAB_FILE_BYTES, SHA, GEO)).toMatch(/size-class/);
+    expect(slabFileReason(cls(1, { bytes: 1 }), SLAB_FILE_BYTES, SHA, GEO)).toMatch(/size-class/);
+    // una classe in meno: il caso che v1 non poteva nemmeno esprimere
+    expect(slabFileReason({ ...h, classes: h.classes.slice(0, 1) }, SLAB_FILE_BYTES, SHA, GEO))
+      .toMatch(/size-class/);
+    expect(slabFileReason(h, SLAB_FILE_BYTES - 1, SHA, GEO)).toMatch(/file di/);
   });
 
   it("magic sbagliato ⇒ parse null (non si legge mai roba di ignota provenienza)", () => {
-    const buf = buildSlabHeader(SHA);
+    const buf = buildSlabHeader(GEO, SHA);
     buf[3] = 0x00;
     expect(parseSlabHeader(buf)).toBeNull();
   });
 
   it("un file troncato a meta' non passa per valido", () => {
-    const h = parseSlabHeader(buildSlabHeader(SHA));
-    expect(slabFileReason(h, Math.floor(SLAB_FILE_BYTES / 2), SHA)).not.toBeNull();
+    const h = parseSlabHeader(buildSlabHeader(GEO, SHA));
+    expect(slabFileReason(h, Math.floor(SLAB_FILE_BYTES / 2), SHA, GEO)).not.toBeNull();
   });
 
   it("SHA sorgente non valido ⇒ throw alla costruzione dell'header", () => {
-    expect(() => buildSlabHeader("non-uno-sha")).toThrow();
+    expect(() => buildSlabHeader(GEO, "non-uno-sha")).toThrow();
   });
 });
 
@@ -141,7 +172,36 @@ const findSlabFile = (): string | null => {
 };
 const slabPath = findSlabFile();
 
-describe.skipIf(!existsSync(GGUF_PATH) || !slabPath)("file slab generato vs GGUF", () => {
+/**
+ * Il file su disco e' del formato che sappiamo leggere?
+ *
+ * Da it.45 il layout e' v2 (lista delle classi nell'header invece di due coppie
+ * cablate) e `parseSlabHeader` **rifiuta** un v1 — che e' il comportamento
+ * giusto: leggere byte con la geometria sbagliata darebbe slab validi e
+ * sbagliati. Un file v1 sul disco non e' un fallimento di questo caso, e' un
+ * file che `ensureSlabs` rigenerera' al prossimo load dichiarandone il motivo.
+ *
+ * Lo si SALTA dicendo perche', invece di fallire (rumore su un fatto atteso) o
+ * di passare in silenzio (che nasconderebbe un file davvero corrotto).
+ */
+const slabHeaderReadable = (): boolean => {
+  if (!slabPath) return false;
+  const fd = openSync(slabPath, "r");
+  try {
+    const b = Buffer.alloc(SLAB_HEADER_BYTES);
+    readSync(fd, b, 0, SLAB_HEADER_BYTES, 0);
+    const h = parseSlabHeader(new Uint8Array(b.buffer, b.byteOffset, SLAB_HEADER_BYTES));
+    if (h === null) {
+      console.log("[slabfile] file slab su disco non leggibile col layout v"
+        + `${SLAB_LAYOUT_VERSION} (verosimilmente v1): il caso sul FILE si salta,`
+        + " `ensureSlabs` lo rigenerera' al prossimo load");
+      return false;
+    }
+    return true;
+  } finally { closeSync(fd); }
+};
+
+describe.skipIf(!existsSync(GGUF_PATH) || !slabPath || !slabHeaderReadable())("file slab generato vs GGUF", () => {
   it("gli slab su disco sono identici a packExpertSlab(byte GGUF)", () => {
     const gfd = openSync(GGUF_PATH, "r");
     const sfd = openSync(slabPath!, "r");

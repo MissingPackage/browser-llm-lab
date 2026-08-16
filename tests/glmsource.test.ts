@@ -11,7 +11,14 @@ import { GlmOpfsSource, GLM47_GGUF_BYTES, type GlmSourceDeps, type SlabStoreLike
 import { parseGguf, tensorByteSize, type GgufTensorInfo } from "../src/engine/gguf";
 import { GLM47_FLASH as G, GLM47_FLASH_SHA256, validateGlm47Flash } from "../src/engine/shape";
 import { EXPERT_GATE_UP_BYTES, EXPERT_DOWN_Q4_0_BYTES, EXPERT_DOWN_Q4_1_BYTES, downIsQ4_1 } from "../src/engine/expertstore";
-import { SLAB_FILE_NAME, buildSlabHeader, slabRange } from "../src/engine/slabfile";
+import { buildSlabHeader, slabFileRange, slabFileBytes } from "../src/engine/slabfile";
+import { slabGeometry } from "../src/engine/slabgeom";
+import { GLM_SLAB_DESC } from "../src/engine/glmsource";
+
+// la geometria del GLM viene dal suo descrittore (it.45): `slabfile` non
+// conosce piu' nessun modello, e il nome del file e' dato del modello
+const GEO = slabGeometry(GLM_SLAB_DESC);
+const SLAB_FILE_NAME = GLM_SLAB_DESC.fileName;
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../src/engine/moe";
 import { glmFixture } from "./helpers/glm-gguf-fixture";
 
@@ -57,12 +64,11 @@ class MemStore implements SlabStoreLike {
 
 const fixtureBytes = new Uint8Array(glmFixture());
 // l'ultimo slab del file: i q4_1 stanno davanti, quindi chiude un layer q4_0
-const lastSlab = slabRange(G.nLayer - 1, G.nExpert - 1);
-const SLAB_FILE_BYTES = lastSlab.offset + lastSlab.bytes;
+const SLAB_FILE_BYTES = slabFileBytes(GEO);
 
 function world(opts: { ggufSize?: number; importResult?: { bytes: number; ms: number } } = {}) {
   const gguf = new MemStore(fixtureBytes, opts.ggufSize ?? GLM47_GGUF_BYTES, opts.importResult);
-  const slabs = new MemStore(buildSlabHeader(GLM47_FLASH_SHA256), SLAB_FILE_BYTES);
+  const slabs = new MemStore(buildSlabHeader(GEO, GLM47_FLASH_SHA256), SLAB_FILE_BYTES);
   const moves: Array<{ tmp: string; final: string }> = [];
   const deps: GlmSourceDeps = {
     async openStore(name) {
@@ -134,10 +140,10 @@ describe("letture (range e size-class)", () => {
     expect(src.expert(l40, 63).down.length).toBe(EXPERT_DOWN_Q4_0_BYTES);
   });
 
-  it("expertSlab: legge ESATTAMENTE slabRange(l,e) dal file slab, buffer della classe giusta", async () => {
+  it("expertSlab: legge ESATTAMENTE slabFileRange(GEO, l,e) dal file slab, buffer della classe giusta", async () => {
     const { w, src } = await openSrc();
     const l = G.nLayer - 1, e = 7;
-    const r = slabRange(l, e);
+    const r = slabFileRange(GEO, l, e);
     const out = src.expertSlab(l, e);
     expect(w.slabs.reads).toEqual([{ offset: r.offset, bytes: r.bytes }]);
     expect(out.length).toBe(r.bytes);

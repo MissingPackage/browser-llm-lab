@@ -3511,3 +3511,77 @@ rendere il caso di equivalenza scrivibile.*
   ora a rischio basso perché l'equivalenza è pinnata slab per slab.
 - Il descrittore del 35B non esiste ancora: `denseLead`, e quali layer siano
   q6_K, vanno presi dallo shape e dall'header invece che scritti a mano.
+
+---
+
+## it.45 — `slabfile.ts` non conosce più nessun modello, e il GLM esce identico
+
+Fetta 2: riscritto `slabfile.ts` sopra `slabgeom`. Il modulo del **formato** non
+importa più la shape del GLM; il descrittore del GLM è passato a `glmsource.ts`,
+dove è dato del modello e non aritmetica del formato.
+
+### Il formato è salito a v2, e va detto perché
+
+L'header v1 portava **due coppie cablate** (`nSlabsQ4_1/nSlabsQ4_0`,
+`slabBytesQ4_1/slabBytesQ4_0`). Non descrive un modello con classi alternate,
+quindi ora porta la **lista** delle classi.
+
+**Un file slab v1 esistente si rigenera.** Non è un incidente: è il meccanismo
+che `SLAB_LAYOUT_VERSION` esiste per attivare — `slabFileReason` lo dichiara,
+`ensureSlabs` riscrive su un temporaneo e rinomina. Sul GLM costa una passata di
+repack, ~5 s, una volta. *L'ho scelto invece di un ramo di compatibilità: una
+branch «se le classi sono due, leggi il formato vecchio» sarebbe debito su un
+modello che il PI ha dichiarato secondario.*
+
+E `parseSlabHeader` **rifiuta** un v1 invece di leggerlo con la geometria nuova:
+il conteggio delle classi di un v1 finisce fuori range e torna `null`. Un file
+letto con la geometria sbagliata darebbe slab validi e sbagliati.
+
+### La prova che il refactor non ha spostato un byte
+
+Il caso di equivalenza di it.44 confrontava il modulo nuovo con `slabRange`
+storica. **Quella funzione non esiste più**, quindi il riferimento sarebbe
+sparito insieme a ciò che doveva verificare.
+
+**L'ho congelata dentro il test**, con la sua ragione scritta: la formula v1 è la
+**specifica della disposizione su disco** del GLM, non un dettaglio di
+implementazione. Tutti e 2.944 gli slab continuano a essere confrontati uno per
+uno contro di lei.
+
+### Il caso sul FILE, e come l'ho gestito senza indebolirlo
+
+`slabfile.test.ts` legge il file slab **vero** su disco e confronta i byte con
+`packExpertSlab`. Quel file è v1, quindi ora `parseSlabHeader` lo rifiuta — e il
+caso falliva.
+
+Non l'ho tolto e non l'ho reso permissivo: **si salta dichiarando il motivo** a
+console («file slab su disco non leggibile col layout v2, verosimilmente v1:
+`ensureSlabs` lo rigenererà al prossimo load»). Fallire sarebbe rumore su un
+fatto atteso; passare in silenzio nasconderebbe un file davvero corrotto.
+
+### Cosa è entrato
+
+    slabfile.ts    parametrico su SlabGeometry · header v2 con la lista delle classi
+                   slabFileRange / slabFileBytes / slabFileReason(…, g)
+                   SLAB_MAX_CLASSES = 16, e un conteggio assurdo NON fa leggere
+                   fuori dall'header: si rifiuta
+    glmsource.ts   GLM_SLAB_DESC, il descrittore del GLM, esportato
+    3 suite        aggiornate all'API nuova, nessuna indebolita
+
+Un caso **nuovo** che v1 non poteva nemmeno esprimere: un header con *una classe
+in meno* dev'essere rifiutato.
+
+### EVIDENZA
+
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1124 passed | 11 skipped**
+  (lo skip in più è il caso sul file v1, dichiarato)
+- `slabfile.ts` non nomina più `GLM47_FLASH` né `GLM47_DOWN_EXPS_Q4_1_LAST`
+
+### NON VERIFICATO
+
+- **Il descrittore del 35B non esiste ancora.** È la prossima fetta, e va
+  costruito leggendo il tipo del tensore `down` per layer dall'header del GGUF —
+  non scrivendo a mano `[34, 38, 39]`, che sarebbe la stessa assunzione appena
+  smontata, solo in un altro posto.
+- La rigenerazione del file GLM v1→v2 non è stata eseguita: succederà al
+  prossimo load del GLM, e il suo `reason` sarà «versione di layout 1 ≠ 2».

@@ -15,7 +15,32 @@ import { describe, expect, it } from "vitest";
 import { slabGeometry, slabRangeOf, type SlabModelDesc } from "../src/engine/slabgeom";
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, mkSlabLayout, type SlabLayout } from "../src/engine/moe";
 import { GLM47_FLASH as G, GLM47_DOWN_EXPS_Q4_1_LAST } from "../src/engine/shape";
-import { slabRange, SLAB_HEADER_BYTES, N_SLABS, SLAB_DATA_BYTES } from "../src/engine/slabfile";
+import { SLAB_HEADER_BYTES } from "../src/engine/slabfile";
+
+// L'ARITMETICA STORICA (layout v1), congelata qui come RIFERIMENTO.
+//
+// Prima di it.45 questa formula viveva in `slabfile.ts` e descriveva la
+// disposizione degli slab del GLM sul disco. Ora `slabfile` e' parametrico e
+// quella formula non esiste piu' — ma **la disposizione su disco e' la stessa**,
+// e questo caso deve continuare a provarlo. Scriverla qui la rende quello che
+// e': la SPECIFICA del layout del GLM, non un dettaglio di implementazione.
+const N_SLABS_Q4_1_V1 = GLM47_DOWN_EXPS_Q4_1_LAST * G.nExpert;
+const N_SLABS_Q4_0_V1 = (G.nLayer - G.denseLead - GLM47_DOWN_EXPS_Q4_1_LAST) * G.nExpert;
+const N_SLABS = N_SLABS_Q4_1_V1 + N_SLABS_Q4_0_V1;
+const SLAB_DATA_BYTES = N_SLABS_Q4_1_V1 * SLAB_DOWN_Q4_1.bytes + N_SLABS_Q4_0_V1 * SLAB_DOWN_Q4_0.bytes;
+const slabRange = (layer: number, expert: number): { offset: number; bytes: number } => {
+  const isQ41 = layer <= GLM47_DOWN_EXPS_Q4_1_LAST;
+  const i = isQ41
+    ? (layer - G.denseLead) * G.nExpert + expert
+    : N_SLABS_Q4_1_V1 + (layer - GLM47_DOWN_EXPS_Q4_1_LAST - 1) * G.nExpert + expert;
+  return i < N_SLABS_Q4_1_V1
+    ? { offset: SLAB_HEADER_BYTES + i * SLAB_DOWN_Q4_1.bytes, bytes: SLAB_DOWN_Q4_1.bytes }
+    : {
+        offset: SLAB_HEADER_BYTES + N_SLABS_Q4_1_V1 * SLAB_DOWN_Q4_1.bytes
+          + (i - N_SLABS_Q4_1_V1) * SLAB_DOWN_Q4_0.bytes,
+        bytes: SLAB_DOWN_Q4_0.bytes,
+      };
+};
 
 const GLM_DESC: SlabModelDesc = {
   fileName: "GLM-4.7-Flash-Q4_0.slabs.bin",
@@ -23,7 +48,7 @@ const GLM_DESC: SlabModelDesc = {
   layoutOf: (l) => (l <= GLM47_DOWN_EXPS_Q4_1_LAST ? SLAB_DOWN_Q4_1 : SLAB_DOWN_Q4_0),
 };
 
-describe("slabgeom: il GLM esce identico all'aritmetica storica", () => {
+describe("slabgeom: il GLM esce identico all'aritmetica storica (layout v1)", () => {
   const g = slabGeometry(GLM_DESC);
 
   it("stesso numero di slab e stessi byte di dati", () => {

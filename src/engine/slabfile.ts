@@ -1,90 +1,89 @@
 // File slab degli expert: il repack all'IMPORT invece che nel path caldo
-// (goal C3a fase 3, spec §2).
+// (goal C3a fase 3, spec §2). PARAMETRICO SUL MODELLO da it.44-45.
 //
 // PERCHÉ. `ExpertCache.ensure` chiamava `packExpertSlab` a ogni miss: legge i
 // byte GGUF grezzi dei tre tensori di un expert e li ri-impacchetta nel layout
-// [qs | scales] del motore. Costava **9,5 ms per miss × 4,47 miss/token =
-// 41,4 ms/token** — il 19% del wall, su CPU, dentro il forward. Gli stessi byte
-// si possono produrre UNA volta sola all'import.
+// [qs | scales] del motore. Sul GLM costava **9,5 ms per miss × 4,47 miss/token
+// = 41,4 ms/token**; sul 35B il conto è **7,11 s per sessione** (it.40). Gli
+// stessi byte si possono produrre UNA volta sola.
 //
-// FORMATO. Header di 4 KiB + i 2.944 slab consecutivi, ordinati per
-// (layer, expert) con layer da 1 a 46 (blk.0 è denso). Le due size-class sono
-// contigue e in quest'ordine: prima i 256 slab down-Q4_1 (blk.1-4), poi i 2.688
-// down-Q4_0 (blk.5-46) — così l'offset è un'aritmetica chiusa, senza tabella.
+// FORMATO. Header di 4 KiB + gli slab, raggruppati PER CLASSE e contigui dentro
+// ogni classe — così l'offset resta aritmetica e non una tabella per slab.
+// Quale layer appartiene a quale classe lo dice `slabgeom`, che lo deriva dal
+// descrittore del modello.
 //
-// INVALIDAZIONE. L'header porta magic, versione di layout e SHA-256 del GGUF
-// sorgente: se uno dei tre non combacia il file si rigenera. Mai leggere byte
-// di cui non si conosce la provenienza (postura ds4, la stessa dell'import).
-import { GLM47_FLASH as G, GLM47_DOWN_EXPS_Q4_1_LAST } from "./shape";
-import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "./moe";
+// COSA E' CAMBIATO IN v2, e perché il numero di versione esiste. Fino a v1 la
+// geometria era cablata sul GLM: DUE size-class CONTIGUE, con un `layer <=
+// confine` a separarle. Sul 35B le classi si ALTERNANO (down q4_K sui layer
+// 0-33, q6_K su 34, q4_K su 35-37, q6_K su 38-39, letto dall'header del GGUF),
+// quindi quel confine non le descrive e avrebbe prodotto **offset validi e
+// sbagliati**. L'header ora porta la LISTA delle classi invece di due coppie
+// cablate.
+//
+// **Un file slab v1 esistente si rigenera**: `slabFileReason` lo dichiara come
+// motivo, `ensureSlabs` lo riscrive su un temporaneo e rinomina. Costa una
+// passata di repack (sul GLM ~5 s), una volta.
+//
+// INVALIDAZIONE. L'header porta magic, versione di layout, SHA-256 del GGUF
+// sorgente e la geometria: se uno di questi non combacia il file si rigenera.
+// Mai leggere byte di cui non si conosce la provenienza (postura ds4).
+import { slabRangeOf, type SlabGeometry } from "./slabgeom";
 
 export const SLAB_MAGIC = "BLABSLAB";
-/** Cambiare questo numero INVALIDA tutti i file slab esistenti. */
-export const SLAB_LAYOUT_VERSION = 1;
-export const SLAB_HEADER_BYTES = 4096;
-export const SLAB_FILE_NAME = "GLM-4.7-Flash-Q4_0.slabs.bin";
-
-/** Expert con down Q4_1 (blk.1..4): stanno per primi nel file. */
-export const N_SLABS_Q4_1 = GLM47_DOWN_EXPS_Q4_1_LAST * G.nExpert;
-/** Expert con down Q4_0 (blk.5..46). */
-export const N_SLABS_Q4_0 = (G.nLayer - G.denseLead - GLM47_DOWN_EXPS_Q4_1_LAST) * G.nExpert;
-export const N_SLABS = N_SLABS_Q4_1 + N_SLABS_Q4_0;
-
-export const SLAB_DATA_BYTES =
-  N_SLABS_Q4_1 * SLAB_DOWN_Q4_1.bytes + N_SLABS_Q4_0 * SLAB_DOWN_Q4_0.bytes;
-export const SLAB_FILE_BYTES = SLAB_HEADER_BYTES + SLAB_DATA_BYTES;
-
 /**
- * Indice sequenziale di (layer, expert) nel file. I layer MoE partono da
- * `denseLead`; i Q4_1 stanno davanti, quindi l'indice NON è `layer*64+expert`.
+ * Cambiare questo numero INVALIDA tutti i file slab esistenti.
+ * v2 (it.45): header con la lista delle classi invece di due coppie cablate.
  */
-export function slabIndex(layer: number, expert: number): number {
-  if (layer < G.denseLead || layer >= G.nLayer) throw new Error(`slabfile: layer ${layer} non e' MoE`);
-  if (expert < 0 || expert >= G.nExpert) throw new Error(`slabfile: expert ${expert} fuori range`);
-  const isQ41 = layer <= GLM47_DOWN_EXPS_Q4_1_LAST;
-  return isQ41
-    ? (layer - G.denseLead) * G.nExpert + expert
-    : N_SLABS_Q4_1 + (layer - GLM47_DOWN_EXPS_Q4_1_LAST - 1) * G.nExpert + expert;
-}
+export const SLAB_LAYOUT_VERSION = 2;
+export const SLAB_HEADER_BYTES = 4096;
 
-/** Offset assoluto dello slab nel file (header incluso) e sua taglia. */
-export function slabRange(layer: number, expert: number): { offset: number; bytes: number } {
-  const i = slabIndex(layer, expert);
-  return i < N_SLABS_Q4_1
-    ? { offset: SLAB_HEADER_BYTES + i * SLAB_DOWN_Q4_1.bytes, bytes: SLAB_DOWN_Q4_1.bytes }
-    : {
-        offset: SLAB_HEADER_BYTES + N_SLABS_Q4_1 * SLAB_DOWN_Q4_1.bytes
-          + (i - N_SLABS_Q4_1) * SLAB_DOWN_Q4_0.bytes,
-        bytes: SLAB_DOWN_Q4_0.bytes,
-      };
-}
+/** Quante classi l'header può descrivere. Oltre, il file non si scrive. */
+export const SLAB_MAX_CLASSES = 16;
 
 export interface SlabHeader {
   magic: string;
   layoutVersion: number;
   sourceSha256: string;
-  nSlabsQ4_1: number;
-  nSlabsQ4_0: number;
-  slabBytesQ4_1: number;
-  slabBytesQ4_0: number;
+  /** una voce per size-class, NELL'ORDINE in cui stanno nel file */
+  classes: Array<{ nSlabs: number; bytes: number }>;
   dataBytes: number;
 }
 
-export function buildSlabHeader(sourceSha256: string): Uint8Array {
+/** Byte totali del file per una geometria: header + area dati. */
+export const slabFileBytes = (g: SlabGeometry): number => SLAB_HEADER_BYTES + g.dataBytes;
+
+/**
+ * Offset ASSOLUTO dello slab nel file (header incluso) e sua taglia.
+ * `slabgeom` lavora nell'area dati e non conosce l'header: la somma sta qui,
+ * in un posto solo.
+ */
+export function slabFileRange(
+  g: SlabGeometry, layer: number, expert: number,
+): { offset: number; bytes: number } {
+  const r = slabRangeOf(g, layer, expert);
+  return { offset: SLAB_HEADER_BYTES + r.offset, bytes: r.bytes };
+}
+
+export function buildSlabHeader(g: SlabGeometry, sourceSha256: string): Uint8Array {
   if (!/^[0-9a-f]{64}$/.test(sourceSha256)) throw new Error("slabfile: SHA-256 sorgente non valido");
+  if (g.classes.length > SLAB_MAX_CLASSES) {
+    throw new Error(`slabfile: ${g.classes.length} size-class, il massimo e' ${SLAB_MAX_CLASSES}`);
+  }
   const buf = new Uint8Array(SLAB_HEADER_BYTES);
   const dv = new DataView(buf.buffer);
   for (let i = 0; i < SLAB_MAGIC.length; i++) buf[i] = SLAB_MAGIC.charCodeAt(i);
   let o = 8;
   dv.setUint32(o, SLAB_LAYOUT_VERSION, true); o += 4;
-  dv.setUint32(o, N_SLABS_Q4_1, true); o += 4;
-  dv.setUint32(o, N_SLABS_Q4_0, true); o += 4;
-  dv.setUint32(o, SLAB_DOWN_Q4_1.bytes, true); o += 4;
-  dv.setUint32(o, SLAB_DOWN_Q4_0.bytes, true); o += 4;
-  // dataBytes non entra in u32 (15,68 GB): due word, low/high
-  dv.setUint32(o, SLAB_DATA_BYTES >>> 0, true); o += 4;
-  dv.setUint32(o, Math.floor(SLAB_DATA_BYTES / 2 ** 32), true); o += 4;
+  dv.setUint32(o, g.classes.length, true); o += 4;
+  // dataBytes non entra in u32 (15,68 GB sul GLM): due word, low/high
+  dv.setUint32(o, g.dataBytes >>> 0, true); o += 4;
+  dv.setUint32(o, Math.floor(g.dataBytes / 2 ** 32), true); o += 4;
   for (let i = 0; i < 32; i++) buf[o + i] = parseInt(sourceSha256.slice(i * 2, i * 2 + 2), 16);
+  o += 32;
+  for (const c of g.classes) {
+    dv.setUint32(o, c.nSlabs, true); o += 4;
+    dv.setUint32(o, c.bytes, true); o += 4;
+  }
   return buf;
 }
 
@@ -95,17 +94,22 @@ export function parseSlabHeader(buf: Uint8Array): SlabHeader | null {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   let o = 8;
   const layoutVersion = dv.getUint32(o, true); o += 4;
-  const nSlabsQ4_1 = dv.getUint32(o, true); o += 4;
-  const nSlabsQ4_0 = dv.getUint32(o, true); o += 4;
-  const slabBytesQ4_1 = dv.getUint32(o, true); o += 4;
-  const slabBytesQ4_0 = dv.getUint32(o, true); o += 4;
+  const nClasses = dv.getUint32(o, true); o += 4;
   const lo = dv.getUint32(o, true); o += 4;
   const hi = dv.getUint32(o, true); o += 4;
   let sha = "";
   for (let i = 0; i < 32; i++) sha += buf[o + i].toString(16).padStart(2, "0");
+  o += 32;
+  // un conteggio assurdo NON deve far leggere fuori dall'header: si rifiuta
+  if (nClasses > SLAB_MAX_CLASSES || o + nClasses * 8 > SLAB_HEADER_BYTES) return null;
+  const classes: Array<{ nSlabs: number; bytes: number }> = [];
+  for (let i = 0; i < nClasses; i++) {
+    const nSlabs = dv.getUint32(o, true); o += 4;
+    const bytes = dv.getUint32(o, true); o += 4;
+    classes.push({ nSlabs, bytes });
+  }
   return {
-    magic: SLAB_MAGIC, layoutVersion, sourceSha256: sha,
-    nSlabsQ4_1, nSlabsQ4_0, slabBytesQ4_1, slabBytesQ4_0,
+    magic: SLAB_MAGIC, layoutVersion, sourceSha256: sha, classes,
     dataBytes: hi * 2 ** 32 + lo,
   };
 }
@@ -115,19 +119,22 @@ export function parseSlabHeader(buf: Uint8Array): SlabHeader | null {
  * rigenerazione DICHIARATO, non un fallimento silenzioso.
  */
 export function slabFileReason(
-  header: SlabHeader | null, fileBytes: number, expectedSha256: string,
+  header: SlabHeader | null, fileBytes: number, expectedSha256: string, g: SlabGeometry,
 ): string | null {
   if (!header) return "header assente o magic sbagliato";
   if (header.layoutVersion !== SLAB_LAYOUT_VERSION) {
     return `versione di layout ${header.layoutVersion} ≠ ${SLAB_LAYOUT_VERSION}`;
   }
   if (header.sourceSha256 !== expectedSha256) return "SHA-256 del GGUF sorgente diverso";
-  if (header.nSlabsQ4_1 !== N_SLABS_Q4_1 || header.nSlabsQ4_0 !== N_SLABS_Q4_0) {
-    return `conteggio slab ${header.nSlabsQ4_1}/${header.nSlabsQ4_0} ≠ ${N_SLABS_Q4_1}/${N_SLABS_Q4_0}`;
+  if (header.classes.length !== g.classes.length) {
+    return `${header.classes.length} size-class ≠ ${g.classes.length} attese`;
   }
-  if (header.slabBytesQ4_1 !== SLAB_DOWN_Q4_1.bytes || header.slabBytesQ4_0 !== SLAB_DOWN_Q4_0.bytes) {
-    return "taglia degli slab diversa dal layout corrente";
+  for (let i = 0; i < g.classes.length; i++) {
+    const h = header.classes[i], w = g.classes[i];
+    if (h.nSlabs !== w.nSlabs || h.bytes !== w.bytes) {
+      return `size-class ${i}: ${h.nSlabs}×${h.bytes} B ≠ ${w.nSlabs}×${w.bytes} attesi`;
+    }
   }
-  if (fileBytes !== SLAB_FILE_BYTES) return `file di ${fileBytes} B ≠ ${SLAB_FILE_BYTES} attesi`;
+  if (fileBytes !== slabFileBytes(g)) return `file di ${fileBytes} B ≠ ${slabFileBytes(g)} attesi`;
   return null; // valido
 }
