@@ -16,10 +16,13 @@ dichiarato, **su tutte e quattro le famiglie**. **Barra: 35B ≥ 30 tok/s**
 35B **22,9 tok/s** come TETTO della sola residency (token pulito 43,585 ms,
 it.2) — la barra richiede per costruzione la leva sul pass.
 
-**STATO DELLA METRICA (it.18)**: 35B **30,74 tok/s**, barra 30 **superata** con
-tutta la dispersione sopra. Due leve, entrambe sul pass: `kfan` (riga 2c,
-22,58 → 28,90) e il router parallelo (riga 2e, 28,90 → 30,74). **Il goal non è
-chiuso**: mancano la riga 4 (la barra su tutte e quattro le famiglie, con
+**STATO DELLA METRICA (it.26)**: 35B **39,15 tok/s**, barra 30 superata del 30%,
+nice-to-have 45 a 5,85 tok/s. **Tre** leve, tutte sul pass: `kfan` (riga 2c,
+22,58 → 28,90), il router parallelo (riga 2e, 28,90 → 30,74) e la rotta split-K
+nel decode (riga 2d, 30,74 → 39,15), gate argmax 39/39 su tutte e tre.
+⚠ `kfan` e la rotta sono **spente di default**: il 39,15 è il numero di bracci
+accesi a caldo per l'A/B, e accenderle è una decisione della riga 4.
+**Il goal non è chiuso**: mancano la riga 4 (la barra su tutte e quattro le famiglie, con
 `decodeContext` dichiarato) e la riga 6, che è un gate di merge oggi **rosso su
 UNA voce**: il GLM b12 fuori banda (docket item 7). Il ktest è tornato verde in
 it.19 — `111 PASS / 0 FAIL` — e il suo rosso non era una regressione ma un
