@@ -269,6 +269,50 @@ export interface ExpertCacheStats {
   } | null;
 }
 
+/**
+ * Tetto di banda del DISPOSITIVO su cui l'OPFS vive, in GiB/s. Sopra questo
+ * valore i byte non sono arrivati dal disco: li ha serviti la page cache del
+ * sistema operativo.
+ *
+ * PROVENIENZA — misurata, e dagli artefatti stessi del bench GLM, non da una
+ * scheda tecnica. Le passate di WARM-UP (che leggono l'intero parco expert per
+ * la prima volta) danno la banda del dispositivo:
+ *
+ *     bench-glm-4090-b12-riga6-2026-08-15  prefill 19,10 GiB / 6,414 s = 2,98 GiB/s
+ *                                          decode   1,51 GiB / 0,460 s = 3,29 GiB/s
+ *     bench-glm-4090-b12-BASELINE-2026-08-16 prefill 19,10 / 8,277 s = 2,31 GiB/s
+ *                                            decode   1,51 / 1,117 s = 1,35 GiB/s
+ *
+ * 4 GiB/s sta sopra tutte e quattro con margine: chi lo supera non ha letto.
+ *
+ * PERCHE' ESISTE (goal engine-velocita-decode, it.20). Il riferimento del
+ * 2026-08-15 dichiarava 15,330 tok/s di decode sul GLM. Le sue REPLICHE
+ * leggevano a **9,55 GiB/s** — cioe' 2,9 volte piu' veloce della sua stessa
+ * passata di warm-up, sullo stesso file e a minuti di distanza. Non era una
+ * proprieta' del motore: era la page cache. Rimisurato oggi a cache fredda, con
+ * il path di lettura BYTE-IDENTICO e gli stessi `bytesRead` cifra per cifra, lo
+ * stesso bench da 11,35 tok/s. Il numero e' oscillato del 26% senza che una
+ * riga di codice cambiasse, e nessun campo dell'artefatto lo diceva.
+ *
+ * Un riferimento che non dichiara il suo regime di lettura non e' un
+ * riferimento: e' una fotografia della RAM libera di quel pomeriggio.
+ */
+export const OPFS_DEVICE_CEILING_GIBS = 4;
+
+/** Regime da cui sono arrivati i byte di una finestra di lettura. */
+export type ReadRegime = "disk" | "os-cache" | "non-misurato";
+
+/**
+ * Banda implicita e regime di una finestra di lettura. `non-misurato` quando la
+ * finestra non ha letto niente o il tempo non e' stato preso — mai NaN nel
+ * JSON, e mai un `regime` inventato su zero byte.
+ */
+export function readBandwidth(bytesRead: number, readMs: number): { gibs: number | null; regime: ReadRegime } {
+  if (!(bytesRead > 0) || !(readMs > 0)) return { gibs: null, regime: "non-misurato" };
+  const gibs = bytesRead / (1 << 30) / (readMs / 1000);
+  return { gibs, regime: gibs > OPFS_DEVICE_CEILING_GIBS ? "os-cache" : "disk" };
+}
+
 interface ClassState {
   layout: SlabLayout;
   buffers: GPUBuffer[];

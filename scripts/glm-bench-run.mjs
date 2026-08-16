@@ -157,6 +157,16 @@ for (;;) {
       `hit ${(100 * d.hitRate).toFixed(2)}% (retention ${d.retention == null ? "n/d" : (100 * d.retention).toFixed(2) + "%"}), stallo ${d.stallMsPerToken.toFixed(1)} ms/token ` +
       `(read ${d.readMsPerToken.toFixed(1)} + pack ${d.packMsPerToken.toFixed(1)} + upload ${d.uploadMsPerToken.toFixed(1)}), ` +
       `residuo ${d.residuoMsPerToken.toFixed(1)} ms/token`);
+    // Il regime di lettura va DETTO a chi guarda la console, non solo scritto
+    // nel JSON: e' la differenza fra 15,3 e 11,3 tok/s sullo stesso codice
+    // (it.20). `os-cache` = questo decode ha letto dalla RAM del sistema, e non
+    // e' confrontabile con un riferimento preso a cache fredda.
+    console.log(
+      `[glmbench] regime di lettura: ${d.readRegime ?? "n/d"}`
+      + (d.readGiBs == null ? "" : ` (${d.readGiBs.toFixed(2)} GiB/s)`)
+      + (d.readRegime === "os-cache"
+        ? " — ATTENZIONE: i byte NON sono arrivati dal disco. Questo decode non e' confrontabile con uno a cache fredda."
+        : ""));
     // gap dalla funzione obiettivo: NON gate, ma obbligatorio nel report (C3a)
     const o = report.objective;
     if (o) {

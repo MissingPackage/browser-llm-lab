@@ -15,7 +15,10 @@ import { GlmOpfsSource } from "../glmsource";
 import { grantedLimits, slabBufferCap } from "../gpulimits";
 import { createEngineDevice } from "../gpudevice";
 import type { GlmTelemetry } from "../glmmodel";
-import { arenaNeeds, modelExpertPark, slabBudgetCtxAware, PARK_Q4_0, PARK_Q4_1, type ExpertCacheStats } from "../residency";
+import {
+  arenaNeeds, modelExpertPark, slabBudgetCtxAware, PARK_Q4_0, PARK_Q4_1,
+  readBandwidth, type ReadRegime, type ExpertCacheStats,
+} from "../residency";
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1 } from "../moe";
 
 interface GoldenPrompt { id: string; promptTokens: number[]; generated: number[] }
@@ -67,19 +70,33 @@ interface PhaseResidency {
   hitsResident: number; hitsPrefetch: number; retention: number | null;
   readMs: number; packMs: number; uploadMs: number; stallMs: number;
   bytesRead: number; bytesUploaded: number;
+  /**
+   * IL REGIME DI LETTURA, DICHIARATO (it.20 di engine-velocita-decode). Senza
+   * questi due campi il riferimento del 2026-08-15 diceva 15,330 tok/s e quello
+   * di oggi 11,35 con lo stesso codice e gli stessi `bytesRead`: la differenza
+   * era che le repliche del primo leggevano dalla page cache a 9,55 GiB/s —
+   * 2,9x la banda che la SUA STESSA passata di warm-up aveva misurato sullo
+   * stesso file. Il numero era una fotografia della RAM libera, e l'artefatto
+   * non lo diceva. Ora lo dice: `readRegime: "os-cache"` e' l'avviso che quel
+   * decode NON e' confrontabile con uno preso a cache fredda.
+   */
+  readGiBs: number | null; readRegime: ReadRegime;
 }
 const residencyDelta = (a: ExpertCacheStats, b: ExpertCacheStats): PhaseResidency => {
   const hits = b.hits - a.hits, misses = b.misses - a.misses;
   const evictions = b.evictions - a.evictions;
   const readMs = b.readMs - a.readMs, packMs = b.packMs - a.packMs, uploadMs = b.uploadMs - a.uploadMs;
+  const bytesRead = b.bytesRead - a.bytesRead;
+  const band = readBandwidth(bytesRead, readMs);
   return {
+    readGiBs: band.gibs, readRegime: band.regime,
     hits, misses, evictions,
     hitRate: hits + misses > 0 ? hits / (hits + misses) : null,
     hitsResident: b.hitsResident - a.hitsResident,
     hitsPrefetch: b.hitsPrefetch - a.hitsPrefetch,
     retention: hits + misses > 0 ? 1 - evictions / (hits + misses) : null,
     readMs, packMs, uploadMs, stallMs: readMs + packMs + uploadMs,
-    bytesRead: b.bytesRead - a.bytesRead, bytesUploaded: b.bytesUploaded - a.bytesUploaded,
+    bytesRead, bytesUploaded: b.bytesUploaded - a.bytesUploaded,
   };
 };
 
@@ -399,6 +416,15 @@ async function main(cfg: Cfg): Promise<void> {
       // quota di wall non spiegata dallo stallo residenza = GPU + sync + CPU
       residuoMsPerToken: median(reps.map((r, i) => r.decode.msPerToken - decRes[i].stallMs / cfg.nGen)),
       evictionsPerToken: median(decRes.map((r) => r.evictions / cfg.nGen)),
+      // IL REGIME DI LETTURA DELLE REPLICHE, nella headline e non solo nelle
+      // fasi: e' il numero che i gate confrontano, quindi e' li' che deve stare
+      // l'avviso. `os-cache` significa che questo decode NON e' confrontabile
+      // con uno preso a cache fredda — v. OPFS_DEVICE_CEILING_GIBS (it.20).
+      ...(() => {
+        const tot = (xs: number[]): number => xs.reduce((a, x) => a + x, 0);
+        const b = readBandwidth(tot(decRes.map((r) => r.bytesRead)), tot(decRes.map((r) => r.readMs)));
+        return { readGiBs: b.gibs, readRegime: b.regime };
+      })(),
     },
     occupancy: { occupied: st.occupied, slots: st.slots },
     // attribuzione senza strumentare il motore: i token a ZERO miss danno il

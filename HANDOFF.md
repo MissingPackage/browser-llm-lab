@@ -12,21 +12,50 @@
     dispersione [32,143-32,732] = [30,55-31,11] tok/s: TUTTA sopra la barra
     gate argmax 39/39 IDENTICI, routingDiff 0
 
-**LA PROSSIMA COSA DA FARE E' MIA, NON TUA: resta UN rosso sul gate di merge.**
-La riga 6 pretende «ktest tutti PASS» (**tornato verde in it.19: `111 PASS /
-0 FAIL`**) e «GLM b12 entro ±5%», che è l'ultimo aperto:
+**IL LAVORO E' FERMO SU UNA DECISIONE TUA — docket item 7, tre uscite.** Non ho
+altro di decidibile su questo goal senza quel ruling: la riga 4 (la barra su
+tutte e quattro le famiglie) e la riga 6 (gate di merge) dipendono entrambe da
+cosa il gate GLM deve confrontare.
 
-- **GLM b12 a 11,35 tok/s** contro i 15,330 del riferimento del 2026-08-15
-  (−26%). **Non è calcolo, e non è it.18**: `missesPerToken` ed
-  `evictionsPerToken` sono identici cifra per cifra, `gpuBusy` pure — si muove
-  solo `readMsPerToken`, **2,47 → 17,5 ms/token (7×)**. Ipotesi prima: page
-  cache dell'host (92 GB di OPFS in `~/.cache/blab-glmroute-profile` contro
-  31 GB di RAM). **Docket item 7, ~1 it per discriminare** con una run ripetuta
-  a caldo contro una a freddo.
+**La riga 6 oggi**: «ktest tutti PASS» **verde** (`111 PASS / 0 FAIL`, it.19),
+«GLM b12 entro ±5%» **rosso — ma il rosso non è del motore.**
 
-**LA DECISIONE CHE E' TUA** (item 7): se il numero di un riferimento dipende
-dalla page cache dell'host, **cosa dichiara quel riferimento**? È funzione
-obiettivo, non meccanismo, e non la tocco da solo.
+**IL RIFERIMENTO DEL GLM SI SMENTISCE DA SOLO** (it.20, diagnosi senza una run
+nuova — sta tutta dentro l'artefatto del 2026-08-15):
+
+    STESSO file, STESSA run
+      warm-up  prefill   19,10 GiB / 6,414 s  =  2,98 GiB/s
+      warm-up  decode     1,51 GiB / 0,460 s  =  3,29 GiB/s
+      REPLICHE decode    24,21 MiB/token / 2,475 ms  =  9,55 GiB/s   <- 2,9x
+
+Lo stesso file, a minuti di distanza, tre volte più veloce della passata che
+l'aveva appena letto. **Nessun disco fa questo**: le repliche non hanno letto,
+hanno ripreso dalla **page cache del sistema operativo**. Oggi, quattro run
+consecutive, warm-up e repliche coincidono a 1,31–2,34 GiB/s e nessuna si è
+scaldata. I 15,330 tok/s non misuravano il motore: misuravano la RAM libera di
+quel pomeriggio.
+
+**Il codice è escluso, verificato**: nessun commit fra `bb3d430` (il commit del
+riferimento) e HEAD tocca `glmsource.ts`/`glmmodel.ts`/`residency.ts`/
+`expertstore.ts`/`glmbench/`, e `bytesRead`/`misses`/`evictions` coincidono
+**cifra per cifra** fra le due date. Stessi byte, stesso codice, sette volte il
+tempo.
+
+**Corretto ciò che era mio**: il regime di lettura ora è **dichiarato** —
+`readGiBs`/`readRegime` (`disk` | `os-cache` | `non-misurato`) in ogni fase del
+report GLM e **nella headline**, che è il livello che i gate leggono; il runner
+lo stampa e su `os-cache` avvisa in chiaro. Soglia `OPFS_DEVICE_CEILING_GIBS = 4`
+con la provenienza misurata accanto. Verificato su run vera:
+`readGiBs 1,336 · readRegime "disk"`.
+
+**LA DECISIONE CHE E' TUA**: la riga 6 confronta il GLM con numeri presi senza
+sapere in quale regime. Riprendere il riferimento a cache fredda (perde la
+storia) · rendere il gate condizionale al regime (la conserva, ma serve un
+riferimento per regime) · spostare il gate su `gpuBusy`, che fra le due date si
+muove dello 0,8% invece che del 26% (misura il motore, ma **il 57% del token GLM
+sta fuori dalla GPU**, quindi dichiarerebbe sano un motore che l'utente vede
+lento). La mia lettura: la seconda, poi la prima per il solo b12. Le tre uscite
+per esteso stanno nell'item.
 
 **IL ROSSO DEL KTEST NON ERA UNA REGRESSIONE — era un file con un nome che
 mentiva** (it.19, chiuso senza il bisect che avevo stimato 1-2 iterazioni).

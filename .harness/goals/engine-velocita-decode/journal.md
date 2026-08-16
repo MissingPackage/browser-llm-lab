@@ -1470,3 +1470,92 @@ un riferimento `31/62` — e ho letto «accept-rate diverso» invece di
 - Le run di conformance/bench NON sono state rieseguite dopo il rename dello
   scratch: il path cambia in tre file e il test statico lo pinna, ma la prova
   d'esecuzione arriverà con la prossima run che usa quei runner.
+
+---
+
+## it.20 — il riferimento del GLM si smentisce da solo: leggeva dalla RAM
+
+**Il rosso non è una regressione del motore.** Il riferimento del 2026-08-15
+dichiarava 15,330 tok/s di decode; oggi lo stesso bench ne dà 11,26–11,59 su
+quattro run. La differenza non è codice: **le repliche del riferimento
+leggevano dalla page cache del sistema operativo.**
+
+### La prova sta dentro l'artefatto del riferimento
+
+    riferimento 2026-08-15, STESSO file, STESSA run
+      warm-up  prefill  19,10 GiB / 6,414 s  =  2,98 GiB/s
+      warm-up  decode    1,51 GiB / 0,460 s  =  3,29 GiB/s
+      REPLICHE decode   24,21 MiB/token / 2,475 ms  =  9,55 GiB/s   <-- 2,9x
+
+Lo stesso file, a minuti di distanza, tre volte più veloce della passata che
+l'aveva appena letto. **Nessun disco fa questo.** Le repliche non hanno letto:
+hanno ripreso dalla page cache ciò che il warm-up ci aveva messo.
+
+Oggi, quattro run consecutive, warm-up e repliche coincidono: **1,31–2,34
+GiB/s**, cioè la banda del dispositivo. Nessuna delle quattro si è scaldata —
+il working set eccede la cache disponibile su questo host adesso.
+
+### I tre fatti che escludono il codice, e sono stati verificati, non assunti
+
+1. **Nessun commit ha toccato il path di lettura** fra `bb3d430` (il commit del
+   riferimento) e HEAD: `git diff --stat` non nomina `glmsource.ts`,
+   `glmmodel.ts`, `residency.ts`, `expertstore.ts` né `glmbench/`. Il codice che
+   esegue `readMs` è **byte-identico**.
+2. **`bytesRead` è identico cifra per cifra** sulle due date: 20.512.309.248 nel
+   prefill, 1.624.375.296 nel decode. Stessi byte, stesse `misses` (4,78125/
+   token), stesse `evictions`.
+3. Il braccio con e senza it.18 dà 11,33 contro 11,35: neanche la leva del
+   router c'entra.
+
+**Stessi byte, stesso codice, sette volte il tempo.** Restava solo da dove
+arrivavano.
+
+### La correzione: il regime di lettura si DICHIARA
+
+Il difetto non è che la page cache aiuti — è che **un gate di merge confrontava
+un numero che dipendeva dalla RAM libera del pomeriggio, e nessun campo
+dell'artefatto lo diceva**. Un riferimento che non dichiara il suo regime di
+lettura non è un riferimento.
+
+- `readBandwidth(bytesRead, readMs)` in `residency.ts`, dove vive l'aritmetica
+  della cache. Restituisce `{gibs, regime}` con `regime ∈ disk | os-cache |
+  non-misurato` (mai NaN nel JSON, mai un regime inventato su zero byte).
+- `OPFS_DEVICE_CEILING_GIBS = 4`, **con la provenienza scritta accanto**: le
+  quattro passate di warm-up misurate sui due artefatti (2,31–3,29 GiB/s). Non
+  una scheda tecnica — i numeri di questo host.
+- `readGiBs`/`readRegime` in ogni fase del report GLM **e nella headline**, che
+  è il livello che i gate leggono.
+- Il runner lo stampa, e su `os-cache` aggiunge l'avviso in chiaro.
+- `tests/engine-read-regime.test.ts`, 5 casi che portano dentro **i numeri veri
+  dei due artefatti**: le repliche del riferimento devono uscire `os-cache`,
+  quelle di oggi `disk`, i quattro warm-up `disk`. Chi tocca la soglia deve
+  farli fallire o aggiornarli con la sua ragione.
+
+### EVIDENZA
+
+- `results/engine/bench-glm-4090-b12-readregime-2026-08-16.json`, run vera:
+  headline **`readGiBs 1,336 · readRegime "disk"`**, warm-up prefill 2,34 e
+  decode 1,31, entrambi `disk`. Console:
+  `[glmbench] regime di lettura: disk (1.34 GiB/s)`.
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1099 passed | 10 skipped**
+  (erano 1094: +5)
+- decode 11,258 tok/s: la quarta run di oggi, coerente con 11,26/11,33/11,35/11,59
+
+### COSA RESTA AL PI, e perché non l'ho deciso io
+
+Il meccanismo è chiuso; **cosa farne è funzione obiettivo**. Il gate della riga 6
+dice «GLM b12 optimistic entro ±5% di 13,172 / 31,26 / 14,74», e quei numeri —
+come i 15,330 che li hanno superati — sono stati presi senza sapere in quale
+regime. Le opzioni stanno nel docket item 7. **Non tocco un gate che il PI ha
+scritto.**
+
+### NON VERIFICATO
+
+- Non ho misurato il GLM a cache **calda per costruzione** (una run che rilegge
+  subito ciò che ha appena letto): quattro run consecutive non si sono scaldate
+  da sole, ma non ho forzato la condizione. Se il PI vuole un riferimento
+  `os-cache` riproducibile, quella misura va progettata.
+- Il q35conf non ha ancora la stessa dichiarazione: lì `readMs` è ~0 per
+  costruzione (la fetch è asincrona e sta fuori dalla finestra, nota già in
+  `residency.ts:251`), quindi il campo direbbe `non-misurato`. Va deciso se
+  vale comunque metterlo per uniformità.

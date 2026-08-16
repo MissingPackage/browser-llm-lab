@@ -384,4 +384,55 @@ e 11,35 è fuori.
 **Quello che farei senza risposta**: la run a due bracci del punto (a), perché
 costa poco e taglia due ipotesi su tre.
 
+> **MECCANISMO CHIUSO in it.20 — è la (a), e la prova sta dentro l'artefatto del
+> riferimento.** Non è servita nessuna run nuova per diagnosticarlo:
+>
+>     riferimento 2026-08-15, STESSO file, STESSA run
+>       warm-up  prefill   19,10 GiB / 6,414 s  =  2,98 GiB/s
+>       warm-up  decode     1,51 GiB / 0,460 s  =  3,29 GiB/s
+>       REPLICHE decode    24,21 MiB/token / 2,475 ms  =  9,55 GiB/s   <- 2,9x
+>
+> Lo stesso file, a minuti di distanza, tre volte più veloce della passata che
+> l'aveva appena letto: **le repliche non hanno letto, hanno ripreso dalla page
+> cache**. Oggi, su quattro run consecutive, warm-up e repliche coincidono a
+> 1,31–2,34 GiB/s — la banda del dispositivo — e nessuna si è scaldata.
+>
+> **Il codice è escluso, verificato**: nessun commit fra `bb3d430` e HEAD tocca
+> `glmsource.ts`/`glmmodel.ts`/`residency.ts`/`expertstore.ts`/`glmbench/`, e
+> `bytesRead`/`misses`/`evictions` coincidono cifra per cifra fra le due date.
+>
+> **Corretto ciò che era mio da correggere**: il regime di lettura ora è
+> **dichiarato** nell'artefatto (`readGiBs`/`readRegime` per fase e in headline)
+> e stampato dal runner, con la soglia `OPFS_DEVICE_CEILING_GIBS` e la sua
+> provenienza misurata. Cinque casi in `tests/engine-read-regime.test.ts`
+> portano dentro i numeri veri dei due artefatti. Verificato su run vera:
+> `readGiBs 1,336 · readRegime "disk"`
+> (`bench-glm-4090-b12-readregime-2026-08-16.json`).
+
+**QUELLO CHE RESTA E' TUO, ed è la sola cosa che non decido: il gate.** La riga 6
+pretende «GLM b12 optimistic entro ±5% di 13,172 / 31,26 / 14,74». Quei numeri —
+e i 15,330 che li hanno superati il 2026-08-15 — sono stati presi **senza che
+nessuno sapesse in quale regime**. Tre uscite:
+
+1. **Il riferimento si riprende a cache fredda** e la banda ±5% vale da lì. È
+   l'unica che rende il gate riproducibile su qualunque host, ma **butta via il
+   confronto storico**: tutti i numeri GLM precedenti diventano non
+   confrontabili, e va detto nel consuntivo invece che nascosto.
+2. **Il gate diventa condizionale al regime**: si confronta solo con riferimenti
+   dello stesso `readRegime`, e una run `os-cache` non può chiudere un gate.
+   Conserva la storia, ma da oggi in poi serve un riferimento per regime.
+3. **Il gate smette di guardare il wall del decode** e guarda `gpuBusy`, che fra
+   le due date si muove dello 0,8% (38,5 → 38,9 ms/token) invece che del 26%.
+   Misura il motore invece dell'host — ma smette di misurare ciò che l'utente
+   sente, che è il wall.
+
+**La mia lettura, che non è un ruling**: la **2**, e la 1 subito dopo per il solo
+GLM b12. La 3 è tecnicamente la più pulita e per questo la più pericolosa: il
+57% del token GLM sta **fuori** dalla GPU, e un gate su `gpuBusy` dichiarerebbe
+sano un motore che l'utente vede lento.
+
+**Perché non la decido io**: è la definizione di cosa il progetto promette di
+non far peggiorare — la funzione obiettivo, non il meccanismo. E il ruling
+permanente sulle metriche («non peggiorano mai, banda ±5%») l'hai scritto tu.
+
 **RULING:** _
