@@ -610,3 +610,40 @@ dichiarare passato nessun gate.
 > sporco tornerà a contare.
 
 **RULING:** deprioritizzato (PI, 2026-08-16)
+
+## item 10 — che formato accetta il motore sul disco (io → PI, it.41)
+
+**Contesto**: `packExpertSlab` costa **7,11 s per sessione** sul 35B (misurato,
+it.40) e il meccanismo per saltarlo esiste già nel modulo condiviso — il GLM lo
+usa da un goal intero, il path Qwen no (it.41). Adottarlo richiede uno store di
+slab, e lo store pone una domanda di prodotto.
+
+**Misura che toglie il trade-off** (it.40): lo slab pesa **1,0005×** il GGUF —
+19,45 → 19,46 GiB, dieci MiB su venti giga. Il repack riordina i byte, non li
+aggiunge. Solo il q6_K si allinga a multipli di 4 (+0,95% su tre layer).
+
+**RULING (PI, 2026-08-16):**
+
+> «accetta entrambi e converte al primo caricamento.»
+
+**Applicato così, e va scritto per esteso perché risolve l'obiezione che il PI
+aveva fatto** («la mia idea era avere lo slab al posto del gguf, così non
+chiediamo alle persone il doppio dello spazio»):
+
+1. Il motore accetta **un file slab direttamente**: chi tiene allo spazio
+   converte una volta, tiene solo lo slab, e il GGUF non gli serve più.
+2. Il motore accetta **un GGUF** e lo converte al primo caricamento: è la via
+   comoda, ed è esattamente ciò che `ensureSlabs` già fa per il GLM
+   (temporaneo + rename, quindi un'interruzione non lascia un file valido a
+   metà).
+
+**Quindi la doppia copia è transitoria e sotto il controllo dell'utente, non
+imposta.** Era l'obiezione giusta, e la misura di it.40 la scioglie: dato che lo
+slab pesa quanto il GGUF, sostituirlo è a costo zero.
+
+**La sotto-decisione che NON porto al PI perché è meccanismo**: dopo la
+conversione il motore **non cancella** il GGUF dell'utente — dirà che può
+farlo, non lo farà. Cancellare il file di un modello non è una cosa che un
+motore fa da solo, e il costo di sbagliarsi è un download da 19 GiB.
+
+**RULING:** entrambi i formati, conversione al primo caricamento (PI, 2026-08-16)
