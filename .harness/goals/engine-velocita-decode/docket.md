@@ -435,7 +435,31 @@ sano un motore che l'utente vede lento.
 non far peggiorare — la funzione obiettivo, non il meccanismo. E il ruling
 permanente sulle metriche («non peggiorano mai, banda ±5%») l'hai scritto tu.
 
-**RULING:** _
+> **RULING (PI, 2026-08-16)**, dato come priorità e applicato così:
+>
+> > «Per aiutarti a prioritizzare il lavoro cerca la leva che ci porti il più
+> > vicino possibile ai 45 tok/s sul 35B. GLM al momento è secondario. È un
+> > modello di 4 generazioni fa, dovremo comunque buttarlo e passare al 5.2 o al
+> > nuovo 5.3 (quando avrà i pesi disponibili). Se funziona bene, altrimenti non
+> > sprecherei troppo budget per lui.»
+>
+> **Conseguenza sui tre item aperti**, e vale per tutti e tre insieme perché la
+> priorità è una sola: **il bersaglio è il decode CALDO del 35B**.
+>
+> - **item 7 (gate GLM)**: il GLM smette di essere un gate di risultato e resta
+>   un gate di **non-regressione di correttezza**. Nessun ri-baseline, nessuna
+>   run di banda: `readRegime` è già nell'artefatto, quindi chi in futuro
+>   confronterà due numeri GLM saprà da sé se sono confrontabili. Budget: zero.
+> - **item 8 (riga 2b)** e **item 9 (riga 3)**: entrambe vivono nel regime
+>   **sporco** (miss, repair, replay). Il numero dei 45 tok/s è misurato **a
+>   caldo, con zero miss**: quelle due righe **non lo toccano**. Deprioritizzate
+>   — la 2b chiusa sulla misura (la risposta al «se» era no), la 3 sospesa.
+>
+> **Questo non chiude i tre item come questioni**: li mette fuori dal percorso
+> verso la barra. Se un giorno il regime sporco torna a contare (chat vera,
+> arena stretta), si riprendono da qui con le misure già fatte.
+
+**RULING:** v. sopra (PI, 2026-08-16)
 
 ## item 8 — il done-when della riga 2b non è raggiungibile sul trasporto che ha (io → PI, it.32)
 
@@ -512,7 +536,14 @@ non infilato in una riga che parlava di raggruppare richieste HTTP.
 > **Il collo non è nel come si chiedono i byte.** È dentro il path del motore, e
 > lì la riga 2b non ha più niente da dire: quel pezzo è la riga 3.
 
-**RULING:** _
+> **RULING (PI, 2026-08-16) — DEPRIORITIZZATA.** La priorità data è «la leva che
+> ci porti più vicino ai 45 tok/s sul 35B». Questa riga vive nel regime SPORCO e
+> sul LOAD; il numero dei 45 è misurato **a caldo con zero miss**, quindi la riga
+> non lo tocca. Chiusa sulla misura: il «se» del ruling precedente ha avuto la
+> sua risposta (no, su questo trasporto), e la sorgente OPFS resta un goal suo se
+> e quando il caricamento tornerà a essere la priorità.
+
+**RULING:** deprioritizzata, chiusa sulla misura (PI, 2026-08-16)
 
 ## item 9 — il done-when della riga 3 è degenere sull'artefatto che nomina (io → PI, it.37)
 
@@ -571,4 +602,11 @@ scegliere quanto è difficile il mio compito.
 — contro quello a 12 GiB non c'è niente da eseguire — e riporto i numeri senza
 dichiarare passato nessun gate.
 
-**RULING:** _
+> **RULING (PI, 2026-08-16) — DEPRIORITIZZATO.** La priorità data è «la leva che
+> ci porti più vicino ai 45 tok/s sul 35B». La riga 3 vive nel regime SPORCO,
+> e il numero dei 45 è misurato **a caldo con zero miss**: la riga non lo tocca.
+> Resta chiusa sulla misura — i cinque esperimenti hanno risposto al «se» del
+> ruling precedente, e la risposta era no. Si riprende da qui se il regime
+> sporco tornerà a contare.
+
+**RULING:** deprioritizzato (PI, 2026-08-16)
