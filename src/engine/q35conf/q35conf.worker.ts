@@ -112,7 +112,48 @@ interface Cfg {
    * che divergono.
    */
   splitk?: boolean;
+  /**
+   * SONDA DEI LOGIT (riga 2d, it.25): per ogni token registra i DUE candidati
+   * di testa con i loro valori. Serve a discriminare, quando l'argmax di due
+   * bracci diverge, fra le uniche due spiegazioni possibili:
+   *
+   *   (1) PAREGGIO RAVVICINATO — i primi due logit distano meno dell'errore di
+   *       ri-associazione f32, e il flip e' fisica: la rotta split-K spezza K
+   *       in fette e le ricombina, quindi l'ordine delle somme cambia per
+   *       costruzione e la bit-identita' non e' pretendibile;
+   *   (2) BUG — un indice sui parziali, una fetta letta due volte: allora i
+   *       logit non si somigliano affatto e il tempo del braccio e' il tempo di
+   *       un motore rotto.
+   *
+   * Le due si distinguono a colpo d'occhio: in (1) il top-1 di un braccio e' il
+   * top-2 dell'altro e il divario e' minuscolo; in (2) no.
+   *
+   * COSTA ZERO READBACK: `step(..., read = true)` i logit li legge gia', e
+   * `lastLogits()` li espone. Costa una scansione CPU del vocabolario per
+   * token, che entra nel `ms` misurato — quindi **con la sonda accesa il tempo
+   * non e' un riferimento**, ed e' per questo che e' un flag a parte e non
+   * sempre accesa.
+   */
+  logitProbe?: boolean;
 }
+
+/**
+ * I DUE candidati di testa di un vettore di logit, con i loro valori. Una
+ * passata sola, nessuna allocazione: il vocabolario e' ~150k e questa gira per
+ * token.
+ *
+ * `null` quando i logit non ci sono (passata senza readback): un campo assente
+ * dichiarato batte uno zero che sembra una misura.
+ */
+const top2Of = (lg: Float32Array | null): { i1: number; v1: number; i2: number; v2: number } | null => {
+  if (!lg || lg.length < 2) return null;
+  let i1 = 0, v1 = -Infinity, i2 = -1, v2 = -Infinity;
+  for (let i = 0; i < lg.length; i++) {
+    const v = lg[i];
+    if (v > v1) { i2 = i1; v2 = v1; i1 = i; v1 = v; } else if (v > v2) { i2 = i; v2 = v; }
+  }
+  return { i1, v1, i2, v2 };
+};
 
 /** riga di report di UNA passata del gate 3c: i per-token accanto ai totali. */
 const pass2json = (
@@ -554,7 +595,10 @@ async function main(cfg: Cfg): Promise<void> {
     const p = golden.prompts[0];
     const tokens = [...p.promptTokens, ...p.generated];
     const runPass = async (optimistic: boolean, kfan = false, splitk = false): Promise<{
-      argmax: number[]; submits: number; readbacks: number; hits: number; misses: number;
+      argmax: number[];
+      /** sonda dei logit (it.25): vuoto senza `cfg.logitProbe`. */
+      top2: Array<{ i1: number; v1: number; i2: number; v2: number } | null>;
+      submits: number; readbacks: number; hits: number; misses: number;
       routing: Record<string, number>; ms: number; error: string | null;
       dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
       fetchRepairMs: number; fetchRepairCalls: number; fetchRepairBytes: number;
@@ -584,6 +628,7 @@ async function main(cfg: Cfg): Promise<void> {
       const g0 = model.gpuTimeStats ? model.gpuTimeStats() : null;
       const t = performance.now();
       const argmax: number[] = [];
+      const top2: Array<{ i1: number; v1: number; i2: number; v2: number } | null> = [];
       // Un token SPORCO fa alzare `step` (degrado definito, I2: non si campiona
       // mai). Qui si CATTURA invece di far morire il run: la passata si ferma
       // dove si è rotta e il report esce lo stesso col perché — un gate che
@@ -593,6 +638,7 @@ async function main(cfg: Cfg): Promise<void> {
       try {
         for (let i = 0; i < tokens.length; i++) {
           argmax.push(await model.step(tokens[i], i, true));
+          if (cfg.logitProbe) top2.push(top2Of(model.lastLogits()));
           if (i % 8 === 0) post({ type: "tick", msg: `${optimistic ? "optimistic" : "sync"} ${i}/${tokens.length}` });
         }
       } catch (e) {
@@ -617,7 +663,7 @@ async function main(cfg: Cfg): Promise<void> {
         if (dlt > 0) routing[k] = dlt;
       }
       return {
-        argmax, submits: p1.submits - p0.submits, readbacks: p1.readbacks - p0.readbacks,
+        argmax, top2, submits: p1.submits - p0.submits, readbacks: p1.readbacks - p0.readbacks,
         hits: m1.hits - m0.hits, misses: m1.misses - m0.misses, routing, ms, error,
         dirtyTokens: p1.dirtyTokens - p0.dirtyTokens, replays: p1.replays - p0.replays,
         replayLayers: p1.replayLayers - p0.replayLayers, repairMs: p1.repairMs - p0.repairMs,
@@ -747,6 +793,41 @@ async function main(cfg: Cfg): Promise<void> {
             : "optimistic-warm (rotta OFF) vs optimistic-warm (rotta ON) — SENZA kfan",
           argmaxEqual: eq, argmaxCompared: nS, argmaxIdentical: nS > 0 && eq === nS,
           firstDivergentToken: firstDiff < 0 ? null : firstDiff,
+          // LA DIAGNOSI DEL FLIP (it.25). Con la sonda accesa, per OGNI token
+          // divergente si riportano i due candidati di testa nei due bracci.
+          // La lettura e' meccanica e non richiede giudizio:
+          //   - `swapped: true` + `gapRelOff` minuscolo  ⇒ pareggio ravvicinato,
+          //     cioe' il flip e' la ri-associazione f32 che la rotta introduce
+          //     per costruzione (K spezzato in fette e ricombinato);
+          //   - `swapped: false` oppure un divario largo ⇒ BUG: i due bracci
+          //     non stanno calcolando la stessa cosa.
+          // `gapRel` e' il divario fra i primi due logit diviso la scala del
+          // top-1: e' adimensionale, quindi confrontabile fra token.
+          divergences: (() => {
+            const off = (kfanWarm ?? optim).top2, on = splitkWarm.top2;
+            if (off.length === 0 || on.length === 0) return null;
+            const out: unknown[] = [];
+            for (let i = 0; i < nS; i++) {
+              if (base[i] === splitkWarm.argmax[i]) continue;
+              const a = off[i], b = on[i];
+              if (!a || !b) { out.push({ token: i, note: "sonda assente su questo token" }); continue; }
+              const rel = (t: { i1: number; v1: number; i2: number; v2: number }): number =>
+                Math.abs(t.v1 - t.v2) / Math.max(Math.abs(t.v1), 1e-6);
+              out.push({
+                token: i,
+                off: { top1: a.i1, top2: a.i2, v1: a.v1, v2: a.v2, gapRel: rel(a) },
+                on: { top1: b.i1, top2: b.i2, v1: b.v1, v2: b.v2, gapRel: rel(b) },
+                // il segno inequivocabile del pareggio: i due bracci scelgono
+                // l'uno il secondo dell'altro
+                swapped: a.i1 === b.i2 && a.i2 === b.i1,
+                // quanto si muove il logit del MEDESIMO candidato fra i bracci:
+                // e' l'ampiezza della perturbazione che la rotta introduce
+                deltaTop1Rel: Math.abs(a.v1 - (a.i1 === b.i1 ? b.v1 : b.v2))
+                  / Math.max(Math.abs(a.v1), 1e-6),
+              });
+            }
+            return out;
+          })(),
           msPerTokenSplitkOff: msBase ? msBase.median : null,
           msPerTokenSplitkOn: msSplitk ? msSplitk.median : null,
           speedup: msBase && msSplitk ? msBase.median / msSplitk.median : null,

@@ -82,6 +82,11 @@ if (process.argv.includes("--kfan")) { qs.set("optimistic", "1"); qs.set("kfan",
 if (process.argv.includes("--splitk")) {
   qs.set("optimistic", "1"); qs.set("kfan", "1"); qs.set("splitk", "1");
 }
+// SONDA DEI LOGIT (riga 2d, it.25): i due candidati di testa per token, per
+// discriminare un flip di argmax fra pareggio ravvicinato e bug. PERTURBA il
+// tempo (una scansione del vocabolario per token entra nel ms misurato):
+// con questo flag il report NON e' un riferimento di velocita'.
+if (process.argv.includes("--logit-probe")) qs.set("logitprobe", "1");
 // MISURA della fase 4-ter: quanto costa lo snapshot dello stato ricorrente
 // (62,8 MiB per token). Rompe il replay: solo a cache calda.
 if (process.argv.includes("--no-snapshot")) qs.set("nosnap", "1");

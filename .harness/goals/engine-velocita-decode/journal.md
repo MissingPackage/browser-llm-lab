@@ -1948,3 +1948,103 @@ non la pretende. Ma un flip di argmax ammette due spiegazioni opposte:
   non entra in nessun consuntivo.
 - 4B e 9B non sono stati toccati: la leva è globale per costruzione (decide la
   shape, non il modello) ma non è stata misurata altrove.
+
+---
+
+## it.25 — non è un pareggio: è la quantizzazione delle attivazioni
+
+**La domanda di it.24 aveva due uscite — pareggio ravvicinato o bug — e la
+risposta è: nessuna delle due.**
+
+### La misura
+
+Sonda dei logit accesa (`--logit-probe`, costa zero readback: `step(..., true)`
+i logit li legge già). Token 21, l'unico divergente su 39:
+
+    braccio OFF (kfan)          top1 = 248046  v = 17,527882
+                                top2 =   2899  v = 17,251318   gapRel 1,58e-2
+    braccio ON  (kfan+rotta)    top1 =   2899  v = 17,169683
+                                top2 = 248046  v = 17,099520   gapRel 4,09e-3
+    swapped = true              deltaTop1Rel = 2,44e-2
+
+### Perché `swapped: true` da solo avrebbe ingannato
+
+I due bracci scelgono l'uno il secondo dell'altro: è il segno che avevo scritto
+come «pareggio ravvicinato». **Ma i numeri accanto lo smentiscono.**
+
+    divario da ribaltare (braccio OFF)      0,276564   (1,58%)
+    spostamento del candidato 248046        0,428362   (2,44%)
+
+**La perturbazione è PIÙ GRANDE del divario che deve ribaltare.** Non è un
+pareggio che oscilla: è uno spostamento sistematico che lo supera. Con un
+divario dell'1,58% — largo, non minuscolo — un flip non è fisica.
+
+*Se avessi guardato solo `swapped` avrei chiuso «è un pareggio, si accetta» e
+avrei promosso un braccio che sposta i logit del 2,4%. È la ragione per cui il
+campo `deltaTop1Rel` sta accanto a `swapped` e non da solo.*
+
+### E non è nemmeno un bug: è una proprietà DICHIARATA della rotta
+
+Una ri-associazione f32 su K=2048 dà errori relativi dell'ordine di 1e-6..1e-4.
+**2,4e-2 è due-tre ordini di grandezza sopra.** La spiegazione non è l'ordine
+delle somme — è che la via `idot` **quantizza le attivazioni a int8**
+(`prefillQuantXQ8Wgsl`): `pesi × q8_0`. Il GEMV legacy moltiplica attivazioni
+f32 per pesi int8; la rotta quantizza anche la x. Un errore di ~1/256 per
+elemento, accumulato su 30 layer, produce esattamente questo ordine di
+grandezza.
+
+**Il banco lo sapeva già e lo dichiarava**: `ttRunner.ts:568` usa una tolleranza
+di **2e-2 per i bracci `splitk-idot`** contro 1e-3 per tutti gli altri. Venti
+volte più larga, e per questa ragione. Il numero era in casa e non l'avevo
+collegato.
+
+### LA VIA D'USCITA È GIÀ MISURATA, e costa il 2%
+
+it.23 aveva escluso `via: "f32"` scrivendo «nel decode non è mai stata
+misurata». **Sbagliato: it.21 l'ha misurata**, ed era nella stessa tabella che
+ho letto per decidere.
+
+    K2048 N=8192   base-decode  0,1324    splitk-idot 0,0340 (3,89x)
+                                          splitk-f32  0,0348 (3,80x)
+    K2048 N=4096   base-decode  0,1616    splitk-idot 0,0489 (3,30x)
+                                          splitk-f32  0,0497 (3,25x)
+
+**La forma f32 costa il 2,4% in più dell'intera e non quantizza le
+attivazioni.** Se l'ipotesi regge, prende quasi tutto il guadagno senza il
+difetto — e il gate argmax dovrebbe tornare 39/39.
+
+*Sesta inferenza non verificata di questo goal, e stavolta l'ho scritta io in
+un commento di codice ieri.* Il correttivo è sempre lo stesso: il numero c'era.
+
+### LA PROSSIMA ITERAZIONE — l'esperimento che chiude la domanda
+
+Instradare `via: "f32"` nel decode (il ramo esiste già in `gemvB`, va portato in
+`gemv`: niente quantX, due dispatch invece di tre) e rifare l'A/B.
+
+- **argmax 39/39** ⇒ ipotesi confermata: la divergenza era la quantizzazione
+  delle attivazioni, la rotta è corretta, e si prende la f32.
+- **ancora 38/39** ⇒ l'ipotesi cade e torna in gioco il bug d'indicizzazione:
+  allora il passo dopo è la conformance top-1 contro l'oracolo.
+
+**In nessuno dei due casi i 36,55 tok/s di it.24 diventano un risultato**: quel
+braccio quantizza le attivazioni e il suo gate è rosso.
+
+### La domanda che resta al PI, e che nasce da qui
+
+Se la f32 passa il gate, la rotta intera resta **più veloce del 2,4%** ma cambia
+i token. La domanda non è di meccanismo: **il decode può quantizzare le
+attivazioni?** Il prefill lo fa già ed è passato per il gate giusto (top-1 vs
+oracolo ≥ 1012/1024). Se la risposta è sì, la via intera va misurata con QUEL
+gate e non con l'argmax fra bracci. Non la decido io: è la definizione di cosa
+il motore promette di calcolare. **La registro qui e la porto nel docket solo se
+la f32 fallisce** — se passa, la domanda diventa un'ottimizzazione futura da
+2,4% e non una decisione bloccante.
+
+### EVIDENZA
+
+- `results/engine/q35-splitk-logitprobe-2026-08-16.json` — host quiescente,
+  4 repliche interleavate. **Il tempo di questa run NON è un riferimento**: la
+  sonda scansiona il vocabolario per token e quel costo entra nel `ms`.
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1105 passed | 10 skipped**
+- Il flag `--logit-probe` è a parte proprio perché perturba: le run di velocità
+  restano pulite.
