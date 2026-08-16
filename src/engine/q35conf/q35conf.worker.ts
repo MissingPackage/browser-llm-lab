@@ -10,10 +10,11 @@
 import { createEngineDevice } from "../gpudevice";
 import { parseGguf, type GgufTensorInfo } from "../gguf";
 import { createQ35GpuModel, q35TensorBytes } from "../q35gpumodel";
-import { q35MoeConfig } from "../q35expertstore";
+import { q35MoeConfig, Q35_SLAB_BASE_URL } from "../q35expertstore";
+import { httpSlabDeps } from "../slabsource";
 import { arenaNeeds } from "../residency";
 import { validateQwen35 } from "../q35shape";
-import { ggufRangeReader, takeGgufRangeStats, effectiveParallelism } from "../ggufrange";
+import { ggufRangeReader, httpFileBytes, takeGgufRangeStats, effectiveParallelism } from "../ggufrange";
 
 interface GoldenPos { argmax: number; top: Array<[number, number]> }
 interface GoldenPrompt { id: string; file: string; promptTokens: number[]; generated: number[]; positions: GoldenPos[] }
@@ -259,11 +260,12 @@ async function ioProbe(cfg: Cfg): Promise<void> {
   // cinque i lettori — ha preso l'errore invece di lasciar misurare letture
   // vuote a banda infinita.
   const BASE = 64 * 1024 * 1024;
-  const probe1 = await fetch(URL_GGUF, { headers: { Range: "bytes=0-0" } });
-  const cr = probe1.headers.get("Content-Range") ?? "";
-  const size = Number(/\/(\d+)$/.exec(cr)?.[1] ?? 0);
-  if (!(size > BASE + RANGE_BYTES)) {
-    throw new Error(`io-probe: taglia del file non leggibile da Content-Range ("${cr}")`);
+  // la taglia la chiede `httpFileBytes` (ggufrange), che e' la stessa porta da
+  // cui la sorgente slab decide se il file e' quello giusto: era la seconda
+  // copia di questa Range da un byte, e alla seconda si fattorizza.
+  const size = await httpFileBytes(URL_GGUF);
+  if (size === null || !(size > BASE + RANGE_BYTES)) {
+    throw new Error(`io-probe: taglia di ${URL_GGUF} non leggibile dal server (${size ?? "nessun Content-Range"})`);
   }
   const span = size - BASE - RANGE_BYTES;
   const offs = Array.from({ length: N }, (_, i) => BASE + Math.floor((i * span) / N));
@@ -511,6 +513,13 @@ async function main(cfg: Cfg): Promise<void> {
     info,
     read: (name) => range(f.dataOffset + info(name).offset, q35TensorBytes(info(name))),
     readRange: (name, off, len) => range(f.dataOffset + info(name).offset + off, len),
+    // IL FILE SLAB GIA' IMPACCHETTATO (it.50), se e' stato convertito: un miss
+    // e' UNA richiesta Range invece di tre, senza `packExpertSlab` nel path
+    // caldo. Assente o di un altro GGUF ⇒ si legge grezzo come prima, e il
+    // motivo finisce in `moe.slabSource` dell'artefatto — un bench che non
+    // dichiara da quale file ha letto non dice cosa ha misurato.
+    slabs: httpSlabDeps(Q35_SLAB_BASE_URL),
+    sourceSha256: M.sha,
   }, ctxMax, arenaBudgetBytes, {
     routerShadow: cfg.routerShadow === true,
     select: cfg.optTrace === true ? "optimistic" : "cpu",

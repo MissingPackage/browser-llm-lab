@@ -95,10 +95,13 @@ describe("35B — la scomposizione del repair e' dichiarata, scritta e propagata
 
   it("[3] le DUE await della fetch sono entrambe misurate, e separatamente (C0-3)", () => {
     const src = code(MODEL);
-    // i siti: `await Promise.all(...readExpert...)`. Sono due, e restano due:
+    // i siti: `await Promise.all(...readMiss...)`. Sono due, e restano due:
     // il repair (miss scoperti a fine pass) e prepLayer (miss noti prima del
     // layer). Un terzo sito non misurato sarebbe un buco nuovo.
-    const sites = src.split("\n").filter((l) => l.includes("Promise.all") && l.includes("readExpert"));
+    // `readMiss` era `readExpert` fino a it.50: adesso e' la porta UNICA che
+    // sceglie fra lo slab gia' impacchettato e i tre tensori grezzi, e i due
+    // siti non sanno piu' quale dei due stanno leggendo.
+    const sites = src.split("\n").filter((l) => l.includes("Promise.all") && l.includes("readMiss"));
     expect(sites.length, "i siti di fetch degli expert non sono piu' due").toBe(2);
     // e i due contatori sono distinti: sommarli renderebbe illeggibile quale
     // dei due regimi paga, che e' la ragione per cui sono due nomi e non uno

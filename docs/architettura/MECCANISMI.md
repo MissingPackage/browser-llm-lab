@@ -27,12 +27,20 @@ mentire è peggio di nessuna mappa: la si consulta e ci si fida.
 |---|---|---|---|---|---|
 | **arena + slotTable** | `residency.ts` | ✅ | ✅ | acceso | sì, entrambi |
 | **policy `tier`** (autopin top-usage, LFRU, cap 12,5%) | `residency.ts` | ✅ | ✅ | **`lru`** | GLM 2026-08-09 · **35B it.48: NON paga** |
-| **slab pre-impacchettato** `{ raw, slab }` | `residency.ts:110` | ✅ `glmmodel.ts:871` | ❌ **non adottato** | — | GLM: −41,4 ms/token · 35B: **7,11 s/sessione da recuperare** |
-| **sorgente OPFS** (import + `ensureSlabs`) | `glmsource.ts` | ✅ | ❌ | — | quota OPFS **10 GiB** < 17,07 richiesti (it.43) |
+| **slab pre-impacchettato** `{ raw, slab }` | `residency.ts:110` | ✅ `glmmodel.ts:871` | ✅ `q35gpumodel` (`readMiss`, it.50) | acceso **se il file c'è** | GLM: −41,4 ms/token · 35B: **7,11 s/sessione + 38.625→12.875 richieste**, da misurare |
+| **sorgente OPFS** (import + `ensureSlabs`) | `glmsource.ts` | ✅ | ❌ **e non ci starebbe** | — | quota OPFS **10 GiB** < 17,07 richiesti (it.43) |
+| **sorgente a Range** (file slab servito come il GGUF) | `slabsource.ts` | ❌ (usa OPFS) | ✅ | fallback ai byte grezzi, **con motivo** | apertura e rifiuti sotto test (it.50); il numero manca finché il file non è convertito |
 | **convertitore offline → slab** | `scripts/q35-slab-build.mjs` | ❌ | ✅ | — | verificato 8/8 slab (it.47) |
 
-**La cella che conta oggi**: il 35B non adotta `{ raw, slab }`. L'interfaccia è
-nel modulo condiviso da un goal intero.
+**Le due sorgenti sono due strade per UNA interfaccia**: il GLM genera il suo
+file in OPFS all'import, il 35B legge un file già convertito via Range perché in
+OPFS non ci sta. `ExpertCache` non sa quale delle due la sta servendo.
+
+**Come si legge se è acceso davvero**: `moeStats().slabSource` — `file` non nullo
+⇒ in uso; altrimenti `reason` dice perché (file assente, SHA di un altro GGUF,
+taglia diversa). Sta nell'artefatto di ogni bench e di ogni chat, perché un miss
+costa **una** richiesta Range con lo slab e **tre** senza: due run che
+differiscono per quello non devono distinguersi solo da cosa c'era sul disco.
 
 ## 2 · Leve del decode
 
@@ -83,8 +91,11 @@ Prima di scrivere un banco nuovo, questi esistono:
 
 ## Le celle vuote, in ordine di valore misurato
 
-1. **35B non adotta `{ raw, slab }`** → 7,11 s per sessione, e 38.625 richieste
-   Range → 12.875. Tutto il resto è pronto (formato, descrittore, convertitore).
+1. **il file slab del 35B non è stato convertito** (it.50 ha chiuso il codice: la
+   sorgente c'è, i rifiuti sono sotto test, il fallback è dichiarato). Restano
+   17,07 GiB da scrivere sul disco — **decisione del PI** — e poi il numero:
+   7,11 s per sessione e 38.625 richieste Range → 12.875. *Finché il file manca,
+   `slabSource.reason` dice «file slab assente» in ogni artefatto.*
 2. **prefetch lookahead non implementato** → attacca i ~76 ms/token di tassa di
    residenza, con un oracolo già misurato al 91,92%.
 3. **spec-dec non nella chat** → 1,29× proiettato, ma serve una testa MTP per il

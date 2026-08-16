@@ -121,6 +121,24 @@ export type ExpertReader =
     };
 
 /**
+ * L'`ExpertReader` per uno slab GIA' impacchettato e GIA' in mano.
+ *
+ * Serve alle sorgenti ASINCRONE (il 35B legge il file slab per Range): `ensure`
+ * e' sincrona, quindi chi legge fuori si porta i byte dietro e li consegna con
+ * una chiusura. `raw` non c'e' per un motivo dichiarato — chi ha lo slab non ha
+ * i byte grezzi, e fingere di poterli produrre nasconderebbe che il fallback va
+ * deciso PRIMA, quando si sceglie da quale file leggere.
+ */
+export const slabInHand = (slab: Uint8Array): ExpertReader => ({
+  raw: () => {
+    throw new Error(
+      "residency: reader a slab — i byte grezzi non sono stati letti. Il fallback ai byte "
+      + "GGUF si decide alla sorgente, non qui");
+  },
+  slab: () => slab,
+});
+
+/**
  * MARCHIO DI CONIO (goal fase-D it.6). Il campo privato qui sotto fa sì che
  * un `SlotRef` possa essere CONIATO solo dentro questo modulo: chi prova a
  * fabbricarne uno per spacciare la propria arena come residenza viene

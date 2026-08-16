@@ -33,9 +33,10 @@ import { q35AttnPartialsFloats, q35AttnSplitPlan } from "./q35attnsplit";
 import { q35IsFullAttn, type Q35Shape } from "./q35shape";
 import { ROUTER_QWEN35MOE, routerSelect, WEIGHTS_SUM_CLAMP_MIN, type RouterConfig } from "./moe";
 import {
-  ExpertCache, moeParkOf, type ExpertClass, type ExpertRawBytes, type SlotRef,
+  ExpertCache, moeParkOf, slabInHand, type ExpertClass, type ExpertReader, type SlotRef,
 } from "./residency";
-import { q35ExpertReader, q35MoeConfig } from "./q35expertstore";
+import { q35ExpertReader, q35MoeConfig, q35SlabDesc } from "./q35expertstore";
+import { openSlabRangeSource, type SlabHttpDeps, type SlabRangeSource } from "./slabsource";
 import { gemvCapsFor } from "./gemvcaps";
 
 export interface Q35RawReader {
@@ -45,6 +46,16 @@ export interface Q35RawReader {
   read(name: string): Promise<Uint8Array>;
   /** sotto-range di un tensore (it.17: slab expert on-miss) — OBBLIGATORIO per MoE */
   readRange?(name: string, off: number, len: number): Promise<Uint8Array>;
+  /**
+   * IL FILE SLAB GIA' IMPACCHETTATO, se il chiamante sa servirlo (it.50).
+   * Opzionale e con fallback DICHIARATO: senza, il MoE legge i tre tensori
+   * grezzi e impacchetta a ogni miss, cioe' il path di prima. Serve anche
+   * `sourceSha256`, perche' uno slab prodotto da un ALTRO GGUF darebbe pesi
+   * validi e sbagliati invece di un errore — e il confronto lo fa l'header.
+   */
+  slabs?: SlabHttpDeps;
+  /** SHA-256 del GGUF sorgente: nome del file slab e chiave della sua validita' */
+  sourceSha256?: string;
 }
 
 interface Step {
@@ -202,6 +213,15 @@ export interface Q35GpuModel {
     /** policy di residenza ATTIVA: due run che differiscono per la policy si
      *  distinguevano solo dal comando (docket item 12, rilievo di it.37) */
     policy: "lru" | "tier";
+    /**
+     * IL FILE SLAB: in uso, oppure il motivo per cui non lo è (it.50).
+     * `file` non nullo ⇔ `reason` nullo. Sta nell'artefatto perché un miss
+     * costa **una** richiesta Range con lo slab e **tre** senza, e senza questo
+     * campo due run che differiscono di 7,11 s per sessione si distinguerebbero
+     * solo da quali file c'erano sul disco — che è esattamente il difetto di
+     * it.39 sulle leve spente.
+     */
+    slabSource: { file: string | null; bytes: number; reason: string | null };
   }) | null;
   /**
    * Scomposizione del costo per token (fase D fase 3): dove vanno i ms del
@@ -1449,6 +1469,8 @@ export async function createQ35GpuModel(
     nSlots: Record<string, number>; parkSlots: Record<string, number>; slotBytes: Record<string, number>;
     routing: Map<number, number>;
     stats(): { hits: number; misses: number; uploadedBytes: number; readMs: number; packMs: number; uploadMs: number };
+    /** il file slab in uso, o il motivo per cui i miss leggono i byte grezzi (it.50) */
+    slabSource(): { file: string | null; bytes: number; reason: string | null };
     runLayer(l: number, logitsF32: Float32Array): Promise<void>;
     /**
      * OMBRA (fase 3b, fetta 3b): accoda il router+resolve su GPU nello STESSO
@@ -1498,6 +1520,51 @@ export async function createQ35GpuModel(
     // e non si calcola nessun offset di slab.
     const cfg = q35MoeConfig(S, (n) => r.info(n));
     const readExpert = q35ExpertReader(S, (n) => r.info(n), r.readRange!.bind(r));
+    // IL FILE SLAB, se c'e' (it.50) — e se non c'e' si sa PERCHE'.
+    //
+    // Il motivo del fallback finisce in `moeStats().slabSource` e da li' negli
+    // artefatti: e' la lezione di it.39, dove `kfan` e la rotta split-K erano
+    // misurate e spente in produzione e niente lo diceva. Una leva che non si
+    // vede nel JSON non e' consegnata, e' solo scritta.
+    let slabSrc: SlabRangeSource | null = null;
+    let slabReason: string | null = "sorgente slab non fornita dal chiamante";
+    if (r.slabs && r.sourceSha256) {
+      // il fallback vale ANCHE per un descrittore che lancia (SHA malformato,
+      // geometria impossibile): il motore parte lento, non non parte
+      try {
+        const desc = q35SlabDesc(S, (n) => r.info(n), r.sourceSha256);
+        const opened = await openSlabRangeSource(r.slabs, desc, r.sourceSha256);
+        slabSrc = opened.src;
+        slabReason = opened.reason;
+      } catch (e) {
+        slabReason = `descrittore slab non costruibile: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    } else if (r.slabs && !r.sourceSha256) {
+      slabReason = "slabs fornite senza sourceSha256 — la validita' non e' verificabile";
+    }
+    /**
+     * LA PORTA UNICA DI LETTURA DI UN MISS, per i due siti che la usano (il
+     * repair del decode ottimistico e `prepLayer`). Consegna alla cache un
+     * `ExpertReader` con i byte GIA' in mano, piu' quanti byte sono passati dal
+     * canale — che i due siti contano su contatori diversi di proposito.
+     *
+     * E' qui che il 35B adotta `{ raw, slab }`: con il file slab UNA richiesta
+     * Range porta lo slab impacchettato e `packExpertSlab` sparisce dal path
+     * caldo; senza, si leggono i tre tensori e si impacchetta come prima. La
+     * scelta si fa una volta al caricamento, non a ogni miss.
+     */
+    const readMiss = async (l: number, e: number): Promise<{ reader: ExpertReader; bytes: number }> => {
+      if (slabSrc) {
+        const s = await slabSrc.slab(l, e);
+        return { reader: slabInHand(s), bytes: s.length };
+      }
+      const raw = await readExpert(l, e);
+      return { reader: () => raw, bytes: raw.gate.length + raw.up.length + raw.down.length };
+    };
+    /** un expert non residente di cui NESSUNO ha letto i byte: è un difetto, e lo dice. */
+    const NOT_READ: ExpertReader = (l, e) => {
+      throw new Error(`q35gpumodel: expert blk.${l}/${e} non residente e mai letto — la lista dei miss e la cache non concordano`);
+    };
     // I limiti sono quelli NEGOZIATI col device (il conf worker chiede
     // slabClassBytes = 2 GiB): usarli invece di una costante evita il buffer
     // monolitico che in it.17 falliva in silenzio oltre il cap dell'adapter.
@@ -2008,6 +2075,11 @@ export async function createQ35GpuModel(
         readMs: st.readMs, packMs: st.packMs, uploadMs: st.uploadMs,
       };
     },
+      slabSource: () => ({
+        file: slabSrc?.fileName ?? null,
+        bytes: slabSrc?.fileBytes ?? 0,
+        reason: slabReason,
+      }),
       destroy: () => { opt?.destroy(); cache.destroy(); },
       shadowEncode: shadow ? (enc, m) => shadow.encode(enc, m) : null,
       shadowCompare: shadow ? () => shadow.compare() : null,
@@ -2348,13 +2420,14 @@ export async function createQ35GpuModel(
           // MISURATO A PARTE (goal 35b-residency, riga 1): `readMs` di
           // `residency.ts` NON vede questa await — è l'I/O che sta prima di
           // `ensure`, e sul turno del 2026-08-15 era il 43% del tempo di parete
-          // senza avere un nome. Ogni `readExpert` sono 3 fetch Range HTTP.
-          const got = await Promise.all(misses.map((ms) => readExpert(ms.l, ms.e)));
+          // senza avere un nome. Ogni miss è UNA richiesta Range col file slab
+          // (it.50) e TRE senza — è `readMiss` a saperlo, non questo sito.
+          const got = await Promise.all(misses.map((ms) => readMiss(ms.l, ms.e)));
           perfAcc.fetchRepairMs += performance.now() - tRep;
           perfAcc.fetchRepairCalls += misses.length;
-          for (const g of got) perfAcc.fetchRepairBytes += g.gate.length + g.up.length + g.down.length;
+          for (const g of got) perfAcc.fetchRepairBytes += g.bytes;
           misses.forEach((ms, i) => {
-            cache.ensure(ms.l, ms.e, () => got[i], pinned);
+            cache.ensure(ms.l, ms.e, got[i].reader, pinned);
             repaired.add(cache.keyOf(ms.l, ms.e));
           });
           // UN flush, DOPO le writeBuffer degli slab: il dato prima della
@@ -2411,7 +2484,7 @@ export async function createQ35GpuModel(
         // L'I/O sta FUORI dalla cache: `ensure` è sincrona (GLM legge da
         // memoria), il 35B no. Guardo chi manca, `await`to solo quelli, e poi
         // consegno i byte già in mano. Sugli hit non si legge niente.
-        const raw = new Map<number, ExpertRawBytes>();
+        const readers = new Map<number, ExpertReader>();
         const missing: number[] = [];
         for (const e of sel.experts) if (!cache.isResident(l, e)) missing.push(e);
         if (missing.length > 0) {
@@ -2420,13 +2493,13 @@ export async function createQ35GpuModel(
           // scoprono a fine pass. Sono due regimi, e sommarli renderebbe
           // illeggibile quale dei due paga.
           const tFetch = performance.now();
-          const got = await Promise.all(missing.map((e) => readExpert(l, e)));
+          const got = await Promise.all(missing.map((e) => readMiss(l, e)));
           perfAcc.fetchPrepMs += performance.now() - tFetch;
           perfAcc.fetchPrepCalls += missing.length;
           // stessa contabilita' del repair (`:2331`), cosi' i due regimi si
           // confrontano in MB/s e non in ms per chiamata di taglia ignota
-          for (const g of got) perfAcc.fetchPrepBytes += g.gate.length + g.up.length + g.down.length;
-          missing.forEach((e, i) => raw.set(e, got[i]));
+          for (const g of got) perfAcc.fetchPrepBytes += g.bytes;
+          missing.forEach((e, i) => readers.set(e, got[i].reader));
         }
         // i top-K del token devono coesistere: nessuno di loro può essere
         // vittima di eviction per far posto agli altri.
@@ -2441,7 +2514,11 @@ export async function createQ35GpuModel(
         for (const e of sel.experts) {
           const key = cache.keyOf(l, e);
           routing.set(key, (routing.get(key) ?? 0) + 1);
-          slots.push(cache.ensure(l, e, (_ly, ex) => raw.get(ex)!, pinned).slot);
+          // Sugli hit il reader non viene mai chiamato; se venisse, vorrebbe
+          // dire che `isResident` e la cache non concordano — e un errore
+          // detto qui è meglio di byte `undefined` che diventano un crash tre
+          // frame più in là.
+          slots.push(cache.ensure(l, e, readers.get(e) ?? NOT_READ, pinned).slot);
         }
         cache.noteSelection(l, sel.experts);
         // l'ombra confronta contro CIÒ CHE LA CPU HA DECISO, e i miss vanno
@@ -3273,6 +3350,7 @@ export async function createQ35GpuModel(
           routing: Object.fromEntries([...moe!.routing.entries()].map(([k2, v2]) => [String(k2), v2])),
           nSlots: moe!.nSlots, parkSlots: moe!.parkSlots, slotBytes: moe!.slotBytes,
           policy: opts.expertPolicy ?? "lru",
+          slabSource: moe!.slabSource(),
         })
       : null,
     resetState(): void {

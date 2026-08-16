@@ -3896,3 +3896,89 @@ verità da aggiornare a ogni run.
   non ho toccato (KV cache, tokenizer, attention split) non ci sono, e la loro
   assenza dalla tabella **non significa che non esistano** — significa che
   nessuno le ha mappate.
+
+---
+
+## it.50 — l'ultimo anello: la sorgente che LEGGE lo slab
+
+Le quattro fette precedenti avevano preparato tutto — l'interfaccia della cache
+(it.42), il formato del file (it.44-45), il descrittore derivato (it.46), il
+convertitore offline (it.47) — e la tabella di it.49 lo diceva in una riga sola:
+**il 35B non adotta `{ raw, slab }`, e manca solo chi legge.** Adesso c'è.
+
+### Cos'è entrato
+
+    slabsource.ts        openSlabRangeSource(deps, desc, sha) -> { src, reason }
+                         httpSlabDeps(baseUrl): le deps montate su un prefisso
+    ggufrange.ts         httpFileBytes(url): la taglia CHIESTA al server
+    residency.ts         slabInHand(slab): l'ExpertReader per byte gia' in mano
+    q35gpumodel.ts       apertura + `readMiss`, la porta UNICA dei due siti
+    chat/q35conf worker  due righe: `slabs` + `sourceSha256`
+
+**`readMiss` è la parte che vale più del resto.** I due siti di fetch — il
+repair del decode ottimistico e `prepLayer` — facevano ciascuno il proprio
+`Promise.all(readExpert)` e la propria contabilità dei byte. Ora chiamano una
+funzione sola, che decide **una volta al caricamento** se un miss è una
+richiesta Range con lo slab impacchettato o tre coi tensori grezzi. I due siti
+non sanno più quale delle due stanno leggendo, ed è giusto così: non è una loro
+decisione.
+
+### Il modulo NON è del 35B, ed è una scelta
+
+`openSlabRangeSource` prende un `SlabModelDesc` e basta. Il GLM oggi passa da
+OPFS perché il suo file ci sta (15,7 GiB su una quota di 10 non ci starebbero:
+il suo è più piccolo e la sua sorgente lo genera all'import); il 35B legge via
+Range perché in OPFS **non ci sta** (quota 10,00 GiB, `persist()` negata,
+it.43). Due strade, **una interfaccia**, e `ExpertCache` non sa quale la sta
+servendo. È l'ordine che il PI ha dato: prima la forma globale.
+
+E una copia in meno: `httpFileBytes` era la Range da un byte che `--io-probe`
+si era scritta in casa. Alla seconda copia si fattorizza — ora il probe la
+eredita.
+
+### Il fallback è DICHIARATO, non silenzioso
+
+`moeStats().slabSource` = `{ file, bytes, reason }`, e finisce in ogni artefatto
+di bench e di chat perché i worker già serializzano `moeStats()`. `file` non
+nullo ⇔ `reason` nullo.
+
+*È la lezione di it.39 applicata prima di pagarla una seconda volta*: `kfan` e
+la rotta split-K erano misurate, gated e spente in produzione, e niente lo
+diceva. Un miss costa **una** richiesta Range con lo slab e **tre** senza: due
+run che differiscono per quello non devono distinguersi solo da cosa c'era sul
+disco.
+
+E il fallback vale per OGNI motivo — file assente, SHA di un altro GGUF, taglia
+diversa, header corrotto, errore di trasporto, perfino un descrittore che
+lancia. Un motore che non parte perché manca una **cache** sarebbe peggio di uno
+più lento.
+
+### EVIDENZA
+
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1146 passed | 11 skipped** (+8)
+- `tests/engine-slabsource.test.ts`: otto casi senza rete e senza GPU — file
+  valido (e l'apertura legge SOLO l'header), classi alternate con taglie
+  diverse, file assente, **SHA di un altro GGUF**, file troncato, geometria
+  diversa, header a caso, errore di trasporto. Il file finto ha due classi che
+  si **alternano** come nel 35B, non due corse contigue come nel GLM: se
+  l'offset tornasse a un `layer <= confine` quei casi cadono.
+- `BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs` →
+  **111 PASS / 0 FAIL** (exit 0). Gira sul path di FALLBACK — il file slab non
+  esiste ancora — quindi certifica che il refactor dei due siti non ha mosso
+  niente.
+- `tests/engine-meccanismi.test.ts`: la riga della mappa è stata **rovesciata**
+  dal test che la teneva onesta. Diceva «se q35gpumodel ora adotta lo slab,
+  aggiorna MECCANISMI.md §1»: ha fallito, come doveva, e la mappa è aggiornata.
+
+### NON VERIFICATO — e sono le due cose che contano
+
+- **Il file slab del 35B non esiste.** Nessuna riga di questo codice ha ancora
+  letto uno slab vero: la conversione sono **17,07 GiB sul disco del PI** e la
+  decisione è sua. Finché manca, ogni artefatto porta
+  `slabSource.reason = "file slab assente (q35-a8138f183e3993f1.slabs.bin)"`.
+- **Il numero non c'è.** 7,11 s per sessione e 38.625 → 12.875 richieste sono il
+  conto di it.40, non una misura di questo path. Si saprà col bench, dopo la
+  conversione, e va misurato sui CONTATORI (`packMs` deve andare a 0 e
+  `fetchRepairCalls` restare uguale mentre `ggufRangeStats.calls` cala di 3×).
+- La conversione va servita: serve un symlink in `public/models/` accanto ai
+  GGUF, che è la convenzione che `Q35_SLAB_BASE_URL` dichiara.

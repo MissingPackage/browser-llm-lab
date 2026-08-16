@@ -23,11 +23,12 @@
 import { createEngineDevice } from "../gpudevice";
 import { parseGguf, type GgufTensorInfo } from "../gguf";
 import { createQ35GpuModel, q35TensorBytes, type Q35GpuModel } from "../q35gpumodel";
-import { q35MoeConfig } from "../q35expertstore";
+import { q35MoeConfig, Q35_SLAB_BASE_URL } from "../q35expertstore";
 import { arenaNeeds } from "../residency";
 import { validateQwen35, Q35_SHA256, type Q35Shape } from "../q35shape";
 import { q35TokenizerFromMetadata, type Q35Tokenizer } from "../q35tokenizer";
 import { ggufRangeReader } from "../ggufrange";
+import { httpSlabDeps } from "../slabsource";
 
 // I GGUF canonici: le SHA sono quelle PINNATE in q35shape, non ricopiate a
 // mano — se il pin cambia, questa tabella cambia con lui.
@@ -186,6 +187,12 @@ async function load(cfg: LoadCfg): Promise<void> {
     info,
     read: (name) => range(f.dataOffset + info(name).offset, q35TensorBytes(info(name))),
     readRange: (name, off, len) => range(f.dataOffset + info(name).offset + off, len),
+    // IL FILE SLAB GIA' IMPACCHETTATO (it.50), se e' stato convertito: un miss
+    // diventa UNA richiesta Range invece di tre e `packExpertSlab` esce dal
+    // path caldo. Se il file non c'e' — o e' di un altro GGUF — il motore parte
+    // lo stesso sui byte grezzi, e `moeStats().slabSource` dice perche'.
+    slabs: httpSlabDeps(Q35_SLAB_BASE_URL),
+    sourceSha256: M.sha,
   }, cfg.ctxMax, arenaBudgetBytes, {
     // `optimistic` si può chiedere solo sul MoE: sui densi non c'è arena
     // expert e il path non esiste.

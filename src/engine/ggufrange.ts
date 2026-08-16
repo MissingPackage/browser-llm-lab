@@ -95,6 +95,29 @@ export const effectiveParallelism = (s: GgufRangeStats): number | null => {
  * cinque copie, e resta un parametro perche' su un Range corto sapere QUALE
  * lettore ha fallito e' meta' della diagnosi.
  */
+/**
+ * I byte TOTALI di un file servito via HTTP, chiesti al server con una Range da
+ * un byte e letti da `Content-Range: bytes 0-0/N`.
+ *
+ * `null` = il file non c'e', il server non onora le Range, o non dichiara la
+ * taglia: tre casi che per chi chiama sono lo stesso — non si puo' decidere se
+ * un file e' quello giusto senza sapere quanto e' lungo.
+ *
+ * ESISTEVA GIA' UNA COPIA, dentro `--io-probe` (`q35conf.worker.ts`), e il suo
+ * commento dice perche' la taglia si CHIEDE invece di assumerla: con un passo
+ * fisso il probe sforava la fine del 35B e il server rispondeva 206 con zero
+ * byte. Alla seconda copia e' una domanda, e la risposta e' questa funzione.
+ */
+export const httpFileBytes = async (url: string): Promise<number | null> => {
+  let rr: Response;
+  try { rr = await fetch(url, { headers: { Range: "bytes=0-0" } }); }
+  catch { return null; }
+  if (rr.status !== 206) { await rr.arrayBuffer().catch(() => undefined); return null; }
+  await rr.arrayBuffer().catch(() => undefined); // un byte: si consuma e si chiude
+  const n = Number(/\/(\d+)$/.exec(rr.headers.get("Content-Range") ?? "")?.[1] ?? NaN);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
 export const ggufRangeReader = (urlOf: () => string, label: string): GgufRangeReader =>
   async (off, len) => {
     const t0 = performance.now();

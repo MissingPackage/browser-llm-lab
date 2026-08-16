@@ -32,16 +32,21 @@ describe("la mappa dei meccanismi combacia col sorgente", () => {
     expect(code("src/engine/residency.ts")).toMatch(/slab\?:\s*\(/);
   });
 
-  it("il GLM adotta { raw, slab } e il 35B NO — e la mappa lo dice", () => {
+  it("ENTRAMBE le famiglie adottano { raw, slab }, per due strade diverse — e la mappa dice quali", () => {
+    // La cella vuota di it.49 e' stata riempita in it.50: il 35B legge lo slab
+    // gia' impacchettato dal file servito via Range, il GLM dal suo file in
+    // OPFS generato all'import. Due sorgenti, UNA interfaccia — ed e' quello
+    // che questo caso sorveglia: se qualcuno riscrive il pack nel path caldo
+    // del 35B, o ricopia la lettura invece di passare dalla sorgente, qui si
+    // vede.
     const glm = code("src/engine/glmmodel.ts");
     const q35 = code("src/engine/q35gpumodel.ts");
-    const glmAdotta = /slab:\s*\(/.test(glm);
-    const q35Adotta = /slab:\s*\(/.test(q35);
-    expect(glmAdotta, "glmmodel deve passare { raw, slab }").toBe(true);
-    // IL GIORNO CHE q35 LO ADOTTA, questo caso fallisce e la riga va aggiornata:
-    // e' il punto — la cella vuota deve smettere di essere vuota anche nella mappa
-    expect(q35Adotta, "se q35gpumodel ora adotta lo slab, aggiorna MECCANISMI.md §1").toBe(false);
-    expect(MAPPA).toContain("non adottato");
+    expect(/slab:\s*\(/.test(glm), "glmmodel deve passare { raw, slab }").toBe(true);
+    expect(q35, "q35gpumodel deve aprire la sorgente slab").toContain("openSlabRangeSource");
+    expect(q35, "q35gpumodel deve consegnare lo slab alla cache con slabInHand").toContain("slabInHand");
+    // il fallback dev'essere DICHIARATO nell'artefatto, non silenzioso
+    expect(q35, "il motivo del fallback deve finire in moeStats").toContain("slabSource");
+    expect(MAPPA).toContain("`slabsource.ts`");
   });
 
   it("le due leve del decode nascono SPENTE e la chat le accende", () => {

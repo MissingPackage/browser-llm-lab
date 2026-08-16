@@ -100,6 +100,14 @@ export function q35MoeConfig(shape: Q35Shape, info: (name: string) => GgufTensor
  * rifiuterebbe comunque, ma un rifiuto che costa una rigenerazione da 17 GiB e'
  * peggio di un nome distinto.
  */
+/**
+ * Dove il server serve i file slab: la STESSA cartella dei GGUF, con un symlink
+ * per file — la convenzione che `public/models/` usa gia' per i modelli. Sta
+ * accanto al nome del file perche' i due si leggono insieme: chi cambia l'uno
+ * deve vedere l'altro.
+ */
+export const Q35_SLAB_BASE_URL = "/models/";
+
 export function q35SlabDesc(
   shape: Q35Shape, info: (name: string) => GgufTensorInfo, sourceSha256: string,
 ): SlabModelDesc {
