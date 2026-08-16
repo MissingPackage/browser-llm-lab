@@ -120,19 +120,33 @@ globale per costruzione, non riscritto due volte. Sul GLM rende poco e va detto
 col numero — `gpuBusy` 38,9 → 38,6 — perché il GLM fa top-4 su 64 (otto volte
 meno da parallelizzare) e il 57% del suo token sta comunque fuori dalla GPU.
 
-**IL PRIMO TERMINE ADESSO** (`q35-router-par-gputime-2026-08-16.json`, braccio
-kfan-ON, sonda accesa che perturba):
+**IL PRIMO TERMINE ADESSO** (`q35-splitk-gputime-2026-08-16.json`, braccio
+kfan+rotta, sonda accesa che perturba entrambi i lati):
 
-    ssmGemv    6,992   <- il primo
-    expert     5,152
-    attn       2,539
-    shexp      2,157
-    ssmOut     2,046
-    router     0,836   <- era 2,883
-    TOT GPU   22,872   (era 24,902)
+    expert     5,204   <- il primo, DI NUOVO
+    ssmGemv    2,752   (era 7,043)
+    shexp      2,089
+    tail       1,309
+    attn       1,257   (era 2,557)
+    ssmOut     0,984   (era 2,064)
+    router     0,863
+    TOT GPU   16,309   (era 23,027)
 
-`ssmGemv` e' la proiezione DeltaNet: **non e' MoE, e ce l'hanno anche 4B e 9B**.
-E' la riga 2d, che resta aperta.
+**Il guadagno e' attribuito per intero**: delta GPU −6,718 contro delta del token
+−6,739, coincidono entro lo 0,3%. I tre segmenti q8_0 (`ssmGemv`, `attn`,
+`ssmOut`) fanno 11,664 → 4,993. *In it.27 avevo contato solo `ssmGemv`+`ssmOut` e
+mi restava +1,0 ms inspiegato: mancava `attn`, i cui tensori sul 35B sono anch'essi
+Q8_0.*
+
+**Il giro e' completo**: il goal e' partito dicendo che `expert` era il primo
+termine, e dopo tre leve lo e' di nuovo — a 5,204 ms invece di 8,951.
+
+**REPERTO: il rapporto del banco NON e' il rapporto del motore.** Per kernel a
+M=1 il banco dice 3,55x; per segmento il motore dice 2,34x. Il segmento contiene
+piu' del kernel — i due tensori a N=32 che restano legacy e i combine che la
+rotta aggiunge. E' la seconda volta in tre iterazioni che la distinzione cambia
+un numero (la prima: la f32, piu' lenta al banco e piu' veloce nel motore).
+**Il banco serve a scegliere, non a promettere.**
 
 **LA RIGA 2d E' MISURATA E SI COSTRUISCE (it.21), con la regola scritta prima
 dei numeri.** Banco sulle shape vere a M=1, contro il kernel che il decode

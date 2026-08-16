@@ -2210,3 +2210,90 @@ Iterazione di sola lettura: header dei tre GGUF letti da disco (primi 64 MB,
 - La ripartizione per categoria col braccio rotta acceso (`--gpu-time`): il
   conto qui sopra è aritmetica su numeri presi da run diverse, non una misura.
 - Se il q4_0 nel decode renda quanto il q8_0: **da misurare prima di cablarlo.**
+
+---
+
+## it.28 — il guadagno è attribuito per intero, e il termine che avevo dimenticato è `attn`
+
+**Cambio di passo dichiarato.** Avevo schedulato il q4_0 per il 4B/9B. L'ho
+rimandato con la sua ragione: il 4B è già a 45,5 tok/s e il q4_0 aiuta modelli
+che non sono il collo, mentre questo profilo costa **una run sola**, chiude un
+"NON VERIFICATO" che mi porto da due iterazioni, ed è ciò che la riga 7 pretende
+(«il termine che diventa primo dopo questa leva, nominato con la sua misura
+fresca»). Pareto.
+
+### La ripartizione, braccio kfan contro braccio kfan+rotta
+
+`results/engine/q35-splitk-gputime-2026-08-16.json`, sonda per categoria accesa
+(perturba entrambi i lati allo stesso modo). **Gate argmax 39/39 anche qui**:
+seconda conferma indipendente.
+
+    categoria      kfan   +rotta     delta
+    ssmGemv       7,043    2,752    -4,291    2,56x
+    attn          2,557    1,257    -1,300    2,03x   <- il termine che mancava
+    ssmOut        2,064    0,984    -1,080    2,10x
+    expert        5,192    5,204    +0,013
+    shexp         2,177    2,089    -0,088
+    tail          1,275    1,309    +0,034
+    router        0,842    0,863    +0,021
+    TOT GPU      23,027   16,309    -6,718
+
+**Il delta della GPU (−6,718) e il delta del token (−6,739) coincidono entro lo
+0,3%.** Il guadagno è spiegato per intero, e non resta niente di anonimo.
+
+### L'errore di it.27, corretto
+
+Avevo scritto: «il guadagno viene da `ssmGemv` + `ssmOut` = 9,038 ms», e mi
+restava un residuo di +1,0 ms che non sapevo spiegare. **Mancava `attn`**: anche
+i tensori di attenzione del 35B sono Q8_0 e prendono la rotta. I tre segmenti
+fanno 11,664 → 4,993, cioè **il residuo era esattamente il termine dimenticato**.
+
+*Il correttivo è sempre lo stesso: il conto per differenza sembrava tornare
+«nello stesso ordine di grandezza», e proprio per questo non l'avevo chiamato
+conferma. Averlo tenuto come non-verificato invece che come «torna» è ciò che ha
+fatto trovare `attn`.*
+
+### Il reperto: il rapporto del banco NON è il rapporto del motore
+
+    banco, per KERNEL, a M=1        3,55x
+    motore, per SEGMENTO            2,34x
+
+Non è una discrepanza da spiegare via: **il segmento contiene più del kernel**.
+Dentro `ssmGemv` ci sono anche i due tensori a N=32 che il predicato respinge
+(restano legacy, giustamente) e i dispatch di combine che la rotta aggiunge.
+Il banco misura la moltiplicazione; il motore paga la rotta.
+
+È la seconda volta in tre iterazioni che questa distinzione cambia un numero —
+la prima è stata la f32, più lenta al banco e più veloce nel motore. **Il banco
+serve a scegliere, non a promettere.**
+
+### IL PRIMO TERMINE ADESSO, per la riga 7
+
+    expert      5,204   <- il primo, di nuovo
+    ssmGemv     2,752
+    shexp       2,089
+    tail        1,309
+    attn        1,257
+    ssmOut      0,984
+    router      0,863
+
+Dopo il kfan l'`expert` era sceso al secondo posto; con `ssmGemv` a un terzo,
+**torna primo**. Il giro è completo: il goal è partito dicendo che l'expert era
+il primo termine, e dopo tre leve lo è di nuovo — a 5,204 ms invece di 8,951.
+
+### EVIDENZA
+
+- `results/engine/q35-splitk-gputime-2026-08-16.json`, host quiescente,
+  4 repliche interleavate, **gate argmax 39/39**
+- albero invariato rispetto a `7500797`: iterazione di sola misura
+
+### NON VERIFICATO
+
+- `dispatchPerToken` è **identico** in ogni categoria fra i due bracci (30→30,
+  10→10, …): il contatore conta i SEGMENTI, non i dispatch. Quindi da questo
+  artefatto **non si legge** quanti dispatch la rotta abbia aggiunto, e la mia
+  stima di ~90 resta stima.
+- Il totale GPU (16,3 ms) sta molto sotto il token non perturbato (25,5 ms): la
+  differenza è fuori dalle categorie — attesa di readback e CPU. Non l'ho
+  attribuita e non serve a questa riga, ma è il prossimo posto dove guardare se
+  si vuole il nice-to-have dei 45.
