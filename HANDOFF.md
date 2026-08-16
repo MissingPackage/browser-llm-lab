@@ -36,10 +36,27 @@ banco ha misurato quelle N sul q8_0, e il q4_0 ha un'aritmetica diversa (nibble
 + offset -8). Ereditare quel numero e' l'errore che questo goal ha pagato cinque
 volte.
 
-**IL LAVORO E' FERMO SU UNA DECISIONE TUA — docket item 7, tre uscite.** Non ho
-altro di decidibile su questo goal senza quel ruling: la riga 4 (la barra su
-tutte e quattro le famiglie) e la riga 6 (gate di merge) dipendono entrambe da
-cosa il gate GLM deve confrontare.
+**LO STATO DELLE RIGHE, in chiaro (it.29):**
+
+    riga 4  la barra su tutte e quattro le famiglie   BLOCCATA (docket item 7)
+    riga 6  gate di merge                             BLOCCATA (docket item 7)
+    riga 5  default di ragionamento del 35B           gated sulla riga 4
+    riga 7  consuntivo                                serve i numeri della 4 e 6
+    riga 2b raggruppamento dell'I/O                   libera
+    riga 3  unita' di riparazione                     libera
+
+Le due libere valgono nel regime SPORCO (miss e replay); nel braccio caldo
+misurato oggi i miss sono **zero**, quindi non toccano il numero della barra.
+
+**NON INSEGUO IL NICE-TO-HAVE DEI 45.** La barra e' 30 e siamo a 39,15: superata
+del 30%. Il 45 e' dichiarato nice-to-have nel contratto, non un done-when, e
+ottimizzare mentre le righe che CHIUDONO il goal sono bloccate e' crescita di
+scope. Se un giorno lo si vuole, i due posti sono `expert` (5,204 ms, di nuovo
+il primo termine) e i **~6,3 ms di scoperto** — il 25% del token che sta FRA i
+segmenti cronometrati (confini di pass, latenza di coda, `mapAsync`), non dentro
+un kernel. Si attacca togliendo dispatch, non rendendoli piu' veloci: e' la
+forma del kfan. *Misurato dentro una run sola: `readbackWait` 26,228 contro
+16,309 di GPU per categoria, meno i 3,62 ms che la sonda stessa costa.*
 
 **La riga 6 oggi**: «ktest tutti PASS» **verde** (`111 PASS / 0 FAIL`, it.19),
 «GLM b12 entro ±5%» **rosso — ma il rosso non è del motore.**

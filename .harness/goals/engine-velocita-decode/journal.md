@@ -2297,3 +2297,80 @@ il primo termine, e dopo tre leve lo è di nuovo — a 5,204 ms invece di 8,951.
   differenza è fuori dalle categorie — attesa di readback e CPU. Non l'ho
   attribuita e non serve a questa riga, ma è il prossimo posto dove guardare se
   si vuole il nice-to-have dei 45.
+
+---
+
+## it.29 — i ~9 ms fuori dalle categorie: cosa sono, e perché non li ho inseguiti
+
+**Zero GPU spesa.** La domanda l'ho posta in it.28 guardando due numeri di run
+DIVERSE (16,3 di GPU contro 25,5 di token), che è il confronto sbagliato. La
+risposta sta dentro l'artefatto che avevo già, confrontando i numeri della
+STESSA run — ed è la regola del progetto: leggere l'artefatto prima di
+progettare la misura.
+
+    tutto dentro la stessa run, sonda ACCESA
+    braccio        token   readbackWait   GPU/cat   scoperto
+    optimistic    45,530         41,645    28,462     13,183
+    kfan          35,447         32,348    23,027      9,321
+    kfan+rotta    29,165         26,228    16,309      9,919
+
+`readbackWait` è l'attesa della CPU sul submit: **contiene** il lavoro GPU. Ciò
+che le categorie non coprono è la differenza.
+
+**Al netto della sonda** (che costa 29,165 − 25,543 = 3,62 ms, e che ne è parte
+per costruzione: spezza i pass, quindi aggiunge confini): **~6,3 ms, il 25% del
+token.**
+
+### Cos'è: overhead per dispatch, non calcolo
+
+Il numero **non scende con le leve** — 13,18 → 9,32 → 9,92 — e l'unico salto è
+fra il braccio a 1.320 dispatch e quelli a ~200. Non è tempo di calcolo
+nascosto: è ciò che sta **fra** i segmenti cronometrati — confini di pass,
+latenza di coda, `mapAsync`. La rotta ne aggiunge (i combine) e infatti il
+braccio più veloce ha lo scoperto leggermente più alto del kfan.
+
+**Conseguenza pratica per i 45 tok/s** (22,2 ms/token, mancano 3,3): i posti
+dove cercarli sono due, e nessuno dei due è un kernel nuovo —
+**`expert` (5,204 ms, di nuovo il primo termine)** e **questo scoperto**, che si
+attacca togliendo dispatch, non rendendoli più veloci. È esattamente la forma
+del kfan.
+
+### Perché mi fermo qui e non inseguo i 45
+
+**La barra del goal è 30 e siamo a 39,15: superata del 30%.** Il 45 è dichiarato
+*nice-to-have* nel contratto, non un done-when. Continuare a ottimizzare mentre
+le righe che CHIUDONO il goal sono bloccate è crescita di scope, non progresso:
+il protocollo la chiama col suo nome.
+
+**Lo stato delle righe rimaste:**
+
+    riga 4  la barra su tutte e quattro le famiglie   BLOCCATA (docket item 7)
+    riga 6  gate di merge                             BLOCCATA (docket item 7)
+    riga 5  default di ragionamento del 35B           gated sulla riga 4
+    riga 7  consuntivo                                serve i numeri della 4 e 6
+    riga 2b raggruppamento dell'I/O                   libera
+    riga 3  unità di riparazione                      libera
+
+Le due libere valgono nel regime SPORCO (miss e replay). Nel braccio caldo
+misurato oggi i miss sono **zero**, quindi non toccano il numero della barra:
+sono lavoro reale ma non sulla strada della chiusura.
+
+### LA DOMANDA CHE PORTO IN CHAT, perché è la sola cosa che rende reale tutto questo
+
+**Le tre leve sono SPENTE di default.** `kfanEnabled = false`,
+`splitkEnabled = false`; il router parallelo invece è sempre attivo (non ha
+flag). Quindi oggi il motore, per un utente, fa **~30,7 tok/s** — non 39,15.
+
+Accenderle è una riga di codice, ma cambia cosa significano tutti i riferimenti
+esistenti, e il goal ha un gate di merge apposta. **La mia lettura**: si
+accendono nella riga 4, insieme, con il checkpoint su tutte e quattro le
+famiglie che le misura accese. Non prima, e non separatamente.
+
+*Se non arrivasse risposta farei esattamente questo, quindi non è
+un'escalation — è un avviso: chi legge «39,15 tok/s» deve sapere che è il numero
+di un braccio acceso a mano.* È già scritto in `HANDOFF.md`.
+
+### EVIDENZA
+
+Sola analisi: `results/engine/q35-splitk-gputime-2026-08-16.json`, nessun
+comando GPU, albero invariato rispetto a `07c5085`.
