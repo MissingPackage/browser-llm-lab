@@ -998,9 +998,25 @@ export async function createQ35GpuModel(
         // giusto, e il 2,4% che resta e' una domanda per il PI — «il decode puo'
         // quantizzare le attivazioni?» — non una decisione di meccanismo.
         //
-        // La costante e' `false` e non una riga cancellata di proposito: se quel
-        // ruling arriva, il cablaggio della via intera e' gia' qui sotto e si
-        // riaccende cambiando una parola.
+        // AGGIORNAMENTO 2026-08-16: la domanda non e' piu' aperta, ed e' stata
+        // chiusa dall'aritmetica invece che da un ruling. Riaccendere `idot`
+        // sarebbe piu' LENTO nel motore, non solo diverso nei token:
+        //
+        //   guadagno sul kernel, sui segmenti instradati   ~0,120 ms/token
+        //   ma idot vuole TRE dispatch dove f32 ne vuole DUE:
+        //     quantX per tensore   90 x 8,65 us          = 0,778 ms
+        //     quantX issato a 1 per layer   30 x 8,65 us = 0,260 ms
+        //   NETTO                          da -0,14 a -0,66 ms  PEGGIO
+        //
+        // PERCHE' NEL PREFILL VINCE E QUI PERDE: a M=16 la quantizzazione delle
+        // attivazioni si ammortizza su sedici righe, a M=1 la paghi intera per
+        // una riga sola. Stesso kernel, aritmetica opposta — ed e' la quarta
+        // volta in questo goal che «il banco misura il kernel, il motore paga
+        // la rotta» sposta un verdetto.
+        //
+        // La costante resta `false` e il cablaggio resta qui: se un giorno la
+        // quantX venisse issata a una per layer E i dispatch costassero meno,
+        // il conto andrebbe rifatto. Oggi non serve rifarlo.
         idot: prefillIdot && DEC_SPLITK_IDOT,
         regime: "decode",
       });
