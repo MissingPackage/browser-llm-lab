@@ -3130,3 +3130,71 @@ misurato.
 - Fra N=512 e N=2048 non c'è nessuna misura: il pavimento è conservativo per
   costruzione e potrebbe lasciare sul tavolo le shape intermedie, se ne
   esistessero. Sul 35B non ce ne sono.
+
+---
+
+## it.40 — il confronto pulito: 8,26 → 11,35 tok/s consegnati, e il pre-pack è quantificato
+
+### Il numero del PI, rimisurato col suo stesso prompt
+
+`--prompt` aggiunto a `chat-smoke.mjs` (un turno da 60 token e uno da 800 pagano
+la stessa tassa fissa, quindi non sono confrontabili: serviva riprodurre il
+turno vero, non uno corto).
+
+    senza leve (il turno del PI)   8,26 tok/s · 831 token · TTFT 25,7 s
+    con le leve                   11,35 tok/s · 799 token · TTFT 23,7 s
+    secondo turno                 11,97 tok/s ·             TTFT  4,1 s
+
+**+37% consegnato**, sullo stesso prompt e sulla stessa configurazione. È il
+guadagno vero di it.39 — le leve c'erano da giorni e non arrivavano a nessuno.
+
+*E resta lontanissimo dai 40,06 del banco, per la ragione aritmetica di it.39: il
+parco expert è 17,07 GiB e l'arena ne tiene 11,17. Il 65%. Su questa GPU il
+regime a zero miss non esiste in una chat vera.*
+
+### Il pre-pack: l'idea del PI regge, ed ecco perché
+
+`packExpertSlab(gateRaw, upRaw, downRaw, layout) → Uint8Array` è una **funzione
+pura**: stessi byte grezzi e stesso layout ⇒ stesso slab, sempre. Non legge
+stato, non dipende dal device. **Quindi il suo risultato è cacheable senza
+condizioni** — che è precisamente ciò che serve perché l'idea funzioni.
+
+Misurato sul turno vero:
+
+    pack eseguiti (= miss)   12.875
+    packMs                    7.110 ms   =  552 µs per expert
+    velocità del pack         3.230 MB/s   (CPU, un thread)
+    upload                    7.138 ms   =  3.223 MB/s (PCIe)
+
+**Il pre-pack toglie 7,11 s per sessione** e, come effetto secondario, cambia la
+forma della lettura: **da 38.625 richieste Range a 12.875**, perché uno slab già
+impacchettato si legge in un colpo invece che in tre.
+
+*Nota che pack e upload viaggiano alla stessa velocità (3.230 contro 3.223
+MB/s). Non è una coincidenza sospetta: sono due copie di memoria sullo stesso
+ordine di grandezza. Ma significa che togliere il pack toglie metà del costo per
+byte di un miss, non un decimo.*
+
+### Il disegno, e il costo che va detto
+
+**Cache in OPFS, non un file distribuito**: si impacchetta al primo tocco e si
+riusa per sempre, senza un secondo artefatto da produrre e distribuire. La sede
+esiste già (`glmsource.ts` ha una sorgente OPFS, e il ktest
+`residency-opfs-roundtrip` fa import+read+pack+upload end-to-end).
+
+**Il costo da dichiarare prima di scrivere una riga**: lo store impacchettato è
+una **seconda copia** del parco expert, ~17-21 GiB accanto al GGUF. Su questo
+host ci sono 1,1 TB liberi, ma è spazio dell'utente e va chiesto, non preso.
+
+### EVIDENZA
+
+- `/tmp/chat-smoke-export-35b.json` — chat vera, 35B, ctx 4096, due turni, leve
+  dichiarate attive nell'artefatto
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1117 passed | 10 skipped**
+
+### NON VERIFICATO
+
+- La taglia dello slab impacchettato contro i byte grezzi: se lo slab è più
+  grande del sorgente, la seconda copia costa più di 17 GiB e il conto dello
+  spazio cambia. **Da misurare prima di proporre lo store**, non dopo.
+- Il pre-pack non tocca i ~38 s di repair+replay del turno: quelli sono la riga 3.

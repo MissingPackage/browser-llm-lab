@@ -11,6 +11,11 @@ const MODEL = arg("model", "4b");
 const CTX = arg("ctx", "1024");
 const VRAM = arg("vram", "13");
 const MAXNEW = arg("maxnew", "48");
+// --prompt: il testo del PRIMO turno. Serve a riprodurre un turno vero invece
+// del prompt corto dello smoke — un turno da 60 token e uno da 800 pagano la
+// stessa tassa di residenza fissa, quindi danno tok/s molto diversi e NON sono
+// confrontabili fra loro (it.40).
+const PROMPT = arg("prompt", "Scrivi una frase sola: perche' il cielo e' blu?");
 const PROFILE = join(homedir(), ".cache/blab-glmroute-profile");
 mkdirSync(PROFILE, { recursive: true });
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist", "--disable-gpu-sandbox"];
@@ -31,7 +36,7 @@ try {
   await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("pronto"), null, { timeout: 240000 });
   console.log("[smoke] caricato:", await page.textContent("#status"));
 
-  await page.fill("#input", "Scrivi una frase sola: perche' il cielo e' blu?");
+  await page.fill("#input", PROMPT);
   await page.click("#send");
   await page.waitForSelector(".meta", { timeout: 240000 });
   const reply = await page.textContent(".msg.assistant .body");
