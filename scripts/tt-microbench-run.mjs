@@ -226,6 +226,10 @@ const PROV = {
     goal: "engine-kquant riga 1 (fase 0: le famiglie non-q4_0)",
     prereg: "docs/deep-dive/kquant-fase0-prereg-2026-08-14.md",
   },
+  "velocita-decode-2d": {
+    goal: "engine-velocita-decode riga 2d (la rotta split-K vale il decode?)",
+    prereg: "docs/deep-dive/velocita-decode-2d-prereg-2026-08-16.md",
+  },
 }[TAG];
 if (!PROV) {
   console.error(`[tt] tag sconosciuto "${TAG}": aggiungilo a PROV con il suo goal e la sua pre-registrazione, invece di scrivere un artefatto senza provenienza`);

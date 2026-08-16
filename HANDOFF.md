@@ -110,12 +110,34 @@ kfan-ON, sonda accesa che perturba):
 `ssmGemv` e' la proiezione DeltaNet: **non e' MoE, e ce l'hanno anche 4B e 9B**.
 E' la riga 2d, che resta aperta.
 
-**LA RIGA 2d — stima 2-3 iterazioni, CINQUE consumate, e ora non ha piu' fretta.**
-Ha prodotto, tutto in albero e verde: la verifica di riuso (il kernel veloce
-ESISTE ed e' ktest-ato, 3,26x a M=1 — non va scritto), il predicato su N in
-`kernelVerdict` coi suoi casi, il cablaggio del q8_0 con 11 test aggiornati.
-**MA il valore atterrato e' sul PREFILL del 35B, fuori scope**, e i 1,27 ms che
-inseguiva li ha presi il router.
+**LA RIGA 2d E' MISURATA E SI COSTRUISCE (it.21), con la regola scritta prima
+dei numeri.** Banco sulle shape vere a M=1, contro il kernel che il decode
+emette DAVVERO (braccio `base-decode`, non la forma del prefill):
+
+    K2048 N=4096   base-decode 0,1616 ms ( 9,6% del picco) -> splitk 0,0489  3,30x
+    K2048 N=8192   base-decode 0,1324 ms (23,4% del picco) -> splitk 0,0340  3,89x
+                                                     splitk = 91,0% del picco
+
+N=8192 e' `attn_qkv`, il 66,32% dei byte di `ssmGemv`. **Non era un problema di
+occupazione: era di banda** — il GEMV a un workgroup per riga non satura il bus
+e aggiungere righe non lo cura, lo cura spezzare il K. (Avevo previsto il
+contrario e l'ho registrato come previsione sbagliata.)
+
+Proiezione, dichiarata come criterio di spesa e NON come risultato: `ssmGemv`
+6,99 → 1,97 ms, meno 0,78 ms dei 90 dispatch aggiunti = **~4,24 ms/token netti**
+⇒ token 32,5 → ~28,3 = **~35,4 tok/s**. Pre-registrazione e graduatoria in
+`docs/deep-dive/velocita-decode-2d-prereg-2026-08-16.md`.
+
+**Il conto che manca al piano**: i due buffer che la rotta vuole e che nel decode
+non esistono (parziali N×fette f32, x quantizzata) sono **VRAM sottratta
+all'arena expert**, e su questo modello l'arena e' il vincolo. Va nel piano,
+non scoperto costruendo.
+
+Le cinque iterazioni precedenti della riga hanno prodotto, tutto in albero e
+verde: la verifica di riuso (il kernel veloce ESISTE ed e' ktest-ato), il
+predicato su N in `kernelVerdict`, il cablaggio del q8_0 con 11 test aggiornati.
+**Il loro valore e' atterrato sul PREFILL del 35B, fuori scope**, e i 1,27 ms che
+inseguivano li ha presi il router.
 
 **LE SHAPE, ESATTE** (`q35shape.ts:86-89` + meta dell'header dump, K=2048):
 

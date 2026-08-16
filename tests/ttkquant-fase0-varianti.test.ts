@@ -43,12 +43,34 @@ describe("[a] il braccio di paragone e' il kernel di produzione, importato", () 
     expect(v[0].code).toBe(gemvQuantWgsl({ kind: "q4_1", K: 9216, N: 2560, hasBias: false, batch: true }));
   });
 
-  it("ogni lista ha ESATTAMENTE un braccio legacy, ed e' il primo", () => {
+  it("q8_0: il paragone del DECODE e' `gemvQuantWgsl` SENZA batch, byte per byte", () => {
+    // stessa protezione del [a] sopra, ma per l'altro regime: il decode emette
+    // `gemv` (q35gpumodel.ts:862) e non la forma a M righe su wid.z
+    const v = kquantVariants({ family: "q8_0", K: 2048, N: 8192, M: 1 });
+    const dec = v.find((x) => x.regime === "decode")!;
+    expect(dec.id).toBe("base-decode");
+    expect(dec.code).toBe(gemvQuantWgsl({ kind: "q8_0", K: 2048, N: 8192, hasBias: false }));
+    // e NON deve coincidere col paragone del prefill: sono due kernel diversi,
+    // ed e' l'intero motivo per cui esistono due bracci
+    expect(dec.code).not.toBe(v[0].code);
+  });
+
+  it("UN denominatore PER REGIME, mai due nello stesso — e il prefill e' il primo", () => {
+    // La regola vecchia era «esattamente un legacy, ed e' il primo». Da it.21 i
+    // paragoni sono due, uno per regime: il rapporto della regola di stop resta
+    // calcolabile solo se dentro OGNI regime il denominatore e' unico.
     for (const s of KQUANT_SHAPES) {
       for (const M of s.Ms) {
         const v = kquantVariants({ family: s.family, K: s.K, N: s.N, M });
-        expect(v.filter((x) => x.legacy).length, `${s.family}@M${M}`).toBe(1);
-        expect(v[0].legacy, `${s.family}@M${M}`).toBe(true);
+        const where = `${s.family}@M${M}`;
+        expect(v.filter((x) => x.regime === "prefill").length, where).toBe(1);
+        expect(v[0].regime, where).toBe("prefill");
+        // il decode esiste SOLO a M=1: a M>1 non c'e' decode da misurare, e un
+        // braccio senza batch con M righe sarebbe una forma che nessuno emette
+        expect(v.filter((x) => x.regime === "decode").length, where).toBe(M === 1 ? 1 : 0);
+        // ogni braccio di paragone dichiara il suo regime, ogni candidato no:
+        // un legacy senza regime tornerebbe a essere un denominatore ambiguo
+        for (const a of v) expect(a.legacy, `${where}/${a.id}`).toBe(a.regime !== undefined);
         // senza denominatore la regola di stop non e' calcolabile
         expect(v.length).toBeGreaterThanOrEqual(2);
       }

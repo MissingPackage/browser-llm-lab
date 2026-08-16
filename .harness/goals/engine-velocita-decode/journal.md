@@ -1559,3 +1559,97 @@ scritto.**
   costruzione (la fetch è asincrona e sta fuori dalla finestra, nota già in
   `residency.ts:251`), quindi il campo direbbe `non-misurato`. Va deciso se
   vale comunque metterlo per uniformità.
+
+---
+
+## it.21 — la rotta split-K vale il decode: 3,89× sulla shape che pesa
+
+**Pre-registrata prima di guardare** (`docs/deep-dive/velocita-decode-2d-prereg-2026-08-16.md`),
+con tre previsioni numerate e una regola di decisione fissata in anticipo. Due
+corrette, **una sbagliata — ed è quella che ha corretto il modello.**
+
+    shape          braccio        p50 ms    GB/s   % del picco (576)
+    K2048 N=4096   base-decode    0,1616     55,1     9,6%
+    K2048 N=4096   splitk-idot    0,0489    182,2    31,6%
+    K2048 N=8192   base-decode    0,1324    134,7    23,4%
+    K2048 N=8192   splitk-idot    0,0340    524,4    91,0%
+
+- **P1** (`base-decode` ≈ `base-batch-z` entro ±15% a M=1): **corretta**, +1,4%
+  e +1,1%. Il termine di paragone sbagliato non spostava niente — **il 3,26× di
+  it.13 era numericamente giusto**, contro il kernel del decode fa 3,30×. Il
+  dubbio di it.17 era corretto, la grandezza no.
+- **P2** (2,5–3,5× a N=4096): **corretta**, 3,30×.
+- **P3** (a N=8192 il vantaggio è MINORE, 1,5–3,0×): **SBAGLIATA**, è 3,89×.
+
+### Perché P3 era sbagliata, e cosa cambia nel modello
+
+Avevo previsto che a N=8192 lo split-K rendesse meno «perché il GEMV lancia ~N
+workgroup e a 8.192 su 128 SM non gli manca parallelismo». I GB/s dicono che
+**non era un problema di occupazione, era di banda**: il kernel del decode sta
+al **9,6%** del picco a N=4096 e al 23,4% a N=8192 — migliora col numero di
+righe ma resta lontanissimo dal pavimento — mentre lo split-K a N=8192 arriva al
+**91,0%**, sostanzialmente ottimale.
+
+**Il modello corretto**: un workgroup di 64 thread per riga di uscita non satura
+il bus, e aggiungere righe non lo cura; lo cura **spezzare il K**, che dà a ogni
+workgroup un accesso contiguo più lungo. Il numero di workgroup non era la
+variabile. *È la stessa forma dell'errore del router (it.18): avevo diagnosticato
+occupazione dove il problema era altro.*
+
+### La decisione, per regola scritta prima
+
+3,89× ≥ 2,0× sulla shape che porta il 66,32% dei byte ⇒ **la rotta si
+costruisce**, e la stima di 2-3 iterazioni è confermata.
+
+    per layer (attn_qkv + attn_gate)  0,2940 -> 0,0829 ms   3,55x
+    ssmGemv nel motore                 6,99  ->  1,97 ms    -5,02 ms
+    meno 90 dispatch/token aggiunti (quantX 1 per layer — la x è LA STESSA
+      per i due tensori — più 2 combine) x 8,65 us          +0,78 ms
+    NETTO                                                   ~4,24 ms/token
+    token 32,531 -> ~28,3 ms = ~35,4 tok/s
+
+**Riserva dichiarata**: è una proiezione da banco, e questo goal ha già pagato
+quattro volte il prezzo di trattare una proiezione come una misura. Vale come
+**criterio di spesa**, non come risultato: il risultato lo dirà l'A/B nel
+processo, come per il kfan.
+
+### Il difetto tolto sulla strada, e non era nel brief
+
+Il braccio nuovo ha fatto fallire `ttkquant-fase0-varianti` — «esattamente un
+braccio legacy, ed è il primo». **Il test aveva ragione**: proteggeva
+l'univocità del denominatore, che è esattamente ciò che era mancato al 3,26×.
+
+Non l'ho indebolito: ho reso preciso il modello. `KQuantVariant` ha ora un campo
+`regime: "prefill" | "decode"` sui soli bracci di paragone, e la regola diventa
+**un denominatore PER REGIME, mai due nello stesso**. Il test è più forte di
+prima: pretende anche che ogni `legacy` dichiari il suo regime (`a.legacy ===
+(a.regime !== undefined)`), che il decode esista **solo a M=1**, e — caso nuovo
+— che `base-decode` sia `gemvQuantWgsl` senza `batch` **byte per byte** e che
+NON coincida col paragone del prefill.
+
+E il braccio è scritto **una volta sola** (`pushDecodeArm`) per tutte e cinque le
+famiglie, invece che ricopiato nei tre rami: alla seconda copia la domanda è se
+va fattorizzata, alla terza non è più una domanda.
+
+*Nota di metodo, a mio carico*: la prima stesura l'ho fatta con uno script di
+sostituzione a regex, che ha duplicato un blocco e sparso chiamate in una
+funzione sbagliata. `git checkout` del file e rifatto con edit mirati. Su un
+file da 2.400 righe la regex non è più veloce: è solo meno verificabile.
+
+### EVIDENZA
+
+- `results/microbench/velocita-decode-2d-4090-linux-2026-08-16T02-56-25-413Z.json`,
+  host quiescente, p50 su campioni interleavati, warm-up scartato
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1100 passed | 10 skipped**
+  (erano 1099: +1 caso, e uno riscritto più stringente)
+
+### NON VERIFICATO
+
+- L'artefatto è stato prodotto **prima** che il braccio fosse esteso a q5_K e
+  q4_1 (allora usciva solo per q4_K, q6_K e q8_0). Le loro celle `base-decode`
+  arriveranno alla prossima run — `q5_K K=4096 N=2560` è `ssm_out`, cioè il
+  quinto termine del decode (2,05 ms/token): vale guardarla.
+- **Il conto che manca al piano**: i due buffer che la rotta vuole e che nel
+  decode non esistono (parziali N×fette f32, x quantizzata). Sono VRAM sottratta
+  all'arena expert, e su questo modello l'arena è il vincolo. Va nel piano della
+  prossima iterazione, non scoperto costruendo.

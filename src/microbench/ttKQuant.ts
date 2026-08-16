@@ -1065,7 +1065,15 @@ export const KQUANT_SHAPES: readonly KQuantShape[] = [
   { family: "q4_K", K: 2048, N: 512, label: "35B expert gate/up (117 tensori Q4_K = 17,67 GB, il modello quasi tutto)", Ms: [1, 8, 16] },
   { family: "q4_K", K: 512, N: 2048, label: "35B expert down — DUE superblocchi per riga, split-K a 2 fette (C0-4)", Ms: [1, 8, 16] },
   { family: "q6_K", K: 512, N: 2048, label: "35B expert down di 3 layer (860.160 B per expert, verificato sull'header)", Ms: [1, 8, 16] },
-  { family: "q8_0", K: 2048, N: 4096, label: "35B attn q-proj (100 tensori Q8_0 = 1,09 GB)", Ms: [1, 8, 16] },
+  { family: "q8_0", K: 2048, N: 4096, label: "35B attn q-proj (100 tensori Q8_0 = 1,09 GB) — e' anche attn_gate del DECODE, 33,16% dei pesi dei quattro (it.17)", Ms: [1, 8, 16] },
+  // La shape che mancava, ed e' la PIU' GRANDE dei quattro tensori di `ssmGemv`:
+  // N = (2*group_count + time_step_rank)*state_size = (2*16+32)*128 = 8192,
+  // K = dModel = 2048 (q35shape.ts:86-89 + meta dell'header, it.17). Da sola il
+  // 66,32% dei byte dei quattro; con attn_gate, il 99,48%.
+  // `ssmGemv` e' il primo termine del decode del 35B dopo il kfan (6,99 ms/token
+  // su 30 dispatch = 233 us a layer) e ce l'hanno anche 4B e 9B: e' li' che una
+  // leva sarebbe globale per costruzione.
+  { family: "q8_0", K: 2048, N: 8192, label: "35B attn_qkv del DECODE (66,32% dei pesi di ssmGemv, il primo termine)", Ms: [1, 8, 16] },
 ];
 
 export interface KQuantVariant {
@@ -1074,26 +1082,66 @@ export interface KQuantVariant {
   grid: [number, number, number];
   /** true = la cella ha bisogno delle attivazioni quantizzate a i8 */
   idot: boolean;
-  /** true = e' il braccio di paragone, cioe' cio' che il motore emette OGGI */
+  /**
+   * true = e' un braccio di paragone, cioe' cio' che il motore emette OGGI.
+   * NON e' la stessa cosa di "il denominatore": da it.21 i paragoni sono DUE,
+   * uno per regime (v. `regime`). Il runner usa questo campo per scegliere il
+   * buffer di uscita e il fattore di emissione, non per fare i rapporti.
+   */
   legacy: boolean;
+  /**
+   * Il regime di cui questo braccio e' il paragone — presente SOLO sui bracci
+   * `legacy`, assente sui candidati.
+   *
+   * Esiste perche' i due regimi emettono kernel DIVERSI, e confonderli e'
+   * costato la credibilita' di un numero: il «3,26x a M=1» con cui la riga 2d
+   * di `engine-velocita-decode` giustificava 2-3 iterazioni era misurato contro
+   * `base-batch-z`, cioe' la forma del PREFILL (M righe su `wid.z`), mentre la
+   * leva che doveva giustificare era nel DECODE, che emette lo stesso
+   * generatore SENZA `batch`. Alla verifica i due coincidono entro l'1,4% e il
+   * rapporto ha retto (3,30x) — ma non lo sapeva nessuno, ed e' un caso in cui
+   * l'esito buono non riscatta il metodo.
+   *
+   * La regola: **un denominatore per regime, mai due nello stesso**.
+   */
+  regime?: "prefill" | "decode";
   splits: number;
   ctx: string;
 }
 
 /**
- * I bracci per una (famiglia, shape, M). Il primo e' SEMPRE il legacy di
- * produzione: se la lista non lo contenesse, il rapporto della regola di stop
- * non avrebbe denominatore.
+ * I bracci per una (famiglia, shape, M). Il primo e' SEMPRE il paragone del
+ * PREFILL: se la lista non lo contenesse, il rapporto della regola di stop non
+ * avrebbe denominatore. A M=1 la lista porta anche il paragone del DECODE.
  */
 export function kquantVariants(o: { family: KQuantFamily; K: number; N: number; M: number }): KQuantVariant[] {
   const { family, K, N, M } = o;
   const splits = kquantSplitsFor(family, K);
   const [lgx, lgy] = gemvGrid(N);
   const out: KQuantVariant[] = [];
+  // BRACCIO DEL DECODE (goal engine-velocita-decode, it.21), scritto UNA volta
+  // per tutte e cinque le famiglie invece che ricopiato in ogni ramo.
+  // Solo a M=1: a M>1 il decode non esiste, e un braccio senza `batch` con M
+  // righe misurerebbe una forma che nessuno emette.
+  const pushDecodeArm = (): void => {
+    if (M !== 1) return;
+    const code = family === "q5_K"
+      ? gemvQ5KWgsl({ K, N })
+      : family === "q4_K"
+        ? gemvQ4KWgsl({ K, N })
+        : family === "q6_K"
+          ? gemvQ6KWgsl({ K, N })
+          : gemvQuantWgsl({ kind: family, K, N, hasBias: false });
+    out.push({
+      id: "base-decode", code, grid: [lgx, lgy, 1],
+      idot: false, legacy: true, regime: "decode", splits: 0,
+      ctx: `IL KERNEL DEL DECODE della famiglia ${family}: lo stesso generatore del paragone di prefill ma SENZA batch, un workgroup da 64 thread per riga di uscita. E' cio' che q35gpumodel.ts:862 emette a M=1, e il solo termine di paragone legittimo per una leva di decode.`,
+    });
+  };
   if (family === "q5_K") {
     out.push({
       id: "base-batch-z", code: gemvQ5KWgsl({ K, N, batch: true }), grid: [lgx, lgy, M],
-      idot: false, legacy: true, splits: 0,
+      idot: false, legacy: true, regime: "prefill", splits: 0,
       ctx: "FORMA ATTUALE, importata da src/engine/kernels/wgsl.ts (gemvQ5KWgsl con batch: true): e' cio' che il motore emette oggi su ssm_out. M GEMV replicate su wid.z, riuso dei pesi ZERO — ogni fetta z rilegge l'intera matrice.",
     });
     out.push({
@@ -1106,12 +1154,13 @@ export function kquantVariants(o: { family: KQuantFamily; K: number; N: number; 
       grid: kquantMultiRowGrid({ N, splits }), idot: false, legacy: false, splits,
       ctx: "stessa mappatura, attivazioni in virgola mobile: FALLBACK DICHIARATO per i device senza packed_4x8_integer_dot_product. Tile di un gruppo da 64 per volta, cosi' il fabbisogno di memoria di gruppo resta sotto il minimo di spec WebGPU.",
     });
+    pushDecodeArm();
     return out;
   }
   if (family === "q4_1") {
     out.push({
       id: "base-batch-z", code: gemvQuantWgsl({ kind: "q4_1", K, N, hasBias: false, batch: true }), grid: [lgx, lgy, M],
-      idot: false, legacy: true, splits: 0,
+      idot: false, legacy: true, regime: "prefill", splits: 0,
       ctx: "FORMA ATTUALE, importata da src/engine/kernels/wgsl.ts (gemvQuantWgsl kind q4_1 con batch: true): e' cio' che il motore emette oggi su ffn_down dei layer 0-3. Riuso dei pesi ZERO.",
     });
     out.push({
@@ -1124,6 +1173,7 @@ export function kquantVariants(o: { family: KQuantFamily; K: number; N: number; 
       grid: kquantMultiRowGrid({ N, splits }), idot: false, legacy: false, splits,
       ctx: "stessa mappatura in virgola mobile: FALLBACK DICHIARATO.",
     });
+    pushDecodeArm();
     return out;
   }
 
@@ -1146,7 +1196,7 @@ export function kquantVariants(o: { family: KQuantFamily; K: number; N: number; 
       : kquantQ80MultiRowSplitKIdotWgsl({ family, K, N, M, splits });
   out.push({
     id: "base-batch-z", code: legacyCode, grid: [lgx, lgy, M],
-    idot: false, legacy: true, splits: 0,
+    idot: false, legacy: true, regime: "prefill", splits: 0,
     ctx: `FORMA ATTUALE della famiglia ${family}, importata da src/engine/kernels/wgsl.ts: e' cio' che il motore emetterebbe oggi su questi tensori. Riuso dei pesi ZERO.`,
   });
   const f32Code = family === "q4_K"
@@ -1168,5 +1218,6 @@ export function kquantVariants(o: { family: KQuantFamily; K: number; N: number; 
     grid: kquantMultiRowGrid({ N, splits }), idot: false, legacy: false, splits,
     ctx: "stessa mappatura in virgola mobile: FALLBACK DICHIARATO per i device senza packed_4x8_integer_dot_product. Sul Q6_K l'offset -32 qui si sottrae direttamente dal peso — il traboccamento fra byte esiste solo nella forma impacchettata.",
   });
+  pushDecodeArm();
   return out;
 }
