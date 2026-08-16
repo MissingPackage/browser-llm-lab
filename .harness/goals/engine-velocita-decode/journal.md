@@ -1653,3 +1653,94 @@ file da 2.400 righe la regex non è più veloce: è solo meno verificabile.
   decode non esistono (parziali N×fette f32, x quantizzata). Sono VRAM sottratta
   all'arena expert, e su questo modello l'arena è il vincolo. Va nel piano della
   prossima iterazione, non scoperto costruendo.
+
+---
+
+## it.22 — il conto della VRAM: 130 KiB, e la mia preoccupazione era mal riposta
+
+it.21 aveva lasciato al piano un conto esplicito: *«i due buffer che la rotta
+vuole sono VRAM sottratta all'arena expert, e su questo modello l'arena è il
+vincolo»*. **L'ho fatto, ed è un non-problema.** Lo scrivo senza gonfiarlo: era
+giusto verificarlo prima di costruire, ed è giusto dire che l'esito è banale.
+
+### I numeri, dalle stesse espressioni che il prefill usa già
+
+`PREFILL_SPLITS_MEASURED = 4` (`wgsl.ts:4175`), M = 1, K = 2048:
+
+    part   N=8192   4 x 1 x 8192 x 4 =  131.072 B = 128 KiB
+    part   N=4096   4 x 1 x 4096 x 4 =   65.536 B =  64 KiB
+    xq     K=2048   2048/4 x 4       =    2.048 B =   2 KiB
+    xsc    K=2048   2048/32 x 4      =      256 B
+
+    UN part condiviso dai due tensori      130,2 KiB   = 0,00104% dell'arena da 12 GiB
+    DUE part, uno per tensore              194,2 KiB   = 0,00154%
+
+**Il fattore che rendeva grosso il conto del prefill è `M_MAX = 16`. Nel decode
+M = 1**, e con esso sparisce l'unico termine che contava.
+
+**Consiglio: due `part`, non uno.** Costa 64 KiB in più e toglie una dipendenza
+falsa: con un buffer solo, il GEMM di `attn_qkv` e quello di `attn_gate` devono
+serializzare sulla scrittura anche se sono indipendenti. A 0,0015% dell'arena,
+comprare l'indipendenza è gratis.
+
+### Il buffer del prefill NON si può riusare, e questo sì che andava verificato
+
+`prefillOn = M_MAX > 0` e `M_MAX = min(16, floor(opts.prefillM ?? 0))`
+(`q35gpumodel.ts:703-704`): senza `prefillM` i tre buffer sono **null**. Gli A/B
+del decode di questo goal (`--kfan --arena-gib 12`) non passano `--prefill-m`,
+quindi in quelle run non esistono. **La rotta del decode deve allocare i suoi**,
+incondizionatamente — il che, a 130-194 KiB, è la cosa giusta comunque: legare
+una leva di decode al fatto che qualcuno abbia acceso il prefill a chunk sarebbe
+un accoppiamento gratuito.
+
+### Le tre verifiche che rendono il piano eseguibile
+
+1. **I quattro tensori passano da `gemv`** (`q35gpumodel.ts:1117-1120`:
+   `wqkv.push` / `wz.push` / `wb.push` / `wa.push`), ed è l'emettitore del
+   DECODE — non `gemvB`. La correzione di it.17 regge sul codice.
+2. **Leggono TUTTI lo stesso `xn`.** Quindi la quantizzazione di x si fa **una
+   volta per layer** e la usano entrambi gli ammessi: 30 dispatch di quantX per
+   token, non 60. È il numero che avevo già usato nella proiezione di it.21.
+3. **Il predicato esiste già e va interrogato, non riscritto**: `kernelVerdict`
+   (`prefillgemmplan.ts:209`) respinge `N < PREFILL_GEMM_ROWS_PER_WG`, che è
+   esattamente ciò che tiene fuori `ssm_alpha`/`ssm_beta` (N=32) e dentro
+   `attn_qkv` (8192) e `attn_gate` (4096). Il decode chiede allo stesso piano:
+   una verità sola, ed è il lavoro di it.14 che paga qui.
+
+### Una discrepanza che va detta, perché tocca la proiezione
+
+Il banco dà 294 µs per i due tensori grandi di un layer; il motore misura
+**233 µs per l'intero segmento `ssmGemv` di un layer**, cioè per tutti e
+quattro. Il motore è più veloce del banco sullo stesso lavoro (~26%): condizioni
+diverse, sonda diversa, stato di cache diverso.
+
+**Conseguenza sulla proiezione di it.21**: la grandezza trasferibile è il
+**rapporto** (3,55× per layer), non i millisecondi assoluti — ed è così che
+l'avevo applicata (6,99 × 0,0829/0,294). Il conto regge; l'avrei sbagliato se
+avessi sottratto i 294 µs del banco dai 233 del motore.
+
+### IL PIANO DELLA ROTTA, in cinque fette — perché la prossima iterazione scriva codice invece di progettare
+
+1. **I buffer**: due `part` (4 × N × 4 sulle due N ammesse) + `xq` + `xsc`,
+   allocati sempre, ~194 KiB.
+2. **`quantX` una volta per layer** su `xn`, prima delle quattro `push`.
+3. **`gemv` interroga `planPrefillGemm`** e, se ammesso E il flag è acceso,
+   emette i tre dispatch (quantX già fatto → GEMM a fette → combine) invece di
+   uno. Non ammesso ⇒ resta la via di oggi, che è ciò che protegge i 48 siti del
+   4B e i due tensori a N=32.
+4. **Flag spento di default + `setSplitk()`** per l'A/B a caldo nello stesso
+   processo: è il pattern che ha funzionato col kfan (it.9) e senza il quale
+   l'A/B confronta due processi invece di due bracci.
+5. **Gate**: argmax 39/39 identici fra flag OFF e ON, stessa cache, bracci
+   interleavati — **prima** del tempo, come per il kfan. Poi `ssmGemv` dalla
+   sonda `gpuCat` e il `decode.tokS`. Infine 4B e 9B: hanno gli stessi tensori
+   DeltaNet, ed è lì che si vede se la leva è globale per costruzione o solo per
+   intenzione.
+
+### EVIDENZA
+
+Iterazione di sola lettura e aritmetica: nessuna modifica al codice, albero
+invariato (`52b3efa`). I numeri vengono da `wgsl.ts:4175`,
+`q35gpumodel.ts:703-704, 754-772, 1103-1120` e `prefillgemmplan.ts:209-246`.
+Nessuna GPU spesa: era la domanda giusta da fare a costo zero prima di
+spenderne.

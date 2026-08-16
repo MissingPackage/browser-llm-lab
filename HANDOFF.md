@@ -128,10 +128,21 @@ Proiezione, dichiarata come criterio di spesa e NON come risultato: `ssmGemv`
 ⇒ token 32,5 → ~28,3 = **~35,4 tok/s**. Pre-registrazione e graduatoria in
 `docs/deep-dive/velocita-decode-2d-prereg-2026-08-16.md`.
 
-**Il conto che manca al piano**: i due buffer che la rotta vuole e che nel decode
-non esistono (parziali N×fette f32, x quantizzata) sono **VRAM sottratta
-all'arena expert**, e su questo modello l'arena e' il vincolo. Va nel piano,
-non scoperto costruendo.
+**IL CONTO DELLA VRAM E' FATTO (it.22) ED E' UN NON-PROBLEMA**: `part` a M=1 =
+128 KiB (N=8192) + 64 (N=4096), `xq` 2 KiB, `xsc` 256 B ⇒ **194 KiB con due
+`part` separati = 0,0015% dell'arena da 12 GiB**. Il termine che rendeva grosso
+il conto del prefill e' `M_MAX=16`; nel decode M=1 e sparisce. I buffer del
+prefill NON si riusano (`prefillOn = M_MAX > 0`, e gli A/B del decode non
+passano `--prefill-m`): la rotta alloca i suoi, il che a 194 KiB e' comunque la
+scelta giusta — legare una leva di decode all'aver acceso il prefill a chunk
+sarebbe accoppiamento gratuito.
+
+**IL PIANO E' SCRITTO, in cinque fette (riga 2d di `PHASES.md`)**, cosi' la
+prossima iterazione scrive codice invece di progettare: i buffer · `quantX` UNA
+volta per layer (i quattro tensori leggono lo stesso `xn`, quindi 30 dispatch e
+non 60) · `gemv` interroga `planPrefillGemm` invece di riscrivere il predicato ·
+flag spento + `setSplitk()` per l'A/B nello stesso processo, come `setKfan` ·
+gate argmax PRIMA del tempo, poi 4B e 9B.
 
 Le cinque iterazioni precedenti della riga hanno prodotto, tutto in albero e
 verde: la verifica di riuso (il kernel veloce ESISTE ed e' ktest-ato), il
