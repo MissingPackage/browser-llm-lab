@@ -7,6 +7,18 @@ elementi sono modificabili: è un disegno, non un'immagine.
 `motore-architettura.svg` — la stessa cosa in sola lettura, per guardarla senza
 aprire niente.
 
+## Il file che va letto PRIMA di progettare
+
+`MECCANISMI.md` — la tabella **meccanismi × path**: cosa esiste, chi lo usa,
+qual e' il default, cos'e' gia' misurato. Serve a rendere visibili le **celle
+vuote**, perche' un grep dice cosa c'e' e non cosa manca. E' tenuto onesto da
+`tests/engine-meccanismi.test.ts`, che confronta le sue affermazioni strutturali
+col sorgente: se qualcuno adotta un meccanismo e non aggiorna la riga, il test
+fallisce.
+
+Il diagramma qui sotto mostra come i pezzi si parlano; la tabella mostra chi non
+li usa. Servono a domande diverse.
+
 ## Come si legge
 
 Sette bande, dall'alto: chi entra (**A**), come si leggono i byte (**B**), i due
