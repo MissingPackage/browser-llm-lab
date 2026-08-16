@@ -63,3 +63,5 @@ confonde. ⚠ = collisione dichiarata: due cose che si chiamano uguale.
 **a caldo / a freddo** — a caldo = pesi già in page cache e turno non-primo; a freddo = primo turno dopo il load. Il 35B rende 22,6 contro 9,58 tok/s fra i due: il divario è paginazione, non kernel.
 **tok/s** — sempre col suo `decodeContext` accanto, o non è una misura.
 **µs/posizione** — la pendenza con cui il ms/token cresce col contesto. È il numero che dice se un motore regge il contesto lungo: 10,4 prima del goal sui kernel, 0,15 dopo.
+**regime di lettura (`readRegime`)** — da dove sono arrivati i byte di una finestra di I/O: `disk` (banda sotto `OPFS_DEVICE_CEILING_GIBS`, 4 GiB/s misurati su questo host) oppure `os-cache` (sopra: li ha serviti la page cache del sistema operativo, non il dispositivo). ⚠ **due run in regimi diversi non sono confrontabili**: il GLM b12 ha dato 15,3 e 11,3 tok/s con lo stesso codice e gli stessi `bytesRead`, e la sola differenza era questa (it.20). Un riferimento che non lo dichiara non è un riferimento.
+**kfan** — il collasso dei topK expert in un giro solo di dispatch (`wid.z = k`): 1.320 → 200 dispatch/token sul 35B.
