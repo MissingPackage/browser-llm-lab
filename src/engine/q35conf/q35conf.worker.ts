@@ -13,7 +13,7 @@ import { createQ35GpuModel, q35TensorBytes } from "../q35gpumodel";
 import { q35MoeConfig } from "../q35expertstore";
 import { arenaNeeds } from "../residency";
 import { validateQwen35 } from "../q35shape";
-import { ggufRangeReader } from "../ggufrange";
+import { ggufRangeReader, takeGgufRangeStats, effectiveParallelism } from "../ggufrange";
 
 interface GoldenPos { argmax: number; top: Array<[number, number]> }
 interface GoldenPrompt { id: string; file: string; promptTokens: number[]; generated: number[]; positions: GoldenPos[] }
@@ -184,7 +184,8 @@ const pass2json = (
   // clausola del done-when resa verificabile nell'artefatto invece che a mano:
   // quanta parte di `tailCpuMs` i contatori sanno spiegare.
   repair: {
-    fetchRepairMs: r.fetchRepairMs, fetchRepairCalls: r.fetchRepairCalls,
+    io: (r as unknown as { io?: unknown }).io ?? null,
+  fetchRepairMs: r.fetchRepairMs, fetchRepairCalls: r.fetchRepairCalls,
     fetchRepairBytes: r.fetchRepairBytes,
     msPerFetch: r.fetchRepairCalls > 0 ? r.fetchRepairMs / r.fetchRepairCalls : null,
     fetchPrepMs: r.fetchPrepMs, fetchPrepCalls: r.fetchPrepCalls, fetchPrepBytes: r.fetchPrepBytes,
@@ -745,6 +746,8 @@ async function main(cfg: Cfg): Promise<void> {
     const p = golden.prompts[0];
     const tokens = [...p.promptTokens, ...p.generated];
     const runPass = async (optimistic: boolean, kfan = false, splitk = false): Promise<{
+      /** contatori del lettore condiviso su QUESTA passata (it.34) */
+      io: Record<string, number | null>;
       argmax: number[];
       /** sonda dei logit (it.25): vuoto senza `cfg.logitProbe`. */
       top2: Array<{ i1: number; v1: number; i2: number; v2: number } | null>;
@@ -768,6 +771,8 @@ async function main(cfg: Cfg): Promise<void> {
       // sullo STESSO modello. Il piano porta entrambi i bracci e l'encoder ne
       // salta uno (`Step.arm`), quindi qui non si ricostruisce niente.
       model.setSplitk(splitk);
+      // finestra dei contatori del lettore (it.34): azzera qui, si legge in fondo
+      takeGgufRangeStats();
       const p0 = model.perf(), m0 = model.moeStats!();
       // gpuTime per PASSATA (goal engine-velocita-decode, it.10): i contatori
       // sono cumulativi come `perf` e `moeStats`, quindi il braccio si ottiene
@@ -812,7 +817,17 @@ async function main(cfg: Cfg): Promise<void> {
         const dlt = v - (m0.routing[k] ?? 0);
         if (dlt > 0) routing[k] = dlt;
       }
+      const io = takeGgufRangeStats();
       return {
+        io: {
+          ...io,
+          // LA CIFRA CHE DECIDE: somma delle durate / parete. ~1 = letture di
+          // fatto serializzate, ~N = davvero parallele. it.32-33 hanno escluso
+          // il canale; questa dice se il path le manda in parallelo come crede.
+          effectiveParallelism: effectiveParallelism(io),
+          mbPerSec: io.sumMs > 0 && io.lastEnd > io.firstStart
+            ? (io.bytes / 1e6) / ((io.lastEnd - io.firstStart) / 1000) : null,
+        },
         argmax, top2, submits: p1.submits - p0.submits, readbacks: p1.readbacks - p0.readbacks,
         hits: m1.hits - m0.hits, misses: m1.misses - m0.misses, routing, ms, error,
         dirtyTokens: p1.dirtyTokens - p0.dirtyTokens, replays: p1.replays - p0.replays,

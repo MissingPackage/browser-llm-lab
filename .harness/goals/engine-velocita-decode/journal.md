@@ -2720,3 +2720,87 @@ consegnato byte non è una banda.
 - La curva sopra le 48 richieste resta rumorosa (665-738) e ora anche sporca di
   letture vuote: per un numero preciso servirebbero repliche, per la conclusione
   «il canale non è il collo» no.
+
+---
+
+## it.34 — strumentato l'interno: le richieste sono EMESSE in parallelo e SERVITE in serie
+
+Dopo due ipotesi smentite dai loro esperimenti, ho smesso di modellare il canale
+e ho strumentato il lettore — che è uno solo dal it.30, quindi una modifica sola
+copre tutti e cinque i chiamanti.
+
+**La cifra che serviva**: il **parallelismo effettivo** = somma delle durate
+delle singole letture / durata di parete. Vale ~1 se le letture sono di fatto
+serializzate, ~N se sono davvero parallele. È la sola che distingue «il canale è
+lento per noi» da «le nostre letture non sono parallele come crediamo».
+
+### La misura
+
+`results/engine/q35-ioinside-arena4-2026-08-16.json`
+
+    passata           range    in volo   parall.   media    max     MB/s
+                              max        effett.   ms/range  ms     parete
+    sync-cold         10.596     24       3,51     13,71    63,1    152,3
+    sync-warm          8.256     24       2,95     13,66    60,1    128,5
+    optimistic-warm    9.849    741      57,12    124,42   793,5    272,9
+
+### Il fatto, e non è nessuna delle mie due ipotesi
+
+**Il `prep` emette 24 richieste insieme e ne ottiene servite ~3 alla volta.** Il
+`repair` ne emette 741 e ne ottiene 57. Il rapporto fra i parallelismi effettivi
+è **19×**; quello fra le bande di parete è **2,1×** — cioè esattamente il numero
+da cui la riga 2b è partita.
+
+Non era il numero di richieste in volo (it.32: il canale a 24 dà 543 MB/s), non
+era la forma a raffiche (it.33: 0,98× a 24). **È che le richieste emesse non
+vengono servite in parallelo**, e per ottenere parallelismo servito bisogna
+emetterne un ordine di grandezza di più.
+
+### Due correzioni a mio carico
+
+1. **it.33 diceva «~7 range in volo, non 24»**, dedotto dividendo le chiamate
+   totali per i layer. Il **massimo misurato è 24**: la media non è il massimo, e
+   il contratto aveva ragione. La deduzione era aritmeticamente corretta e
+   descriveva un'altra grandezza.
+2. **Il confronto probe-contro-motore che avevo fatto era fra grandezze
+   diverse**: il probe riporta `totale/N`, che è un *throughput*, mentre pensavo
+   a una *latenza*. La latenza per range nel motore è 13,7 ms nel `prep` e 124
+   nel `repair` — numeri che il probe non aveva mai misurato. Il confronto che
+   regge è quello sulle bande di parete, ed è quello che ho usato sopra.
+
+### Cosa resta ipotesi, e la chiamo così perché ho già sbagliato due volte
+
+Perché 24 richieste vengono servite 3 alla volta? Le candidate:
+
+- **il limite di connessioni per origine** del browser (HTTP/1.1 ne concede ~6):
+  spiegherebbe un tetto vicino a 6, non a 3;
+- **la località**: il `prep` chiede 8 fette *adiacenti* dello stesso tensore,
+  il probe chiedeva 256 fette sparse su 19,46 GiB. Un server che serializza
+  richieste sovrapposte o vicine sullo stesso file darebbe questo;
+- **la contesa col lavoro GPU** nello stesso worker.
+
+**Non ne promuovo nessuna.** La prossima misura è il probe con lo stesso
+strumento — ora ce l'ha, perché usa lo stesso lettore — così il parallelismo
+effettivo si confronta a parità di strumento invece che a parità di ipotesi.
+
+### La conseguenza per la riga 2b, che è già nel docket item 8
+
+Il ruling chiedeva se raggruppare le richieste desse un boost globale. it.33 ha
+risposto **no sul canale**; it.34 aggiunge **perché il `repair` è comunque più
+veloce**: non perché raggruppa, ma perché **satura**. E saturare emettendone
+centinaia è ciò che il `repair` fa per costruzione — non una leva da aggiungere,
+una proprietà del suo regime.
+
+### EVIDENZA
+
+- `results/engine/q35-ioinside-arena4-2026-08-16.json`, host quiescente,
+  zero letture fallite in tutte e tre le passate
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1110 passed | 10 skipped**
+- lo strumento vive nel lettore condiviso: i cinque chiamanti non sanno che
+  esiste, e le prossime misure di I/O lo hanno già
+
+### NON VERIFICATO
+
+- **Perché** il servizio si ferma a ~3. Tre candidate, nessuna promossa.
+- Il probe non ha ancora riportato il proprio parallelismo effettivo: senza,
+  il confronto fra probe e motore resta fra bande e non fra meccanismi.
