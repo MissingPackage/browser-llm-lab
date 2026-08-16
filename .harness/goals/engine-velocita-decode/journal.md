@@ -2804,3 +2804,88 @@ una proprietà del suo regime.
 - **Perché** il servizio si ferma a ~3. Tre candidate, nessuna promossa.
 - Il probe non ha ancora riportato il proprio parallelismo effettivo: senza,
   il confronto fra probe e motore resta fra bande e non fra meccanismi.
+
+---
+
+## it.35 — due candidate su tre eliminate, e una mia formulazione di ieri era sbagliata
+
+Probe e motore ora misurati **con lo stesso strumento** (il parallelismo
+effettivo del lettore condiviso), e con una variabile nuova: la **località**
+delle fette richieste.
+
+    SPARSE (256 fette su 19,46 GiB)
+      in volo    1     2     4     8    16    24    48    96   192   256
+      MB/s     208   511   548   576   562   587   674   682   591   727
+      par.eff 1,00  1,99  3,98  7,90 15,57 23,01 44,81 85,41 117,7 136,5
+
+    ADIACENTI (fette contigue — la forma del motore)
+      in volo    4     8    24    48
+      MB/s     564   536   528   646
+      par.eff 3,98  7,91 22,56 44,34
+
+    MOTORE (it.34)
+      prep      24 in volo   128,5 MB/s   par.eff  2,95
+      repair   741 in volo   272,9 MB/s   par.eff 57,12
+
+### Candidata 1 — il limite di connessioni per origine: ELIMINATA
+
+Il parallelismo effettivo **segue le richieste in volo quasi uno a uno** fino a
+96 (23,01 su 24; 44,81 su 48; 85,41 su 96) e arriva a **136,5**. Se ci fosse il
+tetto a ~6 dell'HTTP/1.1, la curva si sarebbe appiattita lì. Non c'è tetto.
+
+### Candidata 2 — la località delle fette: ELIMINATA
+
+Fette contigue contro fette sparse, stesso numero, stesse finestre, stesso
+lettore: **22,56 contro 23,01** di parallelismo a 24 in volo, e bande a una
+manciata di punti percentuali (528 contro 587). La forma degli offset non conta.
+
+### La correzione: «emette 24 e ne serve 3» era una lettura sbagliata
+
+it.34 ha misurato `maxInFlight = 24` e `parallelismo effettivo = 2,95` e io ho
+scritto che il motore *emette 24 richieste e ne ottiene servite 3*. **Sono due
+grandezze diverse**: 24 è il **picco** sull'intera passata, 2,95 è la **media**.
+Un path che per lo più chiede 3 range alla volta e ogni tanto 24 dà esattamente
+questi numeri — senza che nessuno serializzi niente.
+
+*Terza formulazione mia da correggere in questa riga. Il difetto è sempre lo
+stesso: leggere un massimo e una media come se descrivessero lo stesso momento.*
+
+### Il fatto che resta, ed è più netto di prima
+
+A **parallelismo confrontabile**, la latenza della singola lettura:
+
+    probe, 3,98 in volo      4,32 ms per range
+    motore prep, 2,95        13,66 ms per range     3,2x
+
+Stesso lettore, stesso file, stesso server, stesso browser, parallelismo
+equivalente. **Ogni singola lettura del motore costa tre volte quella del
+probe.** Non è il canale, non è quante ne chiedi, non è dove sono: è **cosa sta
+intorno alla lettura** nel path del motore.
+
+Resta in piedi la terza candidata di it.34 — la contesa col lavoro GPU nello
+stesso worker — e se ne aggiunge una che il probe non può avere: **le pause fra
+una raffica e l'altra**, durante le quali il motore calcola il layer e le
+connessioni restano inattive.
+
+**Non ne promuovo nessuna.** Le due si discriminano facendo girare il probe
+*mentre* la GPU lavora, ed è una misura che si può costruire.
+
+### Perché questo, per la riga 2b, è già una risposta
+
+Il done-when chiedeva l'effetto del raggruppamento. Tre esperimenti controllati
+dicono che **sul trasporto non c'è niente da raggruppare**: il canale serve 24,
+48, 96 richieste in parallelo senza fatica, contigue o sparse. Il 2,1× da cui la
+riga è partita **non è una proprietà dell'I/O**: è una proprietà di come il
+motore lo usa. Il docket item 8 resta come scritto, e questa è la terza conferma
+della sua uscita 3 (assorbire la 2b nella riga 3).
+
+### EVIDENZA
+
+- `results/engine/q35-io-locality-2026-08-16.json`, host quiescente
+  (1 lettura vuota su 256 a 192 in volo, dichiarata)
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1110 passed | 10 skipped**
+
+### NON VERIFICATO
+
+- Perché la singola lettura costi 3,2× dentro il motore. Due candidate, nessuna
+  promossa, e la misura che le separa è nominata.

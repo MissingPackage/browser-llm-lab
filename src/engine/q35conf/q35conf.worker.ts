@@ -267,6 +267,13 @@ async function ioProbe(cfg: Cfg): Promise<void> {
   }
   const span = size - BASE - RANGE_BYTES;
   const offs = Array.from({ length: N }, (_, i) => BASE + Math.floor((i * span) / N));
+  // OFFSET ADIACENTI — la forma del motore, e la variabile che it.34 ha lasciato
+  // aperta. Il `prep` chiede 8 fette CONTIGUE dello stesso tensore; questo probe
+  // finora chiedeva 256 fette sparse su 19,46 GiB. Se il servizio si ferma a ~3
+  // per la localita' e non per il limite di connessioni, e' qui che si vede:
+  // stesso numero, stessa taglia, stesse finestre, cambia SOLO se le fette sono
+  // vicine o lontane.
+  const adj = Array.from({ length: N }, (_, i) => BASE + i * RANGE_BYTES);
 
   // IL SERVER CEDE SOTTO CONCORRENZA, e va CONTATO invece che fatto abortire.
   //
@@ -282,32 +289,58 @@ async function ioProbe(cfg: Cfg): Promise<void> {
     try { await range(off, RANGE_BYTES); } catch { fails.n++; }
   };
 
-  /** N letture con al piu' `w` in volo. Ritorna ms totali e letture fallite. */
-  const pass = async (w: number): Promise<{ ms: number; fails: number }> => {
+  /**
+   * N letture con al piu' `w` in volo, sugli offset dati. Riporta anche il
+   * PARALLELISMO EFFETTIVO misurato dal lettore (it.34): e' la cifra con cui il
+   * probe e il motore si confrontano a parita' di strumento invece che a
+   * parita' di ipotesi.
+   */
+  const pass = async (w: number, where: number[]): Promise<{
+    ms: number; fails: number; parallelism: number | null; maxInFlight: number;
+  }> => {
+    takeGgufRangeStats();
     const t = performance.now();
     const f = { n: 0 };
     let next = 0;
     const worker = async (): Promise<void> => {
       for (;;) {
         const i = next++;
-        if (i >= offs.length) return;
-        await readCounting(offs[i], f);
+        if (i >= where.length) return;
+        await readCounting(where[i], f);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(w, offs.length) }, worker));
-    return { ms: performance.now() - t, fails: f.n };
+    await Promise.all(Array.from({ length: Math.min(w, where.length) }, worker));
+    const ms = performance.now() - t;
+    const io = takeGgufRangeStats();
+    return { ms, fails: f.n, parallelism: effectiveParallelism(io), maxInFlight: io.maxInFlight };
   };
 
   progress(`io-probe: riscaldamento (${N} range da ${(RANGE_BYTES / 1e6).toFixed(2)} MB)`);
-  await pass(64);                         // scartata: nessuna finestra paga il primo contatto
+  await pass(64, offs);                   // scartata: nessuna finestra paga il primo contatto
 
   const mb = (N * RANGE_BYTES) / 1e6;
-  const points: Array<{ inFlight: number; ms: number; mbPerSec: number; msPerRange: number; fails: number }> = [];
+  const points: Array<{
+    inFlight: number; ms: number; mbPerSec: number; msPerRange: number;
+    fails: number; parallelism: number | null; maxInFlight: number;
+  }> = [];
   for (const w of WINDOWS) {
-    const { ms, fails } = await pass(w);
-    points.push({ inFlight: w, ms, mbPerSec: mb / (ms / 1000), msPerRange: ms / N, fails });
-    progress(`io-probe: ${w} in volo -> ${(mb / (ms / 1000)).toFixed(1)} MB/s`
-      + (fails ? ` (${fails}/${N} letture VUOTE: banda non valida)` : ""));
+    const r = await pass(w, offs);
+    points.push({
+      inFlight: w, ms: r.ms, mbPerSec: mb / (r.ms / 1000), msPerRange: r.ms / N,
+      fails: r.fails, parallelism: r.parallelism, maxInFlight: r.maxInFlight,
+    });
+    progress(`io-probe: ${w} in volo -> ${(mb / (r.ms / 1000)).toFixed(1)} MB/s`
+      + ` (parall. eff. ${r.parallelism === null ? "n/d" : r.parallelism.toFixed(2)})`
+      + (r.fails ? ` — ${r.fails}/${N} letture VUOTE: banda non valida` : ""));
+  }
+
+  // ---- TERZA SPAZZATA: stesse finestre, fette ADIACENTI ---------------------
+  const adjacent: Array<{ inFlight: number; ms: number; mbPerSec: number; fails: number; parallelism: number | null }> = [];
+  for (const w of [4, 8, 24, 48]) {
+    const r = await pass(w, adj);
+    adjacent.push({ inFlight: w, ms: r.ms, mbPerSec: mb / (r.ms / 1000), fails: r.fails, parallelism: r.parallelism });
+    progress(`io-probe: ${w} in volo su fette ADIACENTI -> ${(mb / (r.ms / 1000)).toFixed(1)} MB/s`
+      + ` (parall. eff. ${r.parallelism === null ? "n/d" : r.parallelism.toFixed(2)})`);
   }
   // ---- SECONDA SPAZZATA: a RAFFICHE, che e' la forma del `prep` -------------
   //
@@ -360,6 +393,9 @@ async function ioProbe(cfg: Cfg): Promise<void> {
       // e' la forma del `prep`, e serve a dire se la causa e' la forma o il
       // numero di richieste in volo
       bursts,
+      // stesse finestre, fette CONTIGUE: la variabile «localita'», che it.34 ha
+      // lasciato aperta fra le tre candidate
+      adjacent,
       confronto: [8, 24, 48, 96].map((n) => ({
         n,
         continuoMBs: points.find((q) => q.inFlight === n)?.mbPerSec ?? null,
