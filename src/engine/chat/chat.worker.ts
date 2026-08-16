@@ -27,6 +27,7 @@ import { q35MoeConfig } from "../q35expertstore";
 import { arenaNeeds } from "../residency";
 import { validateQwen35, Q35_SHA256, type Q35Shape } from "../q35shape";
 import { q35TokenizerFromMetadata, type Q35Tokenizer } from "../q35tokenizer";
+import { ggufRangeReader } from "../ggufrange";
 
 // I GGUF canonici: le SHA sono quelle PINNATE in q35shape, non ricopiate a
 // mano — se il pin cambia, questa tabella cambia con lui.
@@ -59,13 +60,9 @@ const post = (m: unknown): void => (self as unknown as Worker).postMessage(m);
 const progress = (msg: string): void => post({ type: "progress", msg });
 
 let URL_GGUF: string = MODELS["4b"].url;
-async function range(off: number, len: number): Promise<Uint8Array> {
-  const rr = await fetch(URL_GGUF, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
-  if (rr.status !== 206) throw new Error(`chat: Range non onorato (${rr.status})`);
-  const ab = await rr.arrayBuffer();
-  if (ab.byteLength !== len) throw new Error(`chat: Range corto ${ab.byteLength}/${len}`);
-  return new Uint8Array(ab);
-}
+// il lettore condiviso (riga 2b): e' qui che vivranno la finestra di
+// concorrenza e il coalescing, e questo worker li eredita senza cambiare riga
+const range = ggufRangeReader(() => URL_GGUF, "chat");
 
 // ——— stato del worker (un modello alla volta: la VRAM è una) ———
 let model: Q35GpuModel | null = null;

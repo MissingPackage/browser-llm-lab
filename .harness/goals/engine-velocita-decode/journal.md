@@ -2374,3 +2374,80 @@ di un braccio acceso a mano.* È già scritto in `HANDOFF.md`.
 
 Sola analisi: `results/engine/q35-splitk-gputime-2026-08-16.json`, nessun
 comando GPU, albero invariato rispetto a `07c5085`.
+
+---
+
+## it.30 — riga 2b, fetta 1: la sede condivisa non esisteva, e la quinta copia aveva già divergito
+
+Aperta la riga 2b (il raggruppamento dell'I/O, chiesto dal PI). Il contratto
+dice che la leva va nel path **condiviso** e non nei call-site del 35B,
+«altrimenti è la piccolezza specifica che il ruling vieta».
+
+**Il path condiviso non esisteva.** La stessa funzione da sette righe stava in
+**cinque** posti:
+
+    src/engine/chat/chat.worker.ts          "chat"
+    src/engine/q35conf/q35conf.worker.ts    "q35conf"
+    src/engine/ktest/ktest.worker.ts        "q35-mtp-draft"
+    src/engine/ktest/ktest.worker.ts        "q35-model"
+    src/engine/ktest/ktest.worker.ts        "q35-moe"      <- e questa era diversa
+
+Identiche a meno del prefisso del messaggio d'errore. Mettere lì una finestra di
+concorrenza avrebbe voluto dire scriverla cinque volte: alla seconda copia è una
+domanda, alla terza non lo è più.
+
+### La quinta copia aveva perso un controllo, e non è un dettaglio di stile
+
+`q35-moe-block-real` faceva
+
+    return new Uint8Array(await rr.arrayBuffer());
+
+**senza il confronto fra i byte ricevuti e quelli chiesti** che le altre quattro
+hanno. Un Range corto — un server che tronca, una richiesta oltre la fine del
+file — sarebbe passato in silenzio, e i byte mancanti sarebbero diventati zeri
+dentro un tensore: **numeri plausibili e sbagliati**, non un errore. È la stessa
+classe del difetto di it.19, quello che è costato mezz'ora di GPU per essere
+escluso.
+
+*È anche la dimostrazione della premessa della regola di riuso: le copie non
+restano identiche. Quattro hanno il controllo, una no, e nessuno l'ha deciso.*
+
+### Cosa è entrato
+
+`src/engine/ggufrange.ts` — `ggufRangeReader(urlOf, label)`. Due dettagli con la
+loro ragione scritta:
+
+- **`urlOf` è una funzione, non una stringa**: i worker riassegnano `URL_GGUF`
+  quando cambiano modello, e un lettore costruito a modulo caricato catturerebbe
+  il valore sbagliato — byte validi, modello sbagliato.
+- **`label` resta un parametro**: era l'unica cosa che distingueva le cinque
+  copie, e su un Range corto sapere QUALE lettore ha fallito è metà della
+  diagnosi.
+
+Cinque casi in `tests/engine-ggufrange.test.ts`: l'header si costruisce in **un
+file solo** (gate meccanico che conta i siti nel sorgente), il Range corto
+lancia, lo status ≠ 206 lancia col nome del lettore, l'URL si rilegge a ogni
+chiamata, e l'intervallo è inclusivo (`off .. off+len-1` — un fuori-di-uno qui
+sposterebbe un byte per ogni tensore del modello).
+
+### EVIDENZA
+
+- `grep 'Range: \`bytes='` su `src/`: **1 sito** (era 5), ed è il modulo
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1110 passed | 10 skipped** (+5)
+- `node .harness/tools/engine-ktest.mjs` **111 PASS / 0 FAIL** — ed è la verifica
+  che conta: il ktest esercita **tre** dei cinque siti migrati
+  (`q35-mtp-draft` 31/62, `q35-model-4b-argmax` 6/6 a 570 dispatch/token,
+  `q35-moe-block-real` su due layer), tutti con i pesi veri letti a Range
+
+### NON VERIFICATO — ed è la fetta 2
+
+**Nessun raggruppamento è stato ancora scritto**: questa fetta ha solo creato la
+sede. Il numero da battere resta quello di it.2, misurato e non assunto:
+**6,90 ms/fetch con 24 richieste concorrenti contro 3,27 ms con qualche
+centinaio** — stessi byte, stesso server, stesso lettore. Il done-when chiede
+**< 1,5 ms** e l'effetto misurato **anche sul LOAD di 4B, 9B e GLM**.
+
+I due candidati restano da misurare, non da assumere: finestra di concorrenza
+esplicita, e coalescing delle Range adiacenti — che fra gate/up/down di un
+expert non si può fare (sono tre tensori, tre offset), ma **fra expert dello
+stesso tensore** sì.

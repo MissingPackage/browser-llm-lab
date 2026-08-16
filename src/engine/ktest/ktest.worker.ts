@@ -73,6 +73,7 @@ import { validateQwen35 } from "../q35shape";
 import { parseGguf, type GgufTensorInfo } from "../gguf";
 import { deltaNetStepCore, softplusGgml, Q35DeltaNetRef } from "../q35cpuref";
 import { SAMPLE_DIMS, SAMPLE_T, sampleWeights, sampleInputs } from "../q35sample";
+import { ggufRangeReader } from "../ggufrange";
 
 interface KResult {
   kernel: string; pass: boolean; maxAbs: number; maxRel: number; note?: string;
@@ -720,13 +721,7 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult[]> {
   }
   const golden = (await goldenRes.json()) as { prompts: { promptTokens: number[]; generated: number[] }[] };
   const URL_GGUF = "/models/Qwen3.5-4B-MTP-Q4_0.gguf";
-  const range = async (off: number, len: number): Promise<Uint8Array> => {
-    const rr = await fetch(URL_GGUF, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
-    if (rr.status !== 206) throw new Error(`q35-mtp-draft: Range non onorato (${rr.status})`);
-    const ab = await rr.arrayBuffer();
-    if (ab.byteLength !== len) throw new Error(`q35-mtp-draft: Range corto ${ab.byteLength}/${len}`);
-    return new Uint8Array(ab);
-  };
+  const range = ggufRangeReader(() => URL_GGUF, "q35-mtp-draft");
   const t0 = performance.now();
   const header = await range(0, 64 * 1024 * 1024);
   const f = parseGguf(header.buffer.slice(header.byteOffset, header.byteOffset + header.byteLength) as ArrayBuffer);
@@ -919,13 +914,7 @@ async function testQ35Model4B(g: Gpu): Promise<KResult> {
   // (vite risponde 206, verificato): header 64 MB, poi un GET per tensore,
   // upload e scarto — la stessa postura streaming del loader cpuref.
   const URL_GGUF = "/models/Qwen3.5-4B-Q4_0.gguf";
-  const range = async (off: number, len: number): Promise<Uint8Array> => {
-    const rr = await fetch(URL_GGUF, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
-    if (rr.status !== 206) throw new Error(`q35-model: Range non onorato (${rr.status})`);
-    const ab = await rr.arrayBuffer();
-    if (ab.byteLength !== len) throw new Error(`q35-model: Range corto ${ab.byteLength}/${len}`);
-    return new Uint8Array(ab);
-  };
+  const range = ggufRangeReader(() => URL_GGUF, "q35-model");
   const header = await range(0, 64 * 1024 * 1024);
   const f = parseGguf(header.buffer.slice(header.byteOffset, header.byteOffset + header.byteLength) as ArrayBuffer);
   const { shape, byName } = validateQwen35(f);
@@ -1045,11 +1034,9 @@ async function testQ35MoeBlockReal(g: Gpu): Promise<KResult[]> {
   if (!head.ok) {
     return [{ kernel: "q35-moe-block-real", pass: false, maxAbs: NaN, maxRel: NaN, note: "symlink 35B assente in public/models" }];
   }
-  const range = async (off: number, len: number): Promise<Uint8Array> => {
-    const rr = await fetch(URL35, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
-    if (rr.status !== 206) throw new Error(`q35-moe: Range ${rr.status}`);
-    return new Uint8Array(await rr.arrayBuffer());
-  };
+  // era l'unica delle cinque copie SENZA il controllo sulla lunghezza: ora
+  // lo eredita, e un Range corto smette di diventare pesi troncati in silenzio
+  const range = ggufRangeReader(() => URL35, "q35-moe");
   const hdr = await range(0, 64 * 1024 * 1024);
   const f = parseGguf(hdr.buffer.slice(hdr.byteOffset, hdr.byteOffset + hdr.byteLength) as ArrayBuffer);
   const { shape, byName } = validateQwen35(f);

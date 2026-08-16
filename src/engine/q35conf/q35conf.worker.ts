@@ -13,6 +13,7 @@ import { createQ35GpuModel, q35TensorBytes } from "../q35gpumodel";
 import { q35MoeConfig } from "../q35expertstore";
 import { arenaNeeds } from "../residency";
 import { validateQwen35 } from "../q35shape";
+import { ggufRangeReader } from "../ggufrange";
 
 interface GoldenPos { argmax: number; top: Array<[number, number]> }
 interface GoldenPrompt { id: string; file: string; promptTokens: number[]; generated: number[]; positions: GoldenPos[] }
@@ -215,13 +216,7 @@ const MODELS = {
 } as const;
 let URL_GGUF: string = MODELS["4b"].url;
 
-async function range(off: number, len: number): Promise<Uint8Array> {
-  const rr = await fetch(URL_GGUF, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
-  if (rr.status !== 206) throw new Error(`q35conf: Range non onorato (${rr.status})`);
-  const ab = await rr.arrayBuffer();
-  if (ab.byteLength !== len) throw new Error(`q35conf: Range corto ${ab.byteLength}/${len}`);
-  return new Uint8Array(ab);
-}
+const range = ggufRangeReader(() => URL_GGUF, "q35conf");
 
 async function main(cfg: Cfg): Promise<void> {
   const t0 = performance.now();
