@@ -3287,3 +3287,86 @@ invariato rispetto a `04be246`.
   non l'ho fattorizzata. La stima di 2-3 iterazioni è una stima.
 - Se `ExpertCache.ensure` usi davvero il ramo `slab` senza altre condizioni:
   ho letto il tipo, non il corpo.
+
+---
+
+## it.42 — il ramo `slab` è verificato, e l'inventario dice che la fattorizzazione è piccola
+
+Chiuso il "non verificato" di it.41: avevo letto il **tipo** di `ExpertReader`,
+non il **corpo** di `ensure`.
+
+### Il ramo esiste e non ha condizioni nascoste
+
+`residency.ts:866-877`:
+
+    if (typeof readRaw === "object" && readRaw.slab) {
+      slab = readRaw.slab(layer, expert);
+      t1 = t2 = ...;              // niente pack: read == tutto
+      rawBytes = slab.length;
+    } else {
+      const raw = read(layer, expert);
+      slab = packExpertSlab(raw.gate, raw.up, raw.down, c.layout);
+    }
+
+**Una condizione sola**, e il commento accanto quantifica cosa il GLM ha già
+tolto: *«erano 9,5 ms per miss, 41,4 ms/token al bench»*.
+
+**E la verifica successiva è gratis**: nel ramo slab `packMs` diventa **0** per
+costruzione e `readMs` assorbe tutto. Quando il 35B ci passerà, l'artefatto lo
+dirà da solo senza che nessuno debba misurare a parte.
+
+### L'inventario, e cambia la stima in meglio
+
+    expertstore.ts    ExpertOpfsStore        GENERICO — nessuna traccia di GLM
+    slabfile.ts       133 righe              generico nel MECCANISMO, GLM nelle COSTANTI
+                      SLAB_MAGIC "BLABSLAB", versione, header 4096 B, sha del sorgente
+                      buildSlabHeader / parseSlabHeader / slabFileReason  → generici
+                      SLAB_FILE_NAME = "GLM-4.7-Flash-Q4_0.slabs.bin"     → cablato
+                      N_SLABS_*, slabIndex, slabRange                     → da GLM47_FLASH
+    glmsource.ts      197 righe              specifico: import, indice, due classi
+
+**Il formato del file è già progettato bene**: magic, versione di layout, header
+da 4 KiB e lo **sha del sorgente** dentro — cioè uno slab prodotto da un GGUF
+diverso viene rifiutato invece di dare pesi validi e sbagliati. È esattamente la
+difesa che serviva, ed è già scritta.
+
+**Quindi la fattorizzazione è: parametrizzare `slabfile.ts` su un descrittore di
+modello** (nLayer, denseLead, nExpert, e la classe di slab per layer) invece di
+importare la shape del GLM. Sessanta-ottanta righe, non un modulo nuovo.
+
+Il pezzo vero resta il **sorgente q35**: il 35B legge via HTTP Range e non ha
+una sorgente OPFS, quindi va scritto l'import — che è ciò che
+`GlmOpfsSource.importFromUrl` fa per il GLM.
+
+### La stima, ora fondata invece che stimata
+
+    fetta 1  parametrizzare slabfile.ts sul descrittore      ~1 it
+    fetta 2  sorgente q35 con import OPFS + ensureSlabs      ~1-2 it
+    fetta 3  cablare { raw, slab } in q35gpumodel e misurare  ~1 it
+
+Restano 2-3 iterazioni come avevo detto, ma per ragioni verificate.
+
+### Il ruling del PI è arrivato, ed è già registrato
+
+*«accetta entrambi e converte al primo caricamento»* → docket item 10. Applicato
+così: il motore accetta **uno slab direttamente** (chi tiene allo spazio
+converte una volta e tiene solo quello) **oppure un GGUF**, che converte al primo
+caricamento. La doppia copia diventa transitoria e sotto il controllo
+dell'utente invece che imposta — che era la sua obiezione, giusta.
+
+**Sotto-decisione presa e non escalata**: dopo la conversione il motore **non
+cancella** il GGUF. Dirà che si può fare, non lo farà: cancellare il file di un
+modello non è una cosa che un motore fa da solo, e sbagliarsi costa un download
+da 19 GiB.
+
+### EVIDENZA
+
+Sola lettura di codice: `residency.ts:859-890`, `slabfile.ts` (133 righe),
+`expertstore.ts:160`, `glmsource.ts:7-16, 111-135`. Nessuna GPU, albero
+invariato rispetto a `49ba7c8`.
+
+### NON VERIFICATO
+
+- Se `ExpertOpfsStore` regga un file da **17 GiB**: il GLM ne scrive uno molto
+  più piccolo, e OPFS ha limiti di quota per origine. Va guardato PRIMA della
+  fetta 2, perché se la quota non basta cambia il disegno, non un dettaglio.
