@@ -193,6 +193,27 @@ async function load(cfg: LoadCfg): Promise<void> {
     vramCeilingBytes: ceilingBytes ?? undefined,
     expertPolicy: cfg.expertPolicy,
   });
+  // LE LEVE SI ACCENDONO QUI, ed e' il pezzo che mancava (it.39).
+  //
+  // `kfan` (riga 2c) e la rotta split-K (riga 2d) sono misurate, gated ad argmax
+  // 39/39 e in albero da giorni — ma nascono SPENTE, perche' i loro A/B le
+  // accendono a caldo su un braccio solo. La chat non le accendeva mai:
+  // **l'unico path che un utente usa girava senza entrambe.**
+  //
+  // Quanto costava, misurato sullo stesso modello e sullo stesso path:
+  //     senza leve      22,58 tok/s
+  //     + kfan          28,90
+  //     + rotta         40,06     (a caldo, zero miss)
+  //
+  // Le due guardie non sono difensive: `setKfan(true)` LANCIA su un modello
+  // senza expert MoE (il 4B e il 9B sono densi) e `setSplitk(true)` LANCIA se
+  // il piano non ha instradato nessun tensore. Chiederle quando non ci sono
+  // farebbe morire il load invece di degradare.
+  const kfanOn = isMoe && cfg.select === "optimistic";
+  if (kfanOn) model.setKfan(true);
+  const splitkOn = model.splitkAvail();
+  if (splitkOn) model.setSplitk(true);
+
   pos = 0;
   assistantOpen = false;
   const loadMs = performance.now() - t0;
@@ -212,6 +233,10 @@ async function load(cfg: LoadCfg): Promise<void> {
       nExpertUsed: shape.nExpertUsed,
       select: isMoe ? cfg.select : "cpu",
       expertPolicy: cfg.expertPolicy,
+      // QUALI LEVE SONO ATTIVE, nell'artefatto e non solo nel codice: senza
+      // questo campo un JSON di chat non dice se il numero che riporta viene
+      // dal motore con le leve o senza, e i due differiscono di 1,8x.
+      levers: { kfan: kfanOn, splitk: splitkOn },
       dispatchBreakdown: model.dispatchBreakdown,
       vramPlan: model.vramPlan(),
       hasChatTemplate: chatTemplateRaw !== null,
