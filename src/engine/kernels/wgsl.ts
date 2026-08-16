@@ -3844,9 +3844,34 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
 // stabile dell'oracolo), somma dei probs SENZA bias nell'ordine di selezione,
 // denominatore clampato, ×weightsScale.
 //
-// La selezione gira su un thread solo: sono nExpert×nUsed confronti (64×4 = 256)
-// e la serializzazione E' la specifica — un top-k parallelo con riduzione
-// cambierebbe l'ordine dei confronti e quindi il tie-break.
+// LA SELEZIONE E' PARALLELA (engine-velocita-decode it.18), e la nota che stava
+// qui prima era sbagliata. Diceva: «gira su un thread solo, la serializzazione
+// E' la specifica — un top-k parallelo con riduzione cambierebbe l'ordine dei
+// confronti e quindi il tie-break». **Non lo cambia.** Lo scan lineare con `>`
+// stretto calcola il massimo secondo l'ordine TOTALE su (punteggio, −indice):
+// vince il punteggio piu' alto, a pari punteggio l'indice minore. Il massimo su
+// un ordine totale e' associativo e commutativo, quindi una riduzione ad albero
+// che implementa QUELLO STESSO comparatore da' lo stesso elemento comunque si
+// associ. Non c'e' niente da conservare nell'ordine dei confronti.
+// L'unica divergenza e' su NaN, dove `>` non e' un ordine totale: lo scan
+// seriale porta avanti il primo non preso e poi non lo sostituisce mai, la
+// riduzione lo confina al suo sotto-intervallo. Con logit NaN il layer e' gia'
+// perduto a monte, e la differenza e' fra due modi di sbagliare.
+//
+// COSA COSTAVA la nota sbagliata, misurato: `router` 3,221 ms/token su 40
+// dispatch = **80 µs a layer** per scegliere 8 expert su 256, contro i 17,5 µs
+// del GEMV che quei logit li produce macinando 256×2048 MAC
+// (`q35-kfan-gputime-2026-08-15b.json`). Un thread su 64, 8×256 confronti
+// seriali, e un `array<bool, 256>` in memoria PRIVATA indicizzato
+// dinamicamente — cioe' scratch, non registri.
+//
+// Cosa resta seriale, e perche': la somma dei `probs` selezionati (NU addendi,
+// nell'ordine di selezione) e il denominatore della softmax (`z`, NE addendi in
+// ordine di indice). L'addizione in virgola mobile NON e' associativa: quelle
+// due somme sono le uniche righe in cui l'ordine E' la specifica, e restano
+// dove sono. Tutto il resto del blocco softmax — il massimo, gli `exp`, la
+// divisione — e' parallelo ed esatto. Il testo emesso e' quindi bit-identico
+// nei valori a quello di prima, NaN a parte.
 //
 // RESOLVE (slice B): con `resolve` il kernel non si ferma a id+pesi — scrive
 // direttamente `Sel`, cioe' la stessa struttura che la CPU riempie in slice A.
@@ -3887,7 +3912,11 @@ export function routerTopKWgsl(opts: {
 }): string {
   const { nExpert, nUsed, weightsScale, clampMin } = opts;
   const gating = opts.gating ?? "sigmoid";
-  const WG = 64;
+  // Una potenza di due <= 256 (il massimo di invocazioni per workgroup che
+  // WebGPU garantisce), non piu' larga di quanto serva: il workgroup e' UNO
+  // solo — `dispatchWorkgroups(1)` in entrambi i modelli — quindi la larghezza
+  // e' l'unica leva di parallelismo che questo kernel ha.
+  const WG = nExpert >= 256 ? 256 : (nExpert >= 128 ? 128 : 64);
   const res = opts.resolve;
   const dirty = res?.dirty === true;
   if (res && (res.nExpert !== nExpert || res.nUsed !== nUsed)) {
@@ -3924,12 +3953,35 @@ export function routerTopKWgsl(opts: {
     sel[i] = p + bias[i];   // il bias entra SOLO nella selezione`
     : `
     probs[i] = logits[i];   // grezzi: la softmax ha bisogno del massimo globale`;
+  // softmax, in quattro passi. Il massimo e' una riduzione (esatta: il massimo
+  // su un ordine totale non dipende da come si associa), gli `exp` e la
+  // divisione sono per-elemento. La SOMMA `z` resta sul thread 0 e nell'ordine
+  // di indice, perche' l'addizione f32 non e' associativa: e' l'unico punto del
+  // blocco in cui l'ordine e' la specifica, e i valori restano quelli di prima.
   const gatingNorm = gating === "sigmoid" ? "" : `
-  var mx = probs[0];
-  for (var i = 1u; i < NE; i = i + 1u) { if (probs[i] > mx) { mx = probs[i]; } }
-  var z = 0.0;
-  for (var i = 0u; i < NE; i = i + 1u) { let e2 = exp(probs[i] - mx); probs[i] = e2; z = z + e2; }
-  for (var i = 0u; i < NE; i = i + 1u) { probs[i] = probs[i] / z; sel[i] = probs[i] + bias[i]; }`;
+  var lmx = probs[0];
+  for (var i = t; i < NE; i = i + ${WG}u) { if (probs[i] > lmx) { lmx = probs[i]; } }
+  redV[t] = lmx;
+  workgroupBarrier();
+  var mstride = ${WG / 2}u;
+  while (mstride > 0u) {
+    if (t < mstride && redV[t + mstride] > redV[t]) { redV[t] = redV[t + mstride]; }
+    workgroupBarrier();
+    mstride = mstride >> 1u;
+  }
+  let mx = redV[0];
+  workgroupBarrier();
+  for (var i = t; i < NE; i = i + ${WG}u) { probs[i] = exp(probs[i] - mx); }
+  workgroupBarrier();
+  if (t == 0u) {
+    var zacc = 0.0;
+    for (var i = 0u; i < NE; i = i + 1u) { zacc = zacc + probs[i]; }
+    zw = zacc;
+  }
+  workgroupBarrier();
+  let z = zw;
+  for (var i = t; i < NE; i = i + ${WG}u) { probs[i] = probs[i] / z; sel[i] = probs[i] + bias[i]; }
+  workgroupBarrier();`;
   // Con `dirty` la coda cambia in 3 punti (var, conteggio, atomiche); senza,
   // il testo emesso resta BYTE-IDENTICO a prima — shadow e gpu non cambiano.
   const resTail = res
@@ -3970,25 +4022,64 @@ const NE = ${nExpert}u;
 const NU = ${nUsed}u;
 var<workgroup> probs: array<f32, ${nExpert}>;
 var<workgroup> sel: array<f32, ${nExpert}>;
+// taken sta in memoria di WORKGROUP e non piu' in una var di funzione: come
+// array privato indicizzato dinamicamente finiva in scratch, ed era letto
+// NE×NU volte da un thread solo. Qui e' condiviso, ed e' il motivo per cui la
+// selezione puo' essere parallela.
+var<workgroup> taken: array<u32, ${nExpert}>;
+// Il buffer della riduzione: punteggio e indice del miglior candidato di ogni
+// thread. Sono due array e non uno di struct perche' il comparatore li legge
+// separatamente e Tint non promette niente sul layout di un array di struct in
+// workgroup.
+var<workgroup> redV: array<f32, ${WG}>;
+var<workgroup> redI: array<u32, ${WG}>;${gating === "softmax" ? "\nvar<workgroup> zw: f32;   // il denominatore della softmax, dal thread 0 a tutti" : ""}
 @compute @workgroup_size(${WG})
 fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
   let t = lid.x;
   for (var i = t; i < NE; i = i + ${WG}u) {${gatingFill}
+    taken[i] = 0u;
   }
-  workgroupBarrier();
-  if (t != 0u) { return; }${gatingNorm}
-  var taken: array<bool, ${nExpert}>;
-  for (var i = 0u; i < NE; i = i + 1u) { taken[i] = false; }  // var in loop: azzerata a mano
-  var sum = 0.0;
+  workgroupBarrier();${gatingNorm}
+  // SELEZIONE. Per ogni k: ogni thread fa il massimo sul suo sotto-insieme a
+  // passo WG (indici crescenti, > stretto ⇒ a pari punteggio resta il minore,
+  // come lo scan seriale), poi la riduzione ad albero applica lo STESSO
+  // comparatore sull'ordine totale (punteggio, −indice). Il thread 0 marca il
+  // preso. NE resta la sentinella "nessuno".
   for (var k = 0u; k < NU; k = k + 1u) {
-    var best = NE;                                  // NE = "nessuno" (sentinella)
-    for (var i = 0u; i < NE; i = i + 1u) {
-      if (!taken[i] && (best == NE || sel[i] > sel[best])) { best = i; }
+    var bv = 0.0;
+    var bi = NE;
+    for (var i = t; i < NE; i = i + ${WG}u) {
+      if (taken[i] == 0u && (bi == NE || sel[i] > bv)) { bv = sel[i]; bi = i; }
     }
-    taken[best] = true;
-    ids[k] = best;
-    sum = sum + probs[best];                        // probs SENZA bias
+    redV[t] = bv;
+    redI[t] = bi;
+    workgroupBarrier();
+    var stride = ${WG / 2}u;
+    while (stride > 0u) {
+      if (t < stride) {
+        let oi = redI[t + stride];
+        let ov = redV[t + stride];
+        let ci = redI[t];
+        if (oi != NE && (ci == NE || ov > redV[t] || (ov == redV[t] && oi < ci))) {
+          redV[t] = ov;
+          redI[t] = oi;
+        }
+      }
+      workgroupBarrier();
+      stride = stride >> 1u;
+    }
+    if (t == 0u) {
+      let best = redI[0];
+      taken[best] = 1u;
+      ids[k] = best;
+    }
+    workgroupBarrier();
   }
+  if (t != 0u) { return; }
+  // La somma dei probs SENZA bias, nell'ordine di selezione: NU addendi, e
+  // l'ordine e' la specifica (addizione f32 non associativa). Resta seriale.
+  var sum = 0.0;
+  for (var k = 0u; k < NU; k = k + 1u) { sum = sum + probs[ids[k]]; }
   let denom = max(sum, ${clampMin.toExponential()});
   for (var k = 0u; k < NU; k = k + 1u) {
     wts[k] = (probs[ids[k]] / denom) * ${weightsScale.toFixed(6)};

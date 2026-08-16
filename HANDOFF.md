@@ -1,40 +1,74 @@
-# HANDOFF — browser-llm-lab   (aggiornato 2026-08-15, sera)
+# HANDOFF — browser-llm-lab   (aggiornato 2026-08-16, notte)
 
 ## 1. Next decidable
 
-**GOAL `engine-velocita-decode` ATTIVO.** Riga 2c chiusa (leva atterrata),
-riga 2d in **RE-PLAN**.
+**GOAL `engine-velocita-decode` ATTIVO. LA BARRA E' SUPERATA, IL GOAL NO.**
 
-**LA PROSSIMA DECISIONE E' DEL PI — `docket.md` item 5**, tre uscite: costruire
-la rotta nel decode (2-3 it, punta ai 1,27 ms mancanti, guadagno ignoto finche'
-non misurato contro il kernel giusto) · chiudere il goal sul +28% e fare della
-rotta un goal suo · **andare sul `router`, 2,88 ms/token per scegliere 8 expert
-su 256 (72 us a layer), mai guardato e da solo piu' del doppio di cio' che
-manca**. La mia lettura: la terza prima della prima.
+**IL RISULTATO, MISURATO** (`results/engine/q35-router-par-ab-2026-08-16.json`):
 
-**IL RISULTATO, MISURATO**: decode del 35B da **22,58 a 28,90 tok/s (+28%)** col
-KFAN — il collasso dei topK expert in UN giro di dispatch, 5 per layer invece di
-33. A/B nello stesso processo, stessa cache, bracci interleavati; **gate argmax
-39/39 identici**. `results/engine/q35-kfan-ab-2026-08-15c.json`.
-**Barra 30 tok/s = 33,33 ms/token: mancano 1,27 ms.**
+    decode 35B   22,58  ->  28,90  ->  30,74 tok/s
+                 (base)    (kfan)     (router parallelo, it.18)
+    barra 30 tok/s = 33,33 ms/token · siamo a 32,531 ms
+    dispersione [32,143-32,732] = [30,55-31,11] tok/s: TUTTA sopra la barra
+    gate argmax 39/39 IDENTICI, routingDiff 0
 
-**IL PRIMO TERMINE E' CAMBIATO** (`q35-kfan-gputime-2026-08-15b.json`, ms/token
-PER BRACCIO, sonda accesa che perturba):
+**LA PROSSIMA COSA DA FARE E' MIA, NON TUA: sbloccare il gate di merge.** La
+riga 6 pretende «ktest tutti PASS» e «GLM b12 entro ±5%», e **oggi sono
+rossi tutti e due — per cause preesistenti, misurate, non causate da it.18**
+(entrambe discriminate con `git stash` + riesecuzione, non con un'ipotesi):
 
-    categoria   kfan OFF  kfan ON
-    expert        8,951    5,151    <- era il primo
-    ssmGemv       7,767    6,980    <- e' il primo ADESSO
-    router        3,221    2,883       (72 us a layer per un top-8 su 256!)
-    TOT GPU      30,878   24,902
+- **`q35-mtp-draft-4b`** FAIL nel ktest (accept-rate 12/37 = 32,4% contro 50%).
+  Identico sull'albero senza it.18. Ultimo verde noto: `111 PASS / 0 FAIL` alla
+  chiusura di `engine-kquant`. **Sospettato numero uno: it.16, che ha cablato il
+  q8_0 nel prefill senza mai eseguire una run GPU.** Docket item 6, ~1-2 it.
+- **GLM b12 a 11,35 tok/s** contro i 15,330 del riferimento del 2026-08-15
+  (−26%). **Non è calcolo**: `missesPerToken` ed `evictionsPerToken` sono
+  identici cifra per cifra, `gpuBusy` pure — si muove solo `readMsPerToken`,
+  **2,47 → 17,5 ms/token (7×)**. Ipotesi prima: page cache dell'host (92 GB di
+  OPFS contro 31 GB di RAM). Docket item 7, ~1 it per discriminare.
+
+**LE DUE DECISIONI CHE SONO TUE** stanno nei due item: se il bisect del MTP va
+sotto questo goal o sotto `engine-fase-d` (item 6), e cosa dichiara un
+riferimento se il suo numero dipende dalla page cache (item 7 — quella è
+funzione obiettivo, non meccanismo).
+
+**COM'ERA LA LEVA, perché è il reperto riusabile.** `router` costava **2,883
+ms/token su 40 dispatch = 72 µs a layer** per scegliere 8 expert su 256, contro
+i **16,6 µs** del GEMV che quei logit li produce con 256×2048 MAC. Quattro volte
+più lento per 250 volte meno lavoro. La causa: `routerTopKWgsl` faceva la
+selezione **su un thread solo su 64**, con un `array<bool, 256>` in memoria
+privata a indice dinamico (scratch), **difeso da un commento che dichiarava la
+serializzazione "la specifica" perché una riduzione "cambierebbe il tie-break"**.
+Non lo cambia: lo scan con `>` stretto è il massimo sull'ordine TOTALE
+(punteggio, −indice), e il massimo su un ordine totale non dipende da come si
+associa. Ora: **0,836 ms/token, 20,9 µs a dispatch — il pavimento.** Tutte le
+altre categorie GPU entro ±0,012 ms.
+
+**E' UN KERNEL SOLO**, montato da `glmmodel.ts:1068` e `q35gpumodel.ts:1758`:
+globale per costruzione, non riscritto due volte. Sul GLM rende poco e va detto
+col numero — `gpuBusy` 38,9 → 38,6 — perché il GLM fa top-4 su 64 (otto volte
+meno da parallelizzare) e il 57% del suo token sta comunque fuori dalla GPU.
+
+**IL PRIMO TERMINE ADESSO** (`q35-router-par-gputime-2026-08-16.json`, braccio
+kfan-ON, sonda accesa che perturba):
+
+    ssmGemv    6,992   <- il primo
+    expert     5,152
+    attn       2,539
+    shexp      2,157
+    ssmOut     2,046
+    router     0,836   <- era 2,883
+    TOT GPU   22,872   (era 24,902)
 
 `ssmGemv` e' la proiezione DeltaNet: **non e' MoE, e ce l'hanno anche 4B e 9B**.
+E' la riga 2d, che resta aperta.
 
-**LA RIGA 2d — stima 2-3 iterazioni, CINQUE consumate.** Ha prodotto, tutto in
-albero e verde: la verifica di riuso (il kernel veloce ESISTE ed e' ktest-ato,
-3,26x a M=1 — non va scritto), il predicato su N in `kernelVerdict` coi suoi
-casi, il cablaggio del q8_0 con 11 test aggiornati e tre resi piu' stringenti.
-**MA il valore atterrato e' sul PREFILL del 35B, che questo goal ha dichiarato
-fuori scope: la barra e' sul decode, e il decode non e' stato toccato.**
+**LA RIGA 2d — stima 2-3 iterazioni, CINQUE consumate, e ora non ha piu' fretta.**
+Ha prodotto, tutto in albero e verde: la verifica di riuso (il kernel veloce
+ESISTE ed e' ktest-ato, 3,26x a M=1 — non va scritto), il predicato su N in
+`kernelVerdict` coi suoi casi, il cablaggio del q8_0 con 11 test aggiornati.
+**MA il valore atterrato e' sul PREFILL del 35B, fuori scope**, e i 1,27 ms che
+inseguiva li ha presi il router.
 
 **LE SHAPE, ESATTE** (`q35shape.ts:86-89` + meta dell'header dump, K=2048):
 
@@ -74,11 +108,16 @@ default.
 3. **`arenaSlotWgsl`** era una costante con l'indice di Sel cablato; ora e' una
    funzione col default invariato.
 
-**LA LEZIONE DEL GOAL, CINQUE volte**: una divisione non e' una misura, e una
+**LA LEZIONE DEL GOAL, SEI volte**: una divisione non e' una misura, e una
 descrizione del codice non e' il codice. 21,1 ms (token pulito), «16%» (il
 gather), «due contratti diversi» (accum/slot), 30,9 us per dispatch (era 8,65),
-e «gemvB e' il decode» (e' il prefill). **Il correttivo che ha funzionato ogni
-volta: leggere il codice, o misurare.**
+«gemvB e' il decode» (e' il prefill), e **«la serializzazione E' la specifica»**
+(non lo era, e valeva 2,05 ms/token). **Il correttivo che ha funzionato ogni
+volta: leggere il codice, o misurare.** La sesta ha una coda: il commento
+sbagliato e' sopravvissuto a goal interi perche' **nessun gate poteva vederlo** —
+la forma seriale da' gli stessi numeri, quindi i ktest restavano verdi cifra per
+cifra. Ora c'e' `tests/engine-routertopk-parallel.test.ts`, che pinna la FORMA e
+non i valori (13 casi; 12 falliscono sul kernel vecchio, verificato).
 
 ---
 

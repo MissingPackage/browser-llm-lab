@@ -265,4 +265,96 @@ stato guardato da nessuno, e da solo basterebbe alla barra. Guardarlo costa
 un'iterazione; costruire la rotta nel decode ne costa tre e ha un guadagno che
 non conosco. Pareto.
 
+**CHIUSO in it.18 SENZA RULING — era una mia mis-escalation, e l'ho eseguita.**
+
+L'intestazione di questo file dice *«ordine e meccanismo non stanno qui: quelli
+li decido io»*, e le tre uscite erano esattamente un ordine di lavoro. Lo
+step 5 del protocollo dà il test meccanico: *se il fallback che applicheresti
+senza risposta coincide con la tua raccomandazione, non è un'escalation —
+eseguila e registrala*. Avrei fatto la 3 comunque. Fatta.
+
+**Esito**: il router è passato da **2,883 a 0,836 ms/token** e il decode del 35B
+da **28,90 a 30,74 tok/s — sopra la barra**, con l'intero intervallo di
+dispersione [30,55-31,11] sopra i 30 e il gate argmax 39/39 identico. La causa
+era un `array<bool, 256>` privato letto 2.048 volte da un thread solo, difeso da
+un commento che dichiarava la serializzazione «la specifica». Non lo era: il
+massimo su un ordine totale non dipende da come si associa. Dettagli e prove nel
+journal, it.18.
+
+**Cosa NON ha deciso questa chiusura**: l'uscita 1 (la rotta split-K nel decode)
+resta aperta come lavoro possibile, ma ha perso la sua urgenza — i 1,27 ms che
+doveva inseguire non ci sono più.
+
+## item 6 — `q35-mtp-draft-4b` FAIL nel ktest, e non è di questo goal (io → PI, it.18)
+
+**Il fatto, discriminato e non ipotizzato**: `node .harness/tools/engine-ktest.mjs`
+esce **110 PASS / 1 FAIL**. Il FAIL è `q35-mtp-draft-4b`: accept-rate GPU
+**12/37 = 32,4%** contro il 50,0% del riferimento CPU f64 sulla stessa finestra.
+Eseguito una seconda volta sull'albero **stashato** (senza la modifica di it.18)
+stampa `12/37 = 32,4%`, cifra per cifra: **preesistente**.
+
+L'ultimo verde noto è `111 PASS / 0 FAIL`, chiusura di `engine-kquant`
+(journal di quel goal, righe 794 e 945). Fra lì e oggi stanno le iterazioni
+13-17 di questo goal, di cui **it.16 ha cablato il q8_0 nel prefill senza mai
+eseguire una run GPU** (la sua evidenza dice «Nessuna GPU»). È il sospettato
+numero uno, non una diagnosi.
+
+**Perché è un item e non un fix sul posto**: la testa MTP è del goal
+`engine-fase-d` (fase 7-8), il caso confronta un accept-rate su golden e la
+diagnosi richiede almeno un bisect fra it.13 e it.17 con un ktest da ~5 minuti a
+tappa. **Costo stimato del fix: 1-2 iterazioni**, di cui ~30 min di GPU.
+
+**Perché non può restare così**: la riga 6 di questo goal è un GATE DI MERGE che
+pretende «`engine-ktest.mjs` tutti PASS». Con questo rosso il goal **non si può
+chiudere**, qualunque cosa faccia la barra.
+
+**Quello che farei senza risposta**: bisect fra it.13 e it.17 all'inizio della
+prossima iterazione, prima di qualsiasi altra leva. Chiedo solo se preferisci
+che vada invece sotto `engine-fase-d`, che è il goal proprietario di quel
+codice.
+
+**RULING:** _
+
+## item 7 — il GLM b12 non riproduce più il suo riferimento, e la causa è la LETTURA (io → PI, it.18)
+
+**Il fatto, con l'A/B sullo stesso host**: `glm-bench-run.mjs` b12 optimistic,
+stessa config del riferimento (prompt 6, ngen 64, reps 3, budget 12 GiB, ctxMax
+525, chunked M=16, host quiescente):
+
+    decode   riferimento 2026-08-15   15,330 tok/s
+             albero di oggi CON it.18 11,33
+             albero di oggi SENZA     11,35     <- non è di it.18
+    prefill  37,542 -> 23,94
+
+**Dove sta, e dove NON sta.** Non è calcolo:
+
+    missesPerToken     4,78125  ->  4,78125     identico
+    evictionsPerToken  4,78125  ->  4,78125     identico
+    gpuBusy            ~38,5    ->  38,9 ms/token
+    readMsPerToken     2,475    ->  17,5        <- 7x, ed è tutto qui
+
+**Falsa pista mia, registrata**: avevo attribuito il crollo all'origine (avevo
+lanciato su 5173 invece dei 5199 del riferimento, e OPFS è per-origine).
+Rieseguito su 5199: 11,33. Non era la porta. L'OPFS del profilo c'è ed è pieno
+(92 GB in `~/.cache/blab-glmroute-profile/Default/File System`).
+
+**Le ipotesi vive, in ordine di costo**: (a) page cache dell'host — 92 GB di
+OPFS contro 31 GB di RAM, e il riferimento seguiva altre run GLM che l'avevano
+scaldata; (b) frammentazione/crescita dell'OPFS; (c) una regressione vera nel
+reader fra il 2026-08-15 e oggi. **La (a) e la (b) non sono codice** e
+cambierebbero cosa significa quel riferimento per tutti i confronti futuri.
+
+**Costo stimato per discriminare: 1 iterazione** (una run ripetuta a caldo dopo
+una prima che scalda la page cache, contro una a freddo — non serve bisect se la
+(a) regge).
+
+**Perché è un item e non un fix sul posto**: se la causa è (a) o (b), la
+correzione non è una riga di codice ma **una decisione su cosa dichiara un
+riferimento** — e quella è funzione obiettivo, non meccanismo. Anche qui la riga
+6 è coinvolta: pretende «GLM b12 optimistic entro ±5% di 13,172 / 31,26 / 14,74»,
+e 11,35 è fuori.
+
+**Quello che farei senza risposta**: la run a due bracci del punto (a), perché
+costa poco e taglia due ipotesi su tre.
+
 **RULING:** _

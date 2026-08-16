@@ -1212,3 +1212,165 @@ dichiarato fuori scope. La barra è sul decode, e il decode non è stato toccato
 
 **EVIDENZA**: nessun codice. `vitest` 1074 passed | 10 skipped e `tsc` exit 0
 restano quelli di it.16, albero invariato.
+
+---
+
+## it.18 — LA BARRA È SUPERATA: 28,90 → 30,74 tok/s, e la leva era un commento sbagliato
+
+**Il numero, misurato** (`results/engine/q35-router-par-ab-2026-08-16.json`,
+stesso protocollo dei riferimenti: sync-cold che scalda, 4 repliche interleavate
+sulla stessa cache, prima scartata, mediana e dispersione):
+
+    braccio kfan ON   34,601 ms/token  ->  32,531 ms/token
+                      28,90 tok/s      ->  30,74 tok/s        +6,4%
+    dispersione       [32,143 - 32,732] = [30,55 - 31,11] tok/s
+    braccio kfan OFF  44,286 -> 42,959 ms   (22,58 -> 23,28 tok/s)
+    gate argmax       39/39 IDENTICI, routingDiff 0
+
+**Barra 30 tok/s = 33,33 ms/token. Siamo a 32,531, e l'INTERO intervallo di
+dispersione sta sopra la barra.** I 1,27 ms che mancavano erano lì.
+
+### La decisione, presa e non escalata
+
+Il docket item 5 chiedeva un ruling su tre uscite. **Era una mia
+mis-escalation**: l'intestazione del docket dice *«ordine e meccanismo non
+stanno qui: quelli li decido io»*, e le tre uscite erano esattamente un ordine.
+La regola dello step 5 del protocollo è meccanica: *se il fallback che
+applicheresti senza risposta coincide con la tua raccomandazione, non è
+un'escalation*. La mia raccomandazione era la 3 (il router prima della rotta nel
+decode). L'ho eseguita e la registro.
+
+### L'ipotesi, e l'evidenza che l'ha nominata prima di toccare il codice
+
+`routerTopKWgsl` (`wgsl.ts:3859`) portava questo commento:
+
+> «La selezione gira su un thread solo: sono nExpert×nUsed confronti e la
+> serializzazione E' la specifica — un top-k parallelo con riduzione
+> cambierebbe l'ordine dei confronti e quindi il tie-break.»
+
+**È falso, e il suo costo si leggeva già nel profilo di it.10.** Nel braccio
+kfan-ON: `router` 2,883 ms su 40 dispatch = **72 µs a layer** per scegliere 8
+expert su 256, contro **16,6 µs** del `routerGemv` che quei logit li produce
+macinando 256×2048 MAC. Quattro volte più lento per 250 volte meno lavoro: non è
+il costo del dispatch, è un thread su 64 che fa 8×256 confronti seriali leggendo
+un `array<bool, 256>` in memoria **privata** con indice dinamico — cioè scratch,
+non registri.
+
+**Perché il commento è falso, e non è un'opinione.** Lo scan lineare con `>`
+stretto calcola il massimo secondo l'**ordine totale su (punteggio, −indice)**:
+punteggio più alto, a pari punteggio indice minore. Il massimo su un ordine
+totale è associativo e commutativo — una riduzione ad albero che implementa
+*quello stesso comparatore* restituisce lo stesso elemento comunque si associi.
+Non c'era niente da conservare. L'unica divergenza vera è su NaN, dove `>` non è
+un ordine totale, ed è dichiarata nel commento nuovo: con logit NaN il layer è
+già perduto a monte.
+
+### Cosa resta seriale, e perché non è pigrizia
+
+Due somme, e sono le uniche righe in cui l'ordine **è** davvero la specifica
+(l'addizione f32 non è associativa):
+
+- `sum` = i probs dei selezionati, nell'ordine di selezione (NU addendi);
+- `z` = il denominatore della softmax, in ordine di indice (NE addendi).
+
+Tutto il resto del blocco softmax — il **massimo** (riduzione, esatta), gli
+`exp`, la divisione — è parallelo e per-elemento. Quindi il kernel nuovo è
+**bit-identico nei valori** al vecchio, NaN a parte. Non è una speranza: v. la
+prova sotto.
+
+### La prova della bit-identità, che è caduta gratis dal discriminante
+
+Il ktest è stato eseguito **due volte, sullo stesso host, a dieci minuti di
+distanza**: una con la modifica, una con `git stash` (per un altro motivo, v.
+sotto). I quattro casi router hanno stampato **le stesse cifre**:
+
+    router-top4-gpu-vs-cpu        7,38e-8 / 1,64e-7  minSepRetto 3,43e-5
+    q35-router-resolve-gpu-vs-cpu 2,76e-8 / 2,32e-7  minSepRetto 1,92e-5, resolveErrati 0
+    router-top4-near-tie          tenuto fino a eps=1e-6, primo flip a 1e-7
+    router-resolve-slottable      4,40e-8 / 9,76e-8, top4 CPU {54,7,41,40}
+    glm-model-2layer-shadow       router GPU set 6/6, ordine 6/6, wMaxRel 1,27e-7
+
+`near-tie` è il caso che **impone** la separazione fra 4° e 5° e la stringe
+finché f32 cede: è precisamente il tie-break, ed è invariato. Su 64+64 estrazioni
+casuali, 8×8 near-tie costruiti e i layer VERI del GLM, zero cifre di
+differenza.
+
+### La misura causale: il router crolla, il resto non si muove
+
+`results/engine/q35-router-par-gputime-2026-08-16.json`, braccio kfan-ON, sonda
+per categoria accesa (perturba, ma perturba entrambi i lati allo stesso modo):
+
+    categoria    prima    dopo     delta
+    router       2,883    0,836   -2,047   <- 40 dispatch: 72 -> 20,9 us a layer
+    ssmGemv      6,980    6,992   +0,012
+    expert       5,151    5,152   +0,001
+    attn         2,537    2,539   +0,002
+    shexp        2,156    2,157   +0,001
+    ssmOut       2,046    2,046   +0,000
+    routerGemv   0,660    0,663   +0,003
+    TOT GPU     24,902   22,872   -2,030
+
+**Tutte le altre categorie stanno entro ±0,012 ms.** È la firma di una modifica
+isolata: il delta del token pulito (−2,070 ms) e il delta del router (−2,047 ms)
+coincidono entro il 1%. E i 20,9 µs rimasti sono ormai il pavimento del
+dispatch (`routerGemv` ne fa 16,6): **su questo termine non resta quasi niente**.
+
+### La seconda famiglia, misurata e non assunta
+
+Il kernel è **uno solo** e lo montano entrambi i modelli MoE — `glmmodel.ts:1068`
+e `q35gpumodel.ts:1758`. È globale per costruzione, non per copertura: non è
+stata scritta una seconda volta.
+
+Sul GLM il guadagno è piccolo e va detto col numero: `gpuBusy` 38,9 → 38,6
+ms/token. La ragione è aritmetica — il GLM fa top-4 su 64 (256 confronti
+seriali) contro il top-8 su 256 del 35B (2.048), otto volte meno da parallelizzare
+— e comunque **il 57% del token GLM sta fuori dalla GPU**, quindi 0,3 ms di GPU
+non si vedono nel wall. Decode 11,33 (con) contro 11,35 (senza): **nessuna
+regressione**, il resto è rumore.
+
+### DUE ROSSI PREESISTENTI, trovati eseguendo i gate e NON causati da qui
+
+Entrambi discriminati con lo stesso metodo — `git stash`, rieseguire, confrontare
+— invece che con un'ipotesi.
+
+**(1) `q35-mtp-draft-4b` FAIL nel ktest.** accept-rate GPU 12/37 = 32,4% contro
+il 50,0% del riferimento CPU f64. Sull'albero **stashato** stampa
+`12/37 = 32,4%`: cifra per cifra lo stesso. È preesistente. L'ultimo verde noto
+è `111 PASS / 0 FAIL` (chiusura di `engine-kquant`). Docket item 6.
+
+**(2) Il GLM b12 non riproduce più il suo riferimento**, e neanche questo è mio.
+Decode 11,35 tok/s sull'albero stashato contro i **15,330** di
+`bench-glm-4090-b12-riga6-2026-08-15.json` (−26%). La causa **non è di calcolo**:
+`missesPerToken` 4,78125 e `evictionsPerToken` 4,78125 sono identici cifra per
+cifra, `gpuBusy` è 38,9 contro ~38,5 — a muoversi è solo la **lettura**,
+`readMsPerToken` **2,47 → 17,5** (7×). Docket item 7.
+
+*Falsa pista mia, registrata perché mi è costata un run da sette minuti*: avevo
+attribuito il crollo alla porta (avevo usato 5173 invece dei 5199 del
+riferimento, e OPFS è per-origine). **Sbagliato**: rieseguito su 5199 dà 11,33.
+Il metodo giusto era quello che ho applicato dopo — stashare e rimisurare, non
+ipotizzare.
+
+### EVIDENZA
+
+- `npx tsc --noEmit` exit 0
+- `npx vitest run` **1074 passed | 10 skipped** (invariato: nessun test statico
+  pinna questo kernel — v. il rilievo in fondo)
+- `node .harness/tools/engine-ktest.mjs` **110 PASS / 1 FAIL**, il FAIL
+  riprodotto identico sull'albero senza la modifica
+- `results/engine/q35-router-par-ab-2026-08-16.json` (barra, host quiescente:
+  1 processo browser, 653 MiB VRAM, GPU 0%)
+- `results/engine/q35-router-par-gputime-2026-08-16.json` (causalità)
+- `results/engine/bench-glm-4090-b12-routerpar-5199-2026-08-16.json` +
+  `...-BASELINE-nostash-2026-08-16.json` (non-regressione GLM, A/B sullo stesso host)
+- `results/engine/bench-glm-4090-b12-routerpar-2026-08-16.json` (il run su 5173,
+  tenuto perché è il reperto che ha smentito la mia ipotesi sulla porta)
+
+### NON VERIFICATO
+
+- La barra della **riga 4** resta da fare: questo è il 35B su contesto 39
+  posizioni (golden `smoke`), non il checkpoint su tutte e quattro le famiglie
+  con `decodeContext` dichiarato. Il numero è confrontabile col 28,90 perché è
+  lo stesso protocollo sullo stesso golden, non perché sia il consuntivo.
+- 4B e 9B non hanno router (sono densi): la leva non li tocca, e il done-when
+  «misurata su ≥2 famiglie» qui vale come «le due famiglie CHE HANNO un router».
