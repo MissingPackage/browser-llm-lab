@@ -1,0 +1,197 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1650 2050" width="1650" height="2050" font-family="Helvetica,Arial,sans-serif">
+<defs><marker id="a" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#495057"/></marker></defs>
+<rect width="1650" height="2050" fill="#fff"/>
+<rect x="40" y="110" width="1500" height="150" rx="8" fill="none" stroke="#868e96" stroke-width="1" stroke-dasharray="2 5"/>
+<rect x="70" y="155" width="330" height="85" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="440" y="155" width="330" height="85" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="810" y="155" width="330" height="85" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="1180" y="155" width="330" height="85" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="40" y="285" width="1500" height="175" rx="8" fill="none" stroke="#868e96" stroke-width="1" stroke-dasharray="2 5"/>
+<rect x="70" y="330" width="430" height="105" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<rect x="540" y="330" width="430" height="105" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<rect x="1010" y="330" width="500" height="105" rx="8" fill="#e9ecef" stroke="#495057" stroke-width="2"/>
+<line x1="500" y1="382" x2="540" y2="382" stroke="#2f9e44" stroke-width="2" marker-end="url(#a)"/>
+<line x1="970" y1="382" x2="1010" y2="382" stroke="#2f9e44" stroke-width="2" marker-end="url(#a)"/>
+<line x1="285" y1="240" x2="285" y2="330" stroke="#1971c2" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#a)"/>
+<rect x="40" y="485" width="1500" height="155" rx="8" fill="none" stroke="#868e96" stroke-width="1" stroke-dasharray="2 5"/>
+<rect x="70" y="530" width="620" height="90" rx="8" fill="#ffd8a8" stroke="#e8590c" stroke-width="2"/>
+<rect x="730" y="530" width="340" height="90" rx="8" fill="#ffd8a8" stroke="#e8590c" stroke-width="2"/>
+<rect x="1110" y="530" width="400" height="90" rx="8" fill="#eebefa" stroke="#9c36b5" stroke-width="2"/>
+<line x1="380" y1="530" x2="380" y2="512" stroke="#e8590c" stroke-width="2" marker-end="url(#a)"/>
+<line x1="380" y1="512" x2="1300" y2="512" stroke="#e8590c" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1300" y1="512" x2="1300" y2="530" stroke="#e8590c" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1070" y1="592" x2="1110" y2="592" stroke="#e8590c" stroke-width="2" marker-end="url(#a)"/>
+<rect x="40" y="665" width="1500" height="285" rx="8" fill="none" stroke="#868e96" stroke-width="1" stroke-dasharray="2 5"/>
+<rect x="70" y="710" width="300" height="80" rx="8" fill="#e9ecef" stroke="#495057" stroke-width="2"/>
+<rect x="430" y="705" width="330" height="90" rx="8" fill="#ffc9c9" stroke="#e03131" stroke-width="2"/>
+<rect x="430" y="815" width="330" height="90" rx="8" fill="#e9ecef" stroke="#495057" stroke-width="2"/>
+<line x1="370" y1="740" x2="430" y2="740" stroke="#495057" stroke-width="2" marker-end="url(#a)"/>
+<line x1="370" y1="760" x2="430" y2="850" stroke="#495057" stroke-width="2" marker-end="url(#a)"/>
+<rect x="810" y="705" width="380" height="200" rx="8" fill="#eebefa" stroke="#9c36b5" stroke-width="2"/>
+<line x1="760" y1="750" x2="810" y2="780" stroke="#e03131" stroke-width="2" marker-end="url(#a)"/>
+<line x1="760" y1="860" x2="810" y2="830" stroke="#495057" stroke-width="2" marker-end="url(#a)"/>
+<rect x="1230" y="705" width="280" height="200" rx="8" fill="#eebefa" stroke="#9c36b5" stroke-width="2"/>
+<line x1="1190" y1="805" x2="1230" y2="805" stroke="#9c36b5" stroke-width="2" marker-end="url(#a)"/>
+<rect x="40" y="975" width="1500" height="475" rx="8" fill="none" stroke="#868e96" stroke-width="1" stroke-dasharray="2 5"/>
+<rect x="70" y="1035" width="152" height="110" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<line x1="222" y1="1090" x2="236" y2="1090" stroke="#495057" stroke-width="1" marker-end="url(#a)"/>
+<rect x="236" y="1035" width="260" height="110" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<line x1="496" y1="1090" x2="510" y2="1090" stroke="#495057" stroke-width="1" marker-end="url(#a)"/>
+<rect x="510" y="1035" width="152" height="110" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<line x1="662" y1="1090" x2="676" y2="1090" stroke="#495057" stroke-width="1" marker-end="url(#a)"/>
+<rect x="676" y="1035" width="152" height="110" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<line x1="828" y1="1090" x2="842" y2="1090" stroke="#495057" stroke-width="1" marker-end="url(#a)"/>
+<rect x="842" y="1035" width="170" height="110" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<line x1="1012" y1="1090" x2="1026" y2="1090" stroke="#495057" stroke-width="1" marker-end="url(#a)"/>
+<rect x="1026" y="1035" width="152" height="110" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<line x1="1178" y1="1090" x2="1192" y2="1090" stroke="#495057" stroke-width="1" marker-end="url(#a)"/>
+<rect x="1192" y="1035" width="152" height="110" rx="8" fill="#ffc9c9" stroke="#e03131" stroke-width="2"/>
+<line x1="1304" y1="1090" x2="1304" y2="1210" stroke="#495057" stroke-width="1" marker-end="url(#a)"/>
+<rect x="960" y="1165" width="400" height="95" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="70" y="1290" width="700" height="145" rx="8" fill="#e9ecef" stroke="#495057" stroke-width="2"/>
+<rect x="810" y="1290" width="700" height="145" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<rect x="40" y="1475" width="1500" height="250" rx="8" fill="none" stroke="#868e96" stroke-width="1" stroke-dasharray="2 5"/>
+<rect x="70" y="1525" width="400" height="100" rx="8" fill="#ffd8a8" stroke="#e8590c" stroke-width="2"/>
+<rect x="510" y="1525" width="330" height="100" rx="8" fill="#e9ecef" stroke="#495057" stroke-width="2"/>
+<rect x="880" y="1525" width="330" height="100" rx="8" fill="#ffc9c9" stroke="#e03131" stroke-width="2"/>
+<rect x="1250" y="1525" width="260" height="100" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<line x1="840" y1="1575" x2="880" y2="1575" stroke="#495057" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1210" y1="1575" x2="1250" y2="1575" stroke="#495057" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1520" y1="1525" x2="1520" y2="460" stroke="#2f9e44" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#a)"/>
+<rect x="40" y="1750" width="1500" height="235" rx="8" fill="none" stroke="#868e96" stroke-width="1" stroke-dasharray="2 5"/>
+<rect x="70" y="1800" width="250" height="90" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="360" y="1800" width="250" height="90" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="650" y="1800" width="250" height="90" rx="8" fill="#eebefa" stroke="#9c36b5" stroke-width="2"/>
+<rect x="940" y="1800" width="250" height="90" rx="8" fill="#ffc9c9" stroke="#e03131" stroke-width="2"/>
+<rect x="1230" y="1800" width="280" height="90" rx="8" fill="#ffc9c9" stroke="#e03131" stroke-width="2"/>
+<line x1="320" y1="1845" x2="360" y2="1845" stroke="#495057" stroke-width="2" marker-end="url(#a)"/>
+<line x1="610" y1="1845" x2="650" y2="1845" stroke="#495057" stroke-width="2" marker-end="url(#a)"/>
+<line x1="900" y1="1845" x2="940" y2="1845" stroke="#495057" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1190" y1="1845" x2="1230" y2="1845" stroke="#495057" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1370" y1="1890" x2="1370" y2="1935" stroke="#e03131" stroke-width="2" marker-end="url(#a)"/>
+<line x1="1370" y1="1935" x2="195" y2="1935" stroke="#e03131" stroke-width="2" marker-end="url(#a)"/>
+<text x="60" y="61.875" font-size="30" fill="#1e1e1e" text-anchor="start">MOTORE LLM NEL BROWSER — architettura</text>
+<text x="60" y="86.875" font-size="14" fill="#495057" text-anchor="start">stato al 2026-08-16 · decode 35B 40,06 tok/s (barra 30, nice-to-have 45) · i ms sono per token, misurati</text>
+<text x="54" y="135.9375" font-size="15" fill="#868e96" text-anchor="start">A · INGRESSI — una pagina + un worker per harness, un modello alla volta (la VRAM e&#x27; una)</text>
+<text x="235.0" y="194.875" font-size="14" fill="#1971c2" text-anchor="middle">chat.worker</text>
+<text x="235.0" y="212.375" font-size="14" fill="#1971c2" text-anchor="middle">la chat vera</text>
+<text x="605.0" y="186.125" font-size="14" fill="#1971c2" text-anchor="middle">q35conf.worker</text>
+<text x="605.0" y="203.625" font-size="14" fill="#1971c2" text-anchor="middle">conformance + bench</text>
+<text x="605.0" y="221.125" font-size="14" fill="#1971c2" text-anchor="middle">+ gli A/B delle leve</text>
+<text x="975.0" y="186.125" font-size="14" fill="#1971c2" text-anchor="middle">ktest.worker</text>
+<text x="975.0" y="203.625" font-size="14" fill="#1971c2" text-anchor="middle">111 casi kernel</text>
+<text x="975.0" y="221.125" font-size="14" fill="#1971c2" text-anchor="middle">su GPU vera</text>
+<text x="1345.0" y="194.875" font-size="14" fill="#1971c2" text-anchor="middle">glmbench.worker</text>
+<text x="1345.0" y="212.375" font-size="14" fill="#1971c2" text-anchor="middle">bench GLM</text>
+<text x="54" y="310.9375" font-size="15" fill="#868e96" text-anchor="start">B · I/O CONDIVISO — una sede sola (it.30: era copiato in 5 posti, e la quinta copia aveva perso un controllo)</text>
+<text x="285.0" y="371.9375" font-size="13" fill="#2f9e44" text-anchor="middle">ggufRangeReader(urlOf, label)</text>
+<text x="285.0" y="388.1875" font-size="13" fill="#2f9e44" text-anchor="middle">fetch Range → controllo di lunghezza</text>
+<text x="285.0" y="404.4375" font-size="13" fill="#2f9e44" text-anchor="middle">(un Range corto LANCIA)</text>
+<text x="755.0" y="371.9375" font-size="13" fill="#2f9e44" text-anchor="middle">contatori del lettore</text>
+<text x="755.0" y="388.1875" font-size="13" fill="#2f9e44" text-anchor="middle">parallelismo effettivo · latenza</text>
+<text x="755.0" y="404.4375" font-size="13" fill="#2f9e44" text-anchor="middle">in volo max · letture fallite</text>
+<text x="1260.0" y="371.9375" font-size="13" fill="#495057" text-anchor="middle">GGUF via HTTP Range</text>
+<text x="1260.0" y="388.1875" font-size="13" fill="#495057" text-anchor="middle">35B = 19,46 GiB · expert 1,78 MB per lettura</text>
+<text x="1260.0" y="404.4375" font-size="13" fill="#495057" text-anchor="middle">canale misurato: 460-740 MB/s</text>
+<text x="300" y="275.8125" font-size="13" fill="#1971c2" text-anchor="start">tutti e quattro leggono da qui</text>
+<text x="54" y="510.9375" font-size="15" fill="#868e96" text-anchor="start">C · MODELLI — due famiglie, kernel condivisi</text>
+<text x="380.0" y="572.375" font-size="14" fill="#e8590c" text-anchor="middle">q35gpumodel.ts   —   Qwen 4B · 9B · 35B-A3B</text>
+<text x="380.0" y="589.875" font-size="14" fill="#e8590c" text-anchor="middle">DeltaNet + attention · il 35B e&#x27; MoE (256 expert, top-8)</text>
+<text x="900.0" y="572.375" font-size="14" fill="#e8590c" text-anchor="middle">glmmodel.ts</text>
+<text x="900.0" y="589.875" font-size="14" fill="#e8590c" text-anchor="middle">GLM-4.7-Flash (MoE, top-4 su 64)</text>
+<text x="1310.0" y="572.375" font-size="14" fill="#9c36b5" text-anchor="middle">kernels/wgsl.ts</text>
+<text x="1310.0" y="589.875" font-size="14" fill="#9c36b5" text-anchor="middle">ogni kernel WGSL, generato per shape</text>
+<text x="700" y="633.8125" font-size="13" fill="#e8590c" text-anchor="start">i due modelli non si parlano: condividono i KERNEL</text>
+<text x="54" y="690.9375" font-size="15" fill="#868e96" text-anchor="start">D · IL PIANO DEI DISPATCH — costruito UNA VOLTA al load, non per token</text>
+<text x="220.0" y="747.5625" font-size="13" fill="#495057" text-anchor="middle">loadW(tensore)</text>
+<text x="220.0" y="763.8125" font-size="13" fill="#495057" text-anchor="middle">guarda il TIPO reale</text>
+<text x="595.0" y="747.375" font-size="14" fill="#e03131" text-anchor="middle">push → gemv</text>
+<text x="595.0" y="764.875" font-size="14" fill="#e03131" text-anchor="middle">IL DECODE (M=1)</text>
+<text x="595.0" y="857.375" font-size="14" fill="#495057" text-anchor="middle">pushB → gemvB</text>
+<text x="595.0" y="874.875" font-size="14" fill="#495057" text-anchor="middle">IL PREFILL (M=16)</text>
+<text x="1000.0" y="757.75" font-size="12" fill="#9c36b5" text-anchor="middle">planPrefillGemm(kind, K, N, M, regime)</text>
+<text x="1000.0" y="772.75" font-size="12" fill="#9c36b5" text-anchor="middle"></text>
+<text x="1000.0" y="787.75" font-size="12" fill="#9c36b5" text-anchor="middle">regime: &quot;prefill&quot; | &quot;decode&quot;</text>
+<text x="1000.0" y="802.75" font-size="12" fill="#9c36b5" text-anchor="middle"></text>
+<text x="1000.0" y="817.75" font-size="12" fill="#9c36b5" text-anchor="middle">decide: legacy · f32 · idot</text>
+<text x="1000.0" y="832.75" font-size="12" fill="#9c36b5" text-anchor="middle">soglie MISURATE, non scelte:</text>
+<text x="1000.0" y="847.75" font-size="12" fill="#9c36b5" text-anchor="middle">N ≥ 2048 nel decode (it.38)</text>
+<text x="1000.0" y="862.75" font-size="12" fill="#9c36b5" text-anchor="middle">M=1 legacy solo nel prefill</text>
+<text x="1370.0" y="757.75" font-size="12" fill="#9c36b5" text-anchor="middle">Step[]</text>
+<text x="1370.0" y="772.75" font-size="12" fill="#9c36b5" text-anchor="middle">pipe · bind · wgs</text>
+<text x="1370.0" y="787.75" font-size="12" fill="#9c36b5" text-anchor="middle"></text>
+<text x="1370.0" y="802.75" font-size="12" fill="#9c36b5" text-anchor="middle">arm: legacy | splitk</text>
+<text x="1370.0" y="817.75" font-size="12" fill="#9c36b5" text-anchor="middle"></text>
+<text x="1370.0" y="832.75" font-size="12" fill="#9c36b5" text-anchor="middle">l&#x27;encoder ne salta uno:</text>
+<text x="1370.0" y="847.75" font-size="12" fill="#9c36b5" text-anchor="middle">A/B a caldo in UN processo</text>
+<text x="1370.0" y="862.75" font-size="12" fill="#9c36b5" text-anchor="middle">(non fra due cache)</text>
+<text x="54" y="1000.9375" font-size="15" fill="#868e96" text-anchor="start">E · IL TOKEN DI DECODE — la catena per layer, coi ms misurati (35B, braccio piu&#x27; veloce)</text>
+<text x="146.0" y="1079.4375" font-size="13" fill="#1971c2" text-anchor="middle">norm</text>
+<text x="146.0" y="1095.6875" font-size="13" fill="#1971c2" text-anchor="middle"></text>
+<text x="146.0" y="1111.9375" font-size="13" fill="#1971c2" text-anchor="middle">0,40 ms</text>
+<text x="366.0" y="1080.25" font-size="12" fill="#1971c2" text-anchor="middle">10 layer: attn   1,26</text>
+<text x="366.0" y="1095.25" font-size="12" fill="#1971c2" text-anchor="middle">30 layer: ssmGemv 2,75</text>
+<text x="366.0" y="1110.25" font-size="12" fill="#1971c2" text-anchor="middle">+ ssmRec 0,55 + ssmOut 0,98</text>
+<text x="586.0" y="1079.4375" font-size="13" fill="#1971c2" text-anchor="middle">resid</text>
+<text x="586.0" y="1095.6875" font-size="13" fill="#1971c2" text-anchor="middle"></text>
+<text x="586.0" y="1111.9375" font-size="13" fill="#1971c2" text-anchor="middle">0,21 ms</text>
+<text x="752.0" y="1079.4375" font-size="13" fill="#1971c2" text-anchor="middle">shexp</text>
+<text x="752.0" y="1095.6875" font-size="13" fill="#1971c2" text-anchor="middle"></text>
+<text x="752.0" y="1111.9375" font-size="13" fill="#1971c2" text-anchor="middle">2,09 ms</text>
+<text x="927.0" y="1079.4375" font-size="13" fill="#1971c2" text-anchor="middle">routerGemv</text>
+<text x="927.0" y="1095.6875" font-size="13" fill="#1971c2" text-anchor="middle"></text>
+<text x="927.0" y="1111.9375" font-size="13" fill="#1971c2" text-anchor="middle">0,65 ms</text>
+<text x="1102.0" y="1079.4375" font-size="13" fill="#1971c2" text-anchor="middle">router</text>
+<text x="1102.0" y="1095.6875" font-size="13" fill="#1971c2" text-anchor="middle"></text>
+<text x="1102.0" y="1111.9375" font-size="13" fill="#1971c2" text-anchor="middle">0,86 ms</text>
+<text x="1268.0" y="1079.4375" font-size="13" fill="#e03131" text-anchor="middle">expert</text>
+<text x="1268.0" y="1095.6875" font-size="13" fill="#e03131" text-anchor="middle"></text>
+<text x="1268.0" y="1111.9375" font-size="13" fill="#e03131" text-anchor="middle">5,20 ms</text>
+<text x="70" y="1195.9375" font-size="15" fill="#495057" text-anchor="start">× 40 layer</text>
+<text x="70" y="1214.6875" font-size="15" fill="#495057" text-anchor="start">30 DeltaNet + 10 attention</text>
+<text x="1160.0" y="1201.9375" font-size="13" fill="#1971c2" text-anchor="middle">tail  (una volta per token)</text>
+<text x="1160.0" y="1218.1875" font-size="13" fill="#1971c2" text-anchor="middle">output_norm + lm_head + argmax</text>
+<text x="1160.0" y="1234.4375" font-size="13" fill="#1971c2" text-anchor="middle">1,31 ms</text>
+<text x="420.0" y="1327.5625" font-size="13" fill="#495057" text-anchor="middle">TOTALE GPU per categoria   16,31 ms</text>
+<text x="420.0" y="1343.8125" font-size="13" fill="#495057" text-anchor="middle">token misurato (sonda spenta)   24,96 ms  =  40,06 tok/s</text>
+<text x="420.0" y="1360.0625" font-size="13" fill="#495057" text-anchor="middle"></text>
+<text x="420.0" y="1376.3125" font-size="13" fill="#495057" text-anchor="middle">~6,3 ms NON stanno in nessuna categoria: e&#x27; il tempo FRA i segmenti</text>
+<text x="420.0" y="1392.5625" font-size="13" fill="#495057" text-anchor="middle">(confini di pass, latenza di coda). Si toglie levando dispatch,</text>
+<text x="420.0" y="1408.8125" font-size="13" fill="#495057" text-anchor="middle">non rendendoli piu&#x27; veloci.</text>
+<text x="1160.0" y="1319.4375" font-size="13" fill="#2f9e44" text-anchor="middle">LE TRE LEVE, tutte a gate argmax 39/39</text>
+<text x="1160.0" y="1335.6875" font-size="13" fill="#2f9e44" text-anchor="middle"></text>
+<text x="1160.0" y="1351.9375" font-size="13" fill="#2f9e44" text-anchor="middle">1. kfan            i topK expert in UN giro    22,58 → 28,90</text>
+<text x="1160.0" y="1368.1875" font-size="13" fill="#2f9e44" text-anchor="middle">2. router          selezione parallela          28,90 → 30,74</text>
+<text x="1160.0" y="1384.4375" font-size="13" fill="#2f9e44" text-anchor="middle">3. rotta split-K   solo su N ≥ 2048             30,74 → 40,06</text>
+<text x="1160.0" y="1400.6875" font-size="13" fill="#2f9e44" text-anchor="middle"></text>
+<text x="1160.0" y="1416.9375" font-size="13" fill="#2f9e44" text-anchor="middle">kfan e rotta sono SPENTE di default: si accendono per l&#x27;A/B</text>
+<text x="54" y="1500.9375" font-size="15" fill="#868e96" text-anchor="start">F · RESIDENZA DEGLI EXPERT (solo MoE) — la VRAM non tiene i 256 expert x 40 layer</text>
+<text x="270.0" y="1564.4375" font-size="13" fill="#e8590c" text-anchor="middle">ExpertCache (residency.ts)</text>
+<text x="270.0" y="1580.6875" font-size="13" fill="#e8590c" text-anchor="middle">arena: pochi buffer grandi</text>
+<text x="270.0" y="1596.9375" font-size="13" fill="#e8590c" text-anchor="middle">slotTable: expertKey → slot · LRU</text>
+<text x="675.0" y="1564.4375" font-size="13" fill="#495057" text-anchor="middle">prepLayer</text>
+<text x="675.0" y="1580.6875" font-size="13" fill="#495057" text-anchor="middle">miss NOTI prima del layer</text>
+<text x="675.0" y="1596.9375" font-size="13" fill="#495057" text-anchor="middle">path sync + prefill</text>
+<text x="1045.0" y="1564.4375" font-size="13" fill="#e03131" text-anchor="middle">repair</text>
+<text x="1045.0" y="1580.6875" font-size="13" fill="#e03131" text-anchor="middle">miss SCOPERTI a fine pass</text>
+<text x="1045.0" y="1596.9375" font-size="13" fill="#e03131" text-anchor="middle">path ottimistico</text>
+<text x="1380.0" y="1564.4375" font-size="13" fill="#2f9e44" text-anchor="middle">readExpert</text>
+<text x="1380.0" y="1580.6875" font-size="13" fill="#2f9e44" text-anchor="middle">gate + up + down</text>
+<text x="1380.0" y="1596.9375" font-size="13" fill="#2f9e44" text-anchor="middle">3 Range = 1,78 MB</text>
+<text x="1300" y="1502.75" font-size="12" fill="#2f9e44" text-anchor="start">legge dal lettore condiviso</text>
+<text x="70" y="1658.8125" font-size="13" fill="#495057" text-anchor="start">misurato (it.31-35): prep 235-268 MB/s · repair 539 MB/s — e NON e&#x27; il canale, che ne da&#x27; 460-740 anche a 24 richieste in volo.</text>
+<text x="70" y="1684.8125" font-size="13" fill="#495057" text-anchor="start">Raggruppare le richieste NON paga: continuo contro raffiche = 0,98x. Il collo e&#x27; dentro il path, non nel trasporto.</text>
+<text x="54" y="1775.9375" font-size="15" fill="#868e96" text-anchor="start">G · IL CICLO OTTIMISTICO — un submit per token, si ripara dopo invece di chiedere prima</text>
+<text x="195.0" y="1842.5625" font-size="13" fill="#1971c2" text-anchor="middle">1 submit</text>
+<text x="195.0" y="1858.8125" font-size="13" fill="#1971c2" text-anchor="middle">l&#x27;intero token</text>
+<text x="485.0" y="1842.5625" font-size="13" fill="#1971c2" text-anchor="middle">1 readback</text>
+<text x="485.0" y="1858.8125" font-size="13" fill="#1971c2" text-anchor="middle">logits + dirty</text>
+<text x="775.0" y="1834.4375" font-size="13" fill="#9c36b5" text-anchor="middle">dirty?</text>
+<text x="775.0" y="1850.6875" font-size="13" fill="#9c36b5" text-anchor="middle">un expert non</text>
+<text x="775.0" y="1866.9375" font-size="13" fill="#9c36b5" text-anchor="middle">era in VRAM</text>
+<text x="1065.0" y="1842.5625" font-size="13" fill="#e03131" text-anchor="middle">repair</text>
+<text x="1065.0" y="1858.8125" font-size="13" fill="#e03131" text-anchor="middle">fetch dei miss</text>
+<text x="1370.0" y="1842.5625" font-size="13" fill="#e03131" text-anchor="middle">replay</text>
+<text x="1370.0" y="1858.8125" font-size="13" fill="#e03131" text-anchor="middle">dal primo layer sporco</text>
+<text x="430" y="1954.8125" font-size="13" fill="#e03131" text-anchor="start">lo stato ricorrente (DeltaNet) va ripristinato: rigiocare due volte NON e&#x27; idempotente</text>
+</svg>
