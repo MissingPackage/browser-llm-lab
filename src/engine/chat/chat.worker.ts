@@ -342,6 +342,7 @@ async function chat(turn: number, user: string, system: string | null, s: Sampli
         fetchRepairBytes: perf1.fetchRepairBytes - perf0.fetchRepairBytes,
         fetchPrepMs: perf1.fetchPrepMs - perf0.fetchPrepMs,
         fetchPrepCalls: perf1.fetchPrepCalls - perf0.fetchPrepCalls,
+        fetchPrepBytes: perf1.fetchPrepBytes - perf0.fetchPrepBytes,
         replayPassMs: perf1.replayPassMs - perf0.replayPassMs,
         flushMs: perf1.flushMs - perf0.flushMs,
         encodeMs: perf1.encodeMs - perf0.encodeMs,

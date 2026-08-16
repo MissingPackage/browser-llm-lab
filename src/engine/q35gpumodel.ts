@@ -246,7 +246,15 @@ export interface Q35GpuModel {
     submits: number; readbacks: number;
     dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
     fetchRepairMs: number; fetchRepairCalls: number; fetchRepairBytes: number;
-    fetchPrepMs: number; fetchPrepCalls: number;
+    /**
+     * `fetchPrepBytes` esiste dal 2026-08-16 (riga 2b, it.31) e prima mancava.
+     * Senza, il confronto fra i due regimi di fetch — 6,90 ms/call in `prep`
+     * contro 3,27 nel `repair` — poggiava sull'ASSUNZIONE che leggessero gli
+     * stessi byte per chiamata. Plausibile (stesso `readExpert`), mai misurato,
+     * e su una differenza di 2,1x che e' il numero di partenza di quella riga.
+     * Adesso i MB/s dei due regimi si calcolano invece di dedurli.
+     */
+    fetchPrepMs: number; fetchPrepCalls: number; fetchPrepBytes: number;
     replayPassMs: number; flushMs: number;
     /**
      * FASE 4-TER (it.28): il token FUORI dai pass GPU, decomposto.
@@ -2399,6 +2407,9 @@ export async function createQ35GpuModel(
           const got = await Promise.all(missing.map((e) => readExpert(l, e)));
           perfAcc.fetchPrepMs += performance.now() - tFetch;
           perfAcc.fetchPrepCalls += missing.length;
+          // stessa contabilita' del repair (`:2331`), cosi' i due regimi si
+          // confrontano in MB/s e non in ms per chiamata di taglia ignota
+          for (const g of got) perfAcc.fetchPrepBytes += g.gate.length + g.up.length + g.down.length;
           missing.forEach((e, i) => raw.set(e, got[i]));
         }
         // i top-K del token devono coesistere: nessuno di loro può essere
@@ -2471,7 +2482,7 @@ export async function createQ35GpuModel(
     // scomposizione del repair (goal 35b-residency, riga 1): senza questi il
     // 43% del tempo di parete del 35B non ha un nome
     fetchRepairMs: 0, fetchRepairCalls: 0, fetchRepairBytes: 0,
-    fetchPrepMs: 0, fetchPrepCalls: 0,
+    fetchPrepMs: 0, fetchPrepCalls: 0, fetchPrepBytes: 0,
     replayPassMs: 0, flushMs: 0,
     encodeMs: 0, tokenMs: 0, tailCpuMs: 0,
     // testa MTP (it.53): tenuti FUORI da `tokenMs`, perche' il draft e' un

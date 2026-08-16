@@ -163,7 +163,7 @@ const pass2json = (
     dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
     gpuCat: Record<string, { ms: number; n: number }> | null;
     fetchRepairMs: number; fetchRepairCalls: number; fetchRepairBytes: number;
-    fetchPrepMs: number; fetchPrepCalls: number;
+    fetchPrepMs: number; fetchPrepCalls: number; fetchPrepBytes: number;
     replayPassMs: number; flushMs: number;
     encodeMs: number; embedMs: number; argmaxMs: number; tailCpuMs: number;
     readbackMs: number; tokenMs: number;
@@ -185,7 +185,11 @@ const pass2json = (
     fetchRepairMs: r.fetchRepairMs, fetchRepairCalls: r.fetchRepairCalls,
     fetchRepairBytes: r.fetchRepairBytes,
     msPerFetch: r.fetchRepairCalls > 0 ? r.fetchRepairMs / r.fetchRepairCalls : null,
-    fetchPrepMs: r.fetchPrepMs, fetchPrepCalls: r.fetchPrepCalls,
+    fetchPrepMs: r.fetchPrepMs, fetchPrepCalls: r.fetchPrepCalls, fetchPrepBytes: r.fetchPrepBytes,
+    // MB/s dei due regimi, CALCOLATI e non dedotti (it.31): il 2,1x fra prep e
+    // repair poggiava sull'assunzione che leggessero gli stessi byte per chiamata
+    prepMBs: r.fetchPrepMs > 0 ? (r.fetchPrepBytes / 1e6) / (r.fetchPrepMs / 1000) : null,
+    repairMBs: r.fetchRepairMs > 0 ? (r.fetchRepairBytes / 1e6) / (r.fetchRepairMs / 1000) : null,
     replayPassMs: r.replayPassMs, flushMs: r.flushMs,
     // per differenza, mai per assunzione: ciò che resta è contabilità vera
     accountingMs: r.tailCpuMs - r.repairMs - r.replayPassMs,
@@ -597,7 +601,7 @@ async function main(cfg: Cfg): Promise<void> {
       routing: Record<string, number>; ms: number; error: string | null;
       dirtyTokens: number; replays: number; replayLayers: number; repairMs: number;
       fetchRepairMs: number; fetchRepairCalls: number; fetchRepairBytes: number;
-      fetchPrepMs: number; fetchPrepCalls: number;
+      fetchPrepMs: number; fetchPrepCalls: number; fetchPrepBytes: number;
       replayPassMs: number; flushMs: number;
       encodeMs: number; embedMs: number; argmaxMs: number; tailCpuMs: number;
       readbackMs: number; tokenMs: number;
@@ -667,6 +671,7 @@ async function main(cfg: Cfg): Promise<void> {
         fetchRepairBytes: p1.fetchRepairBytes - p0.fetchRepairBytes,
         fetchPrepMs: p1.fetchPrepMs - p0.fetchPrepMs,
         fetchPrepCalls: p1.fetchPrepCalls - p0.fetchPrepCalls,
+        fetchPrepBytes: p1.fetchPrepBytes - p0.fetchPrepBytes,
         replayPassMs: p1.replayPassMs - p0.replayPassMs, flushMs: p1.flushMs - p0.flushMs,
         encodeMs: p1.encodeMs - p0.encodeMs, embedMs: p1.embedMs - p0.embedMs,
         argmaxMs: p1.argmaxMs - p0.argmaxMs, tailCpuMs: p1.tailCpuMs - p0.tailCpuMs,

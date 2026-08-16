@@ -57,7 +57,13 @@ const code = (rel: string): string => {
 /** i contatori che la riga 1 aggiunge, con il verso in cui vanno scritti */
 const NEW_COUNTERS = [
   "fetchRepairMs", "fetchRepairCalls", "fetchRepairBytes",
-  "fetchPrepMs", "fetchPrepCalls",
+  // `fetchPrepBytes` e' arrivato dopo (riga 2b, it.31) e la sua assenza aveva
+  // un costo: senza, i due regimi di fetch si confrontavano in ms PER CHIAMATA
+  // di taglia ignota, e il 2,1x che apre quella riga poggiava sull'assunzione
+  // che `prep` e `repair` leggessero gli stessi byte. Il repair il suo
+  // contatore ce l'aveva dal primo giorno; il prep no, e nessuno se n'era
+  // accorto perche' la lista qui sotto lo rispecchiava.
+  "fetchPrepMs", "fetchPrepCalls", "fetchPrepBytes",
   "replayPassMs", "flushMs",
 ] as const;
 

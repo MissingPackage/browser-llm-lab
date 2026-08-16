@@ -2451,3 +2451,86 @@ I due candidati restano da misurare, non da assumere: finestra di concorrenza
 esplicita, e coalescing delle Range adiacenti — che fra gate/up/down di un
 expert non si può fare (sono tre tensori, tre offset), ma **fra expert dello
 stesso tensore** sì.
+
+---
+
+## it.31 — il 2,1× della riga 2b è reale, e adesso è misurato invece che dedotto
+
+### Il buco che ho trovato guardando i miei stessi artefatti
+
+Il numero che apre la riga 2b — «6,90 ms/fetch in `prep` contro 3,27 nel
+`repair`, stessi byte» — poggiava su un'**assunzione**: che i due regimi
+leggessero la stessa quantità per chiamata. Plausibile (chiamano lo stesso
+`readExpert`), mai verificata. E il contatore per dirlo **non esisteva**: il
+repair aveva `fetchRepairBytes` dal primo giorno, il prep no.
+
+*Il test che pinna la superficie dei contatori elencava `fetchPrepMs` e
+`fetchPrepCalls` e rispecchiava fedelmente l'assenza. Un gate che descrive ciò
+che c'è non vede ciò che manca.*
+
+### La misura, dopo il contatore
+
+`results/engine/q35-fetchbytes-arena4-2026-08-16.json`, arena strozzata a 4 GiB
+(la ricetta che fa girare entrambi i path):
+
+    passata                 calls        ms   ms/call       MB   MB/call     MB/s
+    sync-cold/prep           3532   23546.3     6,667   6303.6    1,7847    267,7
+    sync-warm/prep           2752   20879.7     7,587   4905.8    1,7826    235,0
+    optimistic-warm/repair   3283   10865.4     3,310   5855.7    1,7836    538,9
+
+**`MB/call` coincide a tre cifre in tutti e tre.** L'assunzione era giusta — e
+adesso è una misura. Il 2,1× non era un artefatto di taglie diverse:
+
+    prep    235-268 MB/s
+    repair  539 MB/s        ⇒ 2,0-2,3x, a parità di byte, lettore e server
+
+### La causa è la FORMA della concorrenza, e si legge nel codice
+
+    repair   (`q35gpumodel.ts:2328`)  Promise.all sui miss dell'INTERO TOKEN
+                                      → centinaia di Range in volo
+    prep     (`:2399`)                Promise.all sui miss di UN LAYER
+                                      → al più 8 expert × 3 = 24 Range in volo
+
+Stesso `readExpert`, stesso lettore condiviso (ora unico, it.30). **Cambia solo
+quante richieste stanno in volo insieme**, e vale il doppio della banda.
+
+### E qui la riga 2b incontra la riga 3
+
+La leva per il `prep` è **non fetchare layer per layer**: raggruppare i miss di
+più layer in un `Promise.all` solo. Ma questo è precisamente il meccanismo che
+la **riga 3** ha in contratto — *«sovrapporre l'`ensure` del layer L+1 al
+calcolo del layer L»*.
+
+**Le due righe convergono sullo stesso cambiamento**, e conviene saperlo prima
+di implementarle separatamente: sarebbero due scritture della stessa cosa, che
+è il difetto che questo goal ha appena tolto dall'I/O (cinque copie → una).
+
+*Non riscrivo il piano da solo: lo registro qui e lo porto nel consuntivo.
+Fondere due righe di un contratto è una modifica al contratto.*
+
+### Quanto è lontano il done-when, in chiaro
+
+Il contratto chiede **< 1,5 ms per fetch**. A 1,7836 MB per chiamata significa
+**1.189 MB/s**. Oggi: 539 nel repair, 235-268 nel prep. E il tetto misurato di
+questo host per l'OPFS è ~1,34 GiB/s (it.20), su un path diverso (il 35B legge
+via HTTP da vite, non da OPFS).
+
+**Quindi il done-when non si raggiunge con la sola concorrenza**: portare il
+prep al livello del repair vale ~2×, e servirebbe un altro ~2,2× per arrivare a
+1,5 ms. L'altro candidato del contratto — la sorgente non-HTTP (OPFS) — non è un
+di più: è la seconda metà.
+
+### EVIDENZA
+
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1110 passed | 10 skipped**
+- `results/engine/q35-fetchbytes-arena4-2026-08-16.json`, host quiescente
+- il caso che pinna i contatori ora include `fetchPrepBytes` con la ragione
+  scritta accanto
+
+### NON VERIFICATO
+
+- **Nessuna leva è ancora stata scritta**: questa iterazione ha reso misurabile
+  il numero di partenza, non l'ha mosso.
+- Non ho misurato la curva banda-contro-richieste-in-volo: so che 24 rendono
+  meno di «centinaia», non so dove sta il ginocchio. Serve prima di scegliere
+  una finestra, altrimenti si cabla un numero preso a caso.
