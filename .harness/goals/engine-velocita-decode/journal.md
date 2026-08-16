@@ -3739,3 +3739,88 @@ Due ragioni, e la seconda basta da sola:
   `{ raw, slab }` alla cache — l'interfaccia c'è (it.42), il formato c'è
   (it.45), il descrittore c'è (it.46), il file si sa produrre (oggi). Manca
   l'ultimo anello.
+
+---
+
+## it.48 — l'idea del PI era già in albero, e misurata NON paga sul 35B
+
+Il PI ha proposto il meccanismo di ds4: expert caldi fissi in VRAM, freddi
+streammati. **Esiste**, si chiama policy `tier`, ed è la terza leva spenta di
+default che questo goal trova.
+
+### Cosa c'è già
+
+`residency.ts`: LRU + **AUTOPIN** dei top-usage con confidenza, cap HARD 12,5%
+degli slot per classe, **REPIN LFRU** (score `heat<<8|recency`), isteresi
+25%+4, max 4 swap per passata, decay del calore. Lineage dichiarato nella spec
+di fase C3a (colibri `tier.h`, e la riga che cita ds4 sulla quant asimmetrica).
+`q35gpumodel` chiama già `noteSelection` in due punti, quindi il path Qwen la
+alimenta.
+
+**Non era mai stata misurata sul 35B**: gli unici artefatti col tier sono tre
+bench GLM del 2026-08-09 e una proiezione mobile sul 4B *denso*, dove non c'è
+paging da fare.
+
+### La distribuzione dice di sì, la misura dice di no
+
+Dalla sessione di chat del PI (313.920 selezioni, 7.961 coppie distinte su
+10.240):
+
+    top  1,0% delle coppie  →  16,4% delle selezioni
+    top 12,5%  ← il cap     →  58,4%
+    top 25,0%               →  75,2%
+
+Sbilanciamento forte, ed è la condizione **necessaria** perché l'autopin paghi.
+Non è quella sufficiente:
+
+    arena 4 GiB (regime sporco)   lru 556,05 → tier 569,82 ms/token   miss 3283 → 3273
+    vram 13 (punto di lavoro VERO) lru 11,35 → tier 11,12 tok/s        miss 12.875 → 12.909
+
+**Miss +0,3%, tempo −2%.** Su entrambi i punti di lavoro l'autopin non converte
+lo sbilanciamento in meno miss.
+
+### Perché, in aritmetica
+
+    slot nell'arena a 11,17 GiB   ~6.778
+    parco                         10.240 coppie
+    già residente con LRU         66% del parco
+    cap dell'autopin              12,5% degli slot = ~847 = 8,3% del parco
+
+**LRU tiene già dentro quasi tutta la testa.** Fissarne una fetta non cambia
+*chi* resta: tocca l'8% del parco, e quell'8% erano hit comunque. I miss stanno
+nella **coda**, e la coda non ci sta per capienza, non per politica.
+
+*Il vincolo non è la scelta, è la capienza. Una politica più furba non crea
+spazio.*
+
+### Cosa questo redirige, e perché è una buona notizia
+
+Se il collo è la capienza, le leve che restano non sono su *quali* expert
+tenere, ma su:
+
+1. **rendere i miss economici** — è il pre-pack che sto costruendo: 7,11 s di
+   pack per sessione → 0, e 38.625 richieste → 12.875;
+2. **nasconderli** — il prefetch: il lookahead ha **91,92% di recall a K=8**
+   sul GLM (`q35-looka-35b-2026-08-10.json` ne ha l'analogo sul 35B), cioè si
+   può sapere quali expert servono al layer L+1 mentre si calcola L;
+3. **fare entrare più parco** — non è software.
+
+*Detto altrimenti: il meccanismo di ds4 c'è e funziona; su questo modello e
+questa GPU la testa ci sta già, quindi non ha niente da salvare.*
+
+### EVIDENZA
+
+- `results/engine/q35-tier-arena4-2026-08-16.json` (arena 4, A/B contro
+  `q35-ioinside-arena4`)
+- export della chat vera con `expertPolicy: tier`, confrontato col turno di
+  it.40
+- lo sbilanciamento è calcolato sull'artefatto di chat del PI, non simulato
+
+### NON VERIFICATO
+
+- **Un cap più alto del 12,5%.** È una costante, e il conto dice che a 12,5%
+  tocca l'8% del parco. Non l'ho variata: prima di girare una manopola volevo
+  sapere se la leva agisce, e non agisce.
+- *Correzione a mio carico*: nel primo confronto avevo letto 9.783 miss come
+  totale di sessione. Erano quelli del **primo turno**; il totale è 12.909. Il
+  segno non cambia, la mia lettura sì.

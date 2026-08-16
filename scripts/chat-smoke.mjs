@@ -15,6 +15,9 @@ const MAXNEW = arg("maxnew", "48");
 // del prompt corto dello smoke — un turno da 60 token e uno da 800 pagano la
 // stessa tassa di residenza fissa, quindi danno tok/s molto diversi e NON sono
 // confrontabili fra loro (it.40).
+// --policy tier: autopin dei top-usage (it.48). Il default resta "lru", che e'
+// cio' che la chat fa oggi — cambiarlo qui e' una MISURA, non una decisione.
+const POLICY = arg("policy", null);
 const PROMPT = arg("prompt", "Scrivi una frase sola: perche' il cielo e' blu?");
 const PROFILE = join(homedir(), ".cache/blab-glmroute-profile");
 mkdirSync(PROFILE, { recursive: true });
@@ -32,6 +35,7 @@ try {
   await page.fill("#vram", VRAM);
   await page.fill("#maxnew", MAXNEW);
   await page.fill("#temp", "0");
+  if (POLICY) await page.selectOption("#policy", POLICY);
   await page.click("#load");
   await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("pronto"), null, { timeout: 240000 });
   console.log("[smoke] caricato:", await page.textContent("#status"));
