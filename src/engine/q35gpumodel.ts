@@ -58,6 +58,25 @@ interface Step {
    * i 39 call-site: un'etichetta per gruppo, scritta dove il gruppo comincia.
    */
   cat: string;
+  /**
+   * BRACCIO dell'A/B della rotta split-K nel decode (riga 2d). `undefined` = lo
+   * step gira sempre; `"legacy"` / `"splitk"` = gira solo col flag `setSplitk`
+   * nella posizione corrispondente.
+   *
+   * PERCHE' DUE BRACCI NELLO STESSO PIANO invece di un flag di costruzione. Il
+   * piano dei dispatch si costruisce UNA volta (`push` riempie `steps` mentre
+   * il modello si carica), quindi una scelta fatta li' sarebbe immutabile per
+   * la vita del modello e l'A/B diventerebbe un confronto fra DUE PROCESSI —
+   * cioe' fra due stati di cache diversi. it.20 ha appena mostrato quanto costa
+   * quell'errore: 15,3 contro 11,3 tok/s sullo stesso identico codice, e la
+   * differenza era la page cache. Il kfan (it.9) ha evitato la trappola perche'
+   * i suoi dispatch si codificano per token; questi no, quindi il piano porta
+   * entrambi i rami e l'encoder ne salta uno.
+   *
+   * Costo: qualche pipeline e bind group in piu' costruiti e mai eseguiti nel
+   * braccio spento. Si paga una volta al load, non per token.
+   */
+  arm?: "legacy" | "splitk";
 }
 
 /**
@@ -272,6 +291,18 @@ export interface Q35GpuModel {
   /** KFAN (riga 2c): i topK expert in un giro di dispatch invece di uno per volta. Solo decode ottimistico. */
   setKfan(on: boolean): void;
   kfanOn(): boolean;
+  /**
+   * ROTTA SPLIT-K nel decode (riga 2d): i tensori che il piano ammette passano
+   * dal moltiplicatore a fette di K invece che dal GEMV a un workgroup per
+   * riga. Parte SPENTA e si accende a caldo, perche' l'A/B deve stare dentro un
+   * processo solo — su due processi confronterebbe due stati di cache (it.20).
+   * `splitkAvail()` dice se il piano ha instradato almeno un tensore: senza
+   * `dot4I8Packed` o su un modello le cui shape il piano respinge, accendere il
+   * flag non cambierebbe niente e va saputo PRIMA di leggere un A/B piatto.
+   */
+  setSplitk(on: boolean): void;
+  splitkOn(): boolean;
+  splitkAvail(): boolean;
   /**
    * PREFILL A CHUNK (fase 4): M token in un solo submit, con i logits della
    * SOLA ultima riga — il prefill non ha bisogno degli altri. `null` se il
@@ -771,6 +802,42 @@ export async function createQ35GpuModel(
   const prefillXq = prefillOn && prefillIdot ? empty(M_MAX * (prefillMaxN / 4) * 4) : null;
   const prefillXsc = prefillOn && prefillIdot ? empty(M_MAX * (prefillMaxN / 32) * 4) : null;
   /**
+   * GLI STESSI TRE BUFFER, PER IL DECODE (riga 2d). Le espressioni sono quelle
+   * di sopra con **M = 1**, ed e' l'unica differenza che conta: il termine che
+   * rende grosso il conto del prefill e' `M_MAX = 16`.
+   *
+   *     part  4 x 1 x 8192 x 4  = 128 KiB   (N piu' grande: attn_qkv del 35B)
+   *     xq    2048/4 x 4        =   2 KiB
+   *     xsc   2048/32 x 4       =  256 B
+   *                               ~131 KiB = 0,001% di un'arena da 12 GiB
+   *
+   * NON si riusano quelli del prefill, e non e' pigrizia: `prefillOn` e' vero
+   * solo se il chiamante passa `prefillM`, e gli A/B del decode non lo passano
+   * — li' quei tre sono `null`. Legare una leva di decode all'aver acceso il
+   * prefill a chunk sarebbe un accoppiamento gratuito, e a 131 KiB il prezzo
+   * dell'indipendenza e' zero (conto fatto in it.22 PRIMA di scrivere questo).
+   *
+   * UN `part` SOLO e non due. Il piano di it.22 ne prevedeva due, per togliere
+   * la dipendenza falsa fra il GEMM di `attn_qkv` e quello di `attn_gate`.
+   * Ritirato con la sua ragione: quantizzando `x` dentro `gemv` — come fa il
+   * gemello del prefill — i due tensori serializzano comunque su `decXq`, e il
+   * secondo `part` non comprerebbe niente. Se un giorno la quantizzazione
+   * venisse issata a una volta per layer, allora i due `part` tornano ad avere
+   * senso e questa nota dice perche'.
+   *
+   * NESSUNA CONDIZIONE SULLA FAMIGLIA, di proposito. A decidere quali tensori
+   * prendono la rotta e' `planPrefillGemm` — cioe' la SHAPE e il formato — e
+   * non il modello: e' il predicato di it.14, che protegge i 48 siti a N=32 del
+   * 4B esattamente come proteggerebbe i loro gemelli su qualunque altra
+   * famiglia. Una condizione `arch === "qwen35moe"` qui renderebbe la leva
+   * specifica di un modello, che e' precisamente cio' che il ruling del PI
+   * vieta (memoria `global-levers-not-per-model-optimizations`).
+   */
+  const decSplitkAvail = prefillIdot;
+  const decPart = decSplitkAvail ? empty(PREFILL_SPLITS_MEASURED * prefillMaxN * 4) : null;
+  const decXq = decSplitkAvail ? empty(Math.ceil(prefillMaxN / 4) * 4) : null;
+  const decXsc = decSplitkAvail ? empty(Math.ceil(prefillMaxN / 32) * 4) : null;
+  /**
    * ETICHETTE per la sonda dei tempi (fase 4, it.23): `{at, cat}` dice che dallo
    * step `at` in poi si entra nella categoria `cat`. Sono MARCHE su intervalli e
    * non un campo per step, cosi' i ~25 siti di `push` non si toccano.
@@ -800,7 +867,8 @@ export async function createQ35GpuModel(
    * un dispatch (`dispatchesPerToken` si misura prima).
    */
   let stepTarget: Step[] = steps;
-  const push = (code: string, bufs: GPUBuffer[], wgs: number | [number, number], withUni = false): void => {
+  const push = (code: string, bufs: GPUBuffer[], wgs: number | [number, number] | [number, number, number],
+    withUni = false, arm?: "legacy" | "splitk"): void => {
     const p = pipe(code);
     const entries: GPUBindGroupEntry[] = bufs.map((b, i) => ({ binding: i, resource: { buffer: b } }));
     if (withUni) entries.push({ binding: bufs.length, resource: { buffer: uni } });
@@ -808,7 +876,11 @@ export async function createQ35GpuModel(
     // `cat` qui e' "seq": questo e' il piano SEQUENZIALE del decode, non quello
     // di prefill che la riga 5 scompone. Un campo obbligatorio con un valore
     // onesto batte un campo opzionale che si dimentica di essere vuoto.
-    stepTarget.push({ pipe: p, bind, wgs: typeof wgs === "number" ? [wgs, 1, 1] : [wgs[0], wgs[1], 1], cat: "seq" });
+    stepTarget.push({
+      pipe: p, bind,
+      wgs: typeof wgs === "number" ? [wgs, 1, 1] : wgs.length === 3 ? wgs : [wgs[0], wgs[1], 1],
+      cat: "seq", arm,
+    });
   };
   /**
    * ATTENTION DECODE in DUE dispatch (split sul contesto + combine log-sum-exp).
@@ -864,7 +936,47 @@ export async function createQ35GpuModel(
     const opts = { kind: kk, K: w.k, N: w.n, hasBias: false, vec4Rows2: kk === "q4_0", sg: gemvCaps.sg };
     const ok = gemvQuantVec4Rows2Ok(opts);
     const use = ok ? opts : { kind: kk, K: w.k, N: w.n, hasBias: false };
-    push(gemvQuantWgsl(use), [w.qs, w.scales, src, dst], gemvQuantGrid(use));
+    const legacy = (): void => push(gemvQuantWgsl(use), [w.qs, w.scales, src, dst], gemvQuantGrid(use));
+    // ---- ROTTA SPLIT-K DEL DECODE (riga 2d) ----------------------------------
+    // MISURATA prima di essere scritta, sulle shape vere e a M=1 contro QUESTO
+    // kernel e non contro la forma del prefill (it.21, pre-registrazione in
+    // docs/deep-dive/velocita-decode-2d-prereg-2026-08-16.md):
+    //
+    //     K2048 N=8192  gemv 0,1324 ms (23,4% del picco) -> split-K 0,0340  3,89x
+    //     K2048 N=4096  gemv 0,1616 ms ( 9,6% del picco) -> split-K 0,0489  3,30x
+    //
+    // Lo split-K a N=8192 arriva al 91,0% del picco di banda. Non era un
+    // problema di occupazione — il GEMV lancia gia' ~N workgroup — era di
+    // BANDA: un workgroup di 64 thread per riga non satura il bus, e a curarlo
+    // e' spezzare il K, non aggiungere righe.
+    //
+    // CHI DECIDE E' IL PIANO, non questa funzione: `planPrefillGemm` guarda
+    // formato e shape ed e' lo stesso predicato che instrada il prefill. E' cosi'
+    // che `ssm_alpha`/`ssm_beta` (N=32) restano legacy su OGNI famiglia senza
+    // che nessuno scriva il loro nome qui.
+    //
+    // Solo `via: "idot"`: la via f32 esiste come fallback dichiarato del
+    // prefill, ma nel decode non e' mai stata misurata e instradarla sarebbe
+    // ereditare un numero da un altro regime — l'errore che questo goal ha gia'
+    // fatto quattro volte.
+    if (decSplitkAvail && kk === "q8_0" && decPart !== null && decXq !== null && decXsc !== null) {
+      const route = planPrefillGemm({ kind: kk, K: w.k, N: w.n, M: 1, idot: prefillIdot });
+      if (route.via === "idot") {
+        const o80 = { kind: kk, K: w.k, N: w.n, M: 1, splits: route.splits };
+        push(prefillQuantXQ8Wgsl({ K: w.k, M: 1 }), [src, decXq, decXsc],
+          prefillQuantXGrid({ K: w.k, M: 1 }), false, "splitk");
+        push(prefillGemmQ80SplitKIdotWgsl(o80), [w.qs, w.scales, decXq, decPart, decXsc],
+          prefillGemmGrid(o80), false, "splitk");
+        push(prefillSplitKCombineWgsl({ N: w.n, M: 1, splits: route.splits }), [decPart, dst],
+          prefillCombineGrid({ N: w.n, M: 1 }), false, "splitk");
+        // Il braccio spento sta NELLO STESSO piano: `setSplitk` sceglie a caldo
+        // quale dei due l'encoder esegue, e l'A/B resta dentro un processo solo
+        // — stessa cache, bracci interleavati (v. `Step.arm`).
+        push(gemvQuantWgsl(use), [w.qs, w.scales, src, dst], gemvQuantGrid(use), false, "legacy");
+        return;
+      }
+    }
+    legacy();
   };
   // ---- gemelli a M righe (fase 4). `pushB` scrive SOLO nel piano gemello. ----
   /**
@@ -1937,6 +2049,7 @@ export async function createQ35GpuModel(
                 if (mk !== undefined) pass = usePass(mk);
               }
               const st = steps[i];
+              if (!stepOn(st)) continue;
               pass.setPipeline(st.pipe);
               pass.setBindGroup(0, st.bind);
               pass.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
@@ -1986,6 +2099,7 @@ export async function createQ35GpuModel(
           const tail = usePass("tail");
           for (let i = cuts[nMoeLayer - 1]; i < (read ? steps.length : headCut); i++) {
             const st = steps[i];
+            if (!stepOn(st)) continue;
             tail.setPipeline(st.pipe);
             tail.setBindGroup(0, st.bind);
             tail.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
@@ -2334,6 +2448,18 @@ export async function createQ35GpuModel(
   let optimisticOn = opts.select === "optimistic";
   /** KFAN (riga 2c): parte SPENTO, si accende con `setKfan` per l'A/B nello stesso processo. */
   let kfanEnabled = false;
+  /** ROTTA SPLIT-K nel decode (riga 2d): parte SPENTA, stessa ragione del kfan. */
+  let splitkEnabled = false;
+  /**
+   * Il filtro dei due bracci, in UN posto solo. Gli step senza `arm` girano
+   * sempre; quelli marcati girano nella sola posizione corrispondente del flag.
+   * Ogni ciclo che spara `steps` lo interroga — se un ciclo se ne dimenticasse,
+   * eseguirebbe ENTRAMBI i bracci e il secondo riscriverebbe l'uscita del
+   * primo: nessun errore, numeri plausibili, e un A/B che confronta una cosa
+   * con se stessa. E' il motivo per cui il controllo e' una funzione e non tre
+   * condizioni ricopiate.
+   */
+  const stepOn = (st: Step): boolean => st.arm === undefined || (st.arm === "splitk") === splitkEnabled;
   // ---- sonda di decomposizione del tempo GPU (fase 4, it.19) ----
   // Con le marche di it.23 le categorie per layer diventano 7 (norm, attn|ssm,
   // resid, shexp, routerGemv, router, expert): 40x7+1 = 281 sul 35B. 512 da'
@@ -2611,6 +2737,7 @@ export async function createQ35GpuModel(
     const pass = enc.beginComputePass();
     for (let i = from; i < to; i++) {
       const st = steps[i];
+      if (!stepOn(st)) continue;
       pass.setPipeline(st.pipe);
       pass.setBindGroup(0, st.bind);
       pass.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
@@ -2668,6 +2795,7 @@ export async function createQ35GpuModel(
         const p2 = enc.beginComputePass();
         for (let i = headCut; i < steps.length; i++) {
           const st = steps[i];
+          if (!stepOn(st)) continue;
           p2.setPipeline(st.pipe);
           p2.setBindGroup(0, st.bind);
           p2.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);
@@ -2887,6 +3015,20 @@ export async function createQ35GpuModel(
       kfanEnabled = on;
     },
     kfanOn: () => kfanEnabled,
+    setSplitk(on: boolean): void {
+      // Accendere una rotta che il piano non ha instradato darebbe un A/B
+      // piatto e la lettura sbagliata («la leva non serve») invece di quella
+      // giusta («la leva non e' cablata su questo modello»).
+      if (on && !steps.some((s) => s.arm === "splitk")) {
+        throw new Error(
+          "q35gpumodel: setSplitk(true) su un piano che non ha nessuno step splitk — "
+          + "il piano non ha instradato nessun tensore (dot4I8Packed assente, oppure "
+          + "nessuna shape ammessa da planPrefillGemm). Controlla splitkAvail() prima.");
+      }
+      splitkEnabled = on;
+    },
+    splitkOn: () => splitkEnabled,
+    splitkAvail: () => steps.some((s) => s.arm === "splitk"),
     gpuTimeStats: canGpuTs
       ? () => ({ tokens: tsqTokens, overflow: tsqOverflow, byCat: Object.fromEntries([...tsqAcc.entries()].map(([k2, v2]) => [k2, { ...v2 }])) })
       : null,
@@ -3009,6 +3151,7 @@ export async function createQ35GpuModel(
       const p2 = enc.beginComputePass();
       for (let i = headCut; i < steps.length; i++) {
         const st = steps[i];
+        if (!stepOn(st)) continue;
         p2.setPipeline(st.pipe);
         p2.setBindGroup(0, st.bind);
         p2.dispatchWorkgroups(st.wgs[0], st.wgs[1], st.wgs[2]);

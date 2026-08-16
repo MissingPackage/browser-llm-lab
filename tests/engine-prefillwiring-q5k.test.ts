@@ -313,23 +313,50 @@ const SITES = [
 ] as const;
 
 // ---------------------------------------------------------------------------
-// (a) L'IMBUTO: la rotta si chiede al piano, e da DUE posti — non da uno, non
-//     da tre.
+// (a) L'IMBUTO: la rotta si chiede al piano, e da TRE posti nominati — non da
+//     due, non da quattro.
 //
 // Il censimento di it.17 diceva UNO (`gemvB`) e si fermava li'; ma `ssm_out`
 // non passa da `gemvB`, quindi quel "uno" descriveva una copertura che sui
-// K-quant era zero. Dopo il cablaggio i posti che decidono sono due, e sono
-// nominati: chi ne aggiunge un terzo sta ri-derivando la rotta da qualche altra
-// parte, che e' esattamente la forma del difetto di it.7.
+// K-quant era zero. Col cablaggio del q8_0 sono diventati due.
+//
+// IL TERZO E' ARRIVATO in it.23 ed e' di un ALTRO REGIME: `gemv`, l'emettitore
+// del DECODE. E' la cosa che questo gruppo di casi voleva rendere impossibile
+// di nascosto e possibile in chiaro — la rotta del decode non ri-deriva niente,
+// chiede allo stesso piano, ed e' per questo che `ssm_alpha`/`ssm_beta` (N=32)
+// restano legacy su ogni famiglia senza che il loro nome compaia in `gemv`.
+// Chi ne aggiunge un quarto sta ri-derivando la rotta da qualche altra parte,
+// che e' esattamente la forma del difetto di it.7.
 // ---------------------------------------------------------------------------
-describe("[a] `planPrefillGemm` sta in DUE posti: `gemvB` e il ramo K-quant di `loadW`", () => {
-  it("q35gpumodel importa il piano e lo chiama esattamente due volte", () => {
+describe("[a] `planPrefillGemm` sta in TRE posti: `gemvB`, il ramo K-quant di `loadW`, e `gemv`", () => {
+  it("q35gpumodel importa il piano e lo chiama esattamente tre volte", () => {
     const src = code(MODEL);
     expect(uncommented(MODEL), "q35gpumodel deve importare il piano").toMatch(
       /import\s*\{[^}]*planPrefillGemm[^}]*\}\s*from\s*["'`]\.\/prefillgemmplan["'`]/);
     const calls = hitsOf(src, "planPrefillGemm", "\\(");
     const where = calls.map((i) => `${MODEL}:${lineOf(src, i)}`);
-    expect(calls.length, `planPrefillGemm( a ${where.join(", ") || "NESSUNA riga"}`).toBe(2);
+    expect(calls.length, `planPrefillGemm( a ${where.join(", ") || "NESSUNA riga"}`).toBe(3);
+  });
+
+  it("la terza chiamata e' dentro `gemv`, l'emettitore del DECODE — e chiede M=1", () => {
+    const src = code(MODEL);
+    const g = helperBody(src, "gemv");
+    expect(g, "gemv non trovata").not.toBeNull();
+    expect(hitsOf(g!, "planPrefillGemm", "\\(").length, "dentro gemv").toBe(1);
+    // M=1 e' cio' che distingue il regime: con M diverso da 1 questa chiamata
+    // chiederebbe la rotta di un chunk di prefill dentro il path del decode
+    expect(g!).toMatch(/planPrefillGemm\(\{[^}]*M:\s*1[^}]*\}\)/);
+    // La rotta e' emessa per intero e coi buffer DEL DECODE: quantX -> GEMM a
+    // fette -> combine. Si guardano gli IDENTIFICATORI e non le stringhe:
+    // `code()` bianca i letterali, quindi le etichette dei bracci qui non si
+    // vedono (ed e' giusto — un test sul sorgente non deve leggere le stringhe).
+    for (const id of ["prefillQuantXQ8Wgsl", "prefillGemmQ80SplitKIdotWgsl",
+      "prefillSplitKCombineWgsl", "decXq", "decXsc", "decPart"]) {
+      expect(hitsOf(g!, id, "").length, `${id} dentro gemv`).toBeGreaterThan(0);
+    }
+    // e il braccio spento resta NELLO STESSO piano: `gemv` emette anche il GEMV
+    // legacy dopo la rotta, altrimenti l'A/B sarebbe fra due processi
+    expect(hitsOf(g!, "gemvQuantWgsl", "\\(").length, "gemvQuantWgsl dentro gemv").toBeGreaterThan(1);
   });
 
   it("una chiamata e' dentro `gemvB`, l'altra dentro il ramo K-quant di `loadW`", () => {

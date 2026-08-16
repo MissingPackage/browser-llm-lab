@@ -137,12 +137,28 @@ passano `--prefill-m`): la rotta alloca i suoi, il che a 194 KiB e' comunque la
 scelta giusta — legare una leva di decode all'aver acceso il prefill a chunk
 sarebbe accoppiamento gratuito.
 
-**IL PIANO E' SCRITTO, in cinque fette (riga 2d di `PHASES.md`)**, cosi' la
-prossima iterazione scrive codice invece di progettare: i buffer · `quantX` UNA
-volta per layer (i quattro tensori leggono lo stesso `xn`, quindi 30 dispatch e
-non 60) · `gemv` interroga `planPrefillGemm` invece di riscrivere il predicato ·
-flag spento + `setSplitk()` per l'A/B nello stesso processo, come `setKfan` ·
-gate argmax PRIMA del tempo, poi 4B e 9B.
+**LA ROTTA E' IN ALBERO E SPENTA (it.23, fette 1-4).** `gemv` — l'emettitore del
+DECODE — interroga `planPrefillGemm` a `M: 1` e, sui tensori che il piano
+ammette, emette quantX → GEMM a fette → combine; i buffer sono i suoi (~131 KiB,
+nessuna condizione sulla famiglia: decide la shape, non il modello).
+
+**Il piano statico si costruisce UNA volta, quindi il flag non poteva essere di
+costruzione**: sarebbe stato immutabile per la vita del modello e l'A/B avrebbe
+confrontato DUE PROCESSI, cioe' due stati di cache — la classe di errore che
+it.20 ha appena pagato (15,3 contro 11,3 tok/s sullo stesso codice). Il piano
+porta quindi **entrambi i bracci** (`Step.arm`) e l'encoder ne salta uno tramite
+un predicato solo, `stepOn`.
+
+**IL BRACCIO SPENTO E' PROVATO NO-OP SU GPU**: ktest **111 PASS / 0 FAIL** e
+`q35-model-4b-argmax` resta a **570 dispatch/token** con argmax 6/6 identico. Se
+il filtro sbagliasse girerebbero entrambi i bracci, il conteggio salirebbe e
+l'argmax cadrebbe.
+
+**LA PROSSIMA ITERAZIONE — il flag ACCESO non e' mai stato eseguito.** Serve
+`--splitk` su `q35-conf-run.mjs` (sul modello di `--kfan`), e poi **in
+quest'ordine**: leggere `splitkAvail()` (quanti tensori il piano ha davvero
+instradato — senza, un A/B piatto e' ambiguo) · gate **argmax 39/39** fra OFF e
+ON · `ssmGemv` dalla sonda · `decode.tokS` · infine 4B e 9B.
 
 Le cinque iterazioni precedenti della riga hanno prodotto, tutto in albero e
 verde: la verifica di riuso (il kernel veloce ESISTE ed e' ktest-ato), il

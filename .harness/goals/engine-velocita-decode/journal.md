@@ -1744,3 +1744,98 @@ invariato (`52b3efa`). I numeri vengono da `wgsl.ts:4175`,
 `q35gpumodel.ts:703-704, 754-772, 1103-1120` e `prefillgemmplan.ts:209-246`.
 Nessuna GPU spesa: era la domanda giusta da fare a costo zero prima di
 spenderne.
+
+---
+
+## it.23 — la rotta è in albero, spenta, e il braccio spento è provato no-op
+
+Fette 1-4 del piano di it.22. **La fetta 5 (l'A/B su GPU col flag acceso) resta
+alla prossima**: serve il cablaggio del flag nel runner, e non l'ho improvvisato
+a fine iterazione.
+
+### Il problema di progetto che il piano non aveva visto
+
+Il piano diceva «flag spento + `setSplitk()` per l'A/B a caldo, come `setKfan`».
+**Non funzionava così**: il kfan si accende a caldo perché i suoi dispatch si
+codificano *per token* (`encodeExperts`), mentre il piano dei dispatch statici
+si costruisce **una volta sola** al load. Una scelta fatta lì sarebbe immutabile
+per la vita del modello, e l'A/B diventerebbe un confronto **fra due processi**
+— cioè fra due stati di cache diversi.
+
+**it.20 ha appena mostrato quanto costa quell'errore**: 15,3 contro 11,3 tok/s
+sullo stesso identico codice, e la differenza era la page cache. Fare l'A/B su
+due processi qui avrebbe prodotto esattamente quella classe di numero.
+
+**La soluzione**: il piano porta **entrambi i bracci** e l'encoder ne salta uno.
+`Step` ha ora un campo `arm?: "legacy" | "splitk"`, e un solo predicato —
+`stepOn(st)` — decide. Costo: qualche pipeline e bind group costruiti e mai
+eseguiti nel braccio spento, pagati una volta al load e mai per token.
+
+**Il filtro è UNA funzione e non tre condizioni ricopiate**, ed è deliberato:
+i cicli che sparano `steps` sono cinque, e uno che se ne dimenticasse
+eseguirebbe *entrambi* i bracci — il secondo riscriverebbe l'uscita del primo,
+nessun errore, numeri plausibili, e un A/B che confronta una cosa con se stessa.
+
+### Cosa è entrato
+
+1. **I buffer** (`decPart`, `decXq`, `decXsc`): le stesse espressioni del
+   prefill con **M = 1**, ~131 KiB. **Nessuna condizione sulla famiglia** — a
+   decidere è `planPrefillGemm`, cioè shape e formato, non il modello. Una
+   guardia `arch === "qwen35moe"` avrebbe reso la leva specifica di un modello,
+   che è precisamente ciò che il ruling del PI vieta.
+2. **La rotta in `gemv`** — l'emettitore del DECODE, non `gemvB`: quantX →
+   GEMM a fette → combine, e in coda il GEMV legacy marcato `"legacy"`. Solo
+   `via: "idot"`: la via f32 è il fallback dichiarato del *prefill* e nel decode
+   non è mai stata misurata; instradarla sarebbe ereditare un numero da un altro
+   regime, l'errore che questo goal ha già fatto quattro volte.
+3. **`setSplitk` / `splitkOn` / `splitkAvail`**. `setSplitk(true)` **lancia** se
+   il piano non ha instradato nemmeno un tensore: accendere una rotta assente
+   darebbe un A/B piatto e la lettura sbagliata («la leva non serve») invece di
+   quella giusta («la leva non è cablata qui»).
+
+**Ritirata una decisione di it.22, con la sua ragione**: il piano prevedeva DUE
+`part` per togliere la dipendenza falsa fra i due GEMM. Ne è entrato **uno**:
+quantizzando `x` dentro `gemv` — come fa il gemello del prefill — i due tensori
+serializzano comunque su `decXq`, e il secondo `part` non comprerebbe niente.
+La nota nel codice dice quando tornerebbe ad avere senso (se un giorno la
+quantizzazione venisse issata a una volta per layer).
+
+### Il test che ha protestato, e aveva ragione
+
+`engine-prefillwiring-q5k` pretende che `planPrefillGemm` sia chiamato in
+**esattamente due posti nominati** — «chi ne aggiunge un terzo sta ri-derivando
+la rotta da qualche altra parte». Il terzo l'ho aggiunto io, ed è legittimo: è
+un *altro regime*.
+
+Non l'ho allentato. Ora pinna **tre** posti e in più che il terzo:
+- stia dentro `gemv`, non altrove;
+- chieda **`M: 1`** — con M diverso chiederebbe la rotta di un chunk di prefill
+  dentro il path del decode;
+- emetta la rotta per intero **coi buffer del decode** e **anche il GEMV
+  legacy**, che è ciò che tiene l'A/B dentro un processo solo.
+
+*Dettaglio che è costato due minuti e vale ricordarlo*: le prime asserzioni
+guardavano le stringhe `"legacy"`/`"splitk"`. Il lettore di sorgente **bianca i
+letterali** — giustamente, un test strutturale non deve leggere le stringhe —
+quindi ora guardano gli identificatori.
+
+### EVIDENZA
+
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1101 passed | 10 skipped**
+  (+2 casi rispetto a it.22)
+- `node .harness/tools/engine-ktest.mjs` **111 PASS / 0 FAIL**
+- **Il braccio spento è provato no-op su GPU**: `q35-model-4b-argmax` resta a
+  **570 dispatch/token** con `argmax GPU == oracolo 6/6`, identico a prima del
+  cambio. Se `stepOn` sbagliasse e girassero entrambi i bracci, quel conteggio
+  salirebbe e l'argmax cadrebbe. È la verifica che il filtro funziona.
+
+### NON VERIFICATO — ed è la prossima iterazione
+
+- **Il flag ACCESO non è mai stato eseguito.** Nessun numero, nessun gate: la
+  correttezza della rotta nel decode è per ora un'inferenza dal fatto che il
+  banco la misura corretta a M=1 e che il prefill la usa. Serve `--splitk` su
+  `q35-conf-run.mjs` (sul modello di `--kfan`) e poi, **nell'ordine**: gate
+  argmax 39/39 fra OFF e ON, *poi* `ssmGemv` dalla sonda, *poi* `decode.tokS`.
+- **`splitkAvail()` sul 35B non è stato letto**: non so ancora quanti tensori il
+  piano abbia davvero instradato. Va guardato PRIMA di leggere un A/B, altrimenti
+  un risultato piatto è ambiguo.
