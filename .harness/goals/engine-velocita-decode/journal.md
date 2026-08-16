@@ -2631,3 +2631,92 @@ Va detto al PI perché cambia la taglia della riga: «raggruppare le richieste»
   finestra non distinguo il massimo vero dal rumore. Per scegliere un numero
   servirebbero repliche; per la conclusione «il ginocchio è basso e il tetto è
   ~700» non servono.
+
+---
+
+## it.33 — anche la seconda ipotesi è smentita, e insieme le due rispondono alla domanda del PI
+
+### L'esperimento
+
+Stesso file, stesso lettore, stessi offset, stesse taglie. Cambia **solo la
+forma**: pipeline sempre piena contro raffiche che aspettano di chiudersi prima
+della successiva — cioè la forma del `prep`.
+
+    n      continuo   raffiche   rapporto
+     8      516,4      460,9      1,12x
+    24      543,0      551,9      0,98x
+    48      665,3      547,9      1,21x
+    96      712,9      671,7      1,06x
+
+**A 24 le due forme coincidono** (0,98×). La forma a raffiche non costa niente
+sul canale.
+
+### Il conto che chiude il ragionamento
+
+    canale a 24 in volo, continuo    543 MB/s
+    canale a 24 in volo, a raffiche  552 MB/s
+    prep REALE a 24 in volo          235-268 MB/s
+
+**Né il numero di richieste in volo (it.32) né la forma a raffiche (it.33)
+spiegano il deficit del `prep`.** In ogni configurazione provata — da 1 a 256 in
+volo, continua o a raffiche — il canale sta fra **460 e 740 MB/s**.
+
+*Seconda ipotesi consecutiva smentita dal suo esperimento. Le sto contando: it.31
+attribuiva il deficit alla concorrenza, it.32 alle raffiche. Entrambe erano
+coerenti coi dati che avevo, ed entrambe sbagliate. Ciò che le ha fatte cadere è
+la stessa cosa: costruire l'esperimento che tiene fissa ogni altra variabile.*
+
+**Un dato che avevo letto male, e va corretto**: nel run arena-4 il `prep` fa
+2.752 chiamate su 39 token × 30 layer MoE = **2,35 expert per layer**, cioè ~7
+range in volo per raffica, **non 24**. Il «24» del contratto era il caso
+peggiore (8 expert × 3), non il tipico.
+
+### LA RISPOSTA ALLA DOMANDA CHE IL PI AVEVA FATTO
+
+Il ruling del 2026-08-15 diceva: *«Aggiungi anche il raggruppamento delle
+richieste http **se può dare un boost globale al motore**»*. Il done-when della
+riga 2b è stato scritto per rendere quel «se» verificabile invece che sperato.
+
+**Adesso è verificato, e la risposta è NO su questo trasporto.** Raggruppare
+cambia la banda dello 0,98-1,21×: rumore. Il collo non è nel come si chiedono i
+byte — è altrove.
+
+Questo non chiude la riga 2b (il `prep` resta 2× sotto il canale, e quel 2× è
+reale), ma **sposta dove cercarlo**: dentro il path del motore, non nel
+trasporto. Ed è esattamente ciò che una riga di misura deve produrre prima che
+qualcuno scriva codice di ottimizzazione.
+
+**Le candidate rimaste**, e le chiamo candidate perché ho già sbagliato due
+volte a promuoverne una: la pausa fra raffiche (il `prep` fa girare la GPU in
+mezzo, il probe no); il costo per chiamata dentro `readExpert` fuori dalla
+fetch; la contesa col lavoro GPU nello stesso worker. **Si discriminano
+strumentando il path, non modellando il canale** — e la prossima misura deve
+essere quella, non un'altra spazzata.
+
+### Un reperto sul server, che vale per chi userà questo probe
+
+Sopra le ~48 richieste in volo, vite risponde **206 con ZERO byte** su alcune
+richieste — 2/256 a 96 in volo, 6/256 a 256. Non sono fuori range: gli offset
+sono verificati contro la taglia vera del file.
+
+**Il controllo di lunghezza che it.30 ha dato a tutti e cinque i lettori le
+prende e lancia.** Senza, sarebbero diventate tensori di zeri in silenzio. È la
+seconda volta in quattro iterazioni che quel controllo — aggiunto come effetto
+collaterale di una fattorizzazione — para qualcosa di reale.
+
+Il probe ora le **conta** e continua, e una finestra con letture vuote è esclusa
+dal calcolo del massimo: una banda misurata su richieste che non hanno
+consegnato byte non è una banda.
+
+### EVIDENZA
+
+- `results/engine/q35-io-probe-bursts-2026-08-16.json`, host quiescente
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1110 passed | 10 skipped**
+
+### NON VERIFICATO
+
+- **Dove sta davvero il 2× del `prep`.** Ho escluso il trasporto con due
+  esperimenti controllati; non ho ancora misurato l'interno.
+- La curva sopra le 48 richieste resta rumorosa (665-738) e ora anche sporca di
+  letture vuote: per un numero preciso servirebbero repliche, per la conclusione
+  «il canale non è il collo» no.

@@ -489,4 +489,27 @@ questo stesso goal, che le leve globali vengono prima delle specifiche: il
 cambio di sorgente tocca tutti i modelli e merita di essere deciso come tale,
 non infilato in una riga che parlava di raggruppare richieste HTTP.
 
+> **AGGIORNAMENTO it.33 — la domanda che avevi fatto ha una risposta misurata,
+> e rafforza l'uscita 3.**
+>
+> Il tuo ruling diceva: *«Aggiungi anche il raggruppamento delle richieste http
+> **se può dare un boost globale al motore**»*. Il done-when della riga 2b è
+> stato scritto per rendere quel «se» verificabile. **Verificato: no, su questo
+> trasporto.**
+>
+>     n      continuo   a raffiche   rapporto
+>      8      516,4       460,9       1,12x
+>     24      543,0       551,9       0,98x
+>     48      665,3       547,9       1,21x
+>     96      712,9       671,7       1,06x
+>
+> Stesso file, stesso lettore, stessi offset: cambia solo la forma. **A 24 le
+> due coincidono.** Raggruppare le richieste cambia la banda dello 0,98-1,21×,
+> cioè rumore.
+>
+> E il canale, in **ogni** configurazione provata (1-256 in volo, continua o a
+> raffiche), sta fra 460 e 740 MB/s — mentre il `prep` reale ne ottiene 250.
+> **Il collo non è nel come si chiedono i byte.** È dentro il path del motore, e
+> lì la riga 2b non ha più niente da dire: quel pezzo è la riga 3.
+
 **RULING:** _

@@ -1,0 +1,151 @@
+{
+ "kind": "q35-io-probe",
+ "schemaVersion": 1,
+ "date": "2026-08-16",
+ "model": "35b",
+ "url": "/models/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+ "declared": "stessi offset e stessa taglia per ogni finestra: cambia SOLO il numero di richieste in volo. Passata di riscaldamento scartata. Taglia = quella vera di un range di expert del 35B (594.533 B, da fetchPrepBytes/3 misurato in it.31).",
+ "rangeBytes": 594533,
+ "rangesPerWindow": 256,
+ "mbPerWindow": 152.200448,
+ "fileBytes": 20893015008,
+ "points": [
+  {
+   "inFlight": 1,
+   "ms": 849.9399999976158,
+   "mbPerSec": 179.07199096457038,
+   "msPerRange": 3.3200781249906868,
+   "fails": 0
+  },
+  {
+   "inFlight": 2,
+   "ms": 340.65000000596046,
+   "mbPerSec": 446.7942110592599,
+   "msPerRange": 1.330664062523283,
+   "fails": 0
+  },
+  {
+   "inFlight": 4,
+   "ms": 277.5849999934435,
+   "mbPerSec": 548.3021344942808,
+   "msPerRange": 1.0843164062243886,
+   "fails": 0
+  },
+  {
+   "inFlight": 8,
+   "ms": 294.73499999940395,
+   "mbPerSec": 516.3976046289304,
+   "msPerRange": 1.1513085937476717,
+   "fails": 0
+  },
+  {
+   "inFlight": 16,
+   "ms": 295.5900000035763,
+   "mbPerSec": 514.9039141992577,
+   "msPerRange": 1.1546484375139698,
+   "fails": 0
+  },
+  {
+   "inFlight": 24,
+   "ms": 280.2699999958277,
+   "mbPerSec": 543.0493738261882,
+   "msPerRange": 1.0948046874837019,
+   "fails": 0
+  },
+  {
+   "inFlight": 48,
+   "ms": 228.7800000011921,
+   "mbPerSec": 665.2699012116747,
+   "msPerRange": 0.8936718750046566,
+   "fails": 0
+  },
+  {
+   "inFlight": 96,
+   "ms": 213.48499999940395,
+   "mbPerSec": 712.9327493754828,
+   "msPerRange": 0.8339257812476717,
+   "fails": 2
+  },
+  {
+   "inFlight": 192,
+   "ms": 206.2199999988079,
+   "mbPerSec": 738.0489186348551,
+   "msPerRange": 0.8055468749953434,
+   "fails": 0
+  },
+  {
+   "inFlight": 256,
+   "ms": 282.95499999821186,
+   "mbPerSec": 537.8963015354449,
+   "msPerRange": 1.105292968743015,
+   "fails": 6
+  }
+ ],
+ "bursts": [
+  {
+   "burst": 8,
+   "ms": 330.2600000053644,
+   "mbPerSec": 460.85038453802395,
+   "msPerRange": 1.2900781250209548,
+   "fails": 0
+  },
+  {
+   "burst": 24,
+   "ms": 275.79500000178814,
+   "mbPerSec": 551.8607951522442,
+   "msPerRange": 1.077324218756985,
+   "fails": 0
+  },
+  {
+   "burst": 48,
+   "ms": 277.78999999165535,
+   "mbPerSec": 547.897505326225,
+   "msPerRange": 1.0851171874674037,
+   "fails": 0
+  },
+  {
+   "burst": 96,
+   "ms": 226.5949999988079,
+   "mbPerSec": 671.684935681726,
+   "msPerRange": 0.8851367187453434,
+   "fails": 0
+  }
+ ],
+ "confronto": [
+  {
+   "n": 8,
+   "continuoMBs": 516.3976046289304,
+   "raffichaMBs": 460.85038453802395
+  },
+  {
+   "n": 24,
+   "continuoMBs": 543.0493738261882,
+   "raffichaMBs": 551.8607951522442
+  },
+  {
+   "n": 48,
+   "continuoMBs": 665.2699012116747,
+   "raffichaMBs": 547.897505326225
+  },
+  {
+   "n": 96,
+   "continuoMBs": 712.9327493754828,
+   "raffichaMBs": 671.684935681726
+  }
+ ],
+ "best": {
+  "inFlight": 192,
+  "mbPerSec": 738.0489186348551
+ },
+ "knee": {
+  "inFlight": 192,
+  "mbPerSec": 738.0489186348551,
+  "criterio": "prima finestra a >= 95% del massimo"
+ },
+ "riferimenti": {
+  "prepInFlight": 24,
+  "repairInFlight": "centinaia",
+  "prepMBs": "235-268",
+  "repairMBs": 539
+ }
+}

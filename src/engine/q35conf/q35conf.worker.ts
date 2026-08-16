@@ -267,35 +267,84 @@ async function ioProbe(cfg: Cfg): Promise<void> {
   const span = size - BASE - RANGE_BYTES;
   const offs = Array.from({ length: N }, (_, i) => BASE + Math.floor((i * span) / N));
 
-  /** N letture con al piu' `w` in volo. Ritorna i ms totali. */
-  const pass = async (w: number): Promise<number> => {
+  // IL SERVER CEDE SOTTO CONCORRENZA, e va CONTATO invece che fatto abortire.
+  //
+  // Osservato in it.33 su vite e sul GGUF da 19,46 GiB: sopra le ~48 richieste
+  // in volo, alcune tornano **206 con ZERO byte** — non fuori range (gli offset
+  // sono verificati contro la taglia vera del file), proprio vuote. Il
+  // controllo di lunghezza che it.30 ha dato a tutti e cinque i lettori le
+  // prende e lancia; senza, sarebbero diventate tensori di zeri in silenzio.
+  //
+  // Qui il probe le CONTA e continua: una finestra con errori ha una banda che
+  // non significa niente, e il report deve dirlo invece di non avere la riga.
+  const readCounting = async (off: number, fails: { n: number }): Promise<void> => {
+    try { await range(off, RANGE_BYTES); } catch { fails.n++; }
+  };
+
+  /** N letture con al piu' `w` in volo. Ritorna ms totali e letture fallite. */
+  const pass = async (w: number): Promise<{ ms: number; fails: number }> => {
     const t = performance.now();
+    const f = { n: 0 };
     let next = 0;
     const worker = async (): Promise<void> => {
       for (;;) {
         const i = next++;
         if (i >= offs.length) return;
-        await range(offs[i], RANGE_BYTES);
+        await readCounting(offs[i], f);
       }
     };
     await Promise.all(Array.from({ length: Math.min(w, offs.length) }, worker));
-    return performance.now() - t;
+    return { ms: performance.now() - t, fails: f.n };
   };
 
   progress(`io-probe: riscaldamento (${N} range da ${(RANGE_BYTES / 1e6).toFixed(2)} MB)`);
   await pass(64);                         // scartata: nessuna finestra paga il primo contatto
 
   const mb = (N * RANGE_BYTES) / 1e6;
-  const points: Array<{ inFlight: number; ms: number; mbPerSec: number; msPerRange: number }> = [];
+  const points: Array<{ inFlight: number; ms: number; mbPerSec: number; msPerRange: number; fails: number }> = [];
   for (const w of WINDOWS) {
-    const ms = await pass(w);
-    points.push({ inFlight: w, ms, mbPerSec: mb / (ms / 1000), msPerRange: ms / N });
-    progress(`io-probe: ${w} in volo -> ${(mb / (ms / 1000)).toFixed(1)} MB/s`);
+    const { ms, fails } = await pass(w);
+    points.push({ inFlight: w, ms, mbPerSec: mb / (ms / 1000), msPerRange: ms / N, fails });
+    progress(`io-probe: ${w} in volo -> ${(mb / (ms / 1000)).toFixed(1)} MB/s`
+      + (fails ? ` (${fails}/${N} letture VUOTE: banda non valida)` : ""));
   }
-  const best = points.reduce((a, b) => (b.mbPerSec > a.mbPerSec ? b : a));
+  // ---- SECONDA SPAZZATA: a RAFFICHE, che e' la forma del `prep` -------------
+  //
+  // L'IPOTESI DA FALSIFICARE (it.32). Il `prep` ottiene ~250 MB/s con 24
+  // richieste in volo, mentre il canale a 24 in volo ne da' 525. L'ipotesi e'
+  // che non conti quante ne stanno in volo ma **se ci si ferma**: il `prep` fa
+  // raffiche — 24 richieste, aspetta che finiscano TUTTE, calcola il layer, poi
+  // altre 24 — e il tempo di una raffica e' il MASSIMO delle sue latenze, non
+  // la media.
+  //
+  // L'esperimento tiene fisso tutto — stesso file, stesso lettore, stessi
+  // offset, stesse taglie — e cambia SOLO la forma: continua contro a raffiche.
+  // Se `raffica(24)` scende verso i 250 MB/s mentre `continua(24)` resta a 525,
+  // l'ipotesi regge e la leva e' «non fermarsi», non «piu' richieste insieme».
+  //
+  // NOTA su cosa NON riproduce: fra una raffica e l'altra il `prep` vero fa
+  // girare la GPU, quindi il canale resta inattivo piu' a lungo di qui. Se gia'
+  // la raffica SENZA pausa riproduce il numero, la pausa non serve a spiegarlo.
+  const bursts: Array<{ burst: number; ms: number; mbPerSec: number; msPerRange: number; fails: number }> = [];
+  for (const b of [8, 24, 48, 96]) {
+    const t = performance.now();
+    const f = { n: 0 };
+    for (let i = 0; i < offs.length; i += b) {
+      await Promise.all(offs.slice(i, i + b).map((o) => readCounting(o, f)));
+    }
+    const ms = performance.now() - t;
+    bursts.push({ burst: b, ms, mbPerSec: mb / (ms / 1000), msPerRange: ms / N, fails: f.n });
+    progress(`io-probe: raffiche da ${b} -> ${(mb / (ms / 1000)).toFixed(1)} MB/s`
+      + (f.n ? ` (${f.n}/${N} letture VUOTE: banda non valida)` : ""));
+  }
+
+  // il massimo si cerca SOLO fra le finestre senza letture vuote: una banda
+  // misurata su richieste che non hanno consegnato byte non e' una banda
+  const valid = points.filter((p) => p.fails === 0);
+  const best = (valid.length ? valid : points).reduce((a, b) => (b.mbPerSec > a.mbPerSec ? b : a));
   // il GINOCCHIO: la finestra piu' piccola che arriva al 95% del massimo. E' il
   // numero che serve — oltre, si paga concorrenza senza comprare banda.
-  const knee = points.find((p) => p.mbPerSec >= 0.95 * best.mbPerSec) ?? best;
+  const knee = (valid.length ? valid : points).find((p) => p.mbPerSec >= 0.95 * best.mbPerSec) ?? best;
   post({
     type: "done",
     report: {
@@ -306,6 +355,15 @@ async function ioProbe(cfg: Cfg): Promise<void> {
         + "range di expert del 35B (594.533 B, da fetchPrepBytes/3 misurato in it.31).",
       rangeBytes: RANGE_BYTES, rangesPerWindow: N, mbPerWindow: mb, fileBytes: size,
       points,
+      // la stessa quantita' di byte, letta a raffiche invece che in continuo:
+      // e' la forma del `prep`, e serve a dire se la causa e' la forma o il
+      // numero di richieste in volo
+      bursts,
+      confronto: [8, 24, 48, 96].map((n) => ({
+        n,
+        continuoMBs: points.find((q) => q.inFlight === n)?.mbPerSec ?? null,
+        raffichaMBs: bursts.find((q) => q.burst === n)?.mbPerSec ?? null,
+      })),
       best: { inFlight: best.inFlight, mbPerSec: best.mbPerSec },
       knee: { inFlight: knee.inFlight, mbPerSec: knee.mbPerSec, criterio: "prima finestra a >= 95% del massimo" },
       // i due regimi che la riga 2b confronta, per leggere la curva nel punto giusto
