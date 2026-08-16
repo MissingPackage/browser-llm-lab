@@ -16,7 +16,14 @@ dichiarato, **su tutte e quattro le famiglie**. **Barra: 35B ≥ 30 tok/s**
 35B **22,9 tok/s** come TETTO della sola residency (token pulito 43,585 ms,
 it.2) — la barra richiede per costruzione la leva sul pass.
 
-**STATO DELLA METRICA (it.26)**: 35B **39,15 tok/s**, barra 30 superata del 30%,
+**STATO DELLA METRICA (it.40, e il numero che conta e' quello della CHAT)**:
+la chat del PI, stesso prompt, **8,26 → 11,35 tok/s (+37%)** con le leve accese
+(it.39: non erano accese in produzione). Il banco a caldo con zero miss da'
+**40,06**, ma e' un regime che una chat vera non raggiunge: parco expert 17,07
+GiB contro un'arena da 11,17 — il 65%. Il 35B su questa GPU e' residency-bound
+sempre, e ~76 dei ~101 ms del token caldo sono tassa di residenza.
+
+**STATO DEL BANCO (it.26)**: 35B **39,15 tok/s**, barra 30 superata del 30%,
 nice-to-have 45 a 5,85 tok/s. **Tre** leve, tutte sul pass: `kfan` (riga 2c,
 22,58 → 28,90), il router parallelo (riga 2e, 28,90 → 30,74) e la rotta split-K
 nel decode (riga 2d, 30,74 → 39,15), gate argmax 39/39 su tutte e tre.

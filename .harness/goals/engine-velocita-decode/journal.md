@@ -3824,3 +3824,75 @@ questa GPU la testa ci sta già, quindi non ha niente da salvare.*
 - *Correzione a mio carico*: nel primo confronto avevo letto 9.783 miss come
   totale di sessione. Erano quelli del **primo turno**; il totale è 12.909. Il
   segno non cambia, la mia lettura sì.
+
+---
+
+## it.49 — sessione di documentazione, chiesta dal PI, e la sua correzione va registrata
+
+### La correzione, testuale
+
+> «Non è che misuriamo poco quello che costruiamo. Sei tu che sei focalizzato a
+> fare prove per raggiungere la funzione obiettivo e ti perdi la buona
+> architettura ed il buon software che abbiamo scritto. Abbiamo introdotto il
+> principio fix don't fence proprio per questo.»
+
+**Ha ragione, e la mia diagnosi era sbagliata.** In it.48 avevo scritto «il collo
+non è il browser, è che misuriamo poco quello che costruiamo». Non è quello: **è
+che non so cosa c'è già.** In una notte ho "scoperto" tre cose costruite —
+il pre-pack degli slab, la policy `tier`, le leve spente nella chat — e **due
+delle tre stavano nel modulo condiviso**, cioè nel posto più visibile del repo.
+
+Non le ho viste perché cercavo *cosa costruire*, non *cosa c'è*.
+
+### Cos'è entrato, e la torsione rispetto alla proposta
+
+Il PI proponeva «una sessione di documentazione tecnica e una mappa
+architetturale». L'ho fatta, ma con una forma decisa dal difetto invece che dal
+genere del documento: **un grep dice cosa c'è, non cosa manca.** Quindi non prosa
+d'architettura — una **tabella meccanismi × path** le cui **celle vuote** sono
+l'informazione.
+
+`docs/architettura/MECCANISMI.md`, cinque sezioni: residenza, leve del decode,
+prefill, I/O, strumenti di misura già pronti. Per ogni meccanismo: dove vive,
+chi lo usa, qual è il default, cos'è già misurato.
+
+**Le celle vuote, in ordine di valore misurato:**
+
+1. il 35B non adotta `{ raw, slab }` → 7,11 s/sessione, 38.625 richieste → 12.875
+2. prefetch lookahead non implementato → oracolo al 91,92% @K=8
+3. spec-dec non nella chat → 1,29× proiettato, serve una testa MTP per il 35B
+4. `q35conf` non dichiara il regime di lettura
+
+E una sezione **«cosa NON è una cella vuota»**: `tier` (misurata, non paga), il
+raggruppamento delle richieste (0,98×), `idot` nel decode (peggiore nel motore).
+*Deliberata: senza, fra un mese qualcuno le riproporrà come idee nuove — che è
+esattamente ciò che è successo stasera con `tier`.*
+
+### La parte che impedisce alla mappa di marcire
+
+**Nove casi confrontano la mappa col SORGENTE**, non con se stessa. Se
+`q35gpumodel` adotta lo slab, il caso fallisce e chiede di aggiornare la riga;
+idem se `q35conf` inizia a dichiarare il regime, o se il lookahead compare in un
+modello.
+
+Verificano le affermazioni **strutturali** — «chi usa cosa», «qual è il default»
+— che sono quelle su cui ho sbagliato. **NON i numeri misurati**: quelli stanno
+negli artefatti e hanno il loro journal; pinnarli qui creerebbe una seconda
+verità da aggiornare a ogni run.
+
+*Una mappa che marcisce è peggio di nessuna mappa: la si consulta e ci si fida.*
+
+### EVIDENZA
+
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1138 passed | 11 skipped** (+9)
+- `docs/architettura/README.md` indirizza a `MECCANISMI.md` per primo, con la
+  distinzione: il diagramma dice *come i pezzi si parlano*, la tabella *chi non
+  li usa*
+
+### NON VERIFICATO
+
+- La mappa copre i meccanismi che ho incontrato in questo goal. **Non è un
+  censimento**: nessuno ha camminato tutto il repo per riempirla. Le sezioni che
+  non ho toccato (KV cache, tokenizer, attention split) non ci sono, e la loro
+  assenza dalla tabella **non significa che non esistano** — significa che
+  nessuno le ha mappate.

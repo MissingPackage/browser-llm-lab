@@ -1,312 +1,90 @@
-# HANDOFF — browser-llm-lab   (aggiornato 2026-08-16, notte)
+# HANDOFF — browser-llm-lab   (aggiornato 2026-08-16, chiusura sessione)
 
 ## 1. Next decidable
 
-**GOAL `engine-velocita-decode` ATTIVO. LA BARRA E' SUPERATA, IL GOAL NO.**
+**GOAL `engine-velocita-decode` ATTIVO.** Sessione del 2026-08-16 chiusa dal PI
+dopo 39 iterazioni (it.11-49). **Leggi `docs/architettura/MECCANISMI.md` PRIMA di
+progettare qualsiasi cosa**: e' la tabella meccanismi x path, e le sue celle
+vuote sono il lavoro che resta.
 
-**IL RISULTATO, MISURATO** (`results/engine/q35-splitk-f32-ab-2026-08-16.json`):
+### IL NUMERO CHE CONTA E' QUELLO DELLA CHAT, non quello del banco
 
-    decode 35B   22,58  ->  28,90  ->  30,74  ->  39,15 tok/s
-                 base      kfan      router     rotta split-K (f32)
-    barra 30 SUPERATA CON MARGINE · nice-to-have 45: mancano 5,85 tok/s
-    dispersione [25,146-26,402 ms] = [37,88-39,77] tok/s
-    gate argmax 39/39 IDENTICI, routingDiff 0 · 1,73x dall'inizio del goal
+    la chat del PI, stesso prompt:   8,26  ->  11,35 tok/s   (+37%)
+    banco, braccio caldo a zero miss:              40,06 tok/s
 
-**ATTENZIONE ALLA LETTURA, due volte.**
-1. kfan e rotta sono **spenti di default**: il 39,15 e' il numero di due bracci
-   accesi a caldo per l'A/B, non di cio' che il motore fa oggi da solo.
-   Accenderli e' una decisione della riga di chiusura (riga 4).
-2. **La rotta oggi paga su UNA famiglia sola** (it.27, verificato leggendo gli
-   header): tratta il q8_0, e sul 4B/9B `attn_qkv` e `attn_gate` sono **Q4_0**.
-   I loro unici Q8_0 sono i 48 `ssm_alpha`/`ssm_beta` a N=32, che il predicato
-   respinge. Q8_0 ammessi: **35B 251, 4B zero, 9B zero.**
+I 40,06 sono veri e **misurano un regime che una chat vera non raggiunge**:
+parco expert **17,07 GiB**, arena **11,17** — il 65%. Su questa GPU il 35B e'
+**residency-bound sempre**. Nel turno vero il token costa ~101 ms invece di 25:
+**~76 ms sono tassa di residenza, non calcolo.**
 
-**IL MECCANISMO E' GLOBALE, LA PORTATA NO — e sono due cose diverse.** A
-decidere e' `planPrefillGemm` (shape e formato, non il nome del modello), ma la
-portata dipende da **come il file e' quantizzato**: le tre famiglie hanno gli
-stessi tensori con le stesse shape, in formati diversi. *«Globale per
-costruzione» descriveva il meccanismo e l'ho lasciato leggere come la portata.*
+### LA PROSSIMA COSA DA FARE, e ha tutto pronto tranne l'ultimo anello
 
-**IL PASSO CHE LE PAREGGIA, ed e' piccolo**: il kernel q4_0 **esiste gia' e sta
-in produzione nel prefill** (`prefillGemmQ4SplitKWgsl`/`...IdotWgsl`, cablati nel
-ramo `kk === "q4_0"` di `gemvB`). Portarlo in `gemv` e' la stessa forma gia'
-scritta per il q8_0 — un ramo, non un kernel. Le shape sono ammesse (4B/9B
-`attn_qkv` N=8192, `attn_gate` N=4096). **Da MISURARE prima di cablare**: il
-banco ha misurato quelle N sul q8_0, e il q4_0 ha un'aritmetica diversa (nibble
-+ offset -8). Ereditare quel numero e' l'errore che questo goal ha pagato cinque
-volte.
+**Il 35B non adotta `{ raw, slab }`**, l'interfaccia che salta `packExpertSlab`
+nel path caldo. Il GLM la usa da un goal intero.
 
-**LO STATO DELLE RIGHE, in chiaro (it.29):**
+    interfaccia della cache   c'e' (residency.ts:110, verificata it.42)
+    formato del file          c'e' (v2 parametrico, GLM identico sui 2.944 slab)
+    descrittore del 35B       c'e' (DERIVATO dall'header, non scritto a mano)
+    convertitore offline      c'e' (scripts/q35-slab-build.mjs, 8/8 slab verificati)
+    ----------------------------------------------------------------------
+    la sorgente che LEGGE     MANCA   <- l'ultimo anello
+    conversione completa      da fare (17,07 GiB, stimati 15-25 s)
+    il numero                 dopo
 
-    riga 4  la barra su tutte e quattro le famiglie   BLOCCATA (docket item 7)
-    riga 6  gate di merge                             BLOCCATA (docket item 7)
-    riga 5  default di ragionamento del 35B           gated sulla riga 4
-    riga 7  consuntivo                                serve i numeri della 4 e 6
-    riga 2b raggruppamento dell'I/O                   libera
-    riga 3  unita' di riparazione                     libera
+Vale **7,11 s per sessione** (il pack) e **38.625 richieste Range -> 12.875**
+(uno slab si legge in un colpo, non in tre). *Serve il via del PI per scrivere
+17 GiB sul suo disco — ma solo quando c'e' qualcosa che li legge.*
 
-Le due libere valgono nel regime SPORCO (miss e replay); nel braccio caldo
-misurato oggi i miss sono **zero**, quindi non toccano il numero della barra.
+**La conversione OFFLINE e non al primo caricamento** e' imposta da una misura:
+quota OPFS **10,00 GiB**, `persist()` **negata**, tetto invariato (it.43).
 
-**NON INSEGUO IL NICE-TO-HAVE DEI 45.** La barra e' 30 e siamo a 39,15: superata
-del 30%. Il 45 e' dichiarato nice-to-have nel contratto, non un done-when, e
-ottimizzare mentre le righe che CHIUDONO il goal sono bloccate e' crescita di
-scope. Se un giorno lo si vuole, i due posti sono `expert` (5,204 ms, di nuovo
-il primo termine) e i **~6,3 ms di scoperto** — il 25% del token che sta FRA i
-segmenti cronometrati (confini di pass, latenza di coda, `mapAsync`), non dentro
-un kernel. Si attacca togliendo dispatch, non rendendoli piu' veloci: e' la
-forma del kfan. *Misurato dentro una run sola: `readbackWait` 26,228 contro
-16,309 di GPU per categoria, meno i 3,62 ms che la sonda stessa costa.*
+### LE TRE LEVE, e come vanno lette
 
-**La riga 6 oggi**: «ktest tutti PASS» **verde** (`111 PASS / 0 FAIL`, it.19),
-«GLM b12 entro ±5%» **rosso — ma il rosso non è del motore.**
+    22,58 -> 28,90 (kfan) -> 30,74 (router) -> 40,06 (rotta split-K)
+    gate argmax 39/39 su tutte e tre
 
-**IL RIFERIMENTO DEL GLM SI SMENTISCE DA SOLO** (it.20, diagnosi senza una run
-nuova — sta tutta dentro l'artefatto del 2026-08-15):
+⚠️ **kfan e rotta NASCONO SPENTE** (i loro A/B le accendono un braccio alla
+volta). **La chat le accende da it.39** ed e' li' che stanno i +37%: per giorni
+«misurato» e «consegnato» non coincidevano e niente lo diceva. Ora
+`model.levers` sta nell'artefatto di chat.
 
-    STESSO file, STESSA run
-      warm-up  prefill   19,10 GiB / 6,414 s  =  2,98 GiB/s
-      warm-up  decode     1,51 GiB / 0,460 s  =  3,29 GiB/s
-      REPLICHE decode    24,21 MiB/token / 2,475 ms  =  9,55 GiB/s   <- 2,9x
+### COSA E' STATO ESCLUSO DALLA MISURA — non riproporlo senza leggere il journal
 
-Lo stesso file, a minuti di distanza, tre volte più veloce della passata che
-l'aveva appena letto. **Nessun disco fa questo**: le repliche non hanno letto,
-hanno ripreso dalla **page cache del sistema operativo**. Oggi, quattro run
-consecutive, warm-up e repliche coincidono a 1,31–2,34 GiB/s e nessuna si è
-scaldata. I 15,330 tok/s non misuravano il motore: misuravano la RAM libera di
-quel pomeriggio.
+- **policy `tier`** (l'idea ds4: caldi fissi, freddi streammati): **esiste**, e'
+  adottata, e **non paga** sul 35B (it.48). Miss +0,3%, tempo -2%. Il collo e'
+  la CAPIENZA: LRU tiene gia' il 66% del parco, il cap del 12,5% tocca l'8%.
+- **raggruppare le richieste I/O**: 0,98x fra continuo e raffiche (it.33). Il
+  canale da' 460-740 MB/s in ogni configurazione; non e' il collo.
+- **`idot` nel decode**: vince sul kernel (2,3%) e **perde nel motore**
+  (-0,14/-0,66 ms) per il dispatch in piu'. Cablato e spento, con l'aritmetica
+  al call-site.
 
-**Il codice è escluso, verificato**: nessun commit fra `bb3d430` (il commit del
-riferimento) e HEAD tocca `glmsource.ts`/`glmmodel.ts`/`residency.ts`/
-`expertstore.ts`/`glmbench/`, e `bytesRead`/`misses`/`evictions` coincidono
-**cifra per cifra** fra le due date. Stessi byte, stesso codice, sette volte il
-tempo.
+### LE ALTRE DUE CELLE VUOTE
 
-**Corretto ciò che era mio**: il regime di lettura ora è **dichiarato** —
-`readGiBs`/`readRegime` (`disk` | `os-cache` | `non-misurato`) in ogni fase del
-report GLM e **nella headline**, che è il livello che i gate leggono; il runner
-lo stampa e su `os-cache` avvisa in chiaro. Soglia `OPFS_DEVICE_CEILING_GIBS = 4`
-con la provenienza misurata accanto. Verificato su run vera:
-`readGiBs 1,336 · readRegime "disk"`.
+- **prefetch lookahead**: NON implementato, e l'oracolo e' misurato al
+  **91,92% di recall @K=8**. Attacca i ~76 ms/token di tassa. E' l'idea piu'
+  fuori-schema rimasta: usa una proprieta' del MODELLO (il routing e'
+  prevedibile un layer prima) per battere un limite della PIATTAFORMA.
+- **spec-dec MTP**: costruito, solo nel ktest, accept 50%, proiezione 1,29x.
+  Serve una testa MTP per il 35B, che oggi non esiste.
 
-**LA DECISIONE CHE E' TUA**: la riga 6 confronta il GLM con numeri presi senza
-sapere in quale regime. Riprendere il riferimento a cache fredda (perde la
-storia) · rendere il gate condizionale al regime (la conserva, ma serve un
-riferimento per regime) · spostare il gate su `gpuBusy`, che fra le due date si
-muove dello 0,8% invece che del 26% (misura il motore, ma **il 57% del token GLM
-sta fuori dalla GPU**, quindi dichiarerebbe sano un motore che l'utente vede
-lento). La mia lettura: la seconda, poi la prima per il solo b12. Le tre uscite
-per esteso stanno nell'item.
+### DECISIONI: nessuna ti blocca
 
-**IL ROSSO DEL KTEST NON ERA UNA REGRESSIONE — era un file con un nome che
-mentiva** (it.19, chiuso senza il bisect che avevo stimato 1-2 iterazioni).
-`public/models/q35/golden-full.json` aveva **un nome, due scrittori**
-(`q35-conf-run.mjs` e `q35-bench-run.mjs`, che ci copiano il golden della LORO
-run — qualunque modello, qualunque `--golden-kind`) **e due lettori**, di cui
-uno solo verificava lo SHA. Ci stava il golden **smoke del 35B**: 39 token
-invece di 6.461, quindi il caso MTP misurava l'accept-rate su 37 confronti
-contro un riferimento preso su 62. **L'avevo avvelenato io in it.18** lanciando
-l'A/B con `--golden-kind smoke`, e il `111 PASS` di `engine-kquant` era
-riproducibile solo perché l'ultima run di bench era stata, per caso, una 4B
-full. Corretto alla radice: scratch dei bench → `golden-run.json`, fixture del
-ktest → `golden-q35-4b-full.json` (lo copia `engine-ktest.mjs`, nessun runner lo
-scrive), e il caso **verifica la finestra** invece di assumerla. Ora
-`q35-mtp-draft-4b` dà **31/62 = 50,0%**, il riferimento cifra per cifra.
+Tutti gli item del docket sono chiusi o deprioritizzati dalla priorita' del PI
+(«il massimo dal 35B; GLM secondario, lo butteremo»). Restano aperti solo due
+item storici e ininfluenti (item 2: `blankNonCode` duplicato in 7 test; item 4:
+gia' superato dal ruling successivo).
 
-**IL REPERTO DA RICORDARE**: il difetto produceva **un FAIL con un numero
-plausibile in un gate di merge** — 32,4% contro 50%, esattamente la forma di una
-regressione del modello. Escluderlo è costato mezz'ora di GPU (due parchi
-kernel interi con `git stash`); la causa l'hanno data **quattro righe di test
-lette**. `engine-fase-d` it.53 aveva già visto lo stesso sintomo e l'aveva
-risolto puntando il file giusto **senza togliere la collisione**.
+### LO STATO DELLE RIGHE
 
-**COM'ERA LA LEVA, perché è il reperto riusabile.** `router` costava **2,883
-ms/token su 40 dispatch = 72 µs a layer** per scegliere 8 expert su 256, contro
-i **16,6 µs** del GEMV che quei logit li produce con 256×2048 MAC. Quattro volte
-più lento per 250 volte meno lavoro. La causa: `routerTopKWgsl` faceva la
-selezione **su un thread solo su 64**, con un `array<bool, 256>` in memoria
-privata a indice dinamico (scratch), **difeso da un commento che dichiarava la
-serializzazione "la specifica" perché una riduzione "cambierebbe il tie-break"**.
-Non lo cambia: lo scan con `>` stretto è il massimo sull'ordine TOTALE
-(punteggio, −indice), e il massimo su un ordine totale non dipende da come si
-associa. Ora: **0,836 ms/token, 20,9 µs a dispatch — il pavimento.** Tutte le
-altre categorie GPU entro ±0,012 ms.
-
-**E' UN KERNEL SOLO**, montato da `glmmodel.ts:1068` e `q35gpumodel.ts:1758`:
-globale per costruzione, non riscritto due volte. Sul GLM rende poco e va detto
-col numero — `gpuBusy` 38,9 → 38,6 — perché il GLM fa top-4 su 64 (otto volte
-meno da parallelizzare) e il 57% del suo token sta comunque fuori dalla GPU.
-
-**IL PRIMO TERMINE ADESSO** (`q35-splitk-gputime-2026-08-16.json`, braccio
-kfan+rotta, sonda accesa che perturba entrambi i lati):
-
-    expert     5,204   <- il primo, DI NUOVO
-    ssmGemv    2,752   (era 7,043)
-    shexp      2,089
-    tail       1,309
-    attn       1,257   (era 2,557)
-    ssmOut     0,984   (era 2,064)
-    router     0,863
-    TOT GPU   16,309   (era 23,027)
-
-**Il guadagno e' attribuito per intero**: delta GPU −6,718 contro delta del token
-−6,739, coincidono entro lo 0,3%. I tre segmenti q8_0 (`ssmGemv`, `attn`,
-`ssmOut`) fanno 11,664 → 4,993. *In it.27 avevo contato solo `ssmGemv`+`ssmOut` e
-mi restava +1,0 ms inspiegato: mancava `attn`, i cui tensori sul 35B sono anch'essi
-Q8_0.*
-
-**Il giro e' completo**: il goal e' partito dicendo che `expert` era il primo
-termine, e dopo tre leve lo e' di nuovo — a 5,204 ms invece di 8,951.
-
-**REPERTO: il rapporto del banco NON e' il rapporto del motore.** Per kernel a
-M=1 il banco dice 3,55x; per segmento il motore dice 2,34x. Il segmento contiene
-piu' del kernel — i due tensori a N=32 che restano legacy e i combine che la
-rotta aggiunge. E' la seconda volta in tre iterazioni che la distinzione cambia
-un numero (la prima: la f32, piu' lenta al banco e piu' veloce nel motore).
-**Il banco serve a scegliere, non a promettere.**
-
-**LA RIGA 2d E' MISURATA E SI COSTRUISCE (it.21), con la regola scritta prima
-dei numeri.** Banco sulle shape vere a M=1, contro il kernel che il decode
-emette DAVVERO (braccio `base-decode`, non la forma del prefill):
-
-    K2048 N=4096   base-decode 0,1616 ms ( 9,6% del picco) -> splitk 0,0489  3,30x
-    K2048 N=8192   base-decode 0,1324 ms (23,4% del picco) -> splitk 0,0340  3,89x
-                                                     splitk = 91,0% del picco
-
-N=8192 e' `attn_qkv`, il 66,32% dei byte di `ssmGemv`. **Non era un problema di
-occupazione: era di banda** — il GEMV a un workgroup per riga non satura il bus
-e aggiungere righe non lo cura, lo cura spezzare il K. (Avevo previsto il
-contrario e l'ho registrato come previsione sbagliata.)
-
-Proiezione, dichiarata come criterio di spesa e NON come risultato: `ssmGemv`
-6,99 → 1,97 ms, meno 0,78 ms dei 90 dispatch aggiunti = **~4,24 ms/token netti**
-⇒ token 32,5 → ~28,3 = **~35,4 tok/s**. Pre-registrazione e graduatoria in
-`docs/deep-dive/velocita-decode-2d-prereg-2026-08-16.md`.
-
-**IL CONTO DELLA VRAM E' FATTO (it.22) ED E' UN NON-PROBLEMA**: `part` a M=1 =
-128 KiB (N=8192) + 64 (N=4096), `xq` 2 KiB, `xsc` 256 B ⇒ **194 KiB con due
-`part` separati = 0,0015% dell'arena da 12 GiB**. Il termine che rendeva grosso
-il conto del prefill e' `M_MAX=16`; nel decode M=1 e sparisce. I buffer del
-prefill NON si riusano (`prefillOn = M_MAX > 0`, e gli A/B del decode non
-passano `--prefill-m`): la rotta alloca i suoi, il che a 194 KiB e' comunque la
-scelta giusta — legare una leva di decode all'aver acceso il prefill a chunk
-sarebbe accoppiamento gratuito.
-
-**LA ROTTA E' IN ALBERO E SPENTA (it.23, fette 1-4).** `gemv` — l'emettitore del
-DECODE — interroga `planPrefillGemm` a `M: 1` e, sui tensori che il piano
-ammette, emette quantX → GEMM a fette → combine; i buffer sono i suoi (~131 KiB,
-nessuna condizione sulla famiglia: decide la shape, non il modello).
-
-**Il piano statico si costruisce UNA volta, quindi il flag non poteva essere di
-costruzione**: sarebbe stato immutabile per la vita del modello e l'A/B avrebbe
-confrontato DUE PROCESSI, cioe' due stati di cache — la classe di errore che
-it.20 ha appena pagato (15,3 contro 11,3 tok/s sullo stesso codice). Il piano
-porta quindi **entrambi i bracci** (`Step.arm`) e l'encoder ne salta uno tramite
-un predicato solo, `stepOn`.
-
-**IL BRACCIO SPENTO E' PROVATO NO-OP SU GPU**: ktest **111 PASS / 0 FAIL** e
-`q35-model-4b-argmax` resta a **570 dispatch/token** con argmax 6/6 identico. Se
-il filtro sbagliasse girerebbero entrambi i bracci, il conteggio salirebbe e
-l'argmax cadrebbe.
-
-**IL FLAG E' STATO ACCESO (it.24) E IL GATE E' ROSSO: argmax 38/39, prima
-divergenza al token 21.** Il tempo del braccio e' il migliore del goal —
-27,358 ms = **36,55 tok/s** contro i 32,546 del kfan — **e non va letto**: la
-regola del progetto dice che senza `argmaxIdentical` il ms/token di quel braccio
-non significa niente. Un motore che genera un token diverso non e' un motore
-piu' veloce.
-
-**RISPOSTA, E CHIUSA (it.25 la diagnosi, it.26 la prova).** Il flip non era un
-pareggio ne' un bug: era la **quantizzazione delle attivazioni**. La via `idot`
-quantizza anche la x a int8 (`pesi × q8_0`), e al token 21 spostava un logit di
-0,4284 su 17,53 (2,44%) — piu' del divario di 0,2766 fra i primi due candidati.
-Una ri-associazione f32 su K=2048 sta a 1e-6..1e-4, due-tre ordini sotto. Il
-banco lo dichiarava gia' con una tolleranza di 2e-2 per i bracci idot contro
-1e-3 per gli altri (`ttRunner.ts:568`): il numero era in casa.
-
-**La prova**: cambiata UNA cosa — la rotta usa la forma **f32**, niente
-quantizzatore, due dispatch invece di tre — e il gate e' tornato **39/39**.
-
-**E la f32 e' anche PIU' VELOCE nel motore**, non il 2,4% piu' lenta come al
-banco: 25,543 contro 27,358 ms. Il banco cronometra il solo GEMM, il motore paga
-anche i dispatch, e la via intera ne vuole tre per tensore contro due — **60
-dispatch in meno per token**. *Reperto riusabile: un kernel piu' veloce al banco
-puo' essere piu' lento nel motore se porta un dispatch in piu'.*
-
-**La via intera resta CABLATA E SPENTA** (`DEC_SPLITK_IDOT = false`, con la
-misura al call-site): se un giorno si decide che il decode puo' quantizzare le
-attivazioni, si riaccende cambiando una parola — e il gate da usare sara' la
-conformance top-1 contro l'oracolo, non l'argmax fra bracci. Non e' nel docket:
-la f32 ha passato il gate, quindi il residuo e' un'ottimizzazione da 2,4%.
-
-**La prima run ha dato `available: false`** — il piano non aveva instradato
-niente — e senza la guardia costruita in it.23 avrei letto un A/B piatto come
-«la leva non paga» invece di «la leva non e' cablata». Causa: `planPrefillGemm`
-respinge OGNI kind a M=1 (`PREFILL_M1_LEGACY`), clausola del done-when della
-riga 2 di `engine-ttft` che il suo stesso commento dichiara **conservativa e non
-derivata**. **Non l'ho ristretta**: ho aggiunto un parametro `regime` che vale
-`"prefill"` di default — comportamento identico byte per byte per tutti i
-chiamanti di prima — e il decode chiede col suo regime portando la misura del
-suo regime. La ragione strutturale della clausola («a M=1 non c'e' riuso dei
-pesi da ammortizzare») non si applica: a M=1 lo split-K non vince per riuso,
-vince per **banda** (9,6-23,4% del picco contro 91,0%). *Decisione al confine
-fra meccanismo e contratto, presa perche' non tocca il prefill di una virgola —
-se il PI la vuole diversa, il posto e' un default, non una clausola riscritta.*
-
-Le cinque iterazioni precedenti della riga hanno prodotto, tutto in albero e
-verde: la verifica di riuso (il kernel veloce ESISTE ed e' ktest-ato), il
-predicato su N in `kernelVerdict`, il cablaggio del q8_0 con 11 test aggiornati.
-**Il loro valore e' atterrato sul PREFILL del 35B, fuori scope**, e i 1,27 ms che
-inseguivano li ha presi il router.
-
-**LE SHAPE, ESATTE** (`q35shape.ts:86-89` + meta dell'header dump, K=2048):
-
-    attn_qkv   N=8192  AMMESSO   66,32% dei pesi dei quattro
-    attn_gate  N=4096  AMMESSO   33,16%
-    ssm_beta   N=32    ESCLUSO    0,26%
-    ssm_alpha  N=32    ESCLUSO    0,26%      -> ammessi 99,48%
-
-**Anche il 35B ha `ssm_alpha`/`ssm_beta` a N=32, come il 4B**: il predicato non
-protegge la peculiarita' di un modello, protegge quella coppia di tensori
-nell'architettura ovunque compaia.
-
-**LE DUE TRAPPOLE DEL PASSO CHE RESTA, pagate in it.17:**
-1. **`gemvB` NON e' il decode**, e' il prefill. `loadW` restituisce due
-   emettitori: `push` -> `gemv` (decode, `q35gpumodel.ts:862`, sei righe) e
-   `pushB` -> `gemvB` (prefill, dove sta la rotta). Non c'e' un ramo da aprire:
-   c'e' una rotta da costruire altrove. `gemv` emette UN dispatch, la forma
-   split-K ne vuole TRE piu' due buffer che nel decode non esistono.
-2. **Il 3,26x e' misurato contro `base-batch-z`**, non contro cio' che `gemv`
-   emette (non-batch, e senza il `vec4Rows2` che vale solo per q4_0). Il
-   guadagno del decode va MISURATO, non ereditato dal banco.
-
-**COSA E' IN ALBERO E FUNZIONA**: kfan su `gemvQ4KWgsl`/`gemvQ6KWgsl`
-(`kfan: {nUsed, xPerK}`), `moeCombineWgsl({weightsFromSel})`, il cablaggio nel
-ramo ottimistico di `q35gpumodel.ts`, `setKfan()` per l'A/B a caldo, `--kfan` in
-`q35-conf-run.mjs` col `kfanGate` sull'argmax, `gpuCat` per passata, il
-predicato `PREFILL_GEMM_ROWS_PER_WG` e il q8_0 cablato. Il kfan e' spento di
-default.
-
-**TRE DIFETTI TOLTI SULLA STRADA** (non erano nel brief):
-1. **`setInFlight(true)` senza `finally`**: fra submit e readback c'e'
-   `popErrorScope`, che lancia. Il flag I1 restava alzato e OGNI passata
-   successiva moriva su «ensure con token in volo» — **e l'errore riportato era
-   quello del braccio SANO**, il primo a inciamparci.
-2. **`pCombine` con layout AUTO** e un offset dinamico passato a
-   `setBindGroup`: errore di validazione WebGPU.
-3. **`arenaSlotWgsl`** era una costante con l'indice di Sel cablato; ora e' una
-   funzione col default invariato.
-
-**LA LEZIONE DEL GOAL, SEI volte**: una divisione non e' una misura, e una
-descrizione del codice non e' il codice. 21,1 ms (token pulito), «16%» (il
-gather), «due contratti diversi» (accum/slot), 30,9 us per dispatch (era 8,65),
-«gemvB e' il decode» (e' il prefill), e **«la serializzazione E' la specifica»**
-(non lo era, e valeva 2,05 ms/token). **Il correttivo che ha funzionato ogni
-volta: leggere il codice, o misurare.** La sesta ha una coda: il commento
-sbagliato e' sopravvissuto a goal interi perche' **nessun gate poteva vederlo** —
-la forma seriale da' gli stessi numeri, quindi i ktest restavano verdi cifra per
-cifra. Ora c'e' `tests/engine-routertopk-parallel.test.ts`, che pinna la FORMA e
-non i valori (13 casi; 12 falliscono sul kernel vecchio, verificato).
+    riga 2b  I/O            CHIUSA sulla misura: raggruppare non paga
+    riga 2c  kfan           atterrata
+    riga 2d  rotta split-K  atterrata (40,06)
+    riga 2e  router         atterrata
+    riga 3   replay         done-when degenere (item 9), e vive nel regime sporco
+    riga 4   la barra       serve il checkpoint su 4 famiglie
+    riga 6   gate di merge  ktest verde; GLM fuori banda ma deprioritizzato
+    riga 7   consuntivo     da scrivere
 
 ---
 
