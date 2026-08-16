@@ -3659,3 +3659,83 @@ quali sono davvero.
   deve leggere via HTTP Range e (per il ruling item 10 + it.43) servire uno slab
   **già convertito** invece di generarlo in OPFS.
 - Il file GLM v1 non è ancora stato rigenerato: succederà al prossimo load.
+
+---
+
+## it.47 — il convertitore c'è, ed è verificato sui byte
+
+`scripts/q35-slab-build.mjs`: GGUF → file slab, offline. È la strada che la
+quota OPFS ha imposto in it.43, non quella che avevo scelto io.
+
+### Cosa fa, e cosa si rifiuta di fare
+
+    node scripts/q35-slab-build.mjs --model 35b [--layers a-b] [--verify N] [--dry-run]
+
+    35b: 40 layer × 256 expert = 10.240 slab
+      classe q4k   9.472 slab × 1.769.472 B = 15,61 GiB
+      classe q6k     768 slab × 2.048.000 B =  1,46 GiB
+    file: 17,07 GiB
+
+**Il totale coincide col conto di it.40** (17,07 GiB), calcolato allora
+sull'aritmetica dei blocchi e ora dalla geometria vera. Due strade, stesso
+numero.
+
+Tre rifiuti, e sono il punto:
+
+- **lo SHA del sorgente** finisce nell'header e **nel nome del file**
+  (`q35-a8138f183e3993f1.slabs.bin`). Due quantizzazioni dello stesso modello
+  hanno geometrie diverse: leggere lo slab sbagliato darebbe pesi validi e
+  sbagliati, non un errore.
+- **lo spazio si conta prima di scrivere**, e si pretende il doppio del file —
+  temporaneo e rinominato coesistono per un istante. Sotto quella soglia lo
+  script esce invece di riempire il disco a metà.
+- **la verifica blocca il rename**: se anche uno slab a campione non combacia
+  con `packExpertSlab`, il temporaneo resta temporaneo. Un file convertito male
+  è peggio di nessun file.
+
+E si scrive su un temporaneo con rename finale, come `ensureSlabs`:
+un'interruzione non lascia mai un file valido a metà.
+
+### La prova
+
+Convertiti i layer **33 e 34** — uno per classe, scelti apposta perché il 34 è
+uno dei tre q6_K:
+
+    512 slab · 0,98 GB in 0,6 s · 1.626 MB/s
+    verifica: 8/8 slab IDENTICI a packExpertSlab
+
+E il file parziale occupa **933 MB reali su 17 GiB apparenti**: sparse, come
+deve essere quando si scrivono solo due layer sparsi nel file. *Il temporaneo
+l'ho rimosso: non è un file valido e non deve restare in giro a somigliare a uno.*
+
+### Il numero della conversione completa, con la sua riserva
+
+17,07 GiB a 1.626 MB/s sarebbero **~11 s**. **Non lo prendo per buono**: i due
+layer che ho convertito erano quasi certamente caldi in page cache dalle letture
+dell'header, mentre una conversione intera legge 17 GiB a freddo — e it.20 ha
+misurato quel disco a ~1,3 GiB/s. La stima onesta è **15-25 s**, e si saprà
+facendola.
+
+### Perché NON ho fatto la conversione completa
+
+Due ragioni, e la seconda basta da sola:
+
+1. Sono 17 GiB sul disco del PI. Ha 1,1 TB liberi e ha approvato il formato, ma
+   è spazio suo e un artefatto persistente.
+2. **Non c'è ancora niente che lo legga.** La sorgente q35 che consuma lo slab è
+   la fetta successiva. Scrivere 17 GiB per un consumatore che non esiste è
+   lavoro fatto nell'ordine sbagliato.
+
+### EVIDENZA
+
+- dry-run e conversione parziale sul GGUF vero, `8/8` slab verificati
+- `npx tsc --noEmit` exit 0 · `npx vitest run` **1129 passed | 11 skipped**
+
+### NON VERIFICATO
+
+- **La conversione completa non è stata eseguita**, quindi il tempo vero e la
+  taglia finale su disco restano stimati.
+- **Nessuno legge ancora il file.** Serve la sorgente q35 che passi
+  `{ raw, slab }` alla cache — l'interfaccia c'è (it.42), il formato c'è
+  (it.45), il descrittore c'è (it.46), il file si sa produrre (oggi). Manca
+  l'ultimo anello.
