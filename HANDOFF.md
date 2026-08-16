@@ -12,10 +12,29 @@
     dispersione [25,146-26,402 ms] = [37,88-39,77] tok/s
     gate argmax 39/39 IDENTICI, routingDiff 0 · 1,73x dall'inizio del goal
 
-**ATTENZIONE ALLA LETTURA**: kfan e rotta sono **spenti di default**. Il 39,15 e'
-il numero di due bracci accesi a caldo per l'A/B, non di cio' che il motore fa
-oggi da solo. Accendere i due flag di default e' una decisione della riga di
-chiusura (riga 4), non delle righe che li hanno prodotti.
+**ATTENZIONE ALLA LETTURA, due volte.**
+1. kfan e rotta sono **spenti di default**: il 39,15 e' il numero di due bracci
+   accesi a caldo per l'A/B, non di cio' che il motore fa oggi da solo.
+   Accenderli e' una decisione della riga di chiusura (riga 4).
+2. **La rotta oggi paga su UNA famiglia sola** (it.27, verificato leggendo gli
+   header): tratta il q8_0, e sul 4B/9B `attn_qkv` e `attn_gate` sono **Q4_0**.
+   I loro unici Q8_0 sono i 48 `ssm_alpha`/`ssm_beta` a N=32, che il predicato
+   respinge. Q8_0 ammessi: **35B 251, 4B zero, 9B zero.**
+
+**IL MECCANISMO E' GLOBALE, LA PORTATA NO — e sono due cose diverse.** A
+decidere e' `planPrefillGemm` (shape e formato, non il nome del modello), ma la
+portata dipende da **come il file e' quantizzato**: le tre famiglie hanno gli
+stessi tensori con le stesse shape, in formati diversi. *«Globale per
+costruzione» descriveva il meccanismo e l'ho lasciato leggere come la portata.*
+
+**IL PASSO CHE LE PAREGGIA, ed e' piccolo**: il kernel q4_0 **esiste gia' e sta
+in produzione nel prefill** (`prefillGemmQ4SplitKWgsl`/`...IdotWgsl`, cablati nel
+ramo `kk === "q4_0"` di `gemvB`). Portarlo in `gemv` e' la stessa forma gia'
+scritta per il q8_0 — un ramo, non un kernel. Le shape sono ammesse (4B/9B
+`attn_qkv` N=8192, `attn_gate` N=4096). **Da MISURARE prima di cablare**: il
+banco ha misurato quelle N sul q8_0, e il q4_0 ha un'aritmetica diversa (nibble
++ offset -8). Ereditare quel numero e' l'errore che questo goal ha pagato cinque
+volte.
 
 **IL LAVORO E' FERMO SU UNA DECISIONE TUA — docket item 7, tre uscite.** Non ho
 altro di decidibile su questo goal senza quel ruling: la riga 4 (la barra su

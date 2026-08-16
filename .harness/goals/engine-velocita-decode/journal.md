@@ -2130,3 +2130,83 @@ a portata: mancano 5,85 tok/s, cioè 3,4 ms/token.
   questo goal.
 - `ssmGemv` dalla sonda non è stato riletto: so che il token cala di 6,7 ms, non
   ho la conferma per categoria che venga da lì.
+
+---
+
+## it.27 — «globale per costruzione» non era una misura: sul 4B e sul 9B la rotta non prende NIENTE
+
+**Costo della verifica: la lettura di tre header GGUF. Nessuna GPU.** È la
+domanda che avevo dichiarato non verificata in it.26, ed è giusto che sia stata
+la prima cosa.
+
+    4B    attn_qkv  2560x8192  Q4_0     attn_gate  2560x4096  Q4_0
+          ssm_alpha 2560x32    Q8_0     ssm_beta   2560x32    Q8_0
+          ssm_out   4096x2560  Q5_K
+          => Q8_0 totali 48, con N>=64 (ammessi dal predicato): ZERO
+
+    9B    stessa struttura, stessi formati
+          => Q8_0 totali 48, ammessi: ZERO
+
+    35B   attn_qkv  2048x8192  Q8_0     attn_gate  2048x4096  Q8_0
+          ssm_out   4096x2048  Q8_0     alpha/beta 2048x32    F32
+          => Q8_0 totali 251, ammessi: 251
+
+**La rotta tratta il q8_0. Sul 4B e sul 9B quei tensori sono Q4_0**, e i loro
+unici Q8_0 sono i 48 `ssm_alpha`/`ssm_beta` a N=32, che il predicato sulla shape
+respinge — correttamente, ed è il suo lavoro.
+
+### La distinzione che serve, e che avevo sfumato
+
+Il meccanismo **è** globale: a decidere è `planPrefillGemm`, cioè la shape e il
+formato, non il nome del modello. Ma la **portata** oggi è una famiglia sola, e
+non per l'architettura — 4B, 9B e 35B hanno gli stessi identici tensori con le
+stesse identiche shape — ma per **come il file è quantizzato**.
+
+*«Globale per costruzione» descriveva il meccanismo e l'ho lasciato leggere come
+la portata. Sono due cose diverse e il PI mi ha già corretto una volta
+esattamente su questo. Il numero, adesso, sta scritto.*
+
+### Il passo che rende la portata pari al meccanismo, ed è piccolo
+
+**Il kernel per il q4_0 esiste già ed è in produzione nel prefill**:
+`prefillGemmQ4SplitKWgsl` / `prefillGemmQ4SplitKIdotWgsl`, cablati a
+`q35gpumodel.ts` nel ramo `kk === "q4_0"` di `gemvB`. Portarli in `gemv` è la
+stessa forma già scritta per il q8_0 — non un kernel nuovo, un ramo.
+
+E le shape sono ammesse: 4B `attn_qkv` N=8192 e `attn_gate` N=4096; 9B lo
+stesso. Sono le stesse N su cui il banco ha misurato 3,89x e 3,30x.
+
+*Da fare col metodo di questa riga, non a occhio*: il banco ha misurato quelle N
+sul **q8_0**. Il q4_0 ha un'aritmetica diversa (nibble più offset -8) e va
+misurato prima, non ereditato — è la lezione che questo goal ha pagato cinque
+volte.
+
+### E una conferma che arriva gratis: il meccanismo del guadagno torna
+
+Il 35B ha in q8_0 anche `ssm_out`, che è una categoria a sé nel profilo. Quindi
+la rotta non tocca solo `ssmGemv`:
+
+    ssmGemv 6,992 + ssmOut 2,046      = 9,038 ms di GEMV q8_0
+    a 3,55x                            = 2,546 ms   ⇒ risparmio 6,49
+    meno ~90 dispatch aggiunti          -0,78
+    ATTESO                              5,71 ms
+    MISURATO (32,282 - 25,543)          6,74 ms
+
+**Lo stesso ordine di grandezza, e per la ragione giusta.** Il residuo (+1,0 ms)
+non lo so spiegare: il conto assume 3,55x su entrambe le categorie e 8,65 µs per
+dispatch, due numeri presi altrove. *Non lo chiamo conferma esatta — la conferma
+per categoria costa una run con `--gpu-time` e va fatta, non dedotta.* Ma
+smentisce la mia preoccupazione di it.26 («so che il token cala di 6,7 ms, non
+so da dove»): viene dai GEMV q8_0, e `ssm_out` è il termine che mancava al conto
+della proiezione di it.21.
+
+### EVIDENZA
+
+Iterazione di sola lettura: header dei tre GGUF letti da disco (primi 64 MB,
+`parseGguf`), nessuna GPU, albero invariato rispetto a `924ee94`.
+
+### NON VERIFICATO
+
+- La ripartizione per categoria col braccio rotta acceso (`--gpu-time`): il
+  conto qui sopra è aritmetica su numeri presi da run diverse, non una misura.
+- Se il q4_0 nel decode renda quanto il q8_0: **da misurare prima di cablarlo.**
