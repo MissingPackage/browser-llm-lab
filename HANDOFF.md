@@ -12,19 +12,17 @@ versione finale, come numero da paper»):
 2. **overlap del router top-8 a distanza 1-4 sul 35B** — mezza giornata, riusa il
    router esistente. Decide se lo spec-dec paga anche sul MoE o solo sul denso.
 
-Perché contano: il verdetto «spec-dec più lento» fu misurato **coi kernel
-vecchi**, dove M era quasi ininfluente (1,22x a M=8). Coi nuovi, `wgsl.ts` misura
-splitk-idot a **M=16 in 0,0376 ms contro 0,0698 a M=1** — sedici righe costano
-meno di una. Se la curva conferma il ginocchio a M=2, una riga parcheggiata torna
-in gioco.
+Perché contano: «spec-dec più lento» fu misurato **coi kernel vecchi**, dove M era
+quasi ininfluente (1,22x a M=8). Coi nuovi, `wgsl.ts` misura splitk-idot a **M=16
+in 0,0376 ms contro 0,0698 a M=1** — sedici righe costano meno di una.
 
-**Aperte e in attesa di TE** (titoli; il contenuto sta nel docket):
-item 21 priorità del subgroup-matrix · item 22 ruling sulla classifica delle
-ottimizzazioni · traduzione in inglese del repo motore (item 16) · estrazione di
+**Aperte e in attesa di TE** (titoli; il contenuto sta nel docket): item 21
+priorità del subgroup-matrix · item 22 ruling sulla classifica delle
+ottimizzazioni · traduzione del repo motore (item 16) · estrazione di
 `webgguf-bench` · `paper/` non esiste, quindi il terzo repo non è estraibile.
 
-**Leggi `docs/architettura/MECCANISMI.md` prima di progettare, e `VALUTAZIONE.md`
-prima di credere a un numero.**
+**Leggi `MECCANISMI.md` prima di progettare e `VALUTAZIONE.md` prima di credere a
+un numero** (entrambi in `docs/architettura/`).
 
 ## 2. Mappa
 
@@ -50,12 +48,11 @@ soddisfatto su Chrome · LoRA non iniziato, ma registrato come gap verificato
 **Nebbia** — non ancora specificato:
 - il **regime di Firefox è ignoto**: due turni non sono regime, 4,94 non si
   estrapola. Serve una run da 10 turni, ~15 min.
-- il costo della **traduzione** non è mai stato dimensionato: 60 file di sorgente,
-  21 di `docs/engine`, 6 di `docs/architettura`.
+- il costo della **traduzione** non è mai stato dimensionato: 60 file di sorgente
+  più 27 di documentazione.
 - il **primo utilizzo** (download da 12,6 GB) non è mai stato cronometrato, e la
   quota OPFS (10 GiB) non basta a cacheare il file.
-- la pendenza **µs/posizione del 35B a contesto lungo**: misurato fino a 8k contro
-  262k dichiarati dal modello.
+- la pendenza **a contesto lungo del 35B**: misurato fino a 8k contro 262k.
 
 **Fuori scope, deliberatamente** — smesso di riproporre:
 subgroup-matrix (il probe committato dice che è inutilizzabile qui, ed è anche
