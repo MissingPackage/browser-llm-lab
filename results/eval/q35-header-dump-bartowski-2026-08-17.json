@@ -1,0 +1,524 @@
+[
+ {
+  "file": "https://huggingface.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen_Qwen3.6-35B-A3B-Q2_K.gguf",
+  "bytes": 13506778752,
+  "nTensors": 753,
+  "meta": {
+   "general.architecture": "qwen35moe",
+   "general.type": "model",
+   "general.sampling.top_k": 20,
+   "general.sampling.top_p": 0.949999988079071,
+   "general.sampling.temp": 1,
+   "general.name": "Qwen3.6 35B A3B",
+   "general.basename": "Qwen3.6",
+   "general.size_label": "35B-A3B",
+   "general.license": "apache-2.0",
+   "general.license.link": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/blob/main/LICENSE",
+   "general.tags#count": 1,
+   "qwen35moe.block_count": 41,
+   "qwen35moe.context_length": 262144,
+   "qwen35moe.embedding_length": 2048,
+   "qwen35moe.attention.head_count": 16,
+   "qwen35moe.attention.head_count_kv": 2,
+   "qwen35moe.rope.dimension_sections#count": 4,
+   "qwen35moe.rope.freq_base": 10000000,
+   "qwen35moe.attention.layer_norm_rms_epsilon": 9.999999974752427e-7,
+   "qwen35moe.expert_count": 256,
+   "qwen35moe.expert_used_count": 8,
+   "qwen35moe.attention.key_length": 256,
+   "qwen35moe.attention.value_length": 256,
+   "qwen35moe.expert_feed_forward_length": 512,
+   "qwen35moe.expert_shared_feed_forward_length": 512,
+   "qwen35moe.ssm.conv_kernel": 4,
+   "qwen35moe.ssm.state_size": 128,
+   "qwen35moe.ssm.group_count": 16,
+   "qwen35moe.ssm.time_step_rank": 32,
+   "qwen35moe.ssm.inner_size": 4096,
+   "qwen35moe.full_attention_interval": 4,
+   "qwen35moe.rope.dimension_count": 64,
+   "qwen35moe.nextn_predict_layers": 1,
+   "tokenizer.ggml.model": "gpt2",
+   "tokenizer.ggml.pre": "qwen35",
+   "tokenizer.ggml.tokens#count": 248320,
+   "tokenizer.ggml.token_type#count": 248320,
+   "tokenizer.ggml.merges#count": 247587,
+   "tokenizer.ggml.eos_token_id": 248046,
+   "tokenizer.ggml.padding_token_id": 248044,
+   "tokenizer.ggml.bos_token_id": 248044,
+   "tokenizer.ggml.add_bos_token": false,
+   "tokenizer.chat_template#chars": 7764,
+   "general.quantization_version": 2,
+   "general.file_type": 10,
+   "quantize.imatrix.file": "/models_out/Qwen3.6-35B-A3B-GGUF/Qwen_Qwen3.6-35B-A3B-imatrix.gguf",
+   "quantize.imatrix.dataset": "/training_dir/calibration_datav5.txt",
+   "quantize.imatrix.entries_count": 510,
+   "quantize.imatrix.chunks_count": 802
+  },
+  "typeHistogram": {
+   "expert:Q2_K *": {
+    "n": 100,
+    "bytes": 8808038400,
+    "lettoDalMotore": false
+   },
+   "expert:Q3_K *": {
+    "n": 20,
+    "bytes": 2306867200,
+    "lettoDalMotore": false
+   },
+   "expert:Q8_0": {
+    "n": 3,
+    "bytes": 855638016,
+    "lettoDalMotore": true
+   },
+   "embd/head:Q6_K": {
+    "n": 1,
+    "bytes": 417177600,
+    "lettoDalMotore": true
+   },
+   "attn:Q4_K": {
+    "n": 40,
+    "bytes": 330301440,
+    "lettoDalMotore": true
+   },
+   "embd/head:Q2_K *": {
+    "n": 1,
+    "bytes": 166871040,
+    "lettoDalMotore": false
+   },
+   "linear_attn:Q8_0": {
+    "n": 14,
+    "bytes": 124780544,
+    "lettoDalMotore": true
+   },
+   "attn:Q2_K *": {
+    "n": 36,
+    "bytes": 115605504,
+    "lettoDalMotore": false
+   },
+   "other:F32": {
+    "n": 84,
+    "bytes": 84246528,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:Q8_0": {
+    "n": 63,
+    "bytes": 70189056,
+    "lettoDalMotore": true
+   },
+   "attn:Q6_K": {
+    "n": 4,
+    "bytes": 55050240,
+    "lettoDalMotore": true
+   },
+   "attn:Q8_0": {
+    "n": 24,
+    "bytes": 51249152,
+    "lettoDalMotore": true
+   },
+   "linear_attn:Q2_K *": {
+    "n": 16,
+    "bytes": 44040192,
+    "lettoDalMotore": false
+   },
+   "ffn/shexp:Q4_K": {
+    "n": 60,
+    "bytes": 35389440,
+    "lettoDalMotore": true
+   },
+   "linear_attn:F32": {
+    "n": 180,
+    "bytes": 19683840,
+    "lettoDalMotore": true
+   },
+   "other:Q8_0": {
+    "n": 1,
+    "bytes": 8912896,
+    "lettoDalMotore": true
+   },
+   "other:BF16 *": {
+    "n": 1,
+    "bytes": 1048576,
+    "lettoDalMotore": false
+   },
+   "attn:F32": {
+    "n": 63,
+    "bytes": 358400,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:F32": {
+    "n": 40,
+    "bytes": 327680,
+    "lettoDalMotore": true
+   },
+   "embd/head:F32": {
+    "n": 1,
+    "bytes": 8192,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:BF16 *": {
+    "n": 1,
+    "bytes": 4096,
+    "lettoDalMotore": false
+   }
+  },
+  "expertParkBytes": 11970543616,
+  "expertParkGiB": 11.148,
+  "nonExpertGiB": 1.431,
+  "formatiNonSupportati": [
+   "Q2_K",
+   "Q3_K",
+   "BF16"
+  ],
+  "sommaTensoriBytes": 13495788032,
+  "scartoVsFileFrazione": 0.00081
+ },
+ {
+  "file": "https://huggingface.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen_Qwen3.6-35B-A3B-Q3_K_S.gguf",
+  "bytes": 16404919936,
+  "nTensors": 753,
+  "meta": {
+   "general.architecture": "qwen35moe",
+   "general.type": "model",
+   "general.sampling.top_k": 20,
+   "general.sampling.top_p": 0.949999988079071,
+   "general.sampling.temp": 1,
+   "general.name": "Qwen3.6 35B A3B",
+   "general.basename": "Qwen3.6",
+   "general.size_label": "35B-A3B",
+   "general.license": "apache-2.0",
+   "general.license.link": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/blob/main/LICENSE",
+   "general.tags#count": 1,
+   "qwen35moe.block_count": 41,
+   "qwen35moe.context_length": 262144,
+   "qwen35moe.embedding_length": 2048,
+   "qwen35moe.attention.head_count": 16,
+   "qwen35moe.attention.head_count_kv": 2,
+   "qwen35moe.rope.dimension_sections#count": 4,
+   "qwen35moe.rope.freq_base": 10000000,
+   "qwen35moe.attention.layer_norm_rms_epsilon": 9.999999974752427e-7,
+   "qwen35moe.expert_count": 256,
+   "qwen35moe.expert_used_count": 8,
+   "qwen35moe.attention.key_length": 256,
+   "qwen35moe.attention.value_length": 256,
+   "qwen35moe.expert_feed_forward_length": 512,
+   "qwen35moe.expert_shared_feed_forward_length": 512,
+   "qwen35moe.ssm.conv_kernel": 4,
+   "qwen35moe.ssm.state_size": 128,
+   "qwen35moe.ssm.group_count": 16,
+   "qwen35moe.ssm.time_step_rank": 32,
+   "qwen35moe.ssm.inner_size": 4096,
+   "qwen35moe.full_attention_interval": 4,
+   "qwen35moe.rope.dimension_count": 64,
+   "qwen35moe.nextn_predict_layers": 1,
+   "tokenizer.ggml.model": "gpt2",
+   "tokenizer.ggml.pre": "qwen35",
+   "tokenizer.ggml.tokens#count": 248320,
+   "tokenizer.ggml.token_type#count": 248320,
+   "tokenizer.ggml.merges#count": 247587,
+   "tokenizer.ggml.eos_token_id": 248046,
+   "tokenizer.ggml.padding_token_id": 248044,
+   "tokenizer.ggml.bos_token_id": 248044,
+   "tokenizer.ggml.add_bos_token": false,
+   "tokenizer.chat_template#chars": 7764,
+   "general.quantization_version": 2,
+   "general.file_type": 11,
+   "quantize.imatrix.file": "/models_out/Qwen3.6-35B-A3B-GGUF/Qwen_Qwen3.6-35B-A3B-imatrix.gguf",
+   "quantize.imatrix.dataset": "/training_dir/calibration_datav5.txt",
+   "quantize.imatrix.entries_count": 510,
+   "quantize.imatrix.chunks_count": 802
+  },
+  "typeHistogram": {
+   "expert:Q3_K *": {
+    "n": 120,
+    "bytes": 13841203200,
+    "lettoDalMotore": false
+   },
+   "expert:Q8_0": {
+    "n": 3,
+    "bytes": 855638016,
+    "lettoDalMotore": true
+   },
+   "embd/head:Q6_K": {
+    "n": 1,
+    "bytes": 417177600,
+    "lettoDalMotore": true
+   },
+   "attn:Q5_K": {
+    "n": 30,
+    "bytes": 346030080,
+    "lettoDalMotore": true
+   },
+   "embd/head:Q3_K *": {
+    "n": 1,
+    "bytes": 218521600,
+    "lettoDalMotore": false
+   },
+   "attn:Q3_K *": {
+    "n": 36,
+    "bytes": 151388160,
+    "lettoDalMotore": false
+   },
+   "linear_attn:Q8_0": {
+    "n": 14,
+    "bytes": 124780544,
+    "lettoDalMotore": true
+   },
+   "other:F32": {
+    "n": 84,
+    "bytes": 84246528,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:Q8_0": {
+    "n": 63,
+    "bytes": 70189056,
+    "lettoDalMotore": true
+   },
+   "linear_attn:Q3_K *": {
+    "n": 16,
+    "bytes": 57671680,
+    "lettoDalMotore": false
+   },
+   "attn:Q6_K": {
+    "n": 4,
+    "bytes": 55050240,
+    "lettoDalMotore": true
+   },
+   "attn:Q8_0": {
+    "n": 24,
+    "bytes": 51249152,
+    "lettoDalMotore": true
+   },
+   "attn:Q4_K": {
+    "n": 10,
+    "bytes": 47185920,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:Q5_K": {
+    "n": 60,
+    "bytes": 43253760,
+    "lettoDalMotore": true
+   },
+   "linear_attn:F32": {
+    "n": 180,
+    "bytes": 19683840,
+    "lettoDalMotore": true
+   },
+   "other:Q8_0": {
+    "n": 1,
+    "bytes": 8912896,
+    "lettoDalMotore": true
+   },
+   "other:BF16 *": {
+    "n": 1,
+    "bytes": 1048576,
+    "lettoDalMotore": false
+   },
+   "attn:F32": {
+    "n": 63,
+    "bytes": 358400,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:F32": {
+    "n": 40,
+    "bytes": 327680,
+    "lettoDalMotore": true
+   },
+   "embd/head:F32": {
+    "n": 1,
+    "bytes": 8192,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:BF16 *": {
+    "n": 1,
+    "bytes": 4096,
+    "lettoDalMotore": false
+   }
+  },
+  "expertParkBytes": 14696841216,
+  "expertParkGiB": 13.688,
+  "nonExpertGiB": 1.591,
+  "formatiNonSupportati": [
+   "Q3_K",
+   "BF16"
+  ],
+  "sommaTensoriBytes": 16393929216,
+  "scartoVsFileFrazione": 0.00067
+ },
+ {
+  "file": "https://huggingface.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen_Qwen3.6-35B-A3B-Q3_K_M.gguf",
+  "bytes": 17117951616,
+  "nTensors": 753,
+  "meta": {
+   "general.architecture": "qwen35moe",
+   "general.type": "model",
+   "general.sampling.top_k": 20,
+   "general.sampling.top_p": 0.949999988079071,
+   "general.sampling.temp": 1,
+   "general.name": "Qwen3.6 35B A3B",
+   "general.basename": "Qwen3.6",
+   "general.size_label": "35B-A3B",
+   "general.license": "apache-2.0",
+   "general.license.link": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/blob/main/LICENSE",
+   "general.tags#count": 1,
+   "qwen35moe.block_count": 41,
+   "qwen35moe.context_length": 262144,
+   "qwen35moe.embedding_length": 2048,
+   "qwen35moe.attention.head_count": 16,
+   "qwen35moe.attention.head_count_kv": 2,
+   "qwen35moe.rope.dimension_sections#count": 4,
+   "qwen35moe.rope.freq_base": 10000000,
+   "qwen35moe.attention.layer_norm_rms_epsilon": 9.999999974752427e-7,
+   "qwen35moe.expert_count": 256,
+   "qwen35moe.expert_used_count": 8,
+   "qwen35moe.attention.key_length": 256,
+   "qwen35moe.attention.value_length": 256,
+   "qwen35moe.expert_feed_forward_length": 512,
+   "qwen35moe.expert_shared_feed_forward_length": 512,
+   "qwen35moe.ssm.conv_kernel": 4,
+   "qwen35moe.ssm.state_size": 128,
+   "qwen35moe.ssm.group_count": 16,
+   "qwen35moe.ssm.time_step_rank": 32,
+   "qwen35moe.ssm.inner_size": 4096,
+   "qwen35moe.full_attention_interval": 4,
+   "qwen35moe.rope.dimension_count": 64,
+   "qwen35moe.nextn_predict_layers": 1,
+   "tokenizer.ggml.model": "gpt2",
+   "tokenizer.ggml.pre": "qwen35",
+   "tokenizer.ggml.tokens#count": 248320,
+   "tokenizer.ggml.token_type#count": 248320,
+   "tokenizer.ggml.merges#count": 247587,
+   "tokenizer.ggml.eos_token_id": 248046,
+   "tokenizer.ggml.padding_token_id": 248044,
+   "tokenizer.ggml.bos_token_id": 248044,
+   "tokenizer.ggml.add_bos_token": false,
+   "tokenizer.chat_template#chars": 7764,
+   "general.quantization_version": 2,
+   "general.file_type": 12,
+   "quantize.imatrix.file": "/models_out/Qwen3.6-35B-A3B-GGUF/Qwen_Qwen3.6-35B-A3B-imatrix.gguf",
+   "quantize.imatrix.dataset": "/training_dir/calibration_datav5.txt",
+   "quantize.imatrix.entries_count": 510,
+   "quantize.imatrix.chunks_count": 802
+  },
+  "typeHistogram": {
+   "expert:Q3_K *": {
+    "n": 100,
+    "bytes": 11534336000,
+    "lettoDalMotore": false
+   },
+   "expert:Q4_K": {
+    "n": 20,
+    "bytes": 3019898880,
+    "lettoDalMotore": true
+   },
+   "expert:Q8_0": {
+    "n": 3,
+    "bytes": 855638016,
+    "lettoDalMotore": true
+   },
+   "embd/head:Q6_K": {
+    "n": 1,
+    "bytes": 417177600,
+    "lettoDalMotore": true
+   },
+   "attn:Q5_K": {
+    "n": 30,
+    "bytes": 346030080,
+    "lettoDalMotore": true
+   },
+   "embd/head:Q3_K *": {
+    "n": 1,
+    "bytes": 218521600,
+    "lettoDalMotore": false
+   },
+   "attn:Q3_K *": {
+    "n": 36,
+    "bytes": 151388160,
+    "lettoDalMotore": false
+   },
+   "linear_attn:Q8_0": {
+    "n": 14,
+    "bytes": 124780544,
+    "lettoDalMotore": true
+   },
+   "other:F32": {
+    "n": 84,
+    "bytes": 84246528,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:Q8_0": {
+    "n": 63,
+    "bytes": 70189056,
+    "lettoDalMotore": true
+   },
+   "linear_attn:Q3_K *": {
+    "n": 16,
+    "bytes": 57671680,
+    "lettoDalMotore": false
+   },
+   "attn:Q6_K": {
+    "n": 4,
+    "bytes": 55050240,
+    "lettoDalMotore": true
+   },
+   "attn:Q8_0": {
+    "n": 24,
+    "bytes": 51249152,
+    "lettoDalMotore": true
+   },
+   "attn:Q4_K": {
+    "n": 10,
+    "bytes": 47185920,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:Q5_K": {
+    "n": 60,
+    "bytes": 43253760,
+    "lettoDalMotore": true
+   },
+   "linear_attn:F32": {
+    "n": 180,
+    "bytes": 19683840,
+    "lettoDalMotore": true
+   },
+   "other:Q8_0": {
+    "n": 1,
+    "bytes": 8912896,
+    "lettoDalMotore": true
+   },
+   "other:BF16 *": {
+    "n": 1,
+    "bytes": 1048576,
+    "lettoDalMotore": false
+   },
+   "attn:F32": {
+    "n": 63,
+    "bytes": 358400,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:F32": {
+    "n": 40,
+    "bytes": 327680,
+    "lettoDalMotore": true
+   },
+   "embd/head:F32": {
+    "n": 1,
+    "bytes": 8192,
+    "lettoDalMotore": true
+   },
+   "ffn/shexp:BF16 *": {
+    "n": 1,
+    "bytes": 4096,
+    "lettoDalMotore": false
+   }
+  },
+  "expertParkBytes": 15409872896,
+  "expertParkGiB": 14.352,
+  "nonExpertGiB": 1.591,
+  "formatiNonSupportati": [
+   "Q3_K",
+   "BF16"
+  ],
+  "sommaTensoriBytes": 17106960896,
+  "scartoVsFileFrazione": 0.00064
+ }
+]
