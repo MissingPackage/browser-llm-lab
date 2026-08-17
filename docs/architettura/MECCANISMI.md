@@ -129,12 +129,13 @@ Prima di scrivere un banco nuovo, questi esistono:
    residenza, con un oracolo già misurato al 91,92%.
 3. **spec-dec non nella chat** → 1,29× proiettato, ma serve una testa MTP per il
    35B che oggi non esiste.
-4. **Q2_K/Q3_K: kernel generati e instradati, zero esecuzioni su GPU** → è la
-   cella aperta dal 2026-08-17. Il testo c'è, è verificato sul testo, e dal
-   selettore unico il ramo expert lo sceglierebbe davvero per un GGUF Q2_K; ma
-   finché non passa il ktest contro `dequantQ2_K`/`dequantQ3_K` e una misura,
-   non è un guadagno — è un candidato. Il valore in palio è il 100% di
-   residenza del parco expert.
+4. **prefill multi-riga Q2_K/Q3_K: generato, `wired: false`, mai eseguito** →
+   ciò che resta della cella aperta il 2026-08-17. I *gemv* q2_K/q3_K l'hanno
+   chiusa lo stesso giorno (§3: ktest 4/4 PASS contro `dequantQ2_K`/
+   `dequantQ3_K`, e il 35B `bartowski Q2_K` che genera in chat); le varianti di
+   prefill no. Il testo c'è ed è verificato sul testo, ma finché `wired: false`
+   nessuna riga di `PREFILL_GEMM_SPEC` le sceglie: non è un guadagno, è un
+   candidato — stessa postura di q4_K, portato e non instradato.
 5. `q35conf` non dichiara il regime di lettura → i suoi numeri non dicono se
    sono confrontabili, ed è il difetto che è costato il falso allarme del GLM.
 

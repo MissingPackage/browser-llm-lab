@@ -723,7 +723,20 @@ distribuzione pubblica è bloccata da questo prima che da qualunque codice.
 non ridistribuiamo pesi, e che i GGUF citati sono di terzi (Qwen Apache-2.0;
 i quant di bartowski/unsloth sono loro ripacchettamenti).
 
-**RULING:** _
+### RULING PI 2026-08-18: APACHE-2.0. **Item 14 CHIUSO.**
+
+La clausola brevettuale e l'allineamento con Qwen hanno deciso. Cosa ne
+discende come LAVORO, dentro lo split (item 18):
+- `LICENSE` (testo Apache-2.0 integrale) alla radice del repo motore;
+- `NOTICE` — l'attribuzione: **non ridistribuiamo pesi**, i GGUF citati sono di
+  terzi (Qwen Apache-2.0; i quant `bartowski`/`unsloth` sono ripacchettamenti
+  loro, con i loro SHA già pinnati in `q35shape.ts`);
+- l'intestazione di licenza NON va messa in cima a ogni file: i commenti di
+  questo motore sono la sua parte migliore e un blocco legale ripetuto in testa
+  li seppellisce. `LICENSE` + campo `license` nel `package.json` bastano.
+
+Il repo bench e il repo paper ereditano la stessa scelta salvo ruling contrario
+al momento della loro pubblicazione (entrambi restano in standby).
 
 ## item 15 — i pesi si scaricano da Hugging Face (PI, deciso)
 
@@ -780,7 +793,26 @@ perché non c'è un server. Le forme possibili, non alternative fra loro:
 `vramCeilingBytes`). Un pacchetto pubblico ha bisogno di un contratto piccolo e
 di un nome, e di dichiarare cosa NON è stabile.
 
-**RULING:** _
+### RULING PI 2026-08-18: **(1) PACCHETTO npm + (3) SPACE SU HF**. Item 14 chiuso, questo APERTO SUL NOME.
+
+Le due forme scelte sono complementari e non ridondanti: l'npm è la forma per
+chi integra, lo Space è la demo che vive accanto ai pesi (item 15) e quindi non
+ha bisogno di un hosting nostro né di configurare COOP/COEP a mano. La **(2)
+pagina demo ospitata** decade — lo Space la sussume. La **(4) estensione/PWA**
+resta fuori: la quota OPFS (10,00 GiB contro 13 GB di file) è un muro che non
+si aggira con la forma di distribuzione.
+
+**IL PI HA SOSPESO IL NOME**: «magari pensiamo ad un nome migliore prima di
+chiamare il repo browser llm engine». Il nome NON è cosmetico qui — è
+simultaneamente il nome del pacchetto npm, dello Space, del repo e del simbolo
+importato, e cambiarlo dopo la pubblicazione costa una deprecazione. Lo split
+(item 18) **non parte finché il nome non è deciso**: è l'unico suo input
+mancante. Candidati e criteri: sezione «item 20».
+
+Resta vero, e diventa lavoro appena il nome c'è: la superficie pubblica oggi è
+`createQ35GpuModel` con ~20 opzioni dai nomi interni (`kfan`, `splitk`,
+`vramCeilingBytes`). Un pacchetto ha bisogno di un contratto piccolo E di dire
+per iscritto cosa NON è stabile.
 
 ## item 18 — separare le repo adesso (io → PI)
 
@@ -800,7 +832,31 @@ PI chiede se conviene farlo **ora**.
 che li attraversa, e per un po' li attraverseranno tutti. Va deciso chi è la
 fonte di verità durante la transizione.
 
-**RULING:** _
+### RULING PI 2026-08-17 (chiusura sessione): SÌ, E PRIMA DI TUTTO. **Item 18 CHIUSO come decisione.**
+
+«Farò lo split come prima cosa in una sessione fresca». I parametri restano
+quelli congelati in `docs/publishing/split-plan.md` (tre repo, `filter-repo` per
+path, su cloni freschi, MAI sul lab).
+
+**FONTE DI VERITÀ durante la transizione** — il rischio che l'item stesso
+dichiarava, e che il ruling non copriva: **resta il lab**. I tre repo nascono
+per estrazione e, finché il PI non dice il contrario, si RIGENERANO dal lab
+invece di ricevere commit propri. Un repo pubblico che diverge dal lab prima di
+avere un pubblico è solo un secondo posto dove sbagliare.
+
+**ESECUZIONE, stato al 2026-08-18:**
+- ✅ *igiene dei worktree*: i 5 worktree SDD (198 MB) sono stati verificati file
+  per file contro main — non «zero commit», che era già noto, ma **contenuto**:
+  `git show main:<f> | diff - <worktree>/<f>` su ogni file sporco. Main è
+  strettamente più avanti ovunque (il worktree diceva `F32_ONLY` dove main ha
+  `ROUTER=[F32,BF16]`; diceva «MAI ESEGUITI SU GPU» dove main ha il ktest 4/4;
+  inlinava `blankNonCode` dove main importa `tests/helpers/source-scan.ts`).
+  Nessun lavoro perso. **Rimozione BLOCCATA dal classifier di auto-mode**
+  (`git worktree remove --force` + `git branch -D`): serve autorizzazione.
+- ❌ *`git-filter-repo` NON è installato* — né comando git né modulo Python.
+  `uv tool install git-filter-repo` **bloccato dal classifier**. È il primo
+  passo del piano e senza non si parte.
+- ⛔ *BLOCCANTE VERO*: **il nome** (item 20). Lo split non parte senza.
 
 ## item 19 — la matrice dei dispositivi (PI, in carico al PI)
 
@@ -812,3 +868,92 @@ siano confrontabili serve, da parte nostra: un runner che gira senza il nostro
 harness, un artefatto che dichiari il dispositivo, e una soglia di successo
 dichiarata prima (il 35B su 48 GB unificati è un regime diverso; sull'S22 il
 modello non ci sta e la domanda è quale modello ci sta).
+
+## item 20 — il nome del motore (PI, sospeso da lui sull'item 17)
+
+> «Magari pensiamo ad un nome migliore prima di chiamare il repo browser llm
+> engine.»
+
+Il nome è l'ULTIMO input mancante dello split (item 18) e non è cosmetico: è la
+stessa stringa in quattro posti — repo GitHub, pacchetto npm, Space HF, e il
+simbolo che chi integra scrive nel proprio sorgente. Cambiarlo dopo la
+pubblicazione costa una deprecazione.
+
+**IL VINCOLO npm È MOLTO PIÙ DEBOLE DI QUANTO SEMBRI** (verificato 2026-08-18,
+`npm view`): quasi ogni parola singola risulta occupata, ma da SQUAT MORTI —
+`atrium` 0.0.0, `quorum` 0.0.0-1, `arena` 0.0.2, cioè pacchetti mai pubblicati
+davvero. Liberi: `synod`, `gguf-web`, `webgguf`, `ggufjs`, `residency`.
+Occupati: `conclave` 1.0.0, `tessera` 0.15.5, `ardesia` 0.3.0, `bottega`,
+`caldera`, `slabs`. **La via d'uscita standard è il pacchetto SCOPED**
+(`@scope/nome`), che azzera del tutto la contesa. Repo GitHub e Space HF stanno
+in namespace PERSONALI (`MissingPackage/*`, `CriM91/*`): lì qualunque nome è
+libero. Quindi npm non deve dettare la scelta.
+
+**IL FATTO CHE HO TROVATO GUARDANDO I REPO DEL PI** — `ardesia` non è un
+candidato, è una FAMIGLIA già esistente: `ardesia-gguf` («LoRA-over-GGUF
+training stack») e `ardesia-unsloth` («config-driven SFT→DPO→GRPO»), entrambi
+Python, entrambi ADDESTRAMENTO. Riusare `ardesia` per un motore di INFERENZA nel
+browser blurra due cose diverse: chi trova l'uno si aspetta l'altro. La
+continuità di brand costa qui più di quanto renda.
+
+**Il registro di nomi del PI**, letto dai suoi repo: `nightshift`,
+`arcana-screen`, `gitgud` — parola singola, evocativa, MAI descrittiva.
+
+**I candidati, con la ragione accanto:**
+- **`conclave`** ⭐ — la MoE *è* un conclave: a ogni token una piccola assemblea
+  scelta di expert si riunisce, delibera, si scioglie. È l'unico nome che dice
+  l'ARCHITETTURA su cui questo motore è specializzato, invece della piattaforma
+  su cui gira. Non collide con `ardesia-*`. npm scoped.
+- **`tessera`** — doppio senso reale: tassello di mosaico E biglietto/gettone
+  (token). Rende bene lo slab streammato. Ma legge come struttura dati, e non
+  dice MoE.
+- **`synod`** — stessa metafora di `conclave`, e LIBERO su npm senza scope. Ma
+  più opaco per un lettore non italiano/cattolico.
+- **`gguf-web` / `webgguf`** — liberi, e cercabili da chi digita «run gguf in
+  browser». La contro-argomentazione: descrittivo = dimenticabile, e questo
+  motore non è «gguf nel browser», è «modelli più grandi della VRAM che girano
+  lo stesso».
+
+**RULING:** _
+
+### RULING PI 2026-08-18: **`webgguf`**, sotto il namespace personale. **Item 20 CHIUSO.**
+
+Il PI ha rovesciato la linea evocativa con un argomento che accolgo: «i nomi
+evocativi finiscono per non avere successo su GitHub». Su un repo che cerca
+adozione la discoverability batte la memorabilità, e `conclave` non contiene
+nessun termine che qualcuno digiti.
+
+**`webgguf`**: libero su npm SENZA scope, **zero repo omonimi su GitHub**.
+
+**NAMESPACE: personale (`MissingPackage/webgguf`), e la decisione è REVERSIBILE**
+— un repo si trasferisce a un'org dopo, con redirect permanenti dal vecchio URL;
+il pacchetto npm è unscoped e non ne risente. L'org si crea se e quando bench e
+paper diventano pubblici davvero, non prima.
+
+### IL VICINATO, misurato (2026-08-18, GitHub API) — perché cambia la DESCRIPTION
+
+Il PI ha chiesto «qualcuno è arrivato prima di noi?». La risposta è no, ma il
+motivo per cui è no va scritto, perché detta come ci si presenta.
+
+| repo | ⭐ | cos'è davvero |
+|---|---|---|
+| `mlc-ai/web-llm` | 18.567 | browser, WebGPU, ma modelli **compilati MLC — non GGUF** |
+| `huggingface/transformers.js` | 16.261 | browser, WebGPU, ma **ONNX** |
+| `Michael-A-Kuykendall/shimmy` | 5.755 | «GGUF-native WebGPU» ma è un **server Rust con API OpenAI** |
+| `ngxson/wllama` | 1.167 | GGUF nel browser, ma **WASM/CPU**: niente WebGPU |
+| `huggingface/ratchet` | 767 | WebGPU + quant GGUF nel browser — **il più vicino**; fermo dal 2026-05-26 |
+| `airframe` / `flarellm` / `Sipp` | 7-107 | motori Rust WebGPU GGUF, non in scheda |
+
+I 18 repo `gguf-web*` che avevano spaventato il PI sono **webui che parlano con
+un server** llama.cpp/Ollama: interfacce, non motori. Non sono concorrenti — ma
+sono lo scaffale in cui si finisce presentandosi come «GGUF in the browser».
+
+**LA CASELLA VUOTA È LA NOSTRA**: GGUF letto via Range in una scheda, WebGPU,
+expert PAGINATI per far girare modelli più grandi della VRAM. Il differenziatore
+non è il formato, è **un 35B MoE a 34,97 tok/s in una scheda**, dove web-llm in
+pratica si ferma sui 7-8B densi.
+
+**CONSEGUENZA OPERATIVA, non un commento**: la description del repo e la prima
+riga del README aprono sul 35B nella scheda, NON su «run GGUF in your browser».
+Il rischio di questo progetto non è che qualcuno sia arrivato prima — è essere
+invisibile accanto a 18.567 stelle dicendo la cosa che dicono già in venti.
