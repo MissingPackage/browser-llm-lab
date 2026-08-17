@@ -1510,3 +1510,98 @@ MISURATO e' M=16 e salire peggiora comunque, a qualunque tier. Il tiering compra
 qualcosa su `q6_K` (M=64: 10,12% contro 12,79% a M=32) e su `q8_0`, non sulle
 shape che dominano il modello. **Il ruling cambia l'INQUADRAMENTO — niente tassa
 di portabilita' — non l'ordine di grandezza in palio.**
+
+## item 29 — SPIKE (2): il routing E' correlato 11x l'indipendente, e lo spec-dec paga sul MoE
+
+Misura: `results/engine/q35-router-overlap-35b-p7-2026-08-18.json`, prodotta da
+`scripts/q35-router-overlap-run.mjs` (nuovo). Prompt 7 INTERO (269 posizioni,
+regola full-corpus: subset di prompt interi, mai un cap), 40 layer, cpuref-f64,
+9,6 min.
+
+### Il kill-check e' passato, e largamente
+
+    ov(1) = 2,83 expert condivisi fra posizioni adiacenti
+    indipendente teorico = 8*8/256 = 0,25
+    -> il routing e' correlato ELEVEN VOLTE la baseline
+
+### La separazione modello/corpus, che era il rischio della misura
+
+    d= 1   ov=2,83   eccesso sul lungo raggio  +1,46
+    d= 2   ov=2,07                             +0,70
+    d= 3   ov=1,99                             +0,61
+    d= 4   ov=1,91                             +0,54
+    d=64   ov=1,37                             (baseline TOPICA/stazionaria)
+
+Circa META' dell'overlap a distanza 1 e' **componente topica** (lo stesso testo
+attiva gli stessi expert a qualunque distanza) e meta' e' **correlazione locale
+del modello**. E l'eccesso locale DIMEZZA gia' a d=2: e' concentrato sui vicini
+immediati, che e' esattamente il regime dello spec-dec.
+
+### Il numero che serviva: D(M) e il guadagno
+
+    M     D(M)   righe/expert   G(M)
+     2    13,2       1,22       1,190x
+     3    17,7       1,36       1,312x
+     4    21,7       1,48       1,411x
+     5    25,3       1,58       1,496x
+     8    34,7       1,84       1,704x
+    16    53,3       2,40       2,112x
+
+`G(M) = 8M(A+B) / [D(M)*A + 8M*B]` con A=15,79 us e B=1,707 us/riga dallo spike
+(1). Sanity: con routing indipendente D=8M e G=1 esatto — tutto il guadagno sta
+nel consolidamento del termine FISSO A.
+
+**Contro la forbice pre-registrata dal consulente** (D(2)=15,75 -> 1,01x ·
+D(2)=13 -> 1,21x · D(2)=10 -> 1,51x): misurato D(2)=13,2 -> **1,19x**. Cade
+esattamente sul caso intermedio.
+
+### IL FATTO PIU' GROSSO, e non era nel disegno: i layer sono ENORMEMENTE diversi
+
+    ov(1) per layer: da 0,52 a 3,75  (media 2,83)
+    primi 5 layer: 0,52 · 1,15 · 1,50 · 1,86 · 2,37
+    ultimi 5 layer: 3,07 · 2,58 · 3,21 · 3,02 · 1,66
+
+**Il layer 0 e' quasi indipendente (0,52 contro 0,25)**, i layer profondi sono
+correlati 12-15x. Il routing dei primi layer segue il TOKEN, quello dei layer
+profondi segue il CONTESTO — che e' stabile fra posizioni adiacenti.
+
+Conseguenza pratica non ovvia: **un GEMM multi-riga in arena renderebbe molto di
+piu' sui layer profondi che sui primi**, e una politica che lo accende SOLO
+sopra una soglia di layer potrebbe prendere quasi tutto il guadagno a meta' del
+costo di implementazione. Non e' nel contratto di nessuna riga: registrato.
+
+### COSA QUESTA MISURA NON DICE
+
+- **E' il PREFILL.** Sono posizioni adiacenti del prompt, non token generati. Il
+  decode e' un regime diverso e NON e' coperto. L'artefatto lo dichiara.
+- **E' UN prompt** (08-prosa-en). La dipendenza dal contenuto e' reale — la
+  baseline topica di 1,37 su 2,83 lo dimostra. Il secondo prompt (p4, math) e'
+  in corso per la banda di genere.
+- **Misura la DOMANDA, non l'offerta.** Il divieto `batch && arena`
+  (`wgsl.ts:2176-2190`) e' per costruzione: il GEMM multi-riga in regime d'arena
+  **e' un kernel da scrivere**. Questo numero decide SE si scrive, non quanto
+  acceleriamo domani.
+
+**RULING: _** — con G(2)=1,19x sul segmento expert sopra l'1,23x del lato
+kernel, la mia raccomandazione e' che il kernel valga; ma e' spesa e la spesa e'
+del PI.
+
+### SECONDO PROMPT (p4, 05-math-en, 388 pos): la banda di genere e' STRETTISSIMA
+
+    prompt              ov(1)   d64    D(2)   D(4)   D(8)  D(16)   G(2)
+    p7 08-prosa-en      2,83   1,37    13,2   21,7   34,7   53,3   1,190x
+    p4 05-math-en       2,95   1,28    13,1   21,2   34,1   53,3   1,199x
+
+**G(2) va da 1,190x a 1,199x**, meno dell'1% fra due generi molto diversi, e
+**D(16) e' IDENTICO (53,3)**.
+
+E il dettaglio che rende la cosa interessante: la baseline TOPICA differisce
+(1,37 contro 1,28) mentre D(M) converge. Cioe' i due testi hanno una
+stazionarieta' diversa ma **la struttura del routing e' la stessa**.
+
+Lettura: **D(M) e' una proprieta' del MODELLO, non del corpus** — che era
+esattamente il rischio che la baseline a lunga distanza doveva escludere. Due
+punti non fanno una legge, ed e' sottoposta al consulente.
+
+L'eterogeneita' per layer si conferma e si allarga: **ov(1) da 0,37 a 3,95**
+(p4), da 0,52 a 3,75 (p7). Il layer 0 e' praticamente indipendente su entrambi.
