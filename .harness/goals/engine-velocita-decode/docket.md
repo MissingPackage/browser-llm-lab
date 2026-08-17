@@ -1152,3 +1152,71 @@ Chrome concede tipicamente ~60% del disco libero.
 
 **RULING DEL PI: _** (la classifica e i tre rischi cambiano l'ordine del lavoro
 di rilascio: non li applico senza ruling.)
+
+## item 22 — LA FUNZIONE OBIETTIVO, dichiarata dal PI (2026-08-17)
+
+> «Il nostro obiettivo è:
+> - avere il motore più veloce al mondo sui modelli che decidiamo di supportare
+>   (espandiamo dopo o noi o la community)
+> - girare bene anche sui browser vanilla
+> - poter fare l'hotswap di layer fine-tuned LoRA over GGUF»
+
+Tre assi, non uno. Sostituisce la formulazione precedente («massima intelligenza
+sopra ~30 tok/s»), che resta vera ma era **un asse solo**.
+
+**E CORREGGE UNA RACCOMANDAZIONE DELLA CONSULENZA**: il consulente strategia
+diceva di tenere il 2,7x su WebLLM «come nota a margine, mai come titolo»,
+perche' e' un delta e i delta si erodono. Il PI ha obiettato, e ha ragione:
+«le persone non switcheranno da un repo con 18K stars solo perche' facciamo
+girare i MoE». **I due claim non sono in conflitto**: la frontiera di capacita'
+e' il claim che non si puo' ribaltare, la velocita' e' il claim che fa muovere
+le persone. Si guida con la prima e si sostiene con la seconda.
+
+**Il terzo asse era gia' registrato come GAP VERIFICATO** (`ideas-ledger.md:74`):
+primitiva LoRA di prima classe, `y = Q(W)x + B(Ax)` fusa nel kernel, adapter
+10-40 MB in hot-swap su base cachata. Lineage diretto da `ardesia-gguf` (lo
+stack di training LoRA-over-GGUF del PI). **Gap confermato allo sweep del
+2026-07-29: WebLLM no, wllama TODO, MediaPipe solo Gemma.** E' una SECONDA prova
+di esistenza, e collega i due repo del PI in una storia unica: si addestra
+l'adapter con ardesia-gguf, lo si fa girare nel browser con webgguf. Il PI
+stima che «verra' quasi gratis», ed e' plausibile: il kernel dequantizza gia' il
+peso e tiene l'accumulatore in registro — `+ B(Ax)` si innesta li'.
+
+### RULING PI sullo spec-dec (2026-08-17)
+
+> «Lo spec-dec intero coi kernel nuovi lo facciamo solo quando siamo sicuri che
+> valga ragionevolmente la pena. Prima facciamo gli spike, i micro-bench e le
+> prove in chat, poi lo facciamo solo alla versione "finale", come numero da
+> portare nel paper. Non possiamo perdere ulteriormente 1.5 giorni.»
+
+**Accolto e coerente con la regola gia' scritta** (memoria
+`long-benches-only-on-final-code`: i bench costosi validano, non fotografano
+stati intermedi). Ordine: (1) curva cost(M) nel microbench esistente — mezza
+giornata, zero run di modello; (2) overlap del router top-8 a distanza 1-4 sul
+35B — decide se paga anche sul MoE o solo sul denso; (3) prove in chat. Il
+rerun del checkpoint B si fa UNA volta, sul codice finale.
+
+### I DUE ASSI GIA' MISURATI OGGI (item 21 esteso)
+
+**Asse «browser vanilla»: GIA' SODDISFATTO su Chrome.** Chrome 151 a ZERO
+argomenti ha WebGPU sulla GPU vera; il bench senza `--enable-unsafe-webgpu` fa
+**327,3 tok/s contro 322,6 col flag**. I flag erano storici. Perse senza flag
+solo: subgroup-matrix (che avevamo gia' scartato — ed e' una conferma),
+timestamp-query-inside-passes (misura), subgroup-size-control (ma `subgroups`
+RESTA), multi-draw-indirect.
+
+**Asse «piu' veloce di WebLLM»: SI', e il margine CRESCE dove il terreno e'
+ostile.**
+
+    browser     webgguf   WebLLM   nostro vantaggio
+    Chrome        322,6     89,5        3,6x
+    Firefox        79,6      9,9        8,0x
+    degrado       4,05x     9,0x
+
+Su Firefox giriamo **senza subgroup** (non esposti) e con `maxBufferSize` a
+1 GiB contro 4. **Degradiamo meno della meta' di loro.**
+
+**DOMANDA APERTA, e non e' di velocita'**: con `maxBufferSize` a 1 GiB, il 35B
+su Firefox si carica? L'arena expert e' ~10 GiB. E' un vincolo di STRUTTURA e
+decide cosa possiamo DICHIARARE su Firefox — «piu' veloce ovunque» e «fa girare
+il 35B ovunque» sono due claim diversi e il secondo potrebbe non reggere li'.
