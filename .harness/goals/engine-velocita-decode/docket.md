@@ -1390,3 +1390,86 @@ e' esattamente cio' contro cui `gemvcaps.ts` mette le sue guardie.
 
 **RULING: _** — se il PI vuole, la diagnosi e' delimitata: la shape e' nota, il
 braccio di confronto pure, e il ktest ha gia' il caso su un'altra shape.
+
+## item 27 — «SI PUO' SALIRE ANCORA?»: NO, e la curva media mentiva per costruzione
+
+Il PI ha chiesto (2026-08-18): «se a M=16 non e' ancora saturato e avevamo gia'
+misurato un 30x conviene capire dove ci si puo' spingere». Esteso lo sweep a
+M ∈ {1,2,4,8,16,32,64,128,256} e consultato l'agente fable esperto di kernel.
+**La risposta e' no, e la premessa — mia e del PI — era sbagliata.**
+
+### (A) «Non ha saturato» era un ARTEFATTO DELLA METRICA
+
+Stavo guardando il costo MEDIO per riga. Il tempo TOTALE e' affine in M, e il fit
+sui miei stessi dati e' quasi esatto (residuo max 0,027-0,143 us su valori di
+4-22 us):
+
+    q4_K 2048x512   T(M) = 6,17 + 0,663*M  us
+    q4_K 512x2048   T(M) = 3,45 + 0,381*M  us
+    q6_K 512x2048   T(M) = 3,85 + 0,336*M  us
+
+Il costo medio e' `b + a/M`: **cala del ~26% a ogni raddoppio PER SEMPRE**, per
+pura aritmetica dell'ammortamento dell'intercetta `a`, **anche quando il costo
+marginale e' gia' piatto**. Il «26% fra M=8 e M=16» che avevo letto come margine
+residuo e' esattamente cio' che il modello affine predice quando il margine
+marginale e' ZERO.
+
+**Guadagno residuo da M=16 a M=infinito: 1,57x / 1,58x / 1,72x.** Non un altro
+30x. Il 30x era M=1 -> M=16 ed e' GIA' INCASSATO.
+
+### (B) E la curva misurata torna su
+
+    q4_K 2048x512  ottimo M=16 (16,95%)  ·  M=32 22,13%  ·  M=64 24,39%
+    q4_K 512x2048  ottimo M=16 (16,06%)  ·  M=32 18,59%  ·  M=64 21,69%
+    q6_K 512x2048  ottimo M=64 (10,12%)  — ma a 22.528 B, OLTRE il minimo di spec
+    q8_0 2048x4096 ottimo M=32 ( 7,57%)
+
+Sulle due shape `q4_K` — **117 tensori, 17,67 GB, il modello quasi tutto** — il
+minimo e' a M=16 e salire PEGGIORA. Il muro non e' la shared (limite duro a
+M=153) ne' i limiti WebGPU: e' l'**asintoto ALU/issue**, e sulle shape expert
+piccole b non e' nemmeno il tetto ALU della macchina — e' il costo di issue di un
+chip semivuoto (2.048-8.192 thread su una GPU che ne vuole ~100k).
+
+### (C) IL CAVEAT CHE INVALIDA IL TRASFERIMENTO: nel banco i pesi stanno in L2
+
+Verificato sull'artefatto: celle che misurano fino a **785,5 GB/s effettivi**,
+cioe' **1,8x il tetto VRAM di 435 GB/s**. Impossibile leggendo dalla VRAM. Le
+matrici sono 0,59-17,8 MB e l'L2 dell'AD103 e' 64 MB: **ci stanno tutte**.
+
+In produzione il decode streama **571 MB di pesi expert per token** dalla VRAM.
+**Tutta la tabella cost(M) misura un regime che il decode non vive.** L'artefatto
+ha bracci `-coldw` solo per q4_0 a M=16: qualunque estensione deve portarli.
+
+### (D) E il segmento expert non puo' usare M grande, per struttura
+
+Con top-8 su 256, le M righe si sparpagliano su expert diversi. Righe medie per
+expert attivo, col routing CORRELATO come misurato (recall 82,67%):
+
+    M=16  -> ~29 expert distinti -> ~4,4 righe/expert
+    M=64  -> ~5,3 righe/expert
+    saturazione a 8 righe/expert solo verso M~180-256
+
+**L'M efficace di un expert resta 4-6 anche a M=64** — dentro il ginocchio gia'
+misurato, mai oltre. Spingere il kernel expert a M alto non serve ne' al decode
+ne' allo spec-dec.
+
+### COSA RESTA VERO, e cosa ne discende
+
+- **Il ginocchio a M=2 e il ribaltamento dello spec-dec (item 25) REGGONO**: sono
+  nel regime M=1->2, dove l'ammortamento dell'intercetta e' reale e grosso.
+- **L'unico consumatore reale di M>16 e' il PREFILL**, e il suo contratto e' il
+  **TTFT**, non i tok/s di decode. Il deliverable di una misura oltre M=16 e'
+  «di quanto alzare `PREFILL_M`», non un guadagno di decode.
+- `gpulimits.test.ts` pinna **M=97** come soglia oltre la quale il GEMM di
+  prefill alzerebbe il limite negoziato: sopra quel M si paga in portabilita'.
+
+### (E) I CHECKSUM SONO TRE, NON UNO — l'item 26 peggiora
+
+    q8_0/splitk-idot@M1    K=512  N=2048   relDiff 3,489e-2
+    q8_0/splitk-idot@M64   K=2048 N=4096   relDiff 3,075e-2
+    q8_0/splitk-idot@M128  K=2048 N=4096   relDiff 7,909e-2
+
+Non e' una cella strana: e' un pattern, e **peggiora con M**. Tolleranza 2e-2.
+
+**RULING: _** — la mia raccomandazione e' di NON spendere altro su M per il
+decode, e di riportare la domanda dove ha una risposta: `PREFILL_M` e il TTFT.
