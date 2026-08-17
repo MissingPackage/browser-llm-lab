@@ -665,3 +665,35 @@ motore fa da solo, e il costo di sbagliarsi è un download da 19 GiB.
 > **Non chiedo un ruling nuovo**: procedo sulla prima meta', che e' gia'
 > approvata. Se un giorno servisse la conversione lato client, l'item torna
 > aperto con la contraddizione di it.43 da chiarire per prima.
+
+## item 13 — lo slab come FORMATO DISTRIBUIBILE, non come cache locale (PI → parcheggiato, 2026-08-17)
+
+**Ruling del PI a valle della misura di it.51**: l'artefatto locale si toglie
+(«così non rischiamo di inquinare i risultati»), il **motore si tiene** — costa
+zero perché senza file è inerte e lo dichiara in `moeStats().slabSource`.
+
+**La domanda che resta aperta, e non è di questo goal**: lo slab è un formato
+*efficiente da distribuire* (per es. su Hugging Face) invece che da generare in
+locale? Cioè: vale la pena pubblicare `modello.slabs.bin` accanto al GGUF?
+
+**Cosa sappiamo già, e va letto prima di riaprirla:**
+- il pack sparisce davvero (`packMs` 7.331 → **0**, it.51);
+- ma la fetch peggiora del 4,6%, perché una richiesta da 1,77 MB non si
+  sovrappone a nessuno mentre tre da 594 KB erano in `Promise.all`;
+- **netto misurato: +3,7% tok/s** su un secondo artefatto da 17 GiB;
+- non è stato provato lo slab letto in **2-4 sotto-range paralleli**, che è dove
+  sta il ginocchio della curva banda/richieste-in-volo (it.33) e che
+  recupererebbe i ~3,1 s persi. `slabFileRange` è già aritmetica: è una fetta
+  piccola, ed è la sola cosa che potrebbe cambiare il segno del giudizio.
+
+**Perché potrebbe valere come prodotto e non come ottimizzazione**: un formato
+già impacchettato è *neutro rispetto al motore che lo consuma* — chiunque abbia
+un'arena a slot lo userebbe senza pagare un repack. È materia da
+`research-campaign` (una tesi, un pre-registro, un memo), non da una riga di
+questo goal.
+
+**NON riaprire senza**: (a) la misura dei sotto-range paralleli, (b) il costo di
+banda/hosting di un secondo file per modello, (c) la domanda se il layout resti
+stabile fra versioni del motore — oggi `SLAB_LAYOUT_VERSION` è un numero che
+invalida tutto quando cambia, e un formato distribuito non può invalidarsi a
+ogni refactor.
