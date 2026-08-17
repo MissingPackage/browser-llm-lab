@@ -71,8 +71,7 @@ formato slab · vocab ridotto sulla lm_head.
 - **Il path bench di `q35conf` dichiara di sé** «frame PRE-ottimizzazioni»: è di
   grado riferimento ma non misura ciò che consegniamo.
 - **Il thinking è ACCESO di default** dal 2026-08-17 (polarità derivata dal
-  template): due run in modalità diverse non si confrontano. Passare
-  `--thinking 0|1|auto` esplicito.
+  template): due modalità diverse non si confrontano. Passare `--thinking` esplicito.
 - **`results/chat/` contiene sia artefatti auto-dichiarati non-riferimento sia le
   tre repliche che lo sono**, e il nome della cartella non distingue.
 - **Non riscrivere i registri**: journal, docket e `results/*.json` erano veri
