@@ -28,6 +28,7 @@ import { arenaNeeds } from "../residency";
 import { validateQwen35, Q35_SHA256, type Q35Shape } from "../q35shape";
 import { q35TokenizerFromMetadata, type Q35Tokenizer } from "../q35tokenizer";
 import { ggufRangeReader } from "../ggufrange";
+import { thinkingRendering, type ThinkingRendering } from "./thinking";
 import { httpSlabDeps } from "../slabsource";
 
 // I GGUF canonici: le SHA sono quelle PINNATE in q35shape, non ricopiate a
@@ -50,6 +51,8 @@ export interface LoadCfg {
   ctxMax: number;
   select: "cpu" | "optimistic";
   expertPolicy: "lru" | "tier";
+  /** forza la modalita' di ragionamento; assente = il default del template */
+  enableThinking?: boolean;
 }
 
 export interface SamplingCfg {
@@ -77,6 +80,7 @@ let shape: Q35Shape | null = null;
 let loadCfg: LoadCfg | null = null;
 let eosIds: number[] = [];
 let chatTemplateRaw: string | null = null;
+let thinking: ThinkingRendering = { prefix: "", thinking: false, source: "assente", condition: null };
 /** posizione del PROSSIMO token nel contesto: la KV si riusa fra i turni. */
 let pos = 0;
 /** il turno precedente si è chiuso da solo con <|im_end|>? */
@@ -157,6 +161,9 @@ async function load(cfg: LoadCfg): Promise<void> {
   eosIds = [eos, ...(eot.length === 1 ? eot : [])];
   const ct = f.metadata["tokenizer.chat_template"];
   chatTemplateRaw = typeof ct === "string" ? ct : null;
+  // la modalita' di ragionamento la decide il FILE; `cfg.enableThinking` la
+  // forza solo se qualcuno lo chiede esplicitamente
+  thinking = thinkingRendering(chatTemplateRaw, cfg.enableThinking);
 
   const isMoe = shape.arch === "qwen35moe";
   const ceilingBytes = cfg.vramGiB !== null ? Math.floor(cfg.vramGiB * (1 << 30)) : null;
@@ -251,6 +258,11 @@ async function load(cfg: LoadCfg): Promise<void> {
       dispatchBreakdown: model.dispatchBreakdown,
       vramPlan: model.vramPlan(),
       hasChatTemplate: chatTemplateRaw !== null,
+      // DICHIARATO nell'artefatto: due run che differiscono per la modalita' di
+      // ragionamento hanno tok/s incomparabili (col thinking acceso il modello
+      // genera molti piu' token), e senza questo campo si distinguerebbero solo
+      // da chi le ha lanciate
+      chatTemplate: thinking,
       eosIds,
       adapter: dev.adapter.info ? { vendor: dev.adapter.info.vendor, architecture: dev.adapter.info.architecture, device: dev.adapter.info.device } : null,
       timestampQuery: dev.has("timestamp-query"),
@@ -271,6 +283,12 @@ function renderDelta(user: string, system: string | null, firstTurn: boolean): s
   if (assistantOpen) s += "<|im_end|>\n";
   if (firstTurn && system && system.trim().length > 0) s += `<|im_start|>system\n${system}<|im_end|>\n`;
   s += `<|im_start|>user\n${user}<|im_end|>\n<|im_start|>assistant\n`;
+  // IL PREFISSO DEL BLOCCO <think>, che fino al 2026-08-17 mancava. Il template
+  // del file non finisce a `<|im_start|>assistant\n`: emette anche il prefisso
+  // che decide se il modello ragiona. Ometterlo consegnava al 35B la modalita'
+  // OPPOSTA alla sua di default, cioe' il modello piu' capace in modalita' meno
+  // capace. La polarita' si deriva dal template (`thinking.ts`), non si cabla.
+  s += thinking.prefix;
   return s;
 }
 

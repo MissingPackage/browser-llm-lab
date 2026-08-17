@@ -80,7 +80,17 @@ try {
   if (POLICY) await page.selectOption("#policy", POLICY);
   await page.click("#load");
   await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("pronto"), null, { timeout: 300000 });
-  console.log(`[chat] caricato: ${await page.textContent("#status")}`);
+  const caricato = await page.textContent("#status");
+  console.log(`[chat] caricato: ${caricato}`);
+  // IL MODELLO CARICATO DEV'ESSERE QUELLO CHIESTO. Il 2026-08-17 una run
+  // lanciata con `--model 35b-q2k` ha caricato il 4B e ha misurato per tre
+  // turni senza che niente protestasse: i numeri erano plausibili e di un altro
+  // modello. Il selettore della pagina e' l'unica fonte, e va riletto DOPO il
+  // caricamento, non solo impostato.
+  const selezionato = await page.$eval("#model", (e) => e.value);
+  if (selezionato !== MODEL) {
+    throw new Error(`modello caricato "${selezionato}" != richiesto "${MODEL}" — la run avrebbe misurato un altro modello`);
+  }
   console.log(`[chat] ${turni.length} turni · ctx ${CTX} · vram ${VRAM} · maxnew ${MAXNEW}${POLICY ? ` · policy ${POLICY}` : ""}\n`);
 
   for (const [i, q] of turni.entries()) {
