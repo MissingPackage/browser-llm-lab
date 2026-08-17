@@ -21,7 +21,7 @@
 //   node scripts/chat-smoke.mjs --model 35b-q2k --ctx 8192 --vram 13 --maxnew 400
 //     [--turns 10] [--policy tier] [--prompt "…"] [--conversation file.json]
 //     [--out PATH]
-import { chromium } from "playwright";
+import { chromium, firefox } from "playwright";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync, mkdirSync, copyFileSync } from "node:fs";
@@ -72,7 +72,15 @@ const turni = conv.slice(0, Math.max(1, TURNS));
 const PROFILE = join(homedir(), ".cache/blab-glmroute-profile");
 mkdirSync(PROFILE, { recursive: true });
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist", "--disable-gpu-sandbox"];
-const browser = await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args, acceptDownloads: true });
+// BROWSER=chrome|firefox, come in `engine-bench.mjs` e `e2e-bench.mjs`. Firefox
+// esiste qui per UNA domanda che non e' di velocita': dichiara `maxBufferSize`
+// a 1 GiB contro i 4 di Chrome, e l'arena expert del 35B ne vuole ~10. Se il
+// modello non si carica, «piu' veloci ovunque» resta vero e «facciamo girare il
+// 35B ovunque» no — sono due claim diversi e vanno separati coi fatti.
+const BROWSER = process.env.BROWSER ?? "chrome";
+const browser = BROWSER === "firefox"
+  ? await firefox.launchPersistentContext(`${PROFILE}-ff`, { headless: false, acceptDownloads: true, firefoxUserPrefs: { "dom.webgpu.enabled": true, "gfx.webgpu.force-enabled": true, "dom.webgpu.workers.enabled": true } })
+  : await chromium.launchPersistentContext(PROFILE, { headless: false, channel: "chrome", args, acceptDownloads: true });
 const page = browser.pages()[0] ?? (await browser.newPage());
 page.on("pageerror", (e) => console.log("[pageerror]", e.message.slice(0, 300)));
 page.on("console", (m) => { if (m.type() === "error") console.log("[console.error]", m.text().slice(0, 300)); });

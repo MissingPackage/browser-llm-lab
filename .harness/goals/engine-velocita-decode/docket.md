@@ -1220,3 +1220,53 @@ Su Firefox giriamo **senza subgroup** (non esposti) e con `maxBufferSize` a
 su Firefox si carica? L'arena expert e' ~10 GiB. E' un vincolo di STRUTTURA e
 decide cosa possiamo DICHIARARE su Firefox — «piu' veloce ovunque» e «fa girare
 il 35B ovunque» sono due claim diversi e il secondo potrebbe non reggere li'.
+
+## item 23 — il 35B SU FIREFOX si carica, e lo split e' compiuto (2026-08-17)
+
+**IL 35B SI CARICA SU FIREFOX**, nonostante `maxBufferSize` a 1 GiB contro i 4
+di Chrome: l'arena expert (~10 GiB) e' evidentemente allocata in molti buffer
+piccoli, non in uno grande. Il vincolo che temevo non esiste.
+
+    turno 1   3,25 tok/s   TTFT 30,8 s   miss 5853
+    turno 2   4,94 tok/s   TTFT  9,4 s   miss 1152
+    (Chrome agli stessi turni: 11,6 e 14,4)
+
+**IL CLAIM SI SPACCA IN DUE, e vanno tenuti separati:**
+- «webgguf fa girare un 35B MoE in una scheda» — **vero su Chrome E su Firefox**;
+- «a 34,6 tok/s» — **vero solo su Chrome**. Su Firefox siamo ~3x sotto e ben
+  lontani dalla barra dei 30.
+
+**LIMITE DICHIARATO**: due turni NON sono il regime (e' la regola del progetto:
+due turni misurano l'arena che si riempie). Il regime di Firefox resta **IGNOTO**
+— servirebbe una run da 10 turni, ~15 min a quelle velocita'. Non estrapolare
+4,94 a un numero di regime.
+
+Aggiunto `BROWSER=chrome|firefox` anche a `chat-smoke.mjs`, come gia' in
+`engine-bench.mjs` e `e2e-bench.mjs`.
+
+### LO SPLIT E' COMPIUTO — `MissingPackage/webgguf`, privato
+
+GitHub e' rientrato dal Partial System Outage. Repo creato, pushato, e
+**verificato DAL REMOTO** (non solo in locale): l'albero su GitHub non contiene
+`.harness/`, `HANDOFF.md` ne' `docs/superpowers/`.
+
+    359 commit ereditati per filter-repo + 1 di scaffolding
+    701 file · tsc exit 0 · vitest 1237 passed | 11 skipped
+
+### RULING PI 2026-08-17 sugli artefatti dell'harness: NELLA CARTELLA, GITIGNORATI
+
+> «Per gli artefatti dell'harness intendevo spostarli nella cartella del nuovo
+> repo ma tenerlo gitignored.»
+
+Copiati in `~/Projects/webgguf/.harness/`: **i 14 goal `engine-*`** (GOAL,
+PHASES, docket, journal) piu' `HANDOFF.md`. **NON copiati**: `fase-1b-matrice` e
+`fase-2-deep-dive`, che sono del BENCHMARK e restano qui.
+
+`.gitignore` del repo motore: `.harness/` e `HANDOFF.md`, con la ragione
+scritta dentro. Verificato con `git check-ignore -v`.
+
+**E questa soluzione scioglie la tensione che avevo segnalato**: spostare il
+processo DENTRO la storia del repo motore avrebbe messo documenti in italiano
+nel repo che l'item 16 vuole in inglese. Gitignorati, il contenuto e' su disco
+per chi lavora e fuori dalla storia pubblica. **Nessun ruling dell'item 16 va
+riaperto.**
