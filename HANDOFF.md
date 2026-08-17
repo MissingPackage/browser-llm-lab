@@ -42,8 +42,8 @@ soddisfatto su Chrome · LoRA non iniziato, ma registrato come gap verificato
 - item 20 nome **`webgguf`**, namespace personale, scelta reversibile
 - item 21 mappa delle capability + consulenza · 22 funzione obiettivo a tre assi
   · 23 il 35B su Firefox e lo split compiuto
-- Cosa finisce in quale repo: `docs/publishing/split-manifest.md` — §7 sono i tre
-  difetti che solo **eseguire** lo split ha trovato.
+- Cosa va in quale repo: `docs/publishing/split-manifest.md` (§7 = i tre difetti
+  che solo **eseguire** lo split ha trovato)
 
 **Nebbia** — non ancora specificato:
 - il **regime di Firefox è ignoto**: due turni non sono regime, 4,94 non si
@@ -54,11 +54,10 @@ soddisfatto su Chrome · LoRA non iniziato, ma registrato come gap verificato
   quota OPFS (10 GiB) non basta a cacheare il file.
 - la pendenza **a contesto lungo del 35B**: misurato fino a 8k contro 262k.
 
-**Fuori scope, deliberatamente** — smesso di riproporre:
-subgroup-matrix (il probe committato dice che è inutilizzabile qui, ed è anche
-dietro flag) · adottare TVM · trasferire lo sviluppo su Mac · policy `tier` ·
-raggruppamento I/O · `idot` nel decode · formato slab · vocab ridotto sulla
-lm_head.
+**Fuori scope, deliberatamente** — smesso di riproporre: subgroup-matrix (il
+probe committato dice che è inutilizzabile qui, ed è anche dietro flag) · TVM ·
+sviluppo su Mac · policy `tier` · raggruppamento I/O · `idot` nel decode ·
+formato slab · vocab ridotto sulla lm_head.
 
 ## 3. Landmines
 
