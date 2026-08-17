@@ -24,6 +24,11 @@ Nomi decisi (docket item 20): il motore è **`webgguf`**, sotto `MissingPackage/
 
 ### Documentazione  ⚠️ DA TRADURRE IN INGLESE (docket item 16)
     docs/engine/                21 file  — consuntivi, spec, ledger delle idee
+    docs/deep-dive/             17 file  — CORRETTO il 2026-08-18: il manifest li
+                                           dava al BENCH. Sono tutti ricerca del
+                                           MOTORE (ogni file rimanda a un goal
+                                           engine-*, o parla di kernel/dequant/
+                                           KV/limiti). Nessuno riguarda l'app.
     docs/architettura/           6 file  — MECCANISMI, QUANTIZZAZIONE, VALUTAZIONE
                                            + i due file del diagramma
     GLOSSARY.md
@@ -33,6 +38,9 @@ Nomi decisi (docket item 20): il motore è **`webgguf`**, sotto `MissingPackage/
     results/opfs-bench/          4 file  — il cold-read è materia motore (piano §3)
     results/chat/               15 file  — le run di chat: è QUI che vive il 34,97 tok/s
     results/eval/               13 file  — corpus e qualità dei quant (+0,13 bit/token)
+    results/microbench/                  — CORRETTO il 2026-08-18: idem. Contiene
+                                           costm-decode-*, kernel-decode-fase0-*,
+                                           kquant-fase0-*: artefatti di goal engine
 
 ### Test — 66 `tests/engine-*` più questi 19, verificati per import
     tests/fixtures/  tests/helpers/  tests/types/
@@ -77,9 +85,7 @@ Nomi decisi (docket item 20): il motore è **`webgguf`**, sotto `MissingPackage/
                        promptset, qualityPrompts, stacks, probe, benchServer,
                        bench.worker
     src/adapters/  src/conformance/  src/microbench/  src/prof/
-    docs/deep-dive/                    13 file
-    results/{4090-linux-*, m4-pro*, s22-ultra*, microbench, dispatch-profile,
-             methodology}
+    results/{4090-linux-*, m4-pro*, s22-ultra*, dispatch-profile, methodology}
     tests/  benchServer, metrics, microbench, probe, prof, protocol, quality,
             render, schema, smoke, telemetry-adapters, transformersjs-adapter,
             webllm-adapter, wllama-adapter
@@ -200,3 +206,21 @@ Nuovi: `LICENSE` (Apache-2.0), `NOTICE` (nessun peso ridistribuito),
 - **La traduzione non è fatta**: commenti del sorgente e `docs/` sono in italiano.
   README, NOTICE e RESUMING sono in inglese. Il README lo dichiara.
 - `webgguf-bench` e `webgguf-paper` NON sono stati estratti (§2, §3).
+
+---
+
+## 8. QUARTO DIFETTO, trovato il 2026-08-18 sincronizzando
+
+Il manifest assegnava **`docs/deep-dive/` e `results/microbench/` al repo BENCH**.
+Sono entrambi del **MOTORE**, e la verifica è banale una volta fatta: dei 17
+documenti in `deep-dive/`, ognuno rimanda a un goal `engine-*` o parla di
+kernel/dequant/KV/limiti di buffer — **nessuno riguarda l'app di benchmark**. E
+`results/microbench/` contiene `costm-decode-*`, `kernel-decode-fase0-*`,
+`kquant-fase0-*`, cioè artefatti di goal engine.
+
+Se lo split fosse andato in produzione così, il repo motore sarebbe nato **senza
+il proprio registro di ricerca** — inclusi il roofline (`headroom`), i due
+prereg/memo della ricerca `cost(M)` e il micro-bench che misura la banda della
+scheda. Amputazione silenziosa, come quella dei cinque strumenti in `.harness/`
+(§7.3): stessa classe di errore, scoperta dallo stesso meccanismo — provare a
+usare davvero il repo estratto.
