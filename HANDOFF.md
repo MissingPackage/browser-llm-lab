@@ -2,10 +2,45 @@
 
 ## 1. Next decidable
 
-**GOAL `engine-velocita-decode` ATTIVO.** Sessione del 2026-08-17: it.50-51 —
-l'ultimo anello dello slab pre-impacchettato, **chiuso e misurato**. **Leggi
-`docs/architettura/MECCANISMI.md` PRIMA di progettare qualsiasi cosa**: e' la
-tabella meccanismi x path, e le sue celle vuote sono il lavoro che resta.
+**LA SESSIONE DEL 2026-08-17 HA CHIUSO IL GOAL SULLA VELOCITA' E APERTO LA FASE
+DI RILASCIO.** Le decisioni aperte stanno nel docket, item **14-19**: licenza,
+pesi da Hugging Face, inglese su tutto il pubblico, forma di distribuzione,
+split delle repo, matrice dei dispositivi. Tre di quelle sono gia' DECISE dal PI
+(15, 16, 19) e aspettano lavoro; tre aspettano un ruling (14, 17, 18).
+
+**Leggi `docs/architettura/MECCANISMI.md` prima di progettare, e
+`docs/architettura/VALUTAZIONE.md` prima di credere a un numero.**
+
+### COSA E' CAMBIATO OGGI, in una riga per cosa
+
+    la barra dei 30 tok/s      PASSATA in chat vera: 34,97 di regime su 10 turni
+    la leva                    NON un kernel: la CAPIENZA (quant Q2_K, parco
+                               17,07 -> 10,39 GiB, tutto dentro l'arena)
+    il costo                   +0,13 bit/token, uniforme su quattro domini
+    il motore e' fedele        top-1 99,04% vs llama.cpp, rango MASSIMO 2
+    lo slab                    +3,7%: non serve, GGUF basta (docket 13)
+    il thinking del 35B        SISTEMATO: la polarita' si deriva dal template
+    tre documenti nuovi        QUANTIZZAZIONE.md, VALUTAZIONE.md, e i banchi
+
+### IL LAVORO CHE DISCENDE, in ordine di dipendenza
+
+1. **Split delle repo** (item 18) — perche' definisce cosa e' pubblico, e senza
+   quel confine la traduzione in inglese non e' eseguibile.
+2. **Traduzione del pubblico** (item 16), file per file, dentro lo split.
+3. **Licenza + attribuzione** (item 14): senza, per default nessuno puo' usarlo.
+4. **Pesi da HF** (item 15): URL nel registro, e VERIFICARE Range + CORS + redirect
+   verso il CDN, che oggi non e' mai stato provato — leggiamo da localhost.
+5. **API pubblica** (item 17): oggi la superficie e' `createQ35GpuModel` con venti
+   opzioni e nomi interni.
+6. **Rimisurare tutto al tag**, corpus CONGELATO e repliche (regola del progetto).
+
+### CIO' CHE RESTA APERTO DEL GOAL, e non e' bloccante
+
+- **riga 4**: la barra formale vuole un artefatto di riferimento su QUATTRO
+  famiglie con warm-up scartato e >= 3 repliche. Oggi abbiamo la chat, che il PI
+  ha dichiarato essere il numero che conta, ma non l'artefatto del contratto.
+- **riga 7**: il consuntivo del goal.
+- 4B, 9B e GLM non sono stati rimisurati sui dieci turni.
 
 ### IL NUMERO CHE CONTA E' QUELLO DELLA CHAT — e su DIECI TURNI
 
