@@ -7,14 +7,23 @@ l'ultimo anello dello slab pre-impacchettato, **chiuso e misurato**. **Leggi
 `docs/architettura/MECCANISMI.md` PRIMA di progettare qualsiasi cosa**: e' la
 tabella meccanismi x path, e le sue celle vuote sono il lavoro che resta.
 
-### IL NUMERO CHE CONTA E' QUELLO DELLA CHAT, non quello del banco
+### IL NUMERO CHE CONTA E' QUELLO DELLA CHAT — e su DIECI TURNI
 
-    la chat del PI, stesso prompt:   8,26 -> 11,35 -> 11,47 tok/s
-    banco, braccio caldo a zero miss:                 40,06 tok/s
+**Ruling del PI 2026-08-17: le prove in chat si fanno su 10 turni di follow-up,
+mai due.** Due turni misurano l'arena che si RIEMPIE, non il regime.
 
-I 40,06 sono veri e **misurano un regime che una chat vera non raggiunge**:
-parco expert **17,07 GiB**, arena **11,17** — il 65%. Su questa GPU il 35B e'
-**residency-bound sempre**.
+    regime (media ultimi 5 turni di 10)     Q4_K_S 11,86  ->  Q2_K 34,97 tok/s
+    miss per turno, al decimo                       429   ->            17
+    TTFT                                      2,2-8,5 s   ->     0,7-1,2 s
+
+**LA BARRA DEL GOAL (>= 30 tok/s a caldo) E' PASSATA IN CHAT VERA: 34,97.**
+La leva non e' un kernel: e' la CAPIENZA. Col quant `bartowski Q2_K` il parco
+expert passa da 17,07 a **10,391 GiB** ed entra tutto nell'arena; i miss vanno a
+**0,05%** e ci restano, mentre sul Q4_K_S oscillano e non convergono mai.
+
+Costo misurato: **+0,13 bit/token** (appaiato, teacher-forced, corpus in
+`results/eval/`), -0,15 di logprob sulla matematica, indistinguibile da zero
+sulla conoscenza. E' velocita' contro intelligenza, e i due si leggono insieme.
 
 ### COSA E' ENTRATO IERI NOTTE, e cosa ha insegnato
 
