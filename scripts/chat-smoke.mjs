@@ -1,24 +1,66 @@
-// Smoke della chat q35: carica il 4B, manda un prompt, verifica che i token
-// arrivino e che l'export JSON contenga i parametri.
+// LA CHAT VERA, SU UNA CONVERSAZIONE VERA — non uno smoke da due turni.
+//
+// PERCHE' DIECI TURNI (ruling del PI, 2026-08-17). Con due turni si misura la
+// fase in cui l'arena si RIEMPIE, non il regime in cui la chat vive: il primo
+// turno di un MoE paga i miss di popolamento (7.930 sul 35B), il secondo li ha
+// gia' quasi tutti residenti. Una conversazione di dieci turni con domande di
+// approfondimento mostra la CURVA — dove il tok/s si stabilizza, se il contesto
+// che cresce lo mangia, e se i miss tendono a zero o no.
+//
+// Il thread e' scelto per assomigliare all'uso vero: una domanda tecnica e nove
+// follow-up che approfondiscono, in italiano, con un turno di riassunto che
+// obbliga il modello a rileggere tutto il contesto. Il PRIMO turno e' quello dei
+// bracci precedenti, cosi' il confronto storico regge.
+//
+// COSA MISURA CHE UN TURNO SOLO NON PUO':
+//   - il tok/s a regime, quando l'arena e' calda;
+//   - il costo del contesto che cresce (la KV si riusa fra i turni);
+//   - se i miss tendono a zero (parco che ci sta) o si ripresentano (non ci sta).
+//
+// Uso:
+//   node scripts/chat-smoke.mjs --model 35b-q2k --ctx 8192 --vram 13 --maxnew 400
+//     [--turns 10] [--policy tier] [--prompt "…"] [--conversation file.json]
+//     [--out PATH]
 import { chromium } from "playwright";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, copyFileSync } from "node:fs";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:5199";
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1] : d; };
 const MODEL = arg("model", "4b");
-const CTX = arg("ctx", "1024");
+const CTX = arg("ctx", "8192");
 const VRAM = arg("vram", "13");
-const MAXNEW = arg("maxnew", "48");
-// --prompt: il testo del PRIMO turno. Serve a riprodurre un turno vero invece
-// del prompt corto dello smoke — un turno da 60 token e uno da 800 pagano la
-// stessa tassa di residenza fissa, quindi danno tok/s molto diversi e NON sono
-// confrontabili fra loro (it.40).
-// --policy tier: autopin dei top-usage (it.48). Il default resta "lru", che e'
-// cio' che la chat fa oggi — cambiarlo qui e' una MISURA, non una decisione.
+const MAXNEW = arg("maxnew", "400");
+const TURNS = Number(arg("turns", "10"));
 const POLICY = arg("policy", null);
-const PROMPT = arg("prompt", "Scrivi una frase sola: perche' il cielo e' blu?");
+const OUT = arg("out", null);
+
+/**
+ * LA CONVERSAZIONE. Il turno 1 e' quello dei bracci del 2026-08-17 (confronto
+ * storico); i nove seguenti sono follow-up che approfondiscono, non domande
+ * indipendenti — e' la differenza fra una chat e una batteria di prompt.
+ * Il turno 9 chiede un RIASSUNTO: costringe a rileggere tutto il contesto, che
+ * e' il caso peggiore per la KV e per il prefill.
+ */
+const CONVERSAZIONE = [
+  "Che relazione c'e' tra entropia dell'informazione e compressione?",
+  "Puoi farmi un esempio numerico concreto con un alfabeto di quattro simboli?",
+  "E se le probabilita' fossero tutte uguali, cosa cambierebbe in quell'esempio?",
+  "Come si collega alla codifica di Huffman? Mostrami l'albero per l'esempio di prima.",
+  "Perche' la codifica aritmetica riesce a fare meglio di Huffman?",
+  "Nei modelli linguistici si parla di bit per token: e' la stessa entropia di cui parlavamo?",
+  "Quindi una perplessita' di 6 quanti bit per token sono, e come la interpreto?",
+  "Se quantizzo i pesi di un modello, cosa succede a quei bit per token?",
+  "Riassumi in cinque punti quello che ci siamo detti finora.",
+  "Dove cadrebbe questo ragionamento se i dati non fossero stazionari?",
+];
+const CONV_FILE = arg("conversation", null);
+const conv = CONV_FILE ? JSON.parse(readFileSync(CONV_FILE, "utf8")) : CONVERSAZIONE.slice();
+const P1 = arg("prompt", null);
+if (P1) conv[0] = P1;
+const turni = conv.slice(0, Math.max(1, TURNS));
+
 const PROFILE = join(homedir(), ".cache/blab-glmroute-profile");
 mkdirSync(PROFILE, { recursive: true });
 const args = ["--enable-unsafe-webgpu", "--enable-features=Vulkan,WebGPUService", "--ignore-gpu-blocklist", "--disable-gpu-sandbox"];
@@ -37,50 +79,55 @@ try {
   await page.fill("#temp", "0");
   if (POLICY) await page.selectOption("#policy", POLICY);
   await page.click("#load");
-  await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("pronto"), null, { timeout: 240000 });
-  console.log("[smoke] caricato:", await page.textContent("#status"));
+  await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("pronto"), null, { timeout: 300000 });
+  console.log(`[chat] caricato: ${await page.textContent("#status")}`);
+  console.log(`[chat] ${turni.length} turni · ctx ${CTX} · vram ${VRAM} · maxnew ${MAXNEW}${POLICY ? ` · policy ${POLICY}` : ""}\n`);
 
-  await page.fill("#input", PROMPT);
-  await page.click("#send");
-  await page.waitForSelector(".meta", { timeout: 240000 });
-  const reply = await page.textContent(".msg.assistant .body");
-  const meta = await page.textContent(".meta");
-  console.log("[smoke] risposta:", JSON.stringify(reply.slice(0, 240)));
-  console.log("[smoke] metriche:", meta);
-  if (!reply || reply.trim().length === 0) throw new Error("risposta VUOTA");
+  for (const [i, q] of turni.entries()) {
+    const t0 = Date.now();
+    await page.fill("#input", q);
+    await page.click("#send");
+    // il turno e' finito quando compare la sua riga di metriche
+    await page.waitForFunction((n) => document.querySelectorAll(".meta").length === n, i + 1, { timeout: 600000 });
+    const meta = (await page.$$eval(".meta", (els) => els.map((e) => e.textContent)))[i];
+    console.log(`[chat] turno ${String(i + 1).padStart(2)}/${turni.length} · ${((Date.now() - t0) / 1000).toFixed(0)}s · ${q.slice(0, 58)}…`);
+    console.log(`         ${meta?.replace(/\s+/g, " ").trim().slice(0, 150)}`);
+  }
 
-  // secondo turno: verifica il riuso della KV (posStart deve ripartire da posEnd)
-  await page.fill("#input", "E di notte?");
-  await page.click("#send");
-  await page.waitForFunction(() => document.querySelectorAll(".meta").length === 2, null, { timeout: 240000 });
-  console.log("[smoke] turno 2:", (await page.textContent("#status")));
-
-  const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 30000 }), page.click("#export-json")]);
+  const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 60000 }), page.click("#export-json")]);
   const p = `/tmp/chat-smoke-export-${MODEL}.json`;
   await dl.saveAs(p);
+  if (OUT) { copyFileSync(p, OUT); console.log(`[chat] artefatto → ${OUT}`); }
+
   const j = JSON.parse(readFileSync(p, "utf8"));
   const t = j.turns.filter((x) => x.role === "assistant");
-  console.log("[smoke] export:", {
-    kind: j.kind,
-    model: j.model.file,
-    sha: j.model.sha256.slice(0, 8),
-    load: j.params.load,
-    sampling: j.params.sampling,
-    hostState: j.hostState,
-    turni: j.turns.length,
-    tokS: t.map((x) => x.stats.decodeTokS?.toFixed(2)),
-    posizioni: t.map((x) => `${x.stats.posStart}→${x.stats.posEnd}`),
-    stop: t.map((x) => x.stats.stopReason),
-    dispatchTotal: j.model.dispatchBreakdown.total,
-    vramPlanGiB: j.final?.vramPlan ? (j.final.vramPlan.allocatedBytes / 2 ** 30).toFixed(2) : null,
-    renderedPrompt0: t[0].stats.renderedPrompt,
-    chatTemplatePresente: j.params.chatTemplateRaw !== null,
-  });
-  if (t[1].stats.posStart !== t[0].stats.posEnd) throw new Error(`KV non riusata fra i turni: ${t[0].stats.posEnd} → ${t[1].stats.posStart}`);
+  console.log(`\n[chat] ${j.model.file} · sha ${j.model.sha256.slice(0, 8)} · leve ${JSON.stringify(j.model.levers ?? null)}`);
+  console.log("[chat] turno   tok/s   TTFT ms    gen   ctx        miss   dirty  replayLayers");
+  for (const [i, x] of t.entries()) {
+    const s = x.stats, m = s.moe ?? {}, e = s.engine ?? {};
+    // I contatori sono PER TURNO, non cumulativi di sessione: la pagina li
+    // azzera a ogni invio. Verificato sull'artefatto del 2026-08-17 — la prima
+    // versione di questa tabella li differenziava e stampava miss NEGATIVI, che
+    // e' il modo in cui un'assunzione sbagliata si annuncia da sola.
+    const miss = m.misses ?? 0, dirty = e.dirtyTokens ?? 0, rep = e.replayLayers ?? 0;
+    console.log(
+      `[chat]  ${String(i + 1).padStart(4)}  ${(s.decodeTokS ?? 0).toFixed(2).padStart(6)}  ${String(Math.round(s.ttftMs ?? 0)).padStart(8)}`
+      + `  ${String(s.genTokens).padStart(5)}  ${String(s.posEnd).padStart(5)}  ${String(miss).padStart(9)}  ${String(dirty).padStart(6)}  ${String(rep).padStart(12)}`);
+  }
+  // La riga che dice se il regime esiste: la media degli ULTIMI turni, quando
+  // l'arena e' calda. La media su tutti mescola il popolamento col regime.
+  const coda = t.slice(Math.floor(t.length / 2));
+  const medio = coda.reduce((a, x) => a + (x.stats.decodeTokS ?? 0), 0) / Math.max(1, coda.length);
+  console.log(`[chat] regime (media degli ultimi ${coda.length} turni): ${medio.toFixed(2)} tok/s`);
+
+  if (t.length >= 2 && t[1].stats.posStart !== t[0].stats.posEnd) {
+    throw new Error(`KV non riusata fra i turni: ${t[0].stats.posEnd} → ${t[1].stats.posStart}`);
+  }
   if (j.params.load.vramGiB !== Number(VRAM)) throw new Error("parametri di carico non esportati");
-  console.log("[smoke] OK");
+  if (t.some((x) => !x.content || x.content.trim().length === 0)) throw new Error("un turno ha risposta VUOTA");
+  console.log("[chat] OK");
 } catch (e) {
-  console.error("[smoke] FALLITO:", e.message);
+  console.error("[chat] FALLITO:", e.message);
   code = 1;
 } finally {
   await browser.close();

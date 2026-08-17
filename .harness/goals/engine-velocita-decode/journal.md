@@ -4097,3 +4097,83 @@ il ginocchio della curva a **2-4 richieste in volo**: leggere uno slab in 2-4
 sotto-range paralleli è aritmetica pura sopra `slabFileRange`, e recupererebbe i
 3,1 s che il formato si è ripreso. *Non l'ho fatto: è una riga nuova, non una
 rifinitura di questa.*
+
+---
+
+## it.52 — dieci turni, e il 35B fa 35 tok/s: la barra del goal è passata in chat vera
+
+Il PI: «Prova sempre in chat su 10 turni di conversazione, facendo domande di
+follow up e approfondimento, come una chat reale.» Aveva ragione due volte.
+
+### Il numero, e quello che due turni mi avevano nascosto
+
+Stessa conversazione (una domanda tecnica e nove follow-up in italiano, con un
+turno di riassunto che obbliga a rileggere tutto il contesto), stesso host,
+greedy, ctx 8192, vram 13, maxnew 400.
+
+    turno      Q4_K_S           Q2_K
+               tok/s   miss     tok/s   miss
+      1         9,34   8.092    11,51   7.012     ← l'arena si riempie
+      2         8,87   4.060    14,31   1.413
+      3         7,39   5.925    33,33     296     ← qui il parco è dentro
+      4         9,12   2.984    33,47     271
+      5        10,31   2.085    35,00      67
+      6        12,08     959    35,06      43
+      7        12,93     470    34,98      69
+      8        12,24     511    34,65      41
+      9         9,42   1.078    34,98      38
+     10        12,64     429    35,17      17
+    ------------------------------------------
+    regime     11,86           34,97       = 2,95x
+
+**La barra del goal è ≥ 30 tok/s a caldo. In chat vera: 34,97.**
+
+E i miss raccontano il perché meglio di qualunque spiegazione: sul Q2_K vanno a
+**17 su 31.664 richieste (0,05%)** e ci restano; sul Q4_K_S **oscillano fra 429
+e 5.925 e non convergono mai**, perché a ogni cambio di argomento servono expert
+che l'arena ha dovuto sfrattare. È la firma di un parco che non ci sta.
+
+TTFT: 0,7-1,2 s contro 2,2-8,5 s.
+
+### Perché due turni non bastavano, e lo dico contro di me
+
+Stamattina avevo misurato lo stesso identico modello su due turni e riportato
+«13,4 poi 17,9 tok/s — non è il regime a zero miss sperato». Era vero e
+**fuorviante**: i primi due turni sono l'arena che si popola. Al terzo il numero
+raddoppia e si stabilizza. Con due turni avrei consegnato **1,5x** dove il vero
+è **2,95x**, e avrei concluso che il parco non basta mentre basta.
+
+*La regola è ora in memoria: le prove in chat si fanno su dieci turni, si legge
+il REGIME (media degli ultimi cinque) e si guarda la curva dei miss — se tende a
+zero il parco ci sta, se oscilla no.*
+
+### Cos'è entrato
+
+`scripts/chat-smoke.mjs` non è più uno smoke da due turni: porta la
+conversazione, accetta `--turns`/`--conversation`, e stampa la curva per turno
+più il regime. Il primo turno resta quello dei bracci precedenti, così il
+confronto storico regge.
+
+Un difetto mio, trovato dallo stesso strumento: la prima tabella differenziava i
+contatori credendoli cumulativi e stampava **miss negativi**. Sono per-turno.
+Corretto, e il commento lo dice.
+
+### EVIDENZA
+
+- `results/chat/chat-35b-q2k-10turni-2026-08-17.json` (sha 673142cc, leve
+  kfan+splitk attive, arena 10,89 GiB)
+- `results/chat/chat-35b-q4ks-10turni-2026-08-17.json` (sha a8138f18, stessa
+  conversazione, stesso host, back-to-back)
+
+### NON VERIFICATO
+
+- **Una run per braccio, host non dichiarato quiescente.** I due bracci sono
+  consecutivi sulla stessa macchina e la conversazione è identica e greedy, ma
+  la banda di rumore di questa macchina è ~2,4% e non ho repliche.
+- **La barra formale del contratto chiede un artefatto di RIFERIMENTO, non una
+  chat** (riga 4: quattro famiglie, warm-up scartato, ≥ 3 repliche). Questo è il
+  numero della chat, che il PI ha dichiarato essere quello che conta — ma la
+  riga 4 resta da fare.
+- **Qualità**: il Q2_K costa +0,13 bit/token misurati stamattina. Il 35 tok/s è
+  velocità, non intelligenza, e i due vanno letti insieme.
+- 4B, 9B e GLM non sono stati rimisurati su dieci turni.
