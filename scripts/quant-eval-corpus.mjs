@@ -56,6 +56,13 @@ const mancanti = [];
 const locali = [
   { id: "it-tecnico", domain: "prosa-it", file: ".harness/goals/engine-velocita-decode/journal.md" },
   { id: "code-ts", domain: "codice", file: "src/engine/residency.ts" },
+  // LA CONVERSAZIONE VERA, aggiunta il 2026-08-17. Le altre sezioni sono prosa e
+  // codice: nessuna misura il regime in cui il modello viene davvero usato —
+  // turni di chat con le marche `<|im_start|>`, il contesto che cresce, e il
+  // token di fine turno. Il danno di una quantizzazione puo' benissimo essere
+  // diverso li'. La sorgente e' il TRASCRITTO del braccio di riferimento
+  // (llama.cpp), reso in testo dallo script `chat-transcript.mjs`.
+  { id: "chat-10turni", domain: "conversazione", file: "results/eval/conversazione-10turni.txt" },
 ];
 for (const l of locali) {
   const raw = readFileSync(join(REPO, l.file), "utf8");
