@@ -1473,3 +1473,40 @@ Non e' una cella strana: e' un pattern, e **peggiora con M**. Tolleranza 2e-2.
 
 **RULING: _** — la mia raccomandazione e' di NON spendere altro su M per il
 decode, e di riportare la domanda dove ha una risposta: `PREFILL_M` e il TTFT.
+
+## item 28 — PORTABILITA' NON E' RINUNCIA: si alloca quello che il device concede (PI, deciso)
+
+> «Portabilità non significa rinunciare alle performance. Significa che su ogni
+> dispositivo allochiamo quello che può (non oggi, lo faremo quando
+> impacchetteremo le api). Se un dispositivo supporta 49KB li allochiamo, se ne
+> supporta 8 ne allochiamo 8 e così via.»
+
+**Deciso, e corregge il mio inquadramento dell'item 27.** Avevo scritto che sopra
+M=32 «si rinuncia alla portabilita'», e ho perfino spaccato in due il gate di
+`ttkquant-fase0-varianti.test.ts` su quella base. **Il modello giusto e' un
+altro**: il minimo di spec (16.384 B) non e' un TETTO per tutti, e' il **TIER PIU'
+BASSO**. Un device che concede 49.152 B esegue la variante a M piu' alto; uno al
+minimo di spec esegue quella a M=32; uno a 8 KB una piu' piccola ancora.
+
+**Conseguenza su come si legge la curva cost(M)**: non e' «scegli UN M», e'
+**la tabella di selezione per tier**. Ogni riga serve un tier, e il lavoro non e'
+scegliere un punto ma tenere il PORTAFOGLIO e sceglierlo a runtime.
+
+**E il meccanismo esiste gia' per l'80%**: `gpudevice.ts` filtra le
+`optionalFeatures` per quelle che l'adapter ha davvero, `gpulimits.ts` NEGOZIA
+`requiredLimits` = min(adapter, requisito), `gemvcaps.ts` e' il gate di
+capability fatto bene (rifiuta con motivo scritto in telemetria). Quello che
+manca e' la selezione di M per tier, ed e' esattamente la «fabbrica di kernel
+parametrica + selezione on-device» che la consulenza di strategia raccomandava —
+non autotuning, **selezione fra un portafoglio curato**.
+
+**QUANDO**: non ora. Il PI lo colloca esplicitamente all'impacchettamento delle
+API (item 17: pacchetto npm).
+
+**COSA NON CAMBIA, e va detto perche' il ruling non lo tocca**: la MAGNITUDINE.
+Il modello affine dell'item 27 resta — il guadagno residuo oltre M=16 e'
+1,57-1,72x al massimo, e sulle due shape `q4_K` (117 tensori, 17,67 GB) l'ottimo
+MISURATO e' M=16 e salire peggiora comunque, a qualunque tier. Il tiering compra
+qualcosa su `q6_K` (M=64: 10,12% contro 12,79% a M=32) e su `q8_0`, non sulle
+shape che dominano il modello. **Il ruling cambia l'INQUADRAMENTO — niente tassa
+di portabilita' — non l'ordine di grandezza in palio.**

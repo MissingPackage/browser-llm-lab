@@ -168,22 +168,26 @@ describe("[c] la geometria dei formati viene da quant.ts, non da se stessa", () 
 });
 
 /**
- * M oltre il quale una forma multi-riga NON e' piu' garantita ovunque.
+ * M massimo che sta nel TIER PIU' BASSO, cioe' nel minimo di spec WebGPU
+ * (`maxComputeWorkgroupStorageSize` = 16.384 B). QUESTA scheda ne concede 49.152.
  *
- * Il minimo di spec WebGPU per `maxComputeWorkgroupStorageSize` e' 16.384 B;
- * QUESTA scheda ne concede 49.152. Un kernel fra i due numeri gira qui e non
- * gira su un device conforme al minimo — e «girare bene sui browser vanilla» e'
- * un asse dichiarato della funzione obiettivo, non un dettaglio.
+ * NON e' «il massimo portabile»: la prima stesura di questa costante lo diceva,
+ * ed era sbagliata. **Ruling PI 2026-08-18 (docket item 28): portabilita' non
+ * significa rinunciare alle performance — su ogni dispositivo si alloca quello
+ * che concede.** Un device a 49 KB esegue la variante a M piu' alto, uno al
+ * minimo di spec quella a M=32, uno a 8 KB una piu' piccola. Il minimo di spec
+ * e' il PAVIMENTO del portafoglio, non il suo tetto.
  *
- * Il confine e' MISURATO, non scelto: `q4_K/splitk-idot` usa ~320 B per riga
- * (20.480 B a M=64), quindi sfora fra M=32 e M=64.
+ * Il confine e' MISURATO: `q4_K/splitk-idot` usa ~320 B per riga (20.480 B a
+ * M=64), quindi il tier minimo arriva a M=32 e non oltre.
  *
- * Sopra questa soglia la misura resta LECITA — serve a sapere dove la curva
- * cost(M) satura, che il 2026-08-17 non si sapeva — ma il risultato e'
- * ESPLORATIVO: vale su questo hardware e non si puo' cablare in produzione
- * senza un fallback per i device al minimo di spec.
+ * Quindi questo gate garantisce **che il tier piu' basso esista sempre** — che
+ * e' la cosa che non deve mai rompersi. Le forme sopra la soglia non sono
+ * «non portabili»: sono i tier alti, e vanno selezionate a runtime da
+ * `gpulimits.ts` (che gia' negozia min(adapter, requisito)) invece che cablate.
  */
-const M_PORTABILE_MAX = 32;
+const M_TIER_MINIMO_MAX = 32;
+const M_PORTABILE_MAX = M_TIER_MINIMO_MAX;
 
 describe("[d] nessun candidato sfora il minimo di spec WebGPU", () => {
   it(`fino a M=${M_PORTABILE_MAX} le forme multi-riga stanno sotto 16.384 B — cioe' girano OVUNQUE`, () => {
