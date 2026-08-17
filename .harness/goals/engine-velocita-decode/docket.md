@@ -1605,3 +1605,71 @@ punti non fanno una legge, ed e' sottoposta al consulente.
 
 L'eterogeneita' per layer si conferma e si allarga: **ov(1) da 0,37 a 3,95**
 (p4), da 0,52 a 3,75 (p7). Il layer 0 e' praticamente indipendente su entrambi.
+
+### CORREZIONE DELL'ITEM 29 — avevo fatto un DOPPIO CONTEGGIO, e la raccomandazione cambia ragione
+
+Consulente fable, ripreso sui risultati. Verificate tutte le sue obiezioni.
+
+**(1) NON si moltiplica 1,19 per 1,23.** Avevo scritto al PI «1,19x sul segmento
+expert SOPRA l'1,23x del lato kernel». **E' doppio conteggio.** La formula
+`G(M) = 8M(A+B)/[D(M)A + 8M B]` **contiene gia'** l'economia del kernel dello
+spike (1): e' la curva `T(M)=a+bM` valutata sulla multiplicity misurata. Lo
+spike (1) e' la curva d'OFFERTA, lo spike (2) e' la DOMANDA che la sconta via
+D(M). Comporli conta il riuso due volte. **Il numero e' 1,19x a M=2, punto.**
+
+**(2) E G(M)>1 NON dimostra che lo spec-dec paghi.** G confronta M token
+batchati con M token sequenziali: vale quando **tutti gli M sono utili**, cioe'
+nel PREFILL. Nello spec-dec contano solo gli **accettati**, e il confronto giusto
+e' il costo per token utile:
+
+    C(2)/C(1) = (13,17*15,79 + 16*1,707) / (8*17,50) = 1,681x
+    break-even: 1+alpha >= 1,68   ->   alpha >= 0,68 a M=2
+    a M=4 servirebbe alpha >= 1,83, cioe' e' IRRAGGIUNGIBILE
+
+    acceptance MISURATA (sul 4B): ~0,50
+    -> 1,681 / 1,5 = 1,120   LO SPEC-DEC PERDE IL 12% sul segmento expert,
+       ANCHE col kernel multi-riga
+
+**LA RACCOMANDAZIONE CAMBIA RAGIONE, non verso.** Il GEMM multi-riga in arena si
+giustifica col **PREFILL**, non con lo spec-dec:
+
+- prefill: M=16 e' **strutturale** (le posizioni del prompt ci sono tutte, tutte
+  utili), D(16)=53,3 -> **G=2,11x sul segmento expert** e **2,40x di traffico
+  pesi in meno**. Ed e' misurato NEL REGIME GIUSTO: la misura e' fatta su
+  finestre di posizioni prompt.
+- spec-dec: con questi overlap e alpha~0,5 **non lo giustifica da solo**, e resta
+  appeso a due incognite MISURABILI — l'overlap nel DECODE (~10 min) e
+  l'acceptance della testa MTP **del 35B**, mai misurata (quella del 4B non si
+  trasferisce: stessa lezione del 91,92% di GLM).
+
+**(3) La politica «solo sopra una soglia di layer» che avevo proposto e'
+DOMINATA.** La penalita' del multi-riga dove non serve non e' meta' del costo:
+e' lo **0,91x misurato a m=1**. E si evita **per-expert, non per-layer**: al
+momento dell'encode l'unione e' gia' calcolata (`pinUnion`/`encodeExperts`
+iterano gli expert distinti), quindi la multiplicity `m_e` e' NOTA -> dispatch
+multi-riga se `m_e >= 2`, forma per-riga se `m_e = 1`. **Zero iperparametri,
+zero soglia da tarare**, e prende il guadagno anche sui layer bassi quando
+capita l'expert condiviso. A M=2 con ov(1)=2,83: ~2,8 expert a m=2 e ~10,4
+singleton per layer, separati esattamente. (Caveat: vale sul path chunk/CPU; sul
+path optimistic il resolve e' GPU e il grouping va fatto GPU-side.)
+
+**(4) «D(M) e' proprieta' del modello» era sovra-interpretazione**, e due
+verifiche l'hanno ridimensionata E rafforzata insieme:
+- **D(16) NON e' identico**: 53,3266 contro 53,3111. Arrotondavano entrambi a
+  53,3 nella MIA stampa. Erano vicinissimi, non uguali.
+- Le COMPONENTI differiscono per genere: p4 ha eccesso locale 1,67 e topica
+  1,28; p7 ha 1,46 e 1,37. La somma atterra quasi nello stesso punto — con due
+  punti non si distingue una legge da un incrocio.
+- **MA il test gratuito suggerito dal consulente da' l'evidenza vera**: il
+  PROFILO `ov1(l)` sui 40 layer ha **r di Pearson = 0,911** fra i due prompt,
+  con ampiezze diverse (2,83 contro 2,95). **La FORMA della correlazione lungo i
+  layer e' la stessa su due testi molto diversi** — evidenza di struttura del
+  modello molto piu' forte dell'uguaglianza degli aggregati.
+- Formulazione corretta per l'artefatto: «stabile fra due generi distanti (banda
+  0,8% su G(2)), con profilo per-layer correlato a r=0,91; la generalizzazione a
+  code/json NON e' misurata». Il test di rottura sarebbe 01-code e 07-json
+  (struttura ripetitiva -> topica alta), ~20 min.
+
+**RULING: _** — la raccomandazione corretta e': **il GEMM multi-riga in arena
+vale, per il PREFILL (2,11x)**. Lo spec-dec non lo giustifica ai numeri di oggi
+e va deciso dopo l'overlap in decode e l'acceptance MTP del 35B.

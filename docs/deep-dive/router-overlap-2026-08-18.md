@@ -95,12 +95,28 @@ regime dello spec-dec.
 dallo spike (1). **Sanity**: con routing indipendente `D = 8M` e `G = 1` esatto —
 tutto il guadagno sta nel consolidamento del termine fisso `A`.
 
-### La banda di genere è sotto l'1%
+### La banda di genere è sotto l'1% — ma l'evidenza forte è un'altra
 
-`G(2)` va da **1,190×** a **1,199×** fra prosa inglese e matematica, e `D(16)` è
-**identico** (53,3). Nel frattempo la baseline *topica* differisce (1,37 contro
-1,28): **i due testi hanno stazionarietà diversa ma la struttura del routing è la
-stessa**. È la lettura che la baseline a lunga distanza doveva permettere.
+`G(2)` va da **1,190×** a **1,199×** fra prosa inglese e matematica.
+
+> ⚠️ La prima stesura diceva che `D(16)` fosse **identico**. Non lo è: **53,3266
+> contro 53,3111** — arrotondavano entrambi a 53,3 nella *mia* stampa. Vicini
+> allo 0,03%, non uguali.
+
+E **«D(M) è una proprietà del modello» era sovra-interpretazione**: le
+*componenti* differiscono per genere — p4 ha eccesso locale 1,67 e topica 1,28,
+p7 ha 1,46 e 1,37 — e la somma atterra quasi nello stesso punto. Con due punti
+non si distingue una legge da un incrocio.
+
+**L'evidenza vera sta altrove**, ed è più forte di quella che avevo usato: il
+**profilo** `ov₁(l)` sui 40 layer ha **r di Pearson = 0,911** fra i due prompt,
+con ampiezze diverse (2,83 contro 2,95). Cioè **la forma della correlazione lungo
+i layer è la stessa su due testi molto diversi**, e a cambiare è solo la scala.
+
+Formulazione onesta: *stabile fra due generi distanti (banda 0,8% su `G(2)`), con
+profilo per-layer correlato a r=0,91; la generalizzazione a code/json non è
+misurata* — e quello sarebbe il test di rottura, perché struttura ripetitiva
+significa componente topica alta.
 
 ---
 
@@ -143,11 +159,55 @@ del costo di implementazione.
 
 ---
 
-## 6. Conseguenza
+## 6. Conseguenza — e la correzione di un doppio conteggio
 
-Sul segmento expert: **1,19× a M=2**, sopra l'**1,23×** che lo spike (1) ha
-misurato sul lato kernel. Il segmento expert è la quota dominante del token in
-streaming (571 MB per token).
+> ⚠️ **La prima stesura di questa sezione diceva «1,19× sopra l'1,23× dello spike
+> (1)». Era un DOPPIO CONTEGGIO.** La formula `G(M)` **contiene già** l'economia
+> del kernel: è `T(M)=a+b·M` valutata sulla multiplicity misurata. Lo spike (1)
+> è la curva d'**offerta**, lo spike (2) è la **domanda** che la sconta via
+> `D(M)`. Comporli conta il riuso due volte. **Il numero è 1,19× a M=2, punto.**
 
-**La raccomandazione è che il GEMM multi-riga in arena valga la scrittura.** È
-spesa, e la decisione è del PI: docket **item 29**.
+### E `G(M)>1` non dimostra che lo spec-dec paghi
+
+`G` confronta M token batchati con M sequenziali: vale quando **tutti gli M sono
+utili**, cioè nel **prefill**. Nello spec-dec contano solo gli **accettati**, e
+il confronto giusto è il costo per token utile:
+
+```
+C(2)/C(1) = (13,17·15,79 + 16·1,707) / (8·17,50) = 1,681×
+break-even:  1+α ≥ 1,68   →   α ≥ 0,68  a M=2
+             a M=4 servirebbe α ≥ 1,83, cioè è irraggiungibile
+
+acceptance MISURATA (sul 4B): ~0,50
+→ 1,681 / 1,5 = 1,120   lo spec-dec PERDE il 12% sul segmento expert,
+                        anche col kernel multi-riga
+```
+
+### La raccomandazione cambia ragione, non verso
+
+**Il GEMM multi-riga in arena si giustifica col PREFILL:**
+
+| | prefill | spec-dec |
+|---|---|---|
+| M | **16, strutturale** (le posizioni del prompt ci sono tutte) | 2-4 |
+| righe utili | **tutte** | solo le accettate, α≈0,5 |
+| guadagno segmento expert | **2,11×** | **0,89×** (perde) |
+| traffico pesi | **−2,40×** | — |
+| regime della misura | **quello giusto**: finestre di posizioni prompt | il decode non è misurato |
+
+Lo spec-dec resta appeso a **due incognite misurabili**: l'overlap nel **decode**
+(~10 min) e l'acceptance della testa MTP **del 35B**, mai misurata — quella del
+4B non si trasferisce, stessa lezione del 91,92% di GLM.
+
+### La politica per-expert batte quella per-layer
+
+La §4 proponeva di accendere il multi-riga «solo sopra una soglia di layer».
+**È dominata.** La penalità del multi-riga dove non serve è lo **0,91× misurato
+a m=1**, e si evita **per-expert**: all'encode l'unione è già calcolata
+(`pinUnion`/`encodeExperts` iterano gli expert distinti), quindi la multiplicity
+`m_e` è **nota** → dispatch multi-riga se `m_e ≥ 2`, forma per-riga se `m_e = 1`.
+Zero iperparametri, e prende il guadagno anche sui layer bassi quando capita
+l'expert condiviso. A M=2 con `ov(1)=2,83`: ~2,8 expert a `m=2` e ~10,4 singleton
+per layer, separati esattamente.
+
+Decisione al PI: docket **item 29**.
