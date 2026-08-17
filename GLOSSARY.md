@@ -21,7 +21,7 @@ confonde. ⚠ = collisione dichiarata: due cose che si chiamano uguale.
 
 ## Misura
 
-**ktest** — la suite dei kernel eseguita nel browser vero contro un riferimento CPU. `.harness/tools/engine-ktest.mjs` + `src/.../ktest.worker.ts`.
+**ktest** — la suite dei kernel eseguita nel browser vero contro un riferimento CPU. `tools/harness/engine-ktest.mjs` + `src/.../ktest.worker.ts` (era `.harness/tools/`: spostato il 2026-08-17, quei cinque strumenti sono del motore, non processo).
 **cpuref** — l'implementazione di riferimento in f64 su CPU contro cui il kernel GPU si confronta.
 **golden / pin** — l'uscita congelata del modello (argmax per posizione) su un corpus fisso; "identico al pin" è un gate secco. `results/engine/golden/`.
 **freeze** — sha256 del *testo WGSL generato*: impedisce che un kernel cambi per sbaglio. Copre solo i call-site che qualcuno ha inchiodato.

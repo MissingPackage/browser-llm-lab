@@ -231,7 +231,7 @@ BOOLEANO 0/1, non una M.
 Comandi, tutti eseguiti come stanno scritti:
 
     setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
-    BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs   # 111 PASS / 0 FAIL
+    BASE_URL=http://localhost:5199 node tools/harness/engine-ktest.mjs   # 111 PASS / 0 FAIL
     node scripts/q35-bench-run.mjs --prompt-idx 0 --n-decode 64 --vram-gib 8 --prefill-m 16 --declared quiescent
     node scripts/q35-conf-run.mjs --out results/engine/<seq>.json
     node scripts/q35-conf-run.mjs --conf-prefill-m 16 --out results/engine/<chunk>.json
