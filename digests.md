@@ -569,3 +569,37 @@ GLM-4.7-Flash resta residency-bound
   **Finché il watchdog non è corretto: niente `/loop` con workflow in volo.**
   Il lavoro lungo va fatto con un umano presente, o `ScheduleWakeup{stop:true}`
   prima di lanciare il workflow — al prezzo che il loop poi non riparte da solo.
+
+---
+
+## Ciclo 2026-08-18 — i due spike, e tre correzioni che li hanno raddrizzati
+
+**Spike (1), `cost(M)`**: il ginocchio è a M=2 e il verdetto «spec-dec più
+lento» cade — era corretto per i kernel su cui fu preso. Ma «non ha saturato a
+M=16» era un **artefatto della metrica**: il tempo totale è affine in M, quindi
+il costo *medio* per riga cala del 26% a ogni raddoppio per sempre, anche a
+margine marginale zero. Residuo oltre M=16: **1,6×**, non un altro 30×. E il
+banco misura un regime L2-resident (celle a 785 GB/s contro un tetto VRAM di
+435) che il decode non vive.
+
+**Spike (2), overlap del router**: correlato **11-12×** l'indipendente, con metà
+dell'overlap che è componente topica e metà correlazione locale del modello.
+`G(2) = 1,19×`. Banda di genere sotto l'1%, e il profilo per-layer correlato a
+**r = 0,911** fra due testi diversi — quella è l'evidenza di struttura, non
+l'uguaglianza degli aggregati. Il layer 0 è quasi indipendente, i profondi
+correlati 12-15×.
+
+**Le tre correzioni**, tutte dall'agente fable e tutte verificate sui dati prima
+di accoglierle:
+1. il prior che avevo citato (recall 82,67%) misurava predizione *fra layer
+   dentro una posizione*, non overlap *fra token*. Un grafico pubblicato
+   poggiava su di esso;
+2. **doppio conteggio**: avevo moltiplicato 1,19 × 1,23. `G(M)` contiene già
+   l'economia del kernel;
+3. `G(M)>1` non dimostra che lo spec-dec paghi — vale se *tutti* gli M sono
+   utili, cioè nel prefill. Break-even α ≥ 0,68 contro un'acceptance di 0,50:
+   **lo spec-dec perde il 12%**. Il kernel si giustifica col **prefill** (2,11×).
+
+Più: `webgguf` esiste su GitHub (privato); il 35B gira su Firefox a 9,97 tok/s;
+Chrome nudo non costa nulla; e il ruling sulla portabilità — si alloca quello che
+il device concede, il minimo di spec è il pavimento.
