@@ -697,3 +697,118 @@ banda/hosting di un secondo file per modello, (c) la domanda se il layout resti
 stabile fra versioni del motore — oggi `SLAB_LAYOUT_VERSION` è un numero che
 invalida tutto quando cambia, e un formato distribuito non può invalidarsi a
 ogni refactor.
+
+---
+
+# APERTURA VERSO IL RILASCIO PUBBLICO (PI, 2026-08-17)
+
+Il PI ha aperto la fase di preparazione al rilascio. Gli item qui sotto sono
+DECISIONI, non lavoro: il lavoro discende da loro. Ordine di dipendenza dove c'è.
+
+## item 14 — la licenza del repo (io → PI)
+
+**Il repo non ha una licenza.** Senza, per default nessuno può usarlo: la
+distribuzione pubblica è bloccata da questo prima che da qualunque codice.
+
+**Cosa entra nella scelta**, con la mia lettura accanto:
+- **Apache-2.0** — la stessa dei modelli Qwen che serviamo. Ha la clausola
+  brevettuale esplicita, ed è quella che l'ecosistema (llama.cpp è MIT,
+  transformers.js Apache-2.0) si aspetta da un motore. *È quella che
+  consiglierei.*
+- **MIT** — più corta e più permissiva, nessuna clausola brevettuale.
+- **AGPL** — obbligherebbe chi lo integra a pubblicare: incompatibile con
+  l'adozione che un motore cerca.
+
+**Serve anche**, e non è la licenza: un file di ATTRIBUZIONE che dichiari che
+non ridistribuiamo pesi, e che i GGUF citati sono di terzi (Qwen Apache-2.0;
+i quant di bartowski/unsloth sono loro ripacchettamenti).
+
+**RULING:** _
+
+## item 15 — i pesi si scaricano da Hugging Face (PI, deciso)
+
+> «I pesi possiamo distribuirli facendoli scaricare da huggingface. Così siamo
+> sicuri che vengano scaricate le versioni su cui abbiamo già ottimizzazioni.»
+
+**Deciso.** Cosa ne discende, ed è lavoro vero:
+- il registro dei modelli deve portare **URL HF + SHA-256 + formati attesi**, non
+  un path locale. Lo SHA c'è già (`Q35_SHA256`); l'URL no;
+- **CORS e Range su HF**: `huggingface.co/.../resolve/main/...` risponde 302 verso
+  un CDN. Il nostro lettore fa richieste Range: va verificato che reggano il
+  redirect e che gli header CORS lo permettano da un'origine diversa. **Non
+  misurato**: oggi leggiamo da localhost;
+- **il tempo di primo utilizzo** (13 GB su rete vera) non è mai stato cronometrato
+  e diventa la metrica di prodotto più visibile;
+- la quota OPFS (10,00 GiB, `persist()` negata, it.43) **non basta** a cacheare il
+  file: o si ri-scarica ogni sessione, o si chiede all'utente un file locale.
+  Questa è la domanda aperta più concreta.
+
+## item 16 — tutto ciò che è pubblico è in INGLESE (PI, deciso)
+
+> «Mi raccomando che sia tutto in inglese su quello che distribuiamo
+> pubblicamente.»
+
+**Deciso.** Il confine va però tracciato, perché oggi TUTTO è in italiano —
+codice, commenti, documenti, artefatti:
+
+    pubblico (inglese)   README, docs/ del repo motore, commenti del sorgente
+                         distribuito, messaggi d'errore rivolti all'utente,
+                         il paper
+    interno (italiano)   .harness/ (journal, docket, GOAL/PHASES), i consuntivi
+                         di sessione, questo file
+
+**Il costo è grosso e va detto**: i commenti del motore sono la parte migliore di
+questo repo e sono lunghi. Tradurli meccanicamente li rovinerebbe. Proposta:
+si traducono **al momento dello split** (item 18), file per file, come parte
+della ripulitura — non prima, o si traduce due volte.
+
+## item 17 — la forma di distribuzione del motore (io → PI)
+
+Un motore che gira nel browser non si distribuisce come «app + server API»,
+perché non c'è un server. Le forme possibili, non alternative fra loro:
+
+1. **pacchetto npm** (`import { createEngine } from "…"`) — è la forma vera per
+   chi integra. Il modello lo sceglie l'applicazione ospite.
+2. **pagina demo ospitata** — la prova che funziona. Costo: nessuno se i pesi
+   arrivano da HF (item 15); serve COOP/COEP per `crossOriginIsolated`.
+3. **Space su Hugging Face** — demo accanto ai pesi, con la loro CDN. È la sede
+   naturale per un progetto che consuma GGUF.
+4. **estensione/PWA** — offline vero, ma la quota OPFS resta il muro.
+
+**Ciò che manca in tutte e quattro**: una **API stabile**. Oggi la superficie è
+`createQ35GpuModel` con venti opzioni e nomi interni (`kfan`, `splitk`,
+`vramCeilingBytes`). Un pacchetto pubblico ha bisogno di un contratto piccolo e
+di un nome, e di dichiarare cosa NON è stabile.
+
+**RULING:** _
+
+## item 18 — separare le repo adesso (io → PI)
+
+Il ruling del 2026-07-30 dice motore e benchmark separati alla pubblicazione. Il
+PI chiede se conviene farlo **ora**.
+
+**La mia lettura: sì, e prima della traduzione.** Tre ragioni:
+1. lo split DEFINISCE cosa è pubblico, e senza quel confine l'item 16 non è
+   eseguibile (non si sa cosa tradurre);
+2. farlo ora costa poco: il motore è `src/engine/**` + i test, e le dipendenze
+   verso l'harness sono poche. Farlo dopo la ripulitura significa ripulire anche
+   ciò che poi si butta;
+3. il repo oggi contiene 25 GB di artefatti, worktree e risultati: il repo
+   pubblico deve nascere **senza quella storia**, non ripulito dopo.
+
+**Il rischio da dichiarare**: due repo raddoppiano il costo di ogni cambiamento
+che li attraversa, e per un po' li attraverseranno tutti. Va deciso chi è la
+fonte di verità durante la transizione.
+
+**RULING:** _
+
+## item 19 — la matrice dei dispositivi (PI, in carico al PI)
+
+> «Farò le prove su m4 pro 48 gb e s22 ultra e le includeremo nei risultati del
+> paper.»
+
+Tutti i numeri di questo progetto vengono da UNA macchina. Perché quelle prove
+siano confrontabili serve, da parte nostra: un runner che gira senza il nostro
+harness, un artefatto che dichiari il dispositivo, e una soglia di successo
+dichiarata prima (il 35B su 48 GB unificati è un regime diverso; sull'S22 il
+modello non ci sta e la domanda è quale modello ci sta).
