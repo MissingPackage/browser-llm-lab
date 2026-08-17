@@ -1270,3 +1270,38 @@ processo DENTRO la storia del repo motore avrebbe messo documenti in italiano
 nel repo che l'item 16 vuole in inglese. Gitignorati, il contenuto e' su disco
 per chi lavora e fuori dalla storia pubblica. **Nessun ruling dell'item 16 va
 riaperto.**
+
+## item 24 — il banco K-quant non copre il quant che CONSEGNIAMO (io → PI, costo stimato)
+
+Trovato preparando la curva `cost(M)` (item 21, ordine 1). `KQUANT_SHAPES` copre
+**q5_K, q4_1, q4_K, q6_K, q8_0** e **NON q2_K** — cioe' non il `bartowski Q2_K`
+su cui gira il 35B da cui viene il numero di punta (34,602 tok/s).
+
+**Perche' non l'ho assorbito nello spike**: aggiungere una famiglia vuol dire
+geometria (`KQUANT_GEOM`) piu' kernel gemello di banco, ~mezza giornata — dentro
+una misura che ne vale mezza, la trasforma in un'altra cosa.
+
+**Perche' non basta inferire.** La mia lettura iniziale era «stesso generatore,
+il ginocchio si trasferisce». Il peer `browser-llm-lab-fc` l'ha affilata e ha
+ragione: **stesso generatore non e' stessa geometria.** Il q2_K ha scale a 4 bit
+e blocco piu' stretto, quindi cambia il rapporto byte/lavoro — ed e' proprio quel
+rapporto che decide DOVE sta il ginocchio. Quindi qualunque cosa dica la curva su
+q4_K/q6_K/q8_0, sul quant che consegniamo resta un'INFERENZA.
+
+**Il costo**: ~mezza giornata, delimitata (geometria + gemello + una cella di
+conformita' contro `dequantQ2_K`, che esiste gia').
+
+**RULING: _**
+
+### Nota di metodo che vale oltre questo item
+
+Il ratchet `ttkquant-fase0-varianti.test.ts:132` asseriva `toEqual([1,8,16])`
+mentre il contratto (`engine-kquant/GOAL.md:86`) dice «a M = 1, 8, 16», cioe'
+RICHIEDE quei tre senza dichiararli esaustivi. Corretto in `toContain`, e il
+peer l'ha verificato sul testo del contratto invece di fidarsi.
+
+E' la seconda istanza della stessa malattia in questo progetto: l'altra e' il
+gate di it.6 del goal kquant, che contava i generatori condivisi su TUTTO il file
+invece che nel corpo del proprio banco. **Un gate che sorveglia piu' di cio' che
+il contratto dice diventa una tassa sui miglioramenti** — torna rosso per ragioni
+che non c'entrano con cio' che difende. Criterio da applicare ai prossimi.
