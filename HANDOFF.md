@@ -66,8 +66,8 @@ formato slab · vocab ridotto sulla lm_head.
 - **Mai due runner GPU insieme**, e la quiescenza si misura sui processi
   **browser**, non sui server MCP.
 - **Mai pipe sull'output di un runner**: bufferizza e maschera l'exit code.
-- **Le leve `kfan`/`splitk` nascono SPENTE**: le accende la chat, non il bench. Un
-  riferimento preso senza accenderle misura un motore che non consegniamo.
+- **Le leve `kfan`/`splitk` nascono SPENTE**: le accende la chat, non il bench —
+  un riferimento senza accenderle misura un motore che non consegniamo.
 - **Il path bench di `q35conf` dichiara di sé** «frame PRE-ottimizzazioni»: è di
   grado riferimento ma non misura ciò che consegniamo.
 - **Il thinking è ACCESO di default** dal 2026-08-17 (polarità derivata dal
