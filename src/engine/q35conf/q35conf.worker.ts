@@ -25,7 +25,7 @@ interface Cfg {
   /** modalità BENCH (it.10): riferimenti decode/prefill/TTFT full-resident. */
   bench?: { promptIdx: number; nDecode: number };
   /** modello (it.11): default 4b. */
-  model?: "4b" | "9b" | "35b";
+  model?: "4b" | "9b" | "35b" | "35b-q2k";
   /** budget arena expert in GiB (solo MoE; default 12) */
   arenaGiB?: number;
   /** DEBUG (it.17): dump hidden dopo il layer N sul PRIMO token, poi stop. */

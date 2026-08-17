@@ -5,7 +5,13 @@ const cfg = {
   prompts: q.has("prompts") ? q.get("prompts")!.split(",").map(Number) : undefined,
   maxGen: q.has("maxgen") ? Number(q.get("maxgen")) : undefined,
   // ?bench=4,64 → riferimenti full-resident: prompt idx 4, 64 decode greedy
-  model: (["9b", "35b"].includes(q.get("model") ?? "") ? q.get("model") : undefined) as "9b" | "35b" | undefined,
+  // `35b-q2k` c'e' nel registro dei worker dal 2026-08-17 ma NON era in questa
+  // lista: passarlo cadeva in `undefined` e il worker ricadeva sul 4B di
+  // default, IN SILENZIO. Un runner lanciato con `--model 35b-q2k` avrebbe
+  // scritto i tok/s di un 4B dentro un artefatto chiamato `q35-bench-35b-*`.
+  // La lista e' la porta: se il registro cresce e questa no, il divario non
+  // fallisce — mente.
+  model: (["9b", "35b", "35b-q2k"].includes(q.get("model") ?? "") ? q.get("model") : undefined) as "9b" | "35b" | "35b-q2k" | undefined,
   debugTap: q.has("tap") ? Number(q.get("tap")) : undefined,
   arenaGiB: q.has("arena") ? Number(q.get("arena")) : undefined,
   // ?shadow=1 → router+resolve su GPU in OMBRA accanto alla selezione CPU

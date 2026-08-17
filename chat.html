@@ -54,6 +54,11 @@
           <option value="lru">lru</option>
           <option value="tier">tier (LRU + autopin)</option>
         </select></label>
+        <label>ragionamento <select id="thinking">
+          <option value="auto">auto (lo decide il file)</option>
+          <option value="1">acceso</option>
+          <option value="0">spento</option>
+        </select></label>
         <button id="load">Carica</button>
         <p class="note">Il budget dell'arena expert si DERIVA dal tetto (tetto − allocato − riserva), quindi il numero qui sopra è un tetto vero. Su modello denso `select` è ignorato: non c'è arena.</p>
       </fieldset>

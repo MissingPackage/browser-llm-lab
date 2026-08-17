@@ -24,7 +24,12 @@ if (BROWSER === "firefox") {
 page.on("console", (m) => console.log(`[console:${m.type()}] ${m.text().slice(0, 200)}`));
 page.on("pageerror", (e) => console.log(`[pageerror] ${e.message.slice(0, 300)}`));
 
-await page.goto("http://localhost:5173", { waitUntil: "load" });
+// BASE_URL come gli altri runner (`engine-bench.mjs`, `q35-bench-run.mjs`,
+// `chat-smoke.mjs`): questo era l'unico che inchiodava la porta, e con un vite
+// gia' acceso su un'altra porta l'unico modo di usarlo era accenderne un
+// secondo — cioe' due server per lo stesso albero, che e' esattamente come si
+// finisce a misurare due alberi diversi credendoli uno.
+await page.goto(process.env.BASE_URL ?? "http://localhost:5173", { waitUntil: "load" });
 console.log("[e2e] crossOriginIsolated =", await page.evaluate(() => crossOriginIsolated));
 
 // Attendi il probe (BenchServer risponde al probe iniziale)

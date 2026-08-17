@@ -723,7 +723,7 @@ distribuzione pubblica è bloccata da questo prima che da qualunque codice.
 non ridistribuiamo pesi, e che i GGUF citati sono di terzi (Qwen Apache-2.0;
 i quant di bartowski/unsloth sono loro ripacchettamenti).
 
-### RULING PI 2026-08-18: APACHE-2.0. **Item 14 CHIUSO.**
+### RULING PI 2026-08-17: APACHE-2.0. **Item 14 CHIUSO.**
 
 La clausola brevettuale e l'allineamento con Qwen hanno deciso. Cosa ne
 discende come LAVORO, dentro lo split (item 18):
@@ -793,7 +793,7 @@ perché non c'è un server. Le forme possibili, non alternative fra loro:
 `vramCeilingBytes`). Un pacchetto pubblico ha bisogno di un contratto piccolo e
 di un nome, e di dichiarare cosa NON è stabile.
 
-### RULING PI 2026-08-18: **(1) PACCHETTO npm + (3) SPACE SU HF**. Item 14 chiuso, questo APERTO SUL NOME.
+### RULING PI 2026-08-17: **(1) PACCHETTO npm + (3) SPACE SU HF**. Item 14 chiuso, questo APERTO SUL NOME.
 
 Le due forme scelte sono complementari e non ridondanti: l'npm è la forma per
 chi integra, lo Space è la demo che vive accanto ai pesi (item 15) e quindi non
@@ -844,7 +844,7 @@ per estrazione e, finché il PI non dice il contrario, si RIGENERANO dal lab
 invece di ricevere commit propri. Un repo pubblico che diverge dal lab prima di
 avere un pubblico è solo un secondo posto dove sbagliare.
 
-**ESECUZIONE, stato al 2026-08-18:**
+**ESECUZIONE, stato al 2026-08-17:**
 - ✅ *igiene dei worktree*: i 5 worktree SDD (198 MB) sono stati verificati file
   per file contro main — non «zero commit», che era già noto, ma **contenuto**:
   `git show main:<f> | diff - <worktree>/<f>` su ogni file sporco. Main è
@@ -879,7 +879,7 @@ stessa stringa in quattro posti — repo GitHub, pacchetto npm, Space HF, e il
 simbolo che chi integra scrive nel proprio sorgente. Cambiarlo dopo la
 pubblicazione costa una deprecazione.
 
-**IL VINCOLO npm È MOLTO PIÙ DEBOLE DI QUANTO SEMBRI** (verificato 2026-08-18,
+**IL VINCOLO npm È MOLTO PIÙ DEBOLE DI QUANTO SEMBRI** (verificato 2026-08-17,
 `npm view`): quasi ogni parola singola risulta occupata, ma da SQUAT MORTI —
 `atrium` 0.0.0, `quorum` 0.0.0-1, `arena` 0.0.2, cioè pacchetti mai pubblicati
 davvero. Liberi: `synod`, `gguf-web`, `webgguf`, `ggufjs`, `residency`.
@@ -916,7 +916,7 @@ continuità di brand costa qui più di quanto renda.
 
 **RULING:** _
 
-### RULING PI 2026-08-18: **`webgguf`**, sotto il namespace personale. **Item 20 CHIUSO.**
+### RULING PI 2026-08-17: **`webgguf`**, sotto il namespace personale. **Item 20 CHIUSO.**
 
 Il PI ha rovesciato la linea evocativa con un argomento che accolgo: «i nomi
 evocativi finiscono per non avere successo su GitHub». Su un repo che cerca
@@ -930,7 +930,7 @@ nessun termine che qualcuno digiti.
 il pacchetto npm è unscoped e non ne risente. L'org si crea se e quando bench e
 paper diventano pubblici davvero, non prima.
 
-### IL VICINATO, misurato (2026-08-18, GitHub API) — perché cambia la DESCRIPTION
+### IL VICINATO, misurato (2026-08-17, GitHub API) — perché cambia la DESCRIPTION
 
 Il PI ha chiesto «qualcuno è arrivato prima di noi?». La risposta è no, ma il
 motivo per cui è no va scritto, perché detta come ci si presenta.

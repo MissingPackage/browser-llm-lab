@@ -60,6 +60,14 @@ const readLoadCfg = (): LoadCfg => ({
   ctxMax: Number(($("ctx") as HTMLInputElement).value),
   select: ($("select") as HTMLSelectElement).value as "cpu" | "optimistic",
   expertPolicy: ($("policy") as HTMLSelectElement).value as "lru" | "tier",
+  // `auto` = undefined = la polarita' la DERIVA il template del file (il default
+  // del Qwen3.6 e' ragionamento acceso). Il controllo esiste perche' senza di
+  // esso la modalita' non era raggiungibile da fuori: `enableThinking` viveva
+  // nel LoadCfg e nessuno poteva impostarlo, quindi ogni misura ereditava in
+  // silenzio il default del file. Due misure in modalita' diverse NON si
+  // confrontano — e il campo finisce in `model.chatTemplate` dell'artefatto
+  // proprio perche' la differenza si veda invece di doversela ricordare.
+  enableThinking: ($("thinking") as HTMLSelectElement).value === "auto" ? undefined : ($("thinking") as HTMLSelectElement).value === "1",
 });
 
 const readSampling = (): SamplingCfg => ({

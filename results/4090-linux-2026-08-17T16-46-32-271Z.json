@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 3,
+  "deviceLabel": "4090-linux",
+  "ts": "2026-08-17T16:46:32.271Z",
+  "probe": {
+    "webgpu": true,
+    "adapterInfo": {
+      "vendor": "nvidia",
+      "architecture": "lovelace",
+      "device": "",
+      "description": ""
+    },
+    "limits": {
+      "maxBufferSize": 4294967292,
+      "maxStorageBufferBindingSize": 2147483644,
+      "maxComputeWorkgroupStorageSize": 49152,
+      "maxComputeInvocationsPerWorkgroup": 1024,
+      "maxComputeWorkgroupSizeX": 1024,
+      "maxStorageBuffersPerShaderStage": 16
+    },
+    "features": [
+      "depth32float-stencil8",
+      "chromium-experimental-subgroup-matrix",
+      "rg11b10ufloat-renderable",
+      "texture-formats-tier1",
+      "bgra8unorm-storage",
+      "chromium-experimental-multi-draw-indirect",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "chromium-experimental-timestamp-query-inside-passes",
+      "float32-filterable",
+      "indirect-first-instance",
+      "float32-blendable",
+      "subgroup-size-control",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "texture-formats-tier2",
+      "timestamp-query",
+      "clip-distances",
+      "primitive-index",
+      "texture-component-swizzle",
+      "subgroups"
+    ],
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "deviceMemoryGB": 32,
+    "browser": {
+      "name": "chrome",
+      "version": "151.0.0.0"
+    },
+    "anomalies": []
+  },
+  "cells": [
+    {
+      "stack": "webllm",
+      "modelId": "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+      "quant": "q4f32_1",
+      "promptId": "bench-512-v1",
+      "load": {
+        "loadMs": 58153.89500001073,
+        "cacheState": "cold"
+      },
+      "gen": {
+        "ttftMs": {
+          "mean": 175.3550000091394,
+          "stdev": 0.8625108643794304,
+          "samples": [
+            174.73500001430511,
+            176.34000000357628,
+            174.99000000953674
+          ]
+        },
+        "decodeToksPerSec": {
+          "mean": 90.4582897757507,
+          "stdev": 5.210175575428802,
+          "samples": [
+            96.26225780472784,
+            86.18466591576576,
+            88.92794560675851
+          ]
+        },
+        "totalMs": {
+          "mean": 2989.3650000095367,
+          "stdev": 159.25303002794382,
+          "samples": [
+            2813.360000014305,
+            3123.5,
+            3031.235000014305
+          ]
+        },
+        "promptTokens": 469,
+        "completionTokens": 255
+      },
+      "replicates": [
+        {
+          "ttftMs": 174.73500001430511,
+          "decodeToksPerSec": 96.26225780472784,
+          "totalMs": 2813.360000014305,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 176.34000000357628,
+          "decodeToksPerSec": 86.18466591576576,
+          "totalMs": 3123.5,
+          "promptTokens": 469,
+          "completionTokens": 255
+        },
+        {
+          "ttftMs": 174.99000000953674,
+          "decodeToksPerSec": 88.92794560675851,
+          "totalMs": 3031.235000014305,
+          "promptTokens": 469,
+          "completionTokens": 255
+        }
+      ],
+      "protocol": {
+        "warmupPolicy": "always",
+        "warmupApplied": true,
+        "replicateCount": 3
+      },
+      "anomalies": []
+    }
+  ]
+}

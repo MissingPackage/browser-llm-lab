@@ -35,6 +35,14 @@ const MAXNEW = arg("maxnew", "400");
 const TURNS = Number(arg("turns", "10"));
 const POLICY = arg("policy", null);
 const OUT = arg("out", null);
+// --thinking auto|1|0. `auto` (default) lascia decidere il template del file, che
+// sul Qwen3.6 vuol dire ragionamento ACCESO da quando la polarita' si deriva
+// (2026-08-17). NON e' un dettaglio di comodo: due run in modalita' diverse
+// generano quantita' di token diverse e non si confrontano — il 34,97 tok/s del
+// 2026-08-17 fu misurato PRIMA che il default cambiasse, quindi per confrontarsi
+// con lui serve `--thinking 0` ESPLICITO. L'artefatto lo riporta da solo in
+// `model.chatTemplate`.
+const THINKING = arg("thinking", "auto");
 
 /**
  * LA CONVERSAZIONE. Il turno 1 e' quello dei bracci del 2026-08-17 (confronto
@@ -78,6 +86,13 @@ try {
   await page.fill("#maxnew", MAXNEW);
   await page.fill("#temp", "0");
   if (POLICY) await page.selectOption("#policy", POLICY);
+  await page.selectOption("#thinking", THINKING);
+  // Stessa logica dell'asserzione sul modello qui sotto: il selettore si rilegge
+  // DOPO averlo impostato. Un `selectOption` su un valore che l'option non ha
+  // lancia, ma un controllo che qualcuno rinomina lascerebbe la run girare nella
+  // modalita' sbagliata senza dirlo — ed e' invisibile nei numeri.
+  const thinkSel = await page.$eval("#thinking", (e) => e.value);
+  if (thinkSel !== THINKING) throw new Error(`ragionamento "${thinkSel}" != richiesto "${THINKING}"`);
   await page.click("#load");
   await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("pronto"), null, { timeout: 300000 });
   const caricato = await page.textContent("#status");

@@ -1,6 +1,6 @@
 # Manifest dello split — cosa finisce in quale repo
 
-Derivato dall'albero REALE del 2026-08-18, non dal piano del 2026-08-09: quel
+Derivato dall'albero REALE del 2026-08-17, non dal piano del 2026-08-09: quel
 piano lasciava tre buchi (vedi §4) e li chiude questo file. È l'input di
 `git filter-repo`, e siccome definisce **cosa diventa pubblico** va letto prima
 di eseguire, non dopo.
@@ -96,7 +96,7 @@ ciò che il piano voleva evitare. **Non lo estraggo.**
 ## 4. FUORI DA TUTTI E TRE — il processo resta privato
 
     .harness/          126 file  — journal, docket, GOAL/PHASES
-    .claude/                     — worktree (rimossi il 2026-08-18), config
+    .claude/                     — worktree (rimossi il 2026-08-17), config
     docs/superpowers/   18 file  — spec del workflow SDD
     docs/publishing/             — questo file e il piano: sono interni
     HANDOFF.md
