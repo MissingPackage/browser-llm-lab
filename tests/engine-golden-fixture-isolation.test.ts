@@ -60,7 +60,7 @@ describe("golden: il fixture del ktest e lo scratch dei bench sono file diversi"
   });
 
   it("il runner del ktest provvede il fixture da solo, dal repo", () => {
-    const t = src(".harness/tools/engine-ktest.mjs");
+    const t = src("tools/harness/engine-ktest.mjs");
     expect(t).toContain("results/engine/golden/q35/golden-q35-4b-full-2026-08-10.json");
     expect(t).toContain("public/models/q35/golden-q35-4b-full.json");
     expect(t).toMatch(/copyFileSync\(GOLDEN_SRC, GOLDEN_DST\)/);

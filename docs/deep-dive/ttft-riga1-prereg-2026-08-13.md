@@ -255,7 +255,7 @@ caso il tetto È una leva e la riga 4 va riformulata come chiede docket item 6.
   driver (il suo default è 5173, e leggere i parametri di un runner PRIMA di
   spenderci GPU è la landmine più recidiva di questo progetto).
 - Gate prima di dichiarare fatto: `npx vitest run` verde, `npx tsc --noEmit`
-  pulito, `node .harness/tools/engine-ktest.mjs` tutti PASS.
+  pulito, `node tools/harness/engine-ktest.mjs` tutti PASS.
 
 ## ESITO ATTESO
 

@@ -4,7 +4,7 @@
 // Test STATICO, senza GPU: stessa postura di `tests/engine-ktest-q5k-wiring.test.ts`
 // e `tests/engine-ktest-kquant35b-wiring.test.ts` — si SCANSIONA il sorgente
 // dell'orchestratore invece di fidarsi di una descrizione a parole. Il verdetto
-// NUMERICO non e' di questo file: lo da' `node .harness/tools/engine-ktest.mjs`,
+// NUMERICO non e' di questo file: lo da' `node tools/harness/engine-ktest.mjs`,
 // che vuole un vite server e un Chrome vero, e che questa build NON esegue (la
 // GPU e' una sola e la contesa fra agenti e' un difetto gia' pagato da questo
 // progetto). Qui si prova solo che i quattro banchi esistano, che siano

@@ -26,7 +26,7 @@ Il modello di budget del deep-dive poggiava su un parametro mai misurato: **quan
 dispatch WebGPU costa un token**. I doc usano "~34 dispatch per token", che è il numero di
 kernel **distinti** nel dump WGSL, non il numero di invocazioni.
 
-Tool: `.harness/tools/dispatch-profile.mjs` (patch dei prototype WebGPU dentro il worker,
+Tool: `tools/harness/dispatch-profile.mjs` (patch dei prototype WebGPU dentro il worker,
 stesso pattern di `wgsl-dump.mjs`; contatori esatti + timer aggregati campionati dal
 driver). Run: `results/dispatch-profile/dispatch-profile-4090-linux-2026-07-28T18-14-25-294Z.json`
 — 4090 laptop, Chrome branded, `Qwen2.5-0.5B-Instruct-q4f32_1-MLC`, warm-up + 3 repliche
@@ -246,7 +246,7 @@ propedeutiche a scrivere codice del motore.
   mani del PI~~ **ESEGUITA (2026-07-29)** via `prof.html` (pagina manuale, stessa
   procedura fase-1b) — esiti in §8.
 - **M2 — contatore per call-site su `flushCommands`** — **ESEGUITA (2026-07-29)**, tool
-  `.harness/tools/submit-callsites.mjs` (patch di `queue.submit` con cattura stack), run
+  `tools/harness/submit-callsites.mjs` (patch di `queue.submit` con cattura stack), run
   `results/dispatch-profile/submit-callsites-4090-*.json`: 7 164 submit in 6 call-site.
   Per token: **2× free di buffer** (`deviceFreeDataSpace` → flush), **2× upload CPU→GPU**
   (`copyRawBytesToBuffer`), **1× `deviceCopyToGPU`**, **1× flush pre-readback + 1× submit

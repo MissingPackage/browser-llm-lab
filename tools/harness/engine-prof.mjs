@@ -2,7 +2,7 @@
 // patch dei prototype WebGPU nel worker della pagina engine (stesso metodo di
 // dispatch-profile), snapshot a inizio decode e a fine run.
 // Attese: createBindGroup Δ=0 (L1), submit/forward = 1 (L2), dispatch/forward = 123 (L3).
-// Uso: node .harness/tools/engine-prof.mjs
+// Uso: node tools/harness/engine-prof.mjs
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 

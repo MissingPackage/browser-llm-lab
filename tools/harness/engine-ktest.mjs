@@ -1,5 +1,5 @@
 // Driver del kernel-test motore: apre ktest.html headed (GPU reale), aspetta done,
-// stampa la tabella. Uso: node .harness/tools/engine-ktest.mjs
+// stampa la tabella. Uso: node tools/harness/engine-ktest.mjs
 //   BASE_URL   (default http://localhost:5173) — il server vite di questa sessione
 //   E2E_PROFILE (default /tmp/blab-e2e-profile) — profilo Chrome, UNO ALLA VOLTA
 //   KTEST_MIN_PASS (default 90) — soglia di plausibilita', v. sotto
@@ -95,7 +95,7 @@ try {
     if (/ERR_CONNECTION_REFUSED|ECONNREFUSED/i.test(msg)) {
       die(`nessun server su ${BASE_URL}.\n` +
         `  Il default e' la porta 5173; se il tuo vite gira altrove passa\n` +
-        `  BASE_URL=http://localhost:<porta> node .harness/tools/engine-ktest.mjs\n` +
+        `  BASE_URL=http://localhost:<porta> node tools/harness/engine-ktest.mjs\n` +
         `  Dettaglio: ${msg.slice(0, 200)}`);
     }
     die(`navigazione a ${BASE_URL}/ktest.html: ${msg.slice(0, 400)}`);

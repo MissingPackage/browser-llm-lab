@@ -77,7 +77,7 @@ e' piu' solo `gemvB`. Se il massimo cambia, cambia dichiarandolo.
    fallisce e va cancellato con la sua ragione» — e' **cancellato con quella
    ragione scritta nel commit**, non aggirato.
 3. **Caso ktest nuovo** per il GEMM multi-riga Q5_K contro il riferimento CPU:
-   `node .harness/tools/engine-ktest.mjs` con tutti PASS (oggi 101 PASS / 0
+   `node tools/harness/engine-ktest.mjs` con tutti PASS (oggi 101 PASS / 0
    FAIL — il numero sale, gli zero FAIL restano).
 4. **Floor test**: un test che ri-deriva la tolleranza del caso ktest dal
    PAVIMENTO ARITMETICO f32 del testo WGSL generato, **con e senza contrazione

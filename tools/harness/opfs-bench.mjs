@@ -12,7 +12,7 @@
 // ATTENZIONE profilo: mai /tmp (tmpfs su Fedora ⇒ misureresti la RAM). Default:
 // ~/.cache/blab-opfs-profile (disco vero).
 //
-// Uso (dev server attivo): node .harness/tools/opfs-bench.mjs
+// Uso (dev server attivo): node tools/harness/opfs-bench.mjs
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";

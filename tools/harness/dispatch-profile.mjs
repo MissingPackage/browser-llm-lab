@@ -17,7 +17,7 @@
 // senza bisogno di conoscere il numero di token.
 //
 // Uso (dalla root, dev server attivo):
-//   HEADED=1 CHANNEL=chrome BASE_URL=http://localhost:5173 node .harness/tools/dispatch-profile.mjs
+//   HEADED=1 CHANNEL=chrome BASE_URL=http://localhost:5173 node tools/harness/dispatch-profile.mjs
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 

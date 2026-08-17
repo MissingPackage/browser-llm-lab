@@ -10,7 +10,7 @@
 // a mano qui dentro.
 //
 // Il verdetto NUMERICO non e' di questo test: lo da' `node
-// .harness/tools/engine-ktest.mjs`, che vuole un vite server e un Chrome vero.
+// tools/harness/engine-ktest.mjs`, che vuole un vite server e un Chrome vero.
 // Un ktest dichiarato verde senza averlo eseguito e' il difetto piu' grave
 // registrato in questo repo: questo file non lo simula, verifica solo che il
 // banco sia agganciato dove il driver lo trovera'.
@@ -38,7 +38,7 @@ import {
 } from "./helpers/source-scan";
 
 const KTEST = "src/engine/ktest/ktest.worker.ts";
-const DRIVER = ".harness/tools/engine-ktest.mjs";
+const DRIVER = "tools/harness/engine-ktest.mjs";
 
 const IDOT = "prefill-gemm-q5k-multirow-idot";
 const F32 = "prefill-gemm-q5k-multirow-f32";
@@ -237,7 +237,7 @@ describe("(d) shape, seed e tolleranze arrivano da prefillkquant", () => {
 });
 
 describe("(e) la soglia del driver non e' stata abbassata", () => {
-  // `.harness/tools/engine-ktest.mjs` NON e' posseduto da questo task: qui si
+  // `tools/harness/engine-ktest.mjs` NON e' posseduto da questo task: qui si
   // verifica solo che il default resti 90, cioe' che i due casi nuovi non
   // siano stati fatti entrare abbassando la barra. Che 90 sia SOTTO il numero
   // di casi registrati e' una proprieta' della RUN del driver (i banchi

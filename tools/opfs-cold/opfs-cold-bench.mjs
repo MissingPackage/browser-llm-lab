@@ -3,7 +3,7 @@
 // Misura IN CHROME la lettura OPFS (FileSystemSyncAccessHandle, worker-only) a
 // page cache OS **FREDDA**, su blocchi expert-size (5 325 512 B = expert GLM-4.7
 // -Flash q4, stesso numero di tools/cold-read-bench.py) e sequenziali. Chiude il
-// buco dichiarato dal tool warm di fase A (.harness/tools/opfs-bench.mjs): "il
+// buco dichiarato dal tool warm di fase A (tools/harness/opfs-bench.mjs): "il
 // cold puro richiederebbe drop_caches tra write e read: fuori portata dal
 // browser" — qui l'eviction è fatta DA FUORI (orchestratore Node) sui file di
 // backing OPFS del profilo Chrome, con posix_fadvise(DONTNEED)×2 (python3),

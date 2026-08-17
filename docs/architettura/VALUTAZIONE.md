@@ -188,7 +188,7 @@ Il giudizio classifica **traiettorie**, non implementazioni. È informativo su
 
 ## 5. Correttezza del motore
 
-### 5.1 Il ktest — `.harness/tools/engine-ktest.mjs`
+### 5.1 Il ktest — `tools/harness/engine-ktest.mjs`
 
 **La domanda**: questo kernel calcola la cosa giusta?
 
@@ -336,7 +336,7 @@ setsid nohup npx vite --port 5199 > /tmp/vite-5199.log 2>&1 < /dev/null &
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5199/chat.html   # 200, non pgrep
 
 # correttezza (GPU)
-BASE_URL=http://localhost:5199 node .harness/tools/engine-ktest.mjs
+BASE_URL=http://localhost:5199 node tools/harness/engine-ktest.mjs
 
 # velocità: la chat a dieci turni
 BASE_URL=http://localhost:5199 node scripts/chat-smoke.mjs \

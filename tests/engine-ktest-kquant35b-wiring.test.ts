@@ -25,7 +25,7 @@
 // comunque verificata sul device.
 //
 // Il verdetto NUMERICO non e' di questo test: lo da' `node
-// .harness/tools/engine-ktest.mjs`, che vuole un vite server e un Chrome vero.
+// tools/harness/engine-ktest.mjs`, che vuole un vite server e un Chrome vero.
 // Un ktest dichiarato verde senza averlo eseguito e' il difetto piu' grave
 // registrato in questo repo: questo file non lo simula, verifica solo che i
 // banchi siano agganciati dove il driver li trovera'.
@@ -45,7 +45,7 @@ import {
 } from "./helpers/source-scan";
 
 const KTEST = "src/engine/ktest/ktest.worker.ts";
-const DRIVER = ".harness/tools/engine-ktest.mjs";
+const DRIVER = "tools/harness/engine-ktest.mjs";
 
 /**
  * Un banco della riga 4, con tutto cio' che di lui e' CONGELATO.
@@ -384,7 +384,7 @@ describe.each(BANKS.map((b) => [b.kind, b] as const))(
   });
 
 describe("(e) i banchi della riga 4 si aggiungono senza abbassare la soglia del driver", () => {
-  // `.harness/tools/engine-ktest.mjs` NON e' posseduto da questo task: si legge
+  // `tools/harness/engine-ktest.mjs` NON e' posseduto da questo task: si legge
   // SOLA LETTURA per verificare che il default resti 90, cioe' che i sei casi
   // nuovi non siano stati fatti entrare abbassando la barra. Che 90 sia SOTTO il
   // numero di casi registrati e' una proprieta' della RUN del driver (i banchi

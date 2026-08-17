@@ -80,7 +80,7 @@ sara' confrontabile.
    **10,9376x**), con le 4 `ffn_down` Q4_1 fra i siti `multirow`. La copertura
    sale da 196/248 a **200/248 siti** e da 96,914% a **99,796% dei byte**.
 2. **Caso ktest nuovo** per il GEMM multi-riga Q4_1 contro il riferimento CPU,
-   su ENTRAMBE le vie (intera e f32): `node .harness/tools/engine-ktest.mjs`
+   su ENTRAMBE le vie (intera e f32): `node tools/harness/engine-ktest.mjs`
    tutti PASS (oggi **103 PASS / 0 FAIL** — il numero sale, gli zero FAIL
    restano).
 3. **Floor test**: le tolleranze del caso ktest ri-derivate dal pavimento

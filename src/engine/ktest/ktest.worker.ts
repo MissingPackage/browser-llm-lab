@@ -715,7 +715,7 @@ async function testQ35MtpDraft4B(g: Gpu): Promise<KResult[]> {
   // test misurava l'accept-rate su una finestra da 37 confrontandola con un
   // riferimento preso su 62. Falliva stampando un numero perfettamente
   // plausibile (32,4%), e nessuno poteva ricondurlo a chi aveva scritto il file.
-  // `.harness/tools/engine-ktest.mjs` provvede questo path prima di aprire la
+  // `tools/harness/engine-ktest.mjs` provvede questo path prima di aprire la
   // pagina; nessun runner lo scrive.
   const goldenRes = await fetch("/models/q35/golden-q35-4b-full.json");
   const headRes = await fetch("/models/Qwen3.5-4B-MTP-Q4_0.gguf", { headers: { Range: "bytes=0-15" } });

@@ -1,4 +1,4 @@
-// Dispatch profiler — porting in-SPA del patch di .harness/tools/dispatch-profile.mjs
+// Dispatch profiler — porting in-SPA del patch di tools/harness/dispatch-profile.mjs
 // (sessione di stima 2026-07-28, docket #11: run manuali su M4/S22 senza Playwright/adb).
 //
 // Stessi nomi di contatore del tool: i JSON esportati dalla pagina prof.html e quelli

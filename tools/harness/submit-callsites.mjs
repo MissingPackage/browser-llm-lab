@@ -4,7 +4,7 @@
 // Error().stack e bucketizza per call-site (file:riga del bundle WebLLM, normalizzato).
 // Il costo della cattura stack (~7k stack/run) è irrilevante per il conteggio.
 //
-// Uso (dev server attivo): node .harness/tools/submit-callsites.mjs
+// Uso (dev server attivo): node tools/harness/submit-callsites.mjs
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 
