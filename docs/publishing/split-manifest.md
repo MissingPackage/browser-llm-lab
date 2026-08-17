@@ -13,7 +13,14 @@ Nomi decisi (docket item 20): il motore è **`webgguf`**, sotto `MissingPackage/
 
 ### Sorgente e strumenti
     src/engine/                 60 file  — il motore
-    tools/                      34 file  — oracle-moe, generatori, diagnostica
+    src/microbench/                      — i microbanchi tt*/kd* sono del motore
+                                           (§7.2: la chiusura degli import li pretende)
+    src/{metrics,probe,quality,qualityPrompts,schema}.ts
+                                         — ZONA CONDIVISA col bench (§7.2)
+    tools/                      39 file  — oracle-moe, generatori, diagnostica, piu'
+                                           tools/harness/ (5): engine-ktest,
+                                           engine-prof, opfs-bench, dispatch-profile,
+                                           submit-callsites — vedi §7.3
 
 ### Documentazione  ⚠️ DA TRADURRE IN INGLESE (docket item 16)
     docs/engine/                21 file  — consuntivi, spec, ledger delle idee
@@ -95,7 +102,9 @@ ciò che il piano voleva evitare. **Non lo estraggo.**
 
 ## 4. FUORI DA TUTTI E TRE — il processo resta privato
 
-    .harness/          126 file  — journal, docket, GOAL/PHASES
+    .harness/          121 file  — journal, docket, GOAL/PHASES. Erano 126: i 5
+                                   di `.harness/tools/` sono usciti, perche' non
+                                   erano processo (§7.3)
     .claude/                     — worktree (rimossi il 2026-08-17), config
     docs/superpowers/   18 file  — spec del workflow SDD
     docs/publishing/             — questo file e il piano: sono interni
