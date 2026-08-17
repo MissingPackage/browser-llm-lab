@@ -118,3 +118,76 @@ Il classificatore meccanico «chi importa `src/engine` è del motore» ha
 importano da `tools/`, che è del motore, non da `src/engine`). Il manifest sopra
 è il risultato del passaggio a mano, non del proxy. Se si aggiungono test prima
 di eseguire lo split, vanno classificati a mano allo stesso modo.
+
+---
+
+## 7. COSA HA TROVATO L'ESECUZIONE, il 2026-08-17
+
+Il manifest sopra è stato scritto leggendo l'albero. Eseguirlo ha trovato **tre
+difetti che leggerlo non poteva trovare** — ognuno avrebbe prodotto un repo che
+sembrava completo e non lo era.
+
+### 7.1 Il typecheck dipendeva da un pacchetto del concorrente
+
+Tolte le tre dipendenze runtime (`@mlc-ai/web-llm`, `@huggingface/transformers`,
+`@wllama/wllama` — tutte e tre degli adapter del bench), `tsc` è passato da 0 a
+**295 errori**, tutti su `node:fs`, `process`, `Buffer`.
+
+Causa: `@wllama/wllama/esm/wllama.d.ts` contiene `/// <reference types="node" />`.
+Il typecheck del MOTORE stava ereditando i tipi globali di node attraverso il
+binding WASM di un concorrente, presente solo perché serviva all'app di benchmark.
+`tsconfig.json` non li dichiarava.
+
+Chiuso dichiarandoli: `"types": [..., "node"]` più `@types/node` esplicito fra le
+devDependencies, con il perché scritto nel tsconfig. **Il motore resta a ZERO
+dipendenze runtime** — verificato: non importa un solo pacchetto.
+
+### 7.2 Il manifest amputava `src/microbench/` e cinque moduli della radice
+
+Quattro test del motore importano `src/microbench/tt*` e `kd*` — i microbanchi dei
+goal TTFT e kernel-decode, che importano da `../engine/`. Sono lavoro del motore,
+e il manifest li aveva lasciati al bench.
+
+Non basta aggiungerli: la **chiusura transitiva** degli import (calcolata
+meccanicamente, non a occhio) pretende anche `src/{metrics,probe,quality,
+qualityPrompts,schema}.ts`. Sono ZONA CONDIVISA fra i due repo, come già previsto
+dal piano §3 per `scripts/lib/hoststate.mjs`.
+
+**Regola che ne discende**: prima di uno split si calcola la chiusura degli
+import, non si classifica per cartella. Due giri di `tsc` me l'hanno insegnato.
+
+### 7.3 Cinque strumenti del MOTORE vivevano in `.harness/`
+
+Il difetto peggiore, perché silenzioso: la regola «`.harness/` è processo, resta
+privato» avrebbe buttato via `engine-ktest.mjs` (il driver della conformance dei
+kernel), `engine-prof.mjs` (il profiler esterno del first light), `opfs-bench.mjs`
+(il cui `results/opfs-bench/` il manifest assegnava GIÀ al motore),
+`dispatch-profile.mjs` e `submit-callsites.mjs`.
+
+Se ne sono accorti quattro test, nel repo estratto, con `ENOENT`. Corretto ALLA
+RADICE nel lab (`git mv .harness/tools tools/harness`, 18 file aggiornati),
+non aggirato nello split.
+
+### 7.4 Lo stato verificato del repo estratto
+
+    commit   359          (dai 693 del lab)
+    file     701
+    .git     20 MB
+    tsc      exit 0
+    vitest   1237 passed | 11 skipped | 0 FAILED
+
+Assenti e verificati tali: `.harness/` (journal, docket, GOAL), `.claude/`,
+`docs/superpowers/`, `docs/publishing/`, `docs/deep-dive/`, `src/adapters/`,
+`src/main.ts`, `index.html`, `HANDOFF.md`, i quattro script del bench.
+
+Nuovi: `LICENSE` (Apache-2.0), `NOTICE` (nessun peso ridistribuito),
+`README.md`, `docs/RESUMING.md` (ripresa su un'altra macchina, in inglese).
+
+### 7.5 Cosa resta
+
+- **Il push è bloccato da un guasto GitHub** («Partial System Outage», HTTP 503
+  sull'API). Il repo locale è completo in `~/Projects/webgguf`; `gh repo create
+  webgguf --private --source=.` e `git push -u origin main` bastano al rientro.
+- **La traduzione non è fatta**: commenti del sorgente e `docs/` sono in italiano.
+  README, NOTICE e RESUMING sono in inglese. Il README lo dichiara.
+- `webgguf-bench` e `webgguf-paper` NON sono stati estratti (§2, §3).
