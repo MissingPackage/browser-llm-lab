@@ -27,8 +27,19 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { blockBootstrapCI, mean, pairedNll, quantiles, toBits, winRate } from "./lib/pairedstats.mjs";
 
-const argv = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1] : d; };
+// i posizionali: NON basta togliere cio' che comincia con `--`, perche' il
+// VALORE di un'opzione (`--out results/…json`) non comincia con `--` e verrebbe
+// contato come terzo posizionale. Si salta anche l'elemento dopo ogni flag.
+const argv = (() => {
+  const raw = process.argv.slice(2);
+  const out = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i].startsWith("--")) { i++; continue; }
+    out.push(raw[i]);
+  }
+  return out;
+})();
 if (argv.length !== 2) {
   console.error("uso: node scripts/quant-quality-compare.mjs A.json B.json [--out C.json] [--block 512]");
   process.exit(2);

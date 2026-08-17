@@ -1,0 +1,161 @@
+{
+ "schemaVersion": 1,
+ "kind": "quant-quality-compare",
+ "date": "2026-08-17T09:21:52.209Z",
+ "a": {
+  "file": "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf",
+  "bytes": 20893015008,
+  "sha256": "a8138f183e3993f12cdc23afd2babb8cdb084e64088ce4a256d49101d47b949c"
+ },
+ "b": {
+  "file": "Qwen_Qwen3.6-35B-A3B-Q2_K.gguf",
+  "bytes": 13506778752,
+  "sha256": "673142cca6255bbb19774c8d438220d9ecfc3c8b215bc619d5e801bc37a35405"
+ },
+ "corpusSha256": "987284947f640ffdc308fcd52c2e3e1ffa469a520b20cf2c471d9488f1d35fd3",
+ "blockLen": 512,
+ "oracle": {
+  "a": {
+   "impl": "llama-cpp-python",
+   "version": "0.3.34",
+   "llamaCpp": "n/d",
+   "nThreads": 20,
+   "nCtx": 1024,
+   "nBatch": 512,
+   "nGpuLayers": 0,
+   "mode": "teacher-forced (nessun campionamento)",
+   "loadSeconds": 22
+  },
+  "b": {
+   "impl": "llama-cpp-python",
+   "version": "0.3.34",
+   "llamaCpp": "n/d",
+   "nThreads": 20,
+   "nCtx": 1024,
+   "nBatch": 512,
+   "nGpuLayers": 0,
+   "mode": "teacher-forced (nessun campionamento)",
+   "loadSeconds": 0.6
+  }
+ },
+ "prose": [
+  {
+   "id": "it-tecnico",
+   "domain": "prosa-it",
+   "nTokens": 19437,
+   "bitsA": 4.097119453116882,
+   "bitsB": 4.235808061005169,
+   "deltaBits": {
+    "mean": 0.13868860788831616,
+    "lo": 0.12151722427737795,
+    "hi": 0.158127382299566
+   },
+   "win": {
+    "better": 7848,
+    "worse": 11563,
+    "tie": 26,
+    "n": 19437,
+    "fracBetter": 0.40376601327365336
+   },
+   "top1Diff": 0.23784534650409014,
+   "deltaTail": {
+    "1": 6.19449,
+    "0.5": 0.013579999999999998,
+    "0.9": 0.8690600000000002,
+    "0.99": 2.4519300000000004
+   }
+  },
+  {
+   "id": "code-ts",
+   "domain": "codice",
+   "nTokens": 14322,
+   "bitsA": 3.206427317824219,
+   "bitsB": 3.32300575828003,
+   "deltaBits": {
+    "mean": 0.11657844045580683,
+    "lo": 0.09535118549702092,
+    "hi": 0.13501663509406506
+   },
+   "win": {
+    "better": 5853,
+    "worse": 8405,
+    "tie": 64,
+    "n": 14322,
+    "fracBetter": 0.4086719731881022
+   },
+   "top1Diff": 0.17176372015081692,
+   "deltaTail": {
+    "1": 16.08931,
+    "0.5": 0.00132,
+    "0.9": 0.7562800000000003,
+    "0.99": 2.40217
+   }
+  },
+  {
+   "id": "en-prosa",
+   "domain": "prosa-en",
+   "nTokens": 14322,
+   "bitsA": 2.5941428916379463,
+   "bitsB": 2.728842274848951,
+   "deltaBits": {
+    "mean": 0.13469938321097716,
+    "lo": 0.1143099974219591,
+    "hi": 0.1580797290619958
+   },
+   "win": {
+    "better": 5622,
+    "worse": 8666,
+    "tie": 34,
+    "n": 14322,
+    "fracBetter": 0.3925429409300377
+   },
+   "top1Diff": 0.1490713587487781,
+   "deltaTail": {
+    "1": 10.761009999999999,
+    "0.5": 0.0044399999999999995,
+    "0.9": 0.6511499999999995,
+    "0.99": 2.39104
+   }
+  }
+ ],
+ "tasks": [
+  {
+   "domain": "matematica",
+   "n": 100,
+   "deltaLogprobPerToken": {
+    "mean": -0.15049798,
+    "lo": -0.23005224833333332,
+    "hi": -0.07637143,
+    "blockLen": 1,
+    "resamples": 2000,
+    "seed": 20260817,
+    "alpha": 0.05
+   },
+   "rank1MedianA": 1,
+   "rank1MedianB": 1,
+   "rank1MeanA": 1.69,
+   "rank1MeanB": 1.91,
+   "peggiorati": 22,
+   "top1Diversi": 24
+  },
+  {
+   "domain": "conoscenza",
+   "n": 100,
+   "deltaLogprobPerToken": {
+    "mean": -0.10051729999999999,
+    "lo": -0.2162334999999999,
+    "hi": 0.01550230000000002,
+    "blockLen": 1,
+    "resamples": 2000,
+    "seed": 20260817,
+    "alpha": 0.05
+   },
+   "rank1MedianA": 1,
+   "rank1MedianB": 1,
+   "rank1MeanA": 1.46,
+   "rank1MeanB": 1.58,
+   "peggiorati": 17,
+   "top1Diversi": 19
+  }
+ ]
+}
