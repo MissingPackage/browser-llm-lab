@@ -121,8 +121,14 @@ export function q35ShapeFromGguf(f: GgufFile): Q35Shape {
 }
 
 // Allow-list dei tipi per classe (inventario reale 2026-08-10; fuori lista = throw).
+//
+// Q2_K e Q3_K aggiunti il 2026-08-17 sull'inventario del `bartowski Q2_K`: i
+// quant aggressivi li usano su embedding, attn e expert. La lista resta una
+// ALLOW-LIST e non diventa "tutto cio' che gguf.ts sa leggere" di proposito —
+// e' il posto in cui un file inatteso si ferma prima di diventare pesi
+// plausibili e sbagliati.
 const T = GGML_TYPE;
-const W_QUANT = [T.Q4_0, T.Q4_1, T.Q4_K, T.Q5_K, T.Q6_K, T.Q8_0]; // pesi matmul
+const W_QUANT = [T.Q2_K, T.Q3_K, T.Q4_0, T.Q4_1, T.Q4_K, T.Q5_K, T.Q6_K, T.Q8_0]; // pesi matmul
 const W_SMALL = [T.F32, T.Q8_0]; // alpha/beta (Q8_0 su 4B/9B, F32 su 35B)
 const F32_ONLY = [T.F32];
 

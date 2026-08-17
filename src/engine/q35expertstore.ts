@@ -21,12 +21,14 @@ export const q35ExpertTensor = (layer: number, which: "gate" | "up" | "down"): s
 
 const KIND_OF_GGML: Record<number, QuantKind> = {
   [GGML_TYPE.Q4_0]: "q4_0", [GGML_TYPE.Q4_1]: "q4_1", [GGML_TYPE.Q8_0]: "q8_0",
+  [GGML_TYPE.Q2_K]: "q2_K", [GGML_TYPE.Q3_K]: "q3_K",
   [GGML_TYPE.Q4_K]: "q4_K", [GGML_TYPE.Q5_K]: "q5_K", [GGML_TYPE.Q6_K]: "q6_K",
 };
 
 /** Nome corto della classe di slab, dal formato del tensore `down`. */
 const SHORT: Record<QuantKind, string> = {
-  q4_0: "q4_0", q4_1: "q4_1", q8_0: "q8_0", q4_K: "q4k", q5_K: "q5k", q6_K: "q6k",
+  q4_0: "q4_0", q4_1: "q4_1", q8_0: "q8_0",
+  q2_K: "q2k", q3_K: "q3k", q4_K: "q4k", q5_K: "q5k", q6_K: "q6k",
 };
 
 const kindOf = (t: GgufTensorInfo): QuantKind => {

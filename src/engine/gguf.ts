@@ -27,7 +27,14 @@ export const GGUF_KV_TYPE = {
 // denso Q4_1, shexp Q5_K/Q6_K, output Q6_K.
 // Q4_K: expert del GGUF UD-Q4_K_S di Qwen3.6-35B-A3B (q1 fase 2 — inventario
 // header 2026-08-10: 117 tensori expert Q4_K + 3 Q6_K; spec q1 §2-3).
-export const GGML_TYPE = { F32: 0, F16: 1, Q4_0: 2, Q4_1: 3, Q8_0: 8, Q4_K: 12, Q5_K: 13, Q6_K: 14 } as const;
+// Q2_K/Q3_K: expert del GGUF `bartowski Q2_K` dello stesso modello (dump
+// 2026-08-17: 100 tensori expert Q2_K + 20 Q3_K + 3 Q8_0). Servono perche' il
+// parco expert scende da 17,07 a 11,15 GiB — sotto l'arena, cioe' residenza
+// totale — al costo misurato di +0,13 bit/token.
+export const GGML_TYPE = {
+  F32: 0, F16: 1, Q4_0: 2, Q4_1: 3, Q8_0: 8,
+  Q2_K: 10, Q3_K: 11, Q4_K: 12, Q5_K: 13, Q6_K: 14,
+} as const;
 export type GgmlTypeId = number;
 
 export interface GgufTensorInfo {
@@ -159,6 +166,14 @@ export function tensorByteSize(t: GgufTensorInfo): number {
     case GGML_TYPE.Q8_0: {
       if (t.dims[0] % 32 !== 0) throw new Error(`gguf: ${t.name} Q8_0 con ne[0]=${t.dims[0]} non multiplo di 32`);
       return (elems / 32) * 34; // blocco Q8_0: 2 B scala f16 + 32 B int8
+    }
+    case GGML_TYPE.Q2_K: {
+      if (t.dims[0] % 256 !== 0) throw new Error(`gguf: ${t.name} Q2_K con ne[0]=${t.dims[0]} non multiplo di 256`);
+      return (elems / 256) * 84; // superblocco: 16 B scale+min 4-bit + 64 B qs + d f16 + dmin f16
+    }
+    case GGML_TYPE.Q3_K: {
+      if (t.dims[0] % 256 !== 0) throw new Error(`gguf: ${t.name} Q3_K con ne[0]=${t.dims[0]} non multiplo di 256`);
+      return (elems / 256) * 110; // superblocco: 32 B hmask + 64 B qs + 12 B scale 6-bit + d f16
     }
     case GGML_TYPE.Q4_K: {
       if (t.dims[0] % 256 !== 0) throw new Error(`gguf: ${t.name} Q4_K con ne[0]=${t.dims[0]} non multiplo di 256`);

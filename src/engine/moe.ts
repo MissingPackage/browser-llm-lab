@@ -34,7 +34,7 @@ export const WEIGHTS_SUM_CLAMP_MIN = 6.103515625e-5;
 // 1. Geometria dei formati quant
 // ---------------------------------------------------------------------------
 
-export type QuantKind = "q4_0" | "q4_1" | "q8_0" | "q4_K" | "q5_K" | "q6_K";
+export type QuantKind = "q4_0" | "q4_1" | "q8_0" | "q2_K" | "q3_K" | "q4_K" | "q5_K" | "q6_K";
 
 interface QuantGeom {
   /** pesi per blocco (32 legacy, 256 K-quant) */
@@ -53,6 +53,11 @@ const QUANT: Record<QuantKind, QuantGeom> = {
   q4_0: { weightsPerBlock: 32, srcBytesPerBlock: 18, split: { qsBytesPerBlock: 16, scalesBytesPerBlock: 2 } },
   q4_1: { weightsPerBlock: 32, srcBytesPerBlock: 20, split: { qsBytesPerBlock: 16, scalesBytesPerBlock: 4 } },
   q8_0: { weightsPerBlock: 32, srcBytesPerBlock: 34, split: { qsBytesPerBlock: 32, scalesBytesPerBlock: 2 } },
+  // Q2_K e Q3_K entrano il 2026-08-17: sono i formati degli expert del quant
+  // che fa stare il parco nell'arena. Taglie da `quant.ts`, che li dequantizza
+  // gia' (fase 4c) con byte-identita' verificata contro llama-quantize.
+  q2_K: { weightsPerBlock: 256, srcBytesPerBlock: 84, split: null },
+  q3_K: { weightsPerBlock: 256, srcBytesPerBlock: 110, split: null },
   q4_K: { weightsPerBlock: 256, srcBytesPerBlock: 144, split: null },
   q5_K: { weightsPerBlock: 256, srcBytesPerBlock: 176, split: null },
   q6_K: { weightsPerBlock: 256, srcBytesPerBlock: 210, split: null },
