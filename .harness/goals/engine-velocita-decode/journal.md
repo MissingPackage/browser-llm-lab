@@ -3982,3 +3982,118 @@ più lento.
   `fetchRepairCalls` restare uguale mentre `ggufRangeStats.calls` cala di 3×).
 - La conversione va servita: serve un symlink in `public/models/` accanto ai
   GGUF, che è la convenzione che `Q35_SLAB_BASE_URL` dichiara.
+
+---
+
+## it.51 — il file c'è, il numero c'è: +3,7% e il pack a ZERO, ma il conto di it.40 valeva solo per metà
+
+Il PI ha dato il via ai 17 GiB. Convertiti, serviti, misurati **in A/B
+back-to-back sullo stesso host e sullo stesso prompt**.
+
+### La conversione
+
+    node scripts/q35-slab-build.mjs --model 35b --verify 16
+    10.240 slab · 18,33 GB in 12,5 s · 1.469 MB/s
+    verifica 16/16 slab identici a packExpertSlab
+    /home/neuromancer/.cache/blab-models/q35/q35-a8138f183e3993f1.slabs.bin  17,07 GiB
+
+La stima di it.47 diceva 15-25 s: sono 12,5. E lo SHA che il convertitore
+calcola dal file (`a8138f183e3993f1…`) **coincide col pin di `q35shape.ts`**,
+che è la condizione perché l'header venga accettato.
+
+**Il comando di it.47 NON girava come stava scritto.** `node
+scripts/q35-slab-build.mjs` moriva su `ERR_MODULE_NOT_FOUND`: gli import di
+`src/` sono senza estensione e Node non li risolve. L'hook condiviso per questo
+esiste da un altro goal (`scripts/lib/tsimport.mjs`) e lo script non lo usava.
+*È la terza volta che questo repo paga un comando lasciato per la ripresa e mai
+eseguito come sta scritto* — stavolta è costato due minuti, non una run di GPU.
+
+### L'A/B, e il conto che chiude
+
+Stesso prompt del PI, ctx 4096, vram 13, policy `lru`, leve accese, temp 0.
+Braccio A = symlink rimosso, braccio B = symlink al suo posto.
+
+    turno 1 (799 token)        A senza slab   B con slab
+      tok/s                        11,066       11,472    +3,7%
+      packMs                        5.574          0,0
+      fetchRepairMs                48.607       51.192    +5,3%
+      tokenMs                      88.594       85.574
+    turno 2 (511 token)
+      tok/s                        11,821       12,194    +3,2%
+      packMs                        1.757          0,0
+      tokenMs                      46.862       45.765
+
+    pack risparmiato   7.331 ms
+    fetch in più      −3.125 ms
+    -------------------------------
+    netto              4.206 ms      e tokenMs cala di 4.117 ms
+
+**La somma torna entro il 2%**: il guadagno è reale ed è *quello che resta* dopo
+che la lettura è peggiorata.
+
+### PERCHÉ IL CONTO DI it.40 ERA OTTIMISTA, e non lo era per sbaglio
+
+it.40 aveva misurato `packMs` 7.110 e concluso «7,11 s per sessione». Il pack
+sparisce davvero — **`packMs` è 0,0 in entrambi i turni**, non «basso»: è la
+firma inequivocabile che il path caldo non impacchetta più. Ma quel conto
+assumeva che leggere **1 slab da 1,77 MB** costasse come **3 tensori da 594 KB**.
+Non è così, ed è misurato: la fetch peggiora del 5,3%.
+
+**È il reperto di it.33 che ricompare da un'altra porta.** Lì «raggruppare le
+richieste» dava 0,98×; qui il raggruppamento è imposto dal formato (uno slab È
+un colpo solo) e costa lo stesso 2-5%. Le tre letture di un expert erano
+`Promise.all`, cioè **parallele**: il loro costo di parete era il massimo di tre
+richieste piccole, non la somma. Una richiesta grande non ha nessuno con cui
+sovrapporsi.
+
+*Il numero di richieste è sceso esattamente come previsto — 38.625 → 12.875, e i
+12.875 sono i miss contati in questa sessione, 9.783 + 3.092 — ma **il numero di
+richieste non era la metrica**: lo era il tempo, e il tempo dice un'altra cosa.*
+
+### IL GATE DI CORRETTEZZA, ed è il più forte disponibile
+
+**Le due risposte generate sono IDENTICHE carattere per carattere**, in
+entrambi i turni (2.844 e 1.963 caratteri), a temperatura 0, con gli stessi
+9.783 e 3.092 miss. Gli slab letti dal file producono **gli stessi token** di
+quelli impacchettati al volo, sul modello vero e su 1.310 token generati — non
+su 16 campioni.
+
+### Il fallback, provato sul campo
+
+Col symlink rimosso il dev server **non dà 404**: restituisce `200 text/html`
+(fallback SPA). Il probe pretende `206` e classifica «file assente», e
+l'artefatto del braccio A lo dichiara:
+`slabSource.reason = "file slab assente (q35-a8138f183e3993f1.slabs.bin)"`.
+Se avessi letto la taglia da `Content-Length` avrei preso quella di una pagina
+HTML — e `parseSlabHeader` l'avrebbe rifiutata comunque sul magic. Due guardie,
+ed è servita la prima.
+
+### EVIDENZA
+
+- `results/chat/chat-35b-slabAB-A-noslab-2026-08-17.json` e
+  `…-B-slab-2026-08-17.json` — i due bracci, con `moe.slabSource` dichiarato in
+  entrambi (null+reason nel primo, file+bytes nel secondo)
+- `node .harness/tools/engine-ktest.mjs` → **111 PASS / 0 FAIL** (it.50, sul
+  path di fallback)
+- `npx tsc --noEmit` exit 0 · `npx vitest run` 1146 passed | 11 skipped
+
+### NON VERIFICATO
+
+- **Host non dichiarato quiescente e nessuna replica**: i due bracci sono un
+  A/B a due run singole sullo stesso host, back-to-back. La banda di rumore
+  misurata su questa macchina è ~2,4%, e i due delta (+3,7% e +3,2%) le stanno
+  appena sopra. **Il segno è confermato dai contatori** (`packMs` 0 è un fatto
+  binario, non una media), la TAGLIA del guadagno merita repliche.
+- Il banco (`q35-bench-run`) non è stato rifatto: il regime a zero miss non
+  tocca il pack, quindi lì non cambierebbe nulla — ma non è misurato.
+- Il 4B e il 9B sono densi e il GLM ha la sua sorgente: **nessuna delle altre
+  tre famiglie è stata rimisurata**, e nessuna passa da questo path.
+
+### LA LEVA CHE QUESTA MISURA APRE
+
+La fetch è peggiorata perché una richiesta grande non si sovrappone a nessuno.
+`ggufrange` ha già i contatori del parallelismo effettivo, e it.33 ha misurato
+il ginocchio della curva a **2-4 richieste in volo**: leggere uno slab in 2-4
+sotto-range paralleli è aritmetica pura sopra `slabFileRange`, e recupererebbe i
+3,1 s che il formato si è ripreso. *Non l'ho fatto: è una riga nuova, non una
+rifinitura di questa.*

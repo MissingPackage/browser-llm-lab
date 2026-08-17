@@ -27,9 +27,9 @@ mentire è peggio di nessuna mappa: la si consulta e ci si fida.
 |---|---|---|---|---|---|
 | **arena + slotTable** | `residency.ts` | ✅ | ✅ | acceso | sì, entrambi |
 | **policy `tier`** (autopin top-usage, LFRU, cap 12,5%) | `residency.ts` | ✅ | ✅ | **`lru`** | GLM 2026-08-09 · **35B it.48: NON paga** |
-| **slab pre-impacchettato** `{ raw, slab }` | `residency.ts:110` | ✅ `glmmodel.ts:871` | ✅ `q35gpumodel` (`readMiss`, it.50) | acceso **se il file c'è** | GLM: −41,4 ms/token · 35B: **7,11 s/sessione + 38.625→12.875 richieste**, da misurare |
+| **slab pre-impacchettato** `{ raw, slab }` | `residency.ts:110` | ✅ `glmmodel.ts:871` | ✅ `q35gpumodel` (`readMiss`, it.50) | acceso **se il file c'è** | GLM: −41,4 ms/token · 35B **it.51**: `packMs` 7.331 → **0**, ma fetch +5,3% ⇒ **netto +3,7% tok/s**, e risposte identiche |
 | **sorgente OPFS** (import + `ensureSlabs`) | `glmsource.ts` | ✅ | ❌ **e non ci starebbe** | — | quota OPFS **10 GiB** < 17,07 richiesti (it.43) |
-| **sorgente a Range** (file slab servito come il GGUF) | `slabsource.ts` | ❌ (usa OPFS) | ✅ | fallback ai byte grezzi, **con motivo** | apertura e rifiuti sotto test (it.50); il numero manca finché il file non è convertito |
+| **sorgente a Range** (file slab servito come il GGUF) | `slabsource.ts` | ❌ (usa OPFS) | ✅ | fallback ai byte grezzi, **con motivo** | apertura e rifiuti sotto test (it.50); file convertito e misurato in A/B (it.51) |
 | **convertitore offline → slab** | `scripts/q35-slab-build.mjs` | ❌ | ✅ | — | verificato 8/8 slab (it.47) |
 
 **Le due sorgenti sono due strade per UNA interfaccia**: il GLM genera il suo
@@ -91,11 +91,12 @@ Prima di scrivere un banco nuovo, questi esistono:
 
 ## Le celle vuote, in ordine di valore misurato
 
-1. **il file slab del 35B non è stato convertito** (it.50 ha chiuso il codice: la
-   sorgente c'è, i rifiuti sono sotto test, il fallback è dichiarato). Restano
-   17,07 GiB da scrivere sul disco — **decisione del PI** — e poi il numero:
-   7,11 s per sessione e 38.625 richieste Range → 12.875. *Finché il file manca,
-   `slabSource.reason` dice «file slab assente» in ogni artefatto.*
+1. **lo slab si legge in UNA richiesta e non si sovrappone a nessuno** — la
+   cella nuova, aperta dalla misura di it.51. Il pre-pack ha reso 4,2 s netti
+   invece di 7,3 perché la fetch è peggiorata del 5,3%: tre letture parallele
+   erano più veloci di una grande. Il ginocchio della curva è a 2-4 richieste in
+   volo (it.33) e `slabFileRange` è già aritmetica: leggere uno slab in 2-4
+   sotto-range paralleli è la rifinitura che recupera quei 3,1 s.
 2. **prefetch lookahead non implementato** → attacca i ~76 ms/token di tassa di
    residenza, con un oracolo già misurato al 91,92%.
 3. **spec-dec non nella chat** → 1,29× proiettato, ma serve una testa MTP per il

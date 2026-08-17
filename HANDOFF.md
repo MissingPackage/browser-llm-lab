@@ -1,42 +1,63 @@
-# HANDOFF — browser-llm-lab   (aggiornato 2026-08-16, chiusura sessione)
+# HANDOFF — browser-llm-lab   (aggiornato 2026-08-17)
 
 ## 1. Next decidable
 
-**GOAL `engine-velocita-decode` ATTIVO.** Sessione del 2026-08-16 chiusa dal PI
-dopo 39 iterazioni (it.11-49). **Leggi `docs/architettura/MECCANISMI.md` PRIMA di
-progettare qualsiasi cosa**: e' la tabella meccanismi x path, e le sue celle
-vuote sono il lavoro che resta.
+**GOAL `engine-velocita-decode` ATTIVO.** Sessione del 2026-08-17: it.50-51 —
+l'ultimo anello dello slab pre-impacchettato, **chiuso e misurato**. **Leggi
+`docs/architettura/MECCANISMI.md` PRIMA di progettare qualsiasi cosa**: e' la
+tabella meccanismi x path, e le sue celle vuote sono il lavoro che resta.
 
 ### IL NUMERO CHE CONTA E' QUELLO DELLA CHAT, non quello del banco
 
-    la chat del PI, stesso prompt:   8,26  ->  11,35 tok/s   (+37%)
-    banco, braccio caldo a zero miss:              40,06 tok/s
+    la chat del PI, stesso prompt:   8,26 -> 11,35 -> 11,47 tok/s
+    banco, braccio caldo a zero miss:                 40,06 tok/s
 
 I 40,06 sono veri e **misurano un regime che una chat vera non raggiunge**:
 parco expert **17,07 GiB**, arena **11,17** — il 65%. Su questa GPU il 35B e'
-**residency-bound sempre**. Nel turno vero il token costa ~101 ms invece di 25:
-**~76 ms sono tassa di residenza, non calcolo.**
+**residency-bound sempre**.
 
-### LA PROSSIMA COSA DA FARE, e ha tutto pronto tranne l'ultimo anello
+### COSA E' ENTRATO IERI NOTTE, e cosa ha insegnato
 
-**Il 35B non adotta `{ raw, slab }`**, l'interfaccia che salta `packExpertSlab`
-nel path caldo. Il GLM la usa da un goal intero.
+**Il 35B adotta `{ raw, slab }`** (it.50): `slabsource.ts` apre il file slab
+servito via Range, `readMiss` in `q35gpumodel` e' la porta UNICA dei due siti di
+fetch, e il fallback ai byte grezzi e' **dichiarato in `moeStats().slabSource`**
+(quindi in ogni artefatto). Il file e' convertito e servito:
 
-    interfaccia della cache   c'e' (residency.ts:110, verificata it.42)
-    formato del file          c'e' (v2 parametrico, GLM identico sui 2.944 slab)
-    descrittore del 35B       c'e' (DERIVATO dall'header, non scritto a mano)
-    convertitore offline      c'e' (scripts/q35-slab-build.mjs, 8/8 slab verificati)
-    ----------------------------------------------------------------------
-    la sorgente che LEGGE     MANCA   <- l'ultimo anello
-    conversione completa      da fare (17,07 GiB, stimati 15-25 s)
-    il numero                 dopo
+    ~/.cache/blab-models/q35/q35-a8138f183e3993f1.slabs.bin   17,07 GiB
+    symlink in public/models/, convertito in 12,5 s, 16/16 slab verificati
 
-Vale **7,11 s per sessione** (il pack) e **38.625 richieste Range -> 12.875**
-(uno slab si legge in un colpo, non in tre). *Serve il via del PI per scrivere
-17 GiB sul suo disco — ma solo quando c'e' qualcosa che li legge.*
+**IL RISULTATO, A/B back-to-back sullo stesso host** (`results/chat/
+chat-35b-slabAB-{A-noslab,B-slab}-2026-08-17.json`):
 
-**La conversione OFFLINE e non al primo caricamento** e' imposta da una misura:
-quota OPFS **10,00 GiB**, `persist()` **negata**, tetto invariato (it.43).
+    tok/s        11,066 -> 11,472  (+3,7%)   ·  secondo turno +3,2%
+    packMs        7.331 ->      0            <- binario, non una media
+    fetchRepairMs 68.514 -> 71.639  (+4,6%)  <- LA SORPRESA
+    risposte      IDENTICHE carattere per carattere, 1.310 token, temp 0
+
+**Il conto di it.40 (7,11 s) valeva per meta'**: il pack sparisce davvero, ma
+leggere UNO slab da 1,77 MB e' piu' lento di TRE tensori da 594 KB letti in
+`Promise.all` — una richiesta grande non ha nessuno con cui sovrapporsi. E' il
+reperto di it.33 (raggruppare non paga, 0,98x) che rientra da un'altra porta.
+Netto: 4,2 s su 7,3.
+
+### LA PROSSIMA COSA DA FARE, e nasce da questa misura
+
+**Leggere uno slab in 2-4 sotto-range PARALLELI.** Il ginocchio della curva
+banda/richieste-in-volo e' a 2-4 (it.33), `slabFileRange` e' gia' aritmetica, e
+i contatori del parallelismo effettivo sono in `ggufrange`. Recupererebbe i
+~3,1 s che il formato si e' ripreso. *E' una riga nuova, non una rifinitura.*
+
+Dopo, in ordine di valore: **prefetch lookahead** (oracolo al 91,92% @K=8,
+attacca i ~76 ms/token di tassa di residenza) e **spec-dec nella chat** (1,29x
+proiettato, serve una testa MTP per il 35B che oggi non esiste).
+
+### UNA TRAPPOLA PAGATA DI NUOVO
+
+Il comando che it.47 aveva lasciato scritto (`node scripts/q35-slab-build.mjs`)
+**non girava**: `ERR_MODULE_NOT_FOUND` sugli import senza estensione. L'hook
+condiviso esisteva (`scripts/lib/tsimport.mjs`) e lo script non lo usava.
+Corretto. E' la terza istanza della stessa regola: **un comando lasciato per la
+ripresa si esegue come sta scritto prima di lasciarlo.**
 
 ### LE TRE LEVE, e come vanno lette
 
@@ -54,7 +75,9 @@ volta). **La chat le accende da it.39** ed e' li' che stanno i +37%: per giorni
   adottata, e **non paga** sul 35B (it.48). Miss +0,3%, tempo -2%. Il collo e'
   la CAPIENZA: LRU tiene gia' il 66% del parco, il cap del 12,5% tocca l'8%.
 - **raggruppare le richieste I/O**: 0,98x fra continuo e raffiche (it.33). Il
-  canale da' 460-740 MB/s in ogni configurazione; non e' il collo.
+  canale da' 460-740 MB/s in ogni configurazione; non e' il collo. **it.51 lo
+  conferma dal verso opposto**: il raggruppamento IMPOSTO dal formato slab (una
+  richiesta da 1,77 MB invece di tre da 594 KB in `Promise.all`) costa il 4,6%.
 - **`idot` nel decode**: vince sul kernel (2,3%) e **perde nel motore**
   (-0,14/-0,66 ms) per il dispatch in piu'. Cablato e spento, con l'aritmetica
   al call-site.

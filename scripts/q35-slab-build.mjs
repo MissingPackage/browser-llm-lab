@@ -48,12 +48,19 @@ if (!MODELS[tag]) { console.error(`[slab] modello "${tag}" sconosciuto: ${Object
 const GGUF = join(homedir(), ".cache/blab-models", MODELS[tag]);
 if (!existsSync(GGUF)) { console.error(`[slab] GGUF assente: ${GGUF}`); process.exit(2); }
 
-const { parseGguf } = await import("../src/engine/gguf.ts");
-const { validateQwen35 } = await import("../src/engine/q35shape.ts");
-const { q35SlabDesc, q35ExpertTensor } = await import("../src/engine/q35expertstore.ts");
-const { slabGeometry, slabRangeOf } = await import("../src/engine/slabgeom.ts");
-const { buildSlabHeader, slabFileBytes, SLAB_HEADER_BYTES } = await import("../src/engine/slabfile.ts");
-const { packExpertSlab } = await import("../src/engine/moe.ts");
+// I moduli di `src/` si importano fra loro SENZA estensione (risoluzione
+// "bundler"): `import("../src/engine/gguf.ts")` carica il primo file e poi muore
+// sul suo `import "./gguf"`. L'hook di risoluzione condiviso e' la porta gia'
+// scritta per questo — it.47 aveva documentato un comando che senza di lei non
+// parte, ed e' la seconda volta che questo repo paga un comando non eseguito
+// come sta scritto.
+const { importaTs } = await import("./lib/tsimport.mjs");
+const { parseGguf } = await importaTs("src/engine/gguf.ts");
+const { validateQwen35 } = await importaTs("src/engine/q35shape.ts");
+const { q35SlabDesc, q35ExpertTensor } = await importaTs("src/engine/q35expertstore.ts");
+const { slabGeometry, slabRangeOf } = await importaTs("src/engine/slabgeom.ts");
+const { buildSlabHeader, slabFileBytes, SLAB_HEADER_BYTES } = await importaTs("src/engine/slabfile.ts");
+const { packExpertSlab } = await importaTs("src/engine/moe.ts");
 const { createHash } = await import("node:crypto");
 
 // ---- header del GGUF e SHA ------------------------------------------------
