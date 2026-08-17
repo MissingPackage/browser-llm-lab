@@ -19,6 +19,18 @@ fallisce.
 Il diagramma qui sotto mostra come i pezzi si parlano; la tabella mostra chi non
 li usa. Servono a domande diverse.
 
+## Il file da leggere prima di credere a un numero
+
+`VALUTAZIONE.md` — tutti i banchi di misura di questo progetto: la domanda a cui
+ognuno risponde, **cosa non può dire**, il comando per rieseguirlo, e le trappole
+che ci hanno prodotto numeri credibili e sbagliati. Quattro domande e quattro
+famiglie di strumenti — velocità, intelligenza, correttezza del motore,
+capienza — più la regola che le tiene separate: usare lo strumento di una
+domanda per rispondere a un'altra è l'errore che ci è costato di più.
+
+Chiude con «cosa NON misuriamo ancora», che per un motore destinato a girare su
+macchine altrui è la sezione più importante.
+
 ## Il file da leggere prima di scegliere un modello o scrivere un kernel
 
 `QUANTIZZAZIONE.md` — la spiegazione per intero di come sono fatti i pesi
