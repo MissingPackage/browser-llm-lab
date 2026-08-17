@@ -1673,3 +1673,45 @@ verifiche l'hanno ridimensionata E rafforzata insieme:
 **RULING: _** — la raccomandazione corretta e': **il GEMM multi-riga in arena
 vale, per il PREFILL (2,11x)**. Lo spec-dec non lo giustifica ai numeri di oggi
 e va deciso dopo l'overlap in decode e l'acceptance MTP del 35B.
+
+## item 30 — LA FONTE DI VERITA' DEL MOTORE SI SPOSTA SU `webgguf` (PI, deciso)
+
+> «Spostiamo la fonte di verita' su webgguf per il motore.»
+
+**Deciso il 2026-08-18, e SOSTITUISCE la clausola dell'item 18** che diceva «la
+fonte di verita' durante la transizione RESTA IL LAB: i tre repo si rigenerano,
+non ricevono commit propri». Quella regola era giusta finche' il repo estratto
+era un mirror; non lo e' piu' da quando ha il proprio registro di ricerca
+completo (§8 del manifest).
+
+**Da adesso:**
+- il **motore** si sviluppa in `~/Projects/webgguf` (`MissingPackage/webgguf`,
+  privato). E' li' che si committa.
+- il **lab** resta la casa del **bench**, del **paper** e del **processo**
+  (`.harness/`, `docs/publishing/`, `docs/superpowers/`).
+- **`git filter-repo` NON si rilancia piu' sul motore**: rigenerare adesso
+  cancellerebbe il lavoro fatto di la'. La ri-estrazione del 2026-08-18 e'
+  l'ULTIMA.
+- le zone condivise (`src/{metrics,probe,quality,qualityPrompts,schema}.ts`,
+  `scripts/lib/hoststate.mjs`) esistono ora in DUE copie che possono divergere.
+  Non c'e' meccanismo che le tenga allineate: e' un debito dichiarato, non
+  risolto.
+
+**Cosa NON si sposta**: questo docket e i goal `engine-*` restano nel lab come
+processo, con la copia gitignorata in `webgguf/.harness/` per chi lavora li'.
+Se il PI vuole che il processo del motore si sposti davvero, e' un ruling suo e
+va preso separatamente — perche' cambia dove vivono i ruling.
+
+### La sessione che aprira' su `webgguf` puo' chiedere aiuto
+
+> «Diro' alla sessione che apriro' li' di contattare te e l'agente fable
+> specialista se ha bisogno di una mano nel progettare il goal o se manca
+> qualche documento.»
+
+**PRECISAZIONE PRATICA, altrimenti va a sbattere**: gli agenti fable
+(`fable-kernel-M`, `fable-spike2`, `fable-ottimizzazioni`, `fable-strategia`)
+sono **subagenti IN-PROCESSO di questa sessione**: un'altra sessione NON puo'
+indirizzarli con `SendMessage`, non compaiono nel suo `ListAgents`. Il percorso
+funzionante e': la sessione nuova contatta **questa sessione** (che compare come
+`browser-llm-lab-*` nel suo `ListAgents`), e questa fa da tramite col consulente,
+che ha il contesto della ricerca ancora caldo.

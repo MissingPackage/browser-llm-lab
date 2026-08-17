@@ -7,6 +7,12 @@ di eseguire, non dopo.
 
 Nomi decisi (docket item 20): il motore è **`webgguf`**, sotto `MissingPackage/`.
 
+> ⚠️ **DAL 2026-08-18 LA FONTE DI VERITÀ DEL MOTORE È `~/Projects/webgguf`**
+> (docket item 30). `git filter-repo` **non si rilancia più** su di esso:
+> rigenerare cancellerebbe il lavoro fatto lì. La ri-estrazione del 2026-08-18 è
+> l'ULTIMA. Questo manifest resta valido per `webgguf-bench` e `webgguf-paper`, e
+> come registro di cosa è stato estratto e perché.
+
 ---
 
 ## 1. `webgguf` — il motore
