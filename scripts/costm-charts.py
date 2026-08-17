@@ -109,15 +109,20 @@ for v in range(0,ymax4+1,1):
     yy=Y1-(v/ymax4)*(Y1-Y0); body+=f'<line x1="{X0}" y1="{yy:.1f}" x2="{X1d}" y2="{yy:.1f}" stroke="#eee"/><text x="{X0-8}" y="{yy+4:.1f}" text-anchor="end" fill="#555">{v}</text>'
 y=lambda v:Y1-(v/ymax4)*(Y1-Y0)
 ind=[(M, 8*M/(256*(1-(248/256)**M))) for M in MM]
-cor=[(M, 8*M/(8+1.4*(M-1))) for M in MM]
+sup=[(M, min(M, ymax4)) for M in MM]   # overlap PERFETTO: D(M)=8 costante -> r(M)=M
+# banda dell'ignoto: fra il limite inferiore teorico e quello superiore teorico.
+# NON si disegna nessuna curva "stimata": il prior che avevo usato (recall 82,67%
+# del looka) misura tutt'altro — predizione FRA LAYER dentro una posizione, non
+# overlap FRA TOKEN. Il prior giusto e' `baseline_prev` di trace.cpp, misurato
+# solo su GLM. Il valore vero sul 35B lo misura lo spike (2).
+pts_band = ' '.join(f'{lx(M):.1f},{y(min(v,ymax4)):.1f}' for M,v in sup) + ' ' + ' '.join(f'{lx(M):.1f},{y(min(v,ymax4)):.1f}' for M,v in reversed(ind))
+body+=f'<polygon points="{pts_band}" fill="#f39c12" opacity=".13"/>'
 body+='<polyline fill="none" stroke="#95a5a6" stroke-width="2.2" stroke-dasharray="6 4" points="'+' '.join(f'{lx(M):.1f},{y(min(v,ymax4)):.1f}' for M,v in ind)+'"/>'
-body+='<polyline fill="none" stroke="#27ae60" stroke-width="2.4" points="'+' '.join(f'{lx(M):.1f},{y(min(v,ymax4)):.1f}' for M,v in cor)+'"/>'
-for M,v in cor:
-    if M in (2,4,16,64,256): body+=f'<circle cx="{lx(M):.1f}" cy="{y(min(v,ymax4)):.1f}" r="3.4" fill="#27ae60"/><text x="{lx(M):.1f}" y="{y(min(v,ymax4))-10:.1f}" text-anchor="middle" fill="#27ae60" font-size="10">{v:.1f}</text>'
-body+=f'<line x1="{X0}" y1="{y(8):.1f}" x2="{X1d}" y2="{y(8):.1f}" stroke="#111" stroke-dasharray="3 3"/>'
-body+=f'<text x="{X1d-4}" y="{y(8)-7:.1f}" text-anchor="end" fill="#111" font-size="11">tetto teorico: 8 righe (top-8)</text>'
-body+=f'<text x="{X0+12}" y="{Y0+18}" fill="#27ae60" font-size="11">routing CORRELATO (stimato da recall 82,67%) — DA VERIFICARE con lo spike (2)</text>'
-body+=f'<text x="{X0+12}" y="{Y0+35}" fill="#95a5a6" font-size="11">routing INDIPENDENTE (limite inferiore teorico)</text>'
-body+=f'<text x="{X0}" y="{Y0-12}" fill="#111" font-weight="600" font-size="13">Perché il segmento expert non può usare M grande — top-8 su 256</text>'
+body+='<polyline fill="none" stroke="#e67e22" stroke-width="2.2" stroke-dasharray="6 4" points="'+' '.join(f'{lx(M):.1f},{y(min(v,ymax4)):.1f}' for M,v in sup)+'"/>'
+for M,v in ind:
+    if M in (2,16,64,256): body+=f'<circle cx="{lx(M):.1f}" cy="{y(min(v,ymax4)):.1f}" r="3.2" fill="#95a5a6"/><text x="{lx(M):.1f}" y="{y(min(v,ymax4))+16:.1f}" text-anchor="middle" fill="#95a5a6" font-size="10">{v:.1f}</text>'
+body+=f'<text x="{X0+150}" y="{Y0+120}" fill="#b9770e" font-size="12" font-weight="600">IGNOTO — e&#39; questo che misura lo spike (2)</text>'
+body+=f'<text x="{X0+12}" y="{Y0+18}" fill="#e67e22" font-size="11">overlap PERFETTO (limite superiore teorico): D(M)=8, r(M)=M</text>'
+body+=f'<text x="{X0+12}" y="{Y0+35}" fill="#95a5a6" font-size="11">routing INDIPENDENTE (limite inferiore teorico): a M=16 solo 1,25 righe/expert</text>'
 open('docs/deep-dive/img/costm-righe-per-expert.svg','w').write(svg(700,392,body,'righe per expert'))
 print('4 SVG scritti in docs/deep-dive/img/')

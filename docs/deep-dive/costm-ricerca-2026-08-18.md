@@ -158,19 +158,40 @@ a M=16.
 ![Righe per expert](img/costm-righe-per-expert.svg)
 
 Con **top-8 su 256 expert**, le M righe di una finestra si sparpagliano su
-expert diversi. Righe medie viste da un expert *attivo* = `8M / E[#distinti]`:
+expert diversi. Righe medie viste da un expert *attivo* = `8M / E[#distinti]`.
+Due limiti teorici, e in mezzo il vuoto:
 
 - **routing indipendente** (limite inferiore): `E[#distinti] = 256·(1−(248/256)^M)`
   → a M=16 sono 102 expert distinti, cioè **1,25 righe per expert: ammortamento
   ~zero**;
-- **routing correlato**, stimato dal recall 82,67% dell'oracolo → a M=16 ~4,4
-  righe per expert, a M=64 ancora solo ~5,3.
+- **overlap perfetto** (limite superiore): `D(M) = 8` costante → `r(M) = M`.
 
-**L'M efficace di un expert resta 4-6 anche a M=64** — dentro il ginocchio già
-misurato, mai oltre.
+**Dove cada il valore vero sul 35B non lo sa nessuno**, e la forbice è enorme: a
+M=2, `D=15,75` dà guadagno 1,01× mentre `D=10` dà **1,51×**. È precisamente
+quello che misura lo **spike (2)**.
 
-⚠️ **La curva verde del grafico è una STIMA, non una misura.** Verificarla è
-esattamente lo scopo dello **spike (2)**, l'overlap del router a distanza 1-4.
+> ⚠️ **CORREZIONE (2026-08-18).** La prima versione di questo grafico disegnava
+> una curva «routing correlato, stimato dal recall 82,67%». **Quel prior era
+> sbagliato**: `q35-looka-run.mjs` predice il router del layer *l* dall'hidden
+> **pre-attention della stessa posizione** — misura quanto l'attention sposta il
+> routing *dentro un token*, e non dice nulla sull'overlap fra token adiacenti.
+> Il prior giusto esiste ma altrove: `tools/oracle-moe/trace.cpp:9` ha già
+> `baseline_prev`, «overlap top-4 tra posizioni decode consecutive» — misurato
+> **solo su GLM**, mai sul 35B. La curva è stata rimossa e sostituita dalla
+> banda fra i due limiti teorici.
+
+### E c'è un secondo vincolo, che riguarda l'offerta e non la domanda
+
+Anche con overlap perfetto, **la curva `T(M)` di questo documento oggi non si
+applica al segmento expert**: il divieto `batch && arena` è per costruzione
+(`wgsl.ts:2176-2190` — `batch` mette le righe su `wid.z`, e in regime d'arena
+resta vietato), e il consuntivo `kquant §4.3` dichiara che per Q4_K/Q6_K il
+braccio misurato al banco **non è il percorso di produzione**.
+
+Quindi lo spike (2) misura la **domanda** (righe per expert raggiungibili); l'
+**offerta** — un GEMM multi-riga che funzioni in regime d'arena — è un kernel da
+scrivere. **Il risultato dello spike non è «quanto acceleriamo domani»: è «si
+scrive o non si scrive quel kernel».**
 
 ---
 
