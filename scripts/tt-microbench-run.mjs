@@ -230,6 +230,10 @@ const PROV = {
     goal: "engine-velocita-decode riga 2d (la rotta split-K vale il decode?)",
     prereg: "docs/deep-dive/velocita-decode-2d-prereg-2026-08-16.md",
   },
+  "costm-decode": {
+    goal: "engine-velocita-decode, spike (1) di tre (dove sta il ginocchio di cost(M)?)",
+    prereg: "docs/deep-dive/costm-decode-prereg-2026-08-17.md",
+  },
 }[TAG];
 if (!PROV) {
   console.error(`[tt] tag sconosciuto "${TAG}": aggiungilo a PROV con il suo goal e la sua pre-registrazione, invece di scrivere un artefatto senza provenienza`);

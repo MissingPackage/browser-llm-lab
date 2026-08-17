@@ -1305,3 +1305,52 @@ gate di it.6 del goal kquant, che contava i generatori condivisi su TUTTO il fil
 invece che nel corpo del proprio banco. **Un gate che sorveglia piu' di cio' che
 il contratto dice diventa una tassa sui miglioramenti** — torna rosso per ragioni
 che non c'entrano con cio' che difende. Criterio da applicare ai prossimi.
+
+## item 25 — IL GINOCCHIO E' A M=2: il verdetto sullo spec-dec e' caduto (io, spike 1 di 3)
+
+Misura: `results/microbench/costm-decode-4090-linux-2026-08-17T21-38-36-738Z.json`.
+Pre-registrazione: `docs/deep-dive/costm-decode-prereg-2026-08-17.md` (scritta
+prima di vedere qualunque cella — la prima run mori' alla scrittura per tag
+assente da `PROV`, come gia' successo alla 2d). Memo:
+`docs/deep-dive/costm-decode-memo-2026-08-17.md`.
+
+Costo PER RIGA, miglior variante per ogni M, normalizzato a M=1:
+
+    shape                         M=1     M=2     M=4     M=8    M=16
+    q4_K 2048x512  gate/up        100%   60,3%   35,3%   22,8%   16,9%
+    q4_K 512x2048  down           100%   56,8%   33,5%   21,4%   15,8%
+    q6_K 512x2048  down           100%   57,0%   34,4%   22,4%   16,2%
+    q8_0 2048x4096 attn q-proj    100%   38,9%   21,2%    8,3%    3,2%
+
+**IL GINOCCHIO E' A M=2**, cioe' esattamente nel regime dello spec-dec. Il
+modello pre-registrato `(4+M)/5M` prevedeva 60,0%: misurato 56,8-60,3%.
+
+**E il sorpasso di variante e' AL ginocchio**: a M=1 vince `base-batch-z`, da
+M=2 in poi vince `splitk-idot`.
+
+**IL CONTO CHE RIBALTA IL VERDETTO** — costo totale di verificare 2 token contro
+1, sulla shape PEGGIORE (gate/up): 0,0075/0,0062 = **1,21x**. Con accept 50%
+(1,5 token/passata): **1,5/1,21 = 1,24x**. Coi kernel vecchi era 1,5/1,8 =
+**0,83x**, ed e' l'1,18x piu' lento che il checkpoint B aveva misurato.
+
+Il verdetto del checkpoint B era **corretto per i kernel su cui fu preso**. E'
+caduto perche' la proprieta' del kernel e' cambiata sotto di esso, non perche'
+qualcuno avesse sbagliato.
+
+**UNA PREVISIONE MIA E' FALSIFICATA, e la registro**: avevo previsto il ginocchio
+«molto piu' netto su `down` (K=512) che su `gate/up` (K=2048)», motivandolo con
+l'occupancy (2 lane attive su 64 contro 8). Misurato: 56,8% contro 60,3%, tre
+punti e mezzo. **L'argomento dell'occupancy spiegava molto meno di quanto
+credessi.** Anche la previsione sulla saturazione fra M=8 e M=16 e' falsificata
+(calo del 26%, non <20%): a M=16 non ha ancora saturato.
+
+**COSA NON AUTORIZZA**, e va detto perche' e' il punto in cui questo progetto ha
+gia' sbagliato quattro volte: **e' il BANCO**. «Il banco misura il kernel, il
+motore paga la rotta». 1,24x e' il permesso di MISURARE nel motore, non il
+risultato. E non dice nulla ne' sul q2_K (item 24) ne' — soprattutto — sul
+SEGMENTO EXPERT: con top-8 su 256, se il routing di token adiacenti fosse
+indipendente l'overlap sarebbe 0,25 expert, cioe' ~1,02 righe per expert e ZERO
+ammortamento. L'oracolo dice 82,67% di recall, quindi la correlazione c'e' — ma
+QUANTA e' lo spike (2), ed e' il prossimo.
+
+**RULING: _** (se il PI vuole, lo spike 2 e' mezza giornata e chiude la domanda.)
