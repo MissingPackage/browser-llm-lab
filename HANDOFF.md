@@ -22,6 +22,17 @@ split delle repo, matrice dei dispositivi. Tre di quelle sono gia' DECISE dal PI
     il thinking del 35B        SISTEMATO: la polarita' si deriva dal template
     tre documenti nuovi        QUANTIZZAZIONE.md, VALUTAZIONE.md, e i banchi
 
+### LA PRIMA COSA DA FARE IN UNA SESSIONE FRESCA
+
+**Lo SPLIT DELLE REPO** — deciso dal PI a chiusura del 2026-08-17: «faro' lo
+split come prima cosa in una sessione fresca». Va fatto prima di tradurre e
+prima di ripulire, per la ragione al punto 1 qui sotto.
+
+*Igiene da fare li'*: restano 5 worktree del workflow SDD in `.claude/worktrees/`
+(198 MB, **zero commit non presenti in main** — verificato a chiusura sessione:
+sono copie di lavoro, tutto e' stato integrato per patch). Si tolgono con
+`git worktree remove`, e vanno tolti prima dello split o finiscono nel rumore.
+
 ### IL LAVORO CHE DISCENDE, in ordine di dipendenza
 
 1. **Split delle repo** (item 18) — perche' definisce cosa e' pubblico, e senza
