@@ -31,6 +31,8 @@ import {
   prefillGemmQ4KSplitKIdotWgsl, prefillGemmQ4KSplitKWgsl,
   prefillGemmQ6KSplitKIdotWgsl, prefillGemmQ6KSplitKWgsl,
   prefillGemmQ80SplitKIdotWgsl, prefillGemmQ80SplitKWgsl,
+  prefillGemmQ2KSplitKIdotWgsl, prefillGemmQ2KSplitKWgsl,
+  prefillGemmQ3KSplitKIdotWgsl, prefillGemmQ3KSplitKWgsl,
   prefillQuantXQ8Wgsl, prefillSplitKCombineWgsl,
   prefillGemmGrid, prefillQuantXGrid, prefillCombineGrid,
   prefillGemmSplitsFor, prefillPartialFloats, prefillGemmWorkgroupStorageBytes,
@@ -361,7 +363,7 @@ describe("[a]-port Q5_K: il testo e' quello del banco, riga per riga", () => {
     });
   }
 
-  it("i kind con un kernel sono sei; quelli INSTRADATI restano q4_0, q5_K e q4_1", () => {
+  it("i kind con un kernel sono otto; quelli INSTRADATI restano q4_0, q5_K e q4_1", () => {
     // L'ORDINE e' parte dell'asserzione: i kind nuovi stanno in CODA. Chi legge
     // questo elenco per costruire un piano o una tabella (t2..t6) lo consuma
     // posizionalmente, e un kind infilato in mezzo sposterebbe tutto in
@@ -375,7 +377,12 @@ describe("[a]-port Q5_K: il testo e' quello del banco, riga per riga", () => {
     // differenza fra le due e' il contenuto della riga 4 — se un giorno
     // coincidessero di nuovo, sarebbe perche' qualcuno ha cablato, e allora
     // questa riga deve fallire e farlo dire.
-    expect([...PREFILL_GEMM_KINDS]).toEqual(["q4_0", "q5_K", "q4_1", "q4_K", "q6_K", "q8_0"]);
+    // DAL 2026-08-17 SONO OTTO: `q2_K` e `q3_K` entrano IN CODA (spec q2k-q3k),
+    // portati per analogia dai gemelli q4_K/q6_K e anch'essi `wired: false` —
+    // e con una ragione piu' stretta degli altri, perche' non sono ancora stati
+    // eseguiti su GPU.
+    expect([...PREFILL_GEMM_KINDS])
+      .toEqual(["q4_0", "q5_K", "q4_1", "q4_K", "q6_K", "q8_0", "q2_K", "q3_K"]);
     // il q8_0 e' entrato il 2026-08-15 (goal engine-velocita-decode, riga 2d):
     // il predicato su N protegge la shape, quindi la famiglia puo' passare
     expect([...PREFILL_GEMM_WIRED_KINDS]).toEqual(["q4_0", "q5_K", "q4_1", "q8_0"]);
@@ -1094,20 +1101,26 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
   // KERNEL — portato dal banco e misurato — quindi il contorno non li rifiuta
   // piu', e pretendere il contrario misurerebbe il passato. Restano fuori i
   // formati per cui un moltiplicatore multi-riga non esiste: `f32` (che non e'
-  // quantizzato) e le due famiglie che il motore sa leggere ma per cui nessuno
-  // ha misurato una forma di prefill (`q3_K`, `q2_K` — v. quant.ts).
+  // quantizzato) e gli i-quant a codebook (`iq4_xs`, `iq2_xxs`), che sono
+  // un'ALTRA FAMIGLIA di kernel — la spec q2k-q3k li dichiara fuori scope.
+  // GLI ESEMPI NON SONO PIU' `q3_K`/`q2_K`: erano i formati che il motore
+  // leggeva senza avere una forma di prefill, e dal 2026-08-17 il kernel ce
+  // l'hanno. Il caso vuole un formato DAVVERO fuori dall'elenco, altrimenti
+  // misurerebbe il passato.
   // ATTENZIONE ALLA DISTINZIONE: "il kernel lo rifiuta" NON e' "il piano non lo
-  // instrada". q8_0/q4_K/q6_K sono nel secondo caso, e chi lo verifica e'
+  // instrada". q4_K/q6_K/q2_K/q3_K sono nel secondo caso, e chi lo verifica e'
   // tests/engine-prefillgemmplan-notwired.test.ts.
   it("kind senza kernel -> throw che NOMINA il kind e i kind supportati", () => {
-    for (const kind of ["f32", "q3_K", "q2_K"]) {
+    for (const kind of ["f32", "iq4_xs", "iq2_xxs"]) {
       const k = { ...MEASURED[0], kind } as unknown as PrefillGemmOpts;
       for (const gen of [prefillGemmQ4SplitKIdotWgsl, prefillGemmQ4SplitKWgsl,
         prefillGemmQ5KSplitKIdotWgsl, prefillGemmQ5KSplitKWgsl,
         prefillGemmQ41SplitKIdotWgsl, prefillGemmQ41SplitKWgsl,
         prefillGemmQ4KSplitKIdotWgsl, prefillGemmQ4KSplitKWgsl,
         prefillGemmQ6KSplitKIdotWgsl, prefillGemmQ6KSplitKWgsl,
-        prefillGemmQ80SplitKIdotWgsl, prefillGemmQ80SplitKWgsl]) {
+        prefillGemmQ80SplitKIdotWgsl, prefillGemmQ80SplitKWgsl,
+        prefillGemmQ2KSplitKIdotWgsl, prefillGemmQ2KSplitKWgsl,
+        prefillGemmQ3KSplitKIdotWgsl, prefillGemmQ3KSplitKWgsl]) {
         // il kind RIFIUTATO e' nominato...
         expect(() => gen(k), kind).toThrow(new RegExp(kind));
         // ...e anche quelli supportati, cosi' il messaggio dice dove si puo' andare
@@ -1128,11 +1141,12 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
     }
     // e un kind SENZA KERNEL viene rifiutato PRIMA della geometria: il
     // messaggio parla del formato, non del K.
-    // Era `q4_K`, che da riga 4 il kernel ce l'ha: il caso serve un formato
-    // davvero fuori dall'elenco, e `q3_K` lo e' (il motore lo legge, nessuno ne
-    // ha misurato una forma multi-riga di prefill).
-    const k = { ...q5, kind: "q3_K", K: 4128 } as unknown as PrefillGemmOpts;
-    expect(() => prefillGemmQ5KSplitKIdotWgsl(k)).toThrow(/q3_K/);
+    // Era `q4_K`, poi `q3_K`: tutti e due, col tempo, il kernel se lo sono
+    // preso. Il caso serve un formato davvero fuori dall'elenco, e un i-quant
+    // a codebook lo e' per costruzione — e' un'altra famiglia di kernel, che la
+    // spec q2k-q3k dichiara fuori scope.
+    const k = { ...q5, kind: "iq4_xs", K: 4128 } as unknown as PrefillGemmOpts;
+    expect(() => prefillGemmQ5KSplitKIdotWgsl(k)).toThrow(/iq4_xs/);
     let msg = "";
     try { prefillGemmQ5KSplitKIdotWgsl(k); } catch (e) { msg = (e as Error).message; }
     expect(msg).not.toContain("4128");
@@ -1147,16 +1161,17 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
       expect(() => gen({ ...q41, splits: 7 })).toThrow(/fette/);
     }
     // e un kind SENZA KERNEL viene rifiutato PRIMA della geometria. Era `q4_K`,
-    // che da riga 4 il kernel ce l'ha (v. la ragione nel test Q5_K qui sopra).
-    const k = { ...q41, kind: "q3_K", K: 9248 } as unknown as PrefillGemmOpts;
-    expect(() => prefillGemmQ41SplitKIdotWgsl(k)).toThrow(/q3_K/);
+    // poi `q3_K`: entrambi il kernel ce l'hanno (v. la ragione nel test Q5_K
+    // qui sopra), quindi si prende un i-quant, che e' un'altra famiglia.
+    const k = { ...q41, kind: "iq4_xs", K: 9248 } as unknown as PrefillGemmOpts;
+    expect(() => prefillGemmQ41SplitKIdotWgsl(k)).toThrow(/iq4_xs/);
     let msg = "";
     try { prefillGemmQ41SplitKIdotWgsl(k); } catch (e) { msg = (e as Error).message; }
     expect(msg).not.toContain("9248");
   });
 
   it("il predicato sta in UNA sede sola: tutte le funzioni rifiutano allo stesso modo", () => {
-    // Dodici generatori e tre funzioni di geometria, un solo
+    // Sedici generatori e tre funzioni di geometria, un solo
     // `prefillGemmCheck`. Se una di queste avesse il suo predicato, un kind
     // nuovo entrerebbe da una porta e non dall'altra.
     //
@@ -1166,12 +1181,13 @@ describe("[f] rifiuto invece di kernel non misurato", () => {
     // dell'array: era il numero di formati che il piano manda sulla via veloce,
     // ed e' QUELLO il valore che va pinnato — oggi lo porta
     // `PREFILL_GEMM_WIRED_KINDS`. La lunghezza dell'elenco e' 6 e vale un'altra
-    // cosa: quanti kernel esistono.
-    expect(PREFILL_GEMM_KINDS.length, "kernel esistenti").toBe(6);
+    // cosa: quanti kernel esistono — otto dal 2026-08-17 (q2_K e q3_K), e i
+    // kind instradati restano QUATTRO, che e' esattamente il punto della riga.
+    expect(PREFILL_GEMM_KINDS.length, "kernel esistenti").toBe(8);
     expect(PREFILL_GEMM_WIRED_KINDS.length, "kind instradati dal piano").toBe(4);
-    const k = { ...MEASURED[0], kind: "q3_K" } as unknown as PrefillGemmOpts;
+    const k = { ...MEASURED[0], kind: "iq4_xs" } as unknown as PrefillGemmOpts;
     for (const f of [prefillGemmGrid, prefillPartialFloats, prefillGemmWorkgroupStorageBytes]) {
-      expect(() => f(k)).toThrow(/q3_K/);
+      expect(() => f(k)).toThrow(/iq4_xs/);
     }
   });
 });

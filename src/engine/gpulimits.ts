@@ -171,6 +171,15 @@ const PREFILL_GEMM_SHAPES: Record<PrefillGemmKind, (M: number) => PrefillGemmOpt
   q6_K: (M) => ({ kind: "q6_K", K: 512, N: 2048, M, splits: 2 }),
   // `attn_*` del 35B: 64 blocchi da 32, 4 fette, PER pari (il ciclo avanza a 2).
   q8_0: (M) => ({ kind: "q8_0", K: 2048, N: 4096, M, splits: 4 }),
+  // Le due famiglie degli expert del 35B Q2_K (spec 2026-08-17): stesse shape
+  // dei gemelli q4_K/q6_K, perché sono gli STESSI tensori dello stesso modello
+  // letti da un file quantizzato più stretto — `ffn_gate`/`ffn_up` a K=2048 e
+  // `ffn_down` a K=512. Il termine di memoria di gruppo dipende dal solo M
+  // (352·M sulla via intera, 128·M sulla f32, gli stessi del q6_K), quindi
+  // queste K/N non spostano un byte del tetto: servono perché la formula
+  // VALIDA i suoi argomenti e perché chi legge veda QUALE kernel si dichiara.
+  q2_K: (M) => ({ kind: "q2_K", K: 2048, N: 512, M, splits: 4 }),
+  q3_K: (M) => ({ kind: "q3_K", K: 512, N: 2048, M, splits: 2 }),
 };
 
 /**

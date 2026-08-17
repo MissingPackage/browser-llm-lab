@@ -11,9 +11,10 @@
 import {
   addInPlaceWgsl, ARGMAX_CHUNK, argmaxStage1Wgsl, argmaxStage2Wgsl,
   attnDecodeCombineWgsl, attnDecodeWgsl, axpyWgsl,
-  gemvF32Wgsl, gemvGrid, gemvQ4KWgsl, gemvQ5KWgsl,
+  gemvF32Wgsl, gemvGrid, gemvQ2KWgsl, gemvQ3KWgsl, gemvQ4KWgsl, gemvQ5KWgsl,
   gemvQ6KWgsl, gemvQuantWgsl, gemvQuantGrid, gemvQuantVec4Rows2Ok, kvAppendWgsl, rmsnormWgsl, ropeNeoxWgsl, sigmoidMulWgsl,
   siluMulWgsl, stridedCopyWgsl, routerTopKWgsl, moeCombineWgsl,
+  KQUANT_GEMV_DESC, type KQuantGemvKind, type KGatherOpts, type KFanOpts,
   SEL_BYTES, MOE_IDX_BYTES, MOE_IDX_STRIDE, type KArenaOpts,
   prefillGemmQ4SplitKWgsl, prefillSplitKCombineWgsl, prefillGemmGrid,
   PREFILL_SPLITS_MEASURED,
@@ -25,10 +26,10 @@ import {
 } from "./kernels/wgsl";
 import { planPrefillGemm, prefillGemmCapsFor } from "./prefillgemmplan";
 import { expertArenaBindings } from "./gpulimits";
-import type { SlabTensorLayout } from "./moe";
+import type { QuantKind, SlabTensorLayout } from "./moe";
 import { deltaNetConvWgsl, deltaNetCoreWgsl, deltaNetGatesWgsl } from "./kernels/deltanet";
-import { GGML_TYPE, tensorByteSize, type GgufTensorInfo } from "./gguf";
-import { dequantQ4_0, dequantQ6_K, dequantQ8_0, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
+import { GGML_TYPE, tensorByteSize, type GgmlTypeId, type GgufTensorInfo } from "./gguf";
+import { dequantQ4_0, dequantQ6_K, dequantQ8_0, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q6_K_BLOCK_BYTES } from "./quant";
 import { q35AttnPartialsFloats, q35AttnSplitPlan } from "./q35attnsplit";
 import { q35IsFullAttn, type Q35Shape } from "./q35shape";
 import { ROUTER_QWEN35MOE, routerSelect, WEIGHTS_SUM_CLAMP_MIN, type RouterConfig } from "./moe";
@@ -38,6 +39,100 @@ import {
 import { q35ExpertReader, q35MoeConfig, q35SlabDesc } from "./q35expertstore";
 import { openSlabRangeSource, type SlabHttpDeps, type SlabRangeSource } from "./slabsource";
 import { gemvCapsFor } from "./gemvcaps";
+
+// ---------------------------------------------------------------------------
+// IL SELETTORE DEI GEMV K-QUANT — la scelta del kernel in UN posto solo
+// ---------------------------------------------------------------------------
+/**
+ * Perche' esiste. Fino al 2026-08-17 la scelta del kernel K-quant viveva in
+ * TRE catene di ternari dentro questo file: il gemv statico, il suo gemello a
+ * M righe e la pipeline d'arena degli expert (`t.type === Q4_K ? gemvQ4KWgsl :
+ * …`). Tre posti che tengono UNA decisione: aggiungere Q2_K e Q3_K avrebbe
+ * voluto dire allungarle tutte e tre, e il giorno in cui una sola resta
+ * indietro il motore non da' errore — legge un superblocco da 84 byte col
+ * passo di uno da 144 e produce logit sbagliati, in silenzio.
+ *
+ * Cosa NON fa: aritmetica. I cinque generatori di `wgsl.ts` restano gli unici
+ * a emettere WGSL, e sono quelli ktestati; qui si sceglie soltanto, e il testo
+ * emesso e' identico carattere per carattere a quello del generatore (lo pinna
+ * `tests/engine-q35-q2k-route.test.ts`).
+ */
+type Q35KGemvOpts = {
+  K: number; N: number; batch?: boolean; arena?: KArenaOpts; accum?: boolean;
+  gather?: KGatherOpts; kfan?: KFanOpts;
+};
+
+/**
+ * I cinque generatori, per formato. E' una TABELLA e non una catena di `if`:
+ * un formato in piu' e' una riga, e un formato mancante e' un `undefined` che
+ * si vede subito (sotto), non l'ultimo ramo di un ternario che accetta
+ * qualunque cosa gli arrivi.
+ */
+const Q35_KQUANT_GEMV: Record<KQuantGemvKind, (o: Q35KGemvOpts) => string> = {
+  q2_K: gemvQ2KWgsl,
+  q3_K: gemvQ3KWgsl,
+  q4_K: gemvQ4KWgsl,
+  // Il q5_K ha la firma CONGELATA `{K, N, batch}` (`KQUANT_GEMV_DESC.q5_K.modes
+  // === "batchOnly"`): il suo testo non contiene i regimi arena/accum/gather/
+  // kfan. Passarglieli sarebbe un no-op silenzioso — il kernel emesso
+  // leggerebbe `blocks` invece dell'arena, cioe' un binding che in regime
+  // d'arena non esiste — quindi qui si lancia invece di ignorare.
+  q5_K: (o) => {
+    if (o.arena !== undefined || o.accum === true || o.gather !== undefined || o.kfan !== undefined) {
+      throw new Error("q35 gemv q5_K: modi arena/accum/gather/kfan non previsti da questo formato (firma congelata: K, N, batch)");
+    }
+    return gemvQ5KWgsl({ K: o.K, N: o.N, batch: o.batch });
+  },
+  q6_K: gemvQ6KWgsl,
+};
+
+/** i K-quant, cioe' i soli formati per cui esiste un gemv a superblocchi. */
+const isKQuantKind = (kind: QuantKind): kind is KQuantGemvKind =>
+  Object.prototype.hasOwnProperty.call(Q35_KQUANT_GEMV, kind);
+
+/**
+ * IL KERNEL DI UN K-QUANT, dato il suo kind e la geometria del sito.
+ *
+ * Il `kind` e' quello VERO del tensore — da `q35KQuantKindOfGgml` per i pesi
+ * statici, da `layout(cls).<t>.kind` per gli expert — mai un letterale scritto
+ * a mano: un formato «assunto» e' esattamente il difetto che questa funzione
+ * toglie.
+ */
+export function q35KQuantGemvWgsl(kind: QuantKind, opts: {
+  K: number; N: number; batch?: boolean; arena?: KArenaOpts; accum?: boolean;
+  gather?: KGatherOpts; kfan?: KFanOpts;
+}): string {
+  // LANCIA, non ricade su un default. I formati legacy (q4_0/q4_1/q8_0) hanno
+  // blocchi da 32 pesi e due binding separati: chiederne il gemv qui vuol dire
+  // che il chiamante ha sbagliato ramo, e restituirgli un kernel K-quant
+  // produrrebbe numeri plausibili e sbagliati invece di un errore.
+  if (!isKQuantKind(kind)) {
+    throw new Error(`q35 gemv: nessun kernel a superblocchi per ${kind} (K-quant: q2_K, q3_K, q4_K, q5_K, q6_K)`);
+  }
+  return Q35_KQUANT_GEMV[kind](opts);
+}
+
+/**
+ * Il tipo GGUF -> il kind del formato. Sta accanto al selettore perche' e' la
+ * stessa decisione vista dall'altro capo: kernel, `blockBytes` e kind chiesto
+ * al piano di prefill discendono TUTTI da questa riga, e il descrittore di
+ * `wgsl.ts` li tiene insieme. `undefined` = non e' un K-quant, e il chiamante
+ * prosegue sui rami legacy.
+ *
+ * E' esportata per una ragione sola: senza, l'unico invariante che il motore
+ * non puo' verificare da se' — che il kind sia quello del tensore e non un
+ * altro — resterebbe fuori dalla portata dei test. La prova non e' testuale:
+ * `tests/engine-q35-q2k-route.test.ts` confronta il superblocco del kind
+ * mappato con quello che `tensorByteSize` usa per LEGGERE quel tipo.
+ */
+const Q35_KQUANT_OF_GGML = new Map<number, KQuantGemvKind>([
+  [GGML_TYPE.Q2_K, "q2_K"], [GGML_TYPE.Q3_K, "q3_K"], [GGML_TYPE.Q4_K, "q4_K"],
+  [GGML_TYPE.Q5_K, "q5_K"], [GGML_TYPE.Q6_K, "q6_K"],
+]);
+
+export function q35KQuantKindOfGgml(type: GgmlTypeId): KQuantGemvKind | undefined {
+  return Q35_KQUANT_OF_GGML.get(type);
+}
 
 export interface Q35RawReader {
   shape: Q35Shape;
@@ -581,25 +676,26 @@ export async function createQ35GpuModel(
       const w = await q80(name);
       return { n, k, push: (src, dst) => gemv(w, src, dst, "q8_0"), pushB: (src, dst) => gemvB(w, src, dst, "q8_0") };
     }
-    if (t.type === GGML_TYPE.Q4_K || t.type === GGML_TYPE.Q5_K || t.type === GGML_TYPE.Q6_K) {
-      const blockBytes = t.type === GGML_TYPE.Q4_K ? 144 : t.type === GGML_TYPE.Q5_K ? Q5_K_BLOCK_BYTES : Q6_K_BLOCK_BYTES;
+    /**
+     * Il kind REALE del tensore, letto dall'header: e' quello che si chiede al
+     * piano, ed e' anche quello che si passa al kernel. Prima erano DUE catene
+     * di ternari sul tipo GGUF (una per il codice, una per il kind) piu' una
+     * terza per `blockBytes`; adesso e' una lettura sola, e i tre non possono
+     * piu' divergere. `undefined` = non e' un K-quant, e si tira dritto verso
+     * i rami legacy qui sotto.
+     */
+    const kkq = q35KQuantKindOfGgml(t.type);
+    if (kkq !== undefined) {
+      // il passo del buffer viene dal DESCRITTORE dello stesso formato del
+      // kernel (84/110/144/176/210): kernel e passo nascono dal medesimo `kind`
+      const blockBytes = KQUANT_GEMV_DESC[kkq].blockBytes;
       const w = await kquant(name, blockBytes);
-      const code = t.type === GGML_TYPE.Q4_K ? gemvQ4KWgsl({ K: k, N: n }) : t.type === GGML_TYPE.Q5_K ? gemvQ5KWgsl({ K: k, N: n }) : gemvQ6KWgsl({ K: k, N: n });
+      const code = q35KQuantGemvWgsl(kkq, { K: k, N: n });
       // Sul 35B i pesi statici sono tutti Q8_0/F32 e i K-quant stanno solo
       // negli expert (it.24) — ma il 4B ha `ssm_out` in Q5_K, quindi il gemello
       // a M righe serve anche qui: l'inventario valeva per un modello, non per
       // la famiglia (it.32).
-      const codeB = t.type === GGML_TYPE.Q4_K
-        ? gemvQ4KWgsl({ K: k, N: n, batch: true })
-        : t.type === GGML_TYPE.Q5_K ? gemvQ5KWgsl({ K: k, N: n, batch: true }) : gemvQ6KWgsl({ K: k, N: n, batch: true });
-      /**
-       * Il kind REALE del tensore: e' quello che si chiede al piano, ed e' anche
-       * quello che si passa al kernel. L'annotazione NON e' cerimonia: senza,
-       * TypeScript allarga il letterale a `string` quando finisce in un oggetto,
-       * e il `kind` del kernel tornerebbe a essere un letterale scritto a mano.
-       */
-      const kkq: "q4_K" | "q5_K" | "q6_K" =
-        t.type === GGML_TYPE.Q4_K ? "q4_K" : t.type === GGML_TYPE.Q5_K ? "q5_K" : "q6_K";
+      const codeB = q35KQuantGemvWgsl(kkq, { K: k, N: n, batch: true });
       return {
         n, k,
         push: (src, dst) => push(code, [w.blocks, src, dst], gemvGrid(n)),
@@ -746,7 +842,9 @@ export async function createQ35GpuModel(
   let headStep: (src: GPUBuffer, dst: GPUBuffer) => void;
   if (headT.type === GGML_TYPE.Q6_K) {
     const head = await kquant(headName, Q6_K_BLOCK_BYTES);
-    headStep = (src, dst) => push(gemvQ6KWgsl({ K: head.k, N: head.n }), [head.blocks, src, dst], gemvGrid(head.n));
+    // anche qui dal selettore, benche' il formato sia gia' fissato dall'`if`:
+    // il kernel di un K-quant si chiede in un posto solo, senza eccezioni
+    headStep = (src, dst) => push(q35KQuantGemvWgsl("q6_K", { K: head.k, N: head.n }), [head.blocks, src, dst], gemvGrid(head.n));
   } else if (headT.type === GGML_TYPE.Q4_0) {
     const head = await q40(headName);
     headStep = (src, dst) => gemv(head, src, dst);
@@ -1684,11 +1782,15 @@ export async function createQ35GpuModel(
       }
       device.queue.writeBuffer(moeIdxUni, 0, u as unknown as BufferSource);
     }
-    // i kernel si scelgono dal LAYOUT della classe, non da un'assunzione sul
+    // I kernel si scelgono dal LAYOUT della classe, non da un'assunzione sul
     // formato: se un GGUF della famiglia arrivasse con gate/up diversi, qui
     // si ferma con un messaggio invece di dequantizzare byte sbagliati.
-    const gk = cfg.layout(cfg.classes[0]).gate.kind;
-    if (gk !== "q4_K") throw new Error(`q35 MoE: nessun kernel gemv per gate/up ${gk}`);
+    //
+    // Il controllo NON e' piu' un `if` scritto qui (e neppure sulla sola
+    // `classes[0]`, che parlava per tutte): lo fa `q35KQuantGemvWgsl` sul kind
+    // di OGNI tensore, al momento in cui se ne emette il kernel. Un formato
+    // senza gemv lancia li', prima che esista una pipeline — e lancia per il
+    // tensore giusto, non per il primo della lista.
     /**
      * La catena expert di UNA classe in regime d'arena (PORT da `glmmodel`).
      * Il bind group layout è ESPLICITO e non `"auto"`: `hasDynamicOffset` non
@@ -1706,8 +1808,6 @@ export async function createQ35GpuModel(
           "maxStorageBuffersPerShaderStage con arenaBuffers (gpulimits/arenaNeeds)");
       }
       const L = cfg.layout(cls);
-      const dk = L.down.kind;
-      if (dk !== "q4_K" && dk !== "q6_K") throw new Error(`q35 MoE: nessun kernel gemv per down ${dk}`);
       const kar = (t: SlabTensorLayout): KArenaOpts => ({
         nBuf: geo.nBuf, slabWords: geo.slabWords, slabsPerBuf: geo.slabsPerBuf, tensorWords: t.data / 4,
       });
@@ -1745,28 +1845,27 @@ export async function createQ35GpuModel(
       });
       return {
         nBuf: geo.nBuf,
-        pGate: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.gate) })),
-        pUp: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.up) })),
+        // il KIND di ciascun tensore, preso dal layout dello slab: sul GGUF
+        // `bartowski Q2_K` gate/up/down di una stessa classe sono Q2_K o Q3_K,
+        // e il formato lo sa il layout — non questo file.
+        pGate: mkPipe(q35KQuantGemvWgsl(L.gate.kind, { K: d, N: dE, arena: kar(L.gate) })),
+        pUp: mkPipe(q35KQuantGemvWgsl(L.up.kind, { K: d, N: dE, arena: kar(L.up) })),
         // il down ACCUMULA in `moeAcc` col peso da `Sel` (fase 4, it.21):
         // l'axpy che seguiva non esiste piu' — un dispatch in meno per expert,
         // 320 per token sul 35B, e bit-identico per costruzione.
-        pDown: mkPipe(dk === "q6_K"
-          ? gemvQ6KWgsl({ K: dE, N: d, arena: kar(L.down), accum: true })
-          : gemvQ4KWgsl({ K: dE, N: d, arena: kar(L.down), accum: true })),
+        pDown: mkPipe(q35KQuantGemvWgsl(L.down.kind, { K: dE, N: d, arena: kar(L.down), accum: true })),
         bgGate: bg(xn, gateE), bgUp: bg(xn, upE), bgDown: bg(gateE, moeAcc),
         // KFAN: stessi kernel, `wid.z` = k. Il down NON accumula — scrive lo
         // slot k, e la somma pesata la fa la combine in ordine k crescente,
         // che e' esattamente la catena del decode sequenziale (bit-identita'
         // per costruzione, non attesa). Il `bg` regge cosi' com'e': lega
         // arena + selBuf + moeIdx e cambia solo la destinazione.
-        pGateK: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.gate), kfan: { nUsed: topK } })),
-        pUpK: mkPipe(gemvQ4KWgsl({ K: d, N: dE, arena: kar(L.up), kfan: { nUsed: topK } })),
+        pGateK: mkPipe(q35KQuantGemvWgsl(L.gate.kind, { K: d, N: dE, arena: kar(L.gate), kfan: { nUsed: topK } })),
+        pUpK: mkPipe(q35KQuantGemvWgsl(L.up.kind, { K: d, N: dE, arena: kar(L.up), kfan: { nUsed: topK } })),
         // `xPerK`: il down legge l'`h` prodotto per CIASCUN k (slot k di
         // gateK), non quello del k = 0. Gate e up no — leggono tutti lo stesso
         // hidden del token.
-        pDownK: mkPipe(dk === "q6_K"
-          ? gemvQ6KWgsl({ K: dE, N: d, arena: kar(L.down), kfan: { nUsed: topK, xPerK: true } })
-          : gemvQ4KWgsl({ K: dE, N: d, arena: kar(L.down), kfan: { nUsed: topK, xPerK: true } })),
+        pDownK: mkPipe(q35KQuantGemvWgsl(L.down.kind, { K: dE, N: d, arena: kar(L.down), kfan: { nUsed: topK, xPerK: true } })),
         bgGateK: bg(xn, gateK), bgUpK: bg(xn, upK), bgDownK: bg(gateK, ySlots),
       };
     };

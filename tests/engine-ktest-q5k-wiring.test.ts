@@ -26,21 +26,19 @@
 // Il file si LEGGE come testo. Importarlo tirerebbe dentro i tipi WebGPU e un
 // modulo worker (che in vitest node non si carica). Il testo non si scansiona
 // grezzo: commenti, stringhe e template WGSL vengono prima BIANCATI
-// (§ blankNonCode, helper COPIATO da engine-q35attnwiring.test.ts e non
-// importato, perche' quel file e' un test e non un modulo di libreria). Senza
-// quel passo un commento che nomina `prefillSplitKCombineWgsl(` sposta i
-// conteggi, e una lista `[blocks, xq, part, xsc]` citata in un commento diventa
-// la lista che il test misura al posto di quella vera.
+// (`blankNonCode` in `tests/helpers/source-scan.ts`, dove lo scanner e' stato
+// FATTORIZZATO dopo esserne diventato la quarta copia). Senza quel passo un
+// commento che nomina `prefillSplitKCombineWgsl(` sposta i conteggi, e una lista
+// `[blocks, xq, part, xsc]` citata in un commento diventa la lista che il test
+// misura al posto di quella vera.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  raw, code, uncommented, lineOf, hitsOf, closeOf, topLevelItems, callsTo,
+  importsFrom, has, helperBody, literalHits,
+} from "./helpers/source-scan";
 
 const KTEST = "src/engine/ktest/ktest.worker.ts";
 const DRIVER = ".harness/tools/engine-ktest.mjs";
-// come engine-q35attnwiring.test.ts: percorso ancorato al file di test, non
-// alla directory da cui si lancia vitest.
-const ROOT = join(__dirname, "..");
-const raw = (rel: string): string => readFileSync(join(ROOT, rel), "utf8");
 
 const IDOT = "prefill-gemm-q5k-multirow-idot";
 const F32 = "prefill-gemm-q5k-multirow-f32";
@@ -50,195 +48,12 @@ const TOLS = [
   "PREFILL_GEMM_Q5K_F32_REL_TOL", "PREFILL_GEMM_Q5K_F32_ABS_TOL",
 ];
 
-function blankNonCode(src: string, keepStrings: boolean): string {
-  const out = src.split("");
-  const blank = (i: number): void => { if (i < out.length && out[i] !== "\n") out[i] = " "; };
-  const blankTo = (from: number, to: number): void => { for (let i = from; i < to; i++) blank(i); };
-  // dopo uno di questi caratteri una `/` apre un regex, non una divisione
-  const VALUE_POS = /^$|[(,=:[!&|?{};+\-*%~^<>]/;
-  let prev = "";
-
-  const skipQuoted = (open: number, quote: string): number => {
-    if (!keepStrings) blank(open);
-    for (let i = open + 1; i < src.length; i++) {
-      const c = src[i];
-      if (c === "\\") { if (!keepStrings) blankTo(i, i + 2); i++; continue; }
-      if (c === "\n") return i; // stringa non chiusa: non mangiarsi il resto del file
-      if (!keepStrings) blank(i);
-      if (c === quote) return i + 1;
-    }
-    return src.length;
-  };
-  const skipRegex = (open: number): number => {
-    let cls = false;
-    for (let i = open + 1; i < src.length; i++) {
-      const c = src[i];
-      if (c === "\\") { i++; continue; }
-      if (c === "\n") return open + 1; // non era un regex dopotutto: era una divisione
-      if (c === "[") cls = true;
-      else if (c === "]") cls = false;
-      else if (c === "/" && !cls) { blankTo(open, i + 1); return i + 1; }
-    }
-    return open + 1;
-  };
-  /** consuma codice fino a fine file, o alla `}` che chiude un `${...}` */
-  const code = (start: number, inTemplate: boolean): number => {
-    let i = start, brace = 0;
-    while (i < src.length) {
-      const c = src[i], d = src[i + 1] ?? "";
-      if (inTemplate && c === "}" && brace === 0) return i;
-      if (c === "/" && d === "/") { while (i < src.length && src[i] !== "\n") blank(i++); continue; }
-      if (c === "/" && d === "*") {
-        const e = src.indexOf("*/", i + 2), stop = e < 0 ? src.length : e + 2;
-        blankTo(i, stop); i = stop; continue;
-      }
-      if (c === "/" && VALUE_POS.test(prev)) { i = skipRegex(i); prev = "/"; continue; }
-      if (c === '"' || c === "'") { i = skipQuoted(i, c); prev = '"'; continue; }
-      if (c === "`") { i = skipTemplate(i); prev = "`"; continue; }
-      if (c === "{") brace++;
-      else if (c === "}") brace--;
-      if (!/\s/.test(c)) prev = c;
-      i++;
-    }
-    return i;
-  };
-  const skipTemplate = (open: number): number => {
-    if (!keepStrings) blank(open);
-    let i = open + 1;
-    while (i < src.length) {
-      const c = src[i];
-      if (c === "\\") { if (!keepStrings) blankTo(i, i + 2); i += 2; continue; }
-      if (c === "`") { if (!keepStrings) blank(i); return i + 1; }
-      if (c === "$" && src[i + 1] === "{") {
-        if (!keepStrings) blankTo(i, i + 2);
-        const close = code(i + 2, true);
-        if (!keepStrings) blank(close);
-        i = close + 1; continue;
-      }
-      if (!keepStrings) blank(i);
-      i++;
-    }
-    return i;
-  };
-  code(0, false);
-  return out.join("");
-}
-
-const memo = new Map<string, string>();
-/** sorgente con commenti/stringhe/template biancati: quello che si conta */
-const code = (rel: string): string => {
-  const key = `code:${rel}`;
-  if (!memo.has(key)) memo.set(key, blankNonCode(raw(rel), false));
-  return memo.get(key)!;
-};
-/** sorgente coi soli commenti biancati: serve agli import e ai literal, che sono stringhe */
-const uncommented = (rel: string): string => {
-  const key = `unc:${rel}`;
-  if (!memo.has(key)) memo.set(key, blankNonCode(raw(rel), true));
-  return memo.get(key)!;
-};
-
-const lineOf = (src: string, idx: number): number => src.slice(0, idx).split("\n").length;
-/** occorrenze di un identificatore (non di una sottostringa qualsiasi) */
-const hitsOf = (src: string, ident: string, suffix = ""): number[] =>
-  [...src.matchAll(new RegExp(`(?<![A-Za-z0-9_$])${ident}\\s*${suffix}`, "g"))].map((m) => m.index!);
-
-const CLOSE: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
-
-/** indice del delimitatore che chiude il gruppo aperto a `open`, o -1 */
-function closeOf(src: string, open: number): number {
-  const stack: string[] = [];
-  for (let i = open; i < src.length; i++) {
-    const c = src[i];
-    if (c === "(" || c === "[" || c === "{") stack.push(CLOSE[c]);
-    else if (c === ")" || c === "]" || c === "}") {
-      if (stack.pop() !== c) return -1;
-      if (stack.length === 0) return i;
-    }
-  }
-  return -1;
-}
-
-/** elementi al livello superiore di un gruppo `[...]` / `(...)` (virgole a profondita' 0) */
-function topLevelItems(src: string, open: number): string[] {
-  const end = closeOf(src, open);
-  if (end < 0) return [];
-  const items: string[] = [];
-  let depth = 0, cur = "";
-  for (const c of src.slice(open + 1, end)) {
-    if (c === "(" || c === "[" || c === "{") depth++;
-    else if (c === ")" || c === "]" || c === "}") depth--;
-    if (c === "," && depth === 0) { items.push(cur.trim()); cur = ""; continue; }
-    cur += c;
-  }
-  if (cur.trim().length > 0) items.push(cur.trim());
-  return items;
-}
-
-interface Call { at: number; line: number; args: string[]; bindings: string[] | null }
-
-/**
- * Chiamate a `name(`, ognuna coi SUOI argomenti e con la SUA lista di binding.
- * La lista dev'essere INLINE subito dopo la chiamata (solo spazi e virgole in
- * mezzo): se e' passata per variabile, `bindings` resta null e il test lo DICE,
- * invece di agganciare il primo `[` che trova piu' avanti — che sarebbe un
- * array scorrelato.
- */
-function callsTo(src: string, name: string): Call[] {
-  return hitsOf(src, name, "\\(").map((at) => {
-    const open = src.indexOf("(", at);
-    const end = closeOf(src, open);
-    let j = end + 1;
-    while (end > 0 && j < src.length && /[\s,]/.test(src[j])) j++;
-    return {
-      at,
-      line: lineOf(src, at),
-      args: topLevelItems(src, open),
-      bindings: end > 0 && src[j] === "[" ? topLevelItems(src, j) : null,
-    };
-  });
-}
-
-/** contenuto di ogni `import { ... } from "<src>"` che viene da `suffix` */
-const importsFrom = (src: string, suffix: string): string =>
-  [...src.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g)]
-    .filter((m) => m[2].endsWith(suffix)).map((m) => m[1].replace(/\s+/g, " ").trim()).join(" ; ");
-
-const has = (list: string, ident: string): boolean =>
-  new RegExp(`(?<![A-Za-z0-9_$])${ident}(?![A-Za-z0-9_$])`).test(list);
-
-/**
- * Definizione di un helper, sia nella forma `function f(` sia in quella
- * `const f = (`. Ritorna il corpo `{...}`: il primo gruppo graffo a profondita'
- * di parentesi 0 dopo il nome (cosi' parametri destrutturati e tipi inline non
- * lo confondono).
- */
-function helperBody(src: string, name: string): string | null {
-  const def = new RegExp(`(?:function\\s+${name}\\s*\\(|const\\s+${name}\\s*=)`).exec(src);
-  if (!def) return null;
-  let depth = 0;
-  for (let i = def.index; i < src.length; i++) {
-    const c = src[i];
-    if (c === "(" || c === "[") depth++;
-    else if (c === ")" || c === "]") depth--;
-    else if (c === "{" && depth === 0) {
-      const end = closeOf(src, i);
-      return end < 0 ? null : src.slice(i, end + 1);
-    }
-  }
-  return null;
-}
-
 /** corpo del banco nuovo, o un messaggio che dice DOVE manca */
 function bankBody(src: string): string {
   const body = helperBody(src, FN);
   expect(body === null ? `${KTEST}: ${FN} non e' definito` : "ok").toBe("ok");
   return body!;
 }
-
-/** quante volte una stringa compare come LETTERALE (commenti gia' biancati) */
-const literalHits = (src: string, s: string): number[] =>
-  [...src.matchAll(new RegExp(`["'\`]${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'\`]`, "g"))].map((m) => m.index!);
 
 describe("(a) i due casi nuovi esistono, e ciascuno una volta sola", () => {
   for (const name of [IDOT, F32]) {

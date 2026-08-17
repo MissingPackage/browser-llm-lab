@@ -235,9 +235,19 @@ function ifBlockContaining(src: string, needle: string): { body: string; at: num
   return end < 0 ? null : { body: src.slice(brace, end + 1), at: iff };
 }
 
-/** Il ramo K-quant di `loadW`: quello che carica Q4_K/Q5_K/Q6_K. */
+/**
+ * Il ramo K-quant di `loadW`: quello che carica i CINQUE K-quant (dal
+ * 2026-08-17 anche Q2_K e Q3_K, spec §4 T3).
+ *
+ * L'ancora NON e' piu' `GGML_TYPE.Q4_K`: quel testo, da quando la scelta del
+ * kernel sta in un selettore solo, compare PRIMA nella mappa a livello di
+ * modulo (`Q35_KQUANT_OF_GGML`), e `ifBlockContaining` risalirebbe a un `if`
+ * che non c'entra — un test rotto per un'ancora, non per un difetto. Si ancora
+ * a cio' che solo questo ramo fa: leggere il passo del superblocco dal
+ * descrittore del formato che sta caricando.
+ */
 function kquantBranch(src: string): { body: string; at: number } {
-  const b = ifBlockContaining(src, "GGML_TYPE.Q4_K");
+  const b = ifBlockContaining(src, "KQUANT_GEMV_DESC[kkq].blockBytes");
   expect(b, "ramo K-quant di loadW non trovato in q35gpumodel.ts").not.toBeNull();
   return b!;
 }
@@ -467,21 +477,30 @@ describe("[a] `planPrefillGemm` sta in TRE posti: `gemvB`, il ramo K-quant di `l
       .toEqual([...site.fmts].sort());
   });
 
-  it("il kind del ramo K-quant nomina TUTTI E TRE i formati, non solo quello veloce", () => {
+  it("il kind del ramo K-quant e' il tipo REALE letto dall'header, non un letterale", () => {
     // La variabile che si passa al piano dev'essere il tipo REALE del tensore:
-    // se coprisse il solo q5_K, il q4_K e il q6_K arriverebbero al piano sotto
+    // se coprisse il solo q5_K, gli altri formati arriverebbero al piano sotto
     // falso nome e il piano risponderebbe sulla geometria sbagliata (e' la
     // bugia che il piano stesso si e' appena tolto, `o.kind as "q4_0"`).
+    //
+    // Fino al 2026-08-16 quella variabile era un TERNARIO che nominava i tre
+    // formati di allora, e questo caso contava i tre letterali. Dal T3 della
+    // spec dei K-quant la mappa tipo GGUF -> kind sta in un posto solo
+    // (`q35KQuantKindOfGgml`), che e' anche cio' che rende impossibile la
+    // divergenza fra kernel, `blockBytes` e kind del piano: qui si pretende che
+    // il ramo la CHIAMI sul tipo del tensore. Che la mappa poi sia giusta —
+    // cinque tipi, cinque kind, superblocco confrontato con `tensorByteSize` —
+    // e' provato in tests/engine-q35-q2k-route.test.ts, non qui.
     const kqCode = kquantBranch(code(MODEL)).body;
     const ident = argObjOf(kqCode, "planPrefillGemm")!.get("kind")!;
-    // sorgente coi commenti biancati: il ternario e' codice, i commenti che
-    // nominano gli stessi letterali no
-    const kqUnc = kquantBranch(uncommented(MODEL)).body;
-    const decl = new RegExp(`const\\s+${ident}\\s*(?::[^=;]*)?=([^;]*);`).exec(kqUnc);
-    expect(decl, `dichiarazione di \`${ident}\` non trovata nel ramo K-quant`).not.toBeNull();
-    for (const lit of ["q4_K", "q5_K", "q6_K"]) {
-      expect(decl![1], `\`${ident}\` deve nominare ${lit}`).toContain(lit);
-    }
+    // La dichiarazione sta appena SOPRA il ramo: e' la sua condizione (`if
+    // (kkq !== undefined)`), quindi si cerca nel file e non nel corpo.
+    // Sorgente coi commenti biancati: i commenti che nominano gli stessi
+    // identificatori non valgono come codice.
+    const decl = new RegExp(`const\\s+${ident}\\s*(?::[^=;]*)?=([^;]*);`).exec(uncommented(MODEL));
+    expect(decl, `dichiarazione di \`${ident}\` non trovata in ${MODEL}`).not.toBeNull();
+    expect(decl![1], `\`${ident}\` deve venire dal tipo del tensore, non da un letterale`)
+      .toMatch(/q35KQuantKindOfGgml\(\s*t\.type\s*\)/);
   });
 });
 
@@ -549,20 +568,25 @@ describe("[b] il ramo K-quant emette la via veloce q5_K, e tiene il gemv come le
     }
   });
 
-  it("il ternario `gemvQ4KWgsl/gemvQ5KWgsl/gemvQ6KWgsl({batch:true})` resta come ramo legacy", () => {
+  // Le due emissioni del gemv non nominano piu' TRE generatori: ne chiedono UNO
+  // al selettore, col kind vero. Il conto resta lo stesso — una batch (fallback
+  // legacy) e una scalare (decode) — perche' e' il conto delle EMISSIONI, non
+  // dei formati: prima erano tre rami di un ternario che ne produceva una sola.
+  it("`q35KQuantGemvWgsl({batch:true})` resta come ramo legacy", () => {
     const kq = kquantBranch(code(MODEL));
-    for (const n of ["gemvQ4KWgsl", "gemvQ5KWgsl", "gemvQ6KWgsl"]) {
-      const batched = callsTo(kq.body, n).filter((c) => c.batch);
-      expect(batched.length, `${n}({… batch: true}) — il fallback legacy non si butta`).toBe(1);
+    const batched = callsTo(kq.body, "q35KQuantGemvWgsl").filter((c) => c.batch);
+    expect(batched.length, "q35KQuantGemvWgsl(…, { batch: true }) — il fallback legacy non si butta")
+      .toBe(1);
+    // e nessun generatore chiamato per nome qui: la scelta sta nel selettore
+    for (const n of ["gemvQ2KWgsl", "gemvQ3KWgsl", "gemvQ4KWgsl", "gemvQ5KWgsl", "gemvQ6KWgsl"]) {
+      expect(callsTo(kq.body, n).length, `${n}( nel ramo K-quant: la scelta e' del selettore`).toBe(0);
     }
   });
 
   it("il path di DECODE non e' toccato: `push` col gemv K-quant scalare resta", () => {
     const kq = kquantBranch(code(MODEL));
-    for (const n of ["gemvQ4KWgsl", "gemvQ5KWgsl", "gemvQ6KWgsl"]) {
-      const scalar = callsTo(kq.body, n).filter((c) => !c.batch);
-      expect(scalar.length, `${n}({…}) scalare (decode)`).toBe(1);
-    }
+    const scalar = callsTo(kq.body, "q35KQuantGemvWgsl").filter((c) => !c.batch);
+    expect(scalar.length, "q35KQuantGemvWgsl(…) scalare (decode)").toBe(1);
     expect(hitsOf(kq.body, "gemvGrid", "\\(").length,
       "la griglia del gemv di decode resta `gemvGrid`").toBeGreaterThanOrEqual(1);
   });
@@ -578,13 +602,17 @@ describe("[c] worklist: cosa emette ancora `batch: true` senza chiedere la rotta
     //  attnDecodeWgsl  non e' un GEMM, ha la sua riga ed e' gia' in streaming;
     //  gemvQuantWgsl   e' il fallback DENTRO `gemvB`, cioe' la via legacy
     //                  scelta DAL PIANO — coperto, non eccezione;
-    //  gemvQ4K/Q5K/Q6K DAL CABLAGGIO IN POI sono il fallback dentro un ramo che
+    //  q35KQuantGemvWgsl DAL CABLAGGIO IN POI e' il fallback dentro un ramo che
     //                  la rotta la chiede: stessa posizione di `gemvQuantWgsl`.
-    //                  Prima di questo task erano eccezioni vere ed erano nella
-    //                  worklist; questa e' la riga che cambia.
-    const EXCLUDED = new Set(["attnDecodeWgsl", "gemvQuantWgsl",
-      "gemvQ4KWgsl", "gemvQ5KWgsl", "gemvQ6KWgsl"]);
-    const batchSites = [...src.matchAll(/(\w+Wgsl)\(\{[^}]*batch:\s*true/g)]
+    //                  Prima del cablaggio erano eccezioni vere (tre nomi:
+    //                  gemvQ4K/Q5K/Q6K) ed erano nella worklist; dal T3 dei
+    //                  K-quant il nome e' UNO, quello del selettore.
+    const EXCLUDED = new Set(["attnDecodeWgsl", "gemvQuantWgsl", "q35KQuantGemvWgsl"]);
+    // Il PRIMO ARGOMENTO OPZIONALE non e' cosmesi: il selettore si chiama
+    // `q35KQuantGemvWgsl(kind, { … batch: true })`, e una regex che pretende
+    // `Wgsl({` non lo vedrebbe — la worklist resterebbe verde SALTANDO il sito,
+    // che e' peggio di un fallimento (copertura finta, it.14).
+    const batchSites = [...src.matchAll(/(\w+Wgsl)\((?:[^(){}]*,\s*)?\{[^}]*batch:\s*true/g)]
       .map((m) => ({ name: m[1], line: lineOf(src, m.index!) }));
     const worklist = batchSites.filter((s) => !EXCLUDED.has(s.name));
     expect(worklist.map((s) => s.name).sort(),
@@ -592,18 +620,20 @@ describe("[c] worklist: cosa emette ancora `batch: true` senza chiedere la rotta
       .toEqual(["gemvF32Wgsl", "gemvF32Wgsl"]);
   });
 
-  it("i tre gemv K-quant batch stanno DENTRO il ramo che chiede la rotta", () => {
-    // L'esclusione qui sopra non e' una dispensa: vale solo perche' quelle
-    // emissioni sono nel ramo che ha appena chiesto `planPrefillGemm`. Se
-    // qualcuno le sposta fuori, l'esclusione diventa una copertura finta —
+  it("il gemv K-quant batch sta DENTRO il ramo che chiede la rotta", () => {
+    // L'esclusione qui sopra non e' una dispensa: vale solo perche' quella
+    // emissione e' nel ramo che ha appena chiesto `planPrefillGemm`. Se
+    // qualcuno la sposta fuori, l'esclusione diventa una copertura finta —
     // questo test e' cio' che lo impedisce.
+    //
+    // E si pretende che ce ne sia ALMENO UNA: con un `toBe` fra due zeri il
+    // caso passerebbe anche il giorno in cui il fallback legacy sparisce.
     const src = code(MODEL);
     const kq = kquantBranch(src);
-    for (const n of ["gemvQ4KWgsl", "gemvQ5KWgsl", "gemvQ6KWgsl"]) {
-      const all = callsTo(src, n).filter((c) => c.batch);
-      const inside = callsTo(kq.body, n).filter((c) => c.batch);
-      expect(all.length, `${n} batch nel file`).toBe(inside.length);
-    }
+    const all = callsTo(src, "q35KQuantGemvWgsl").filter((c) => c.batch);
+    const inside = callsTo(kq.body, "q35KQuantGemvWgsl").filter((c) => c.batch);
+    expect(inside.length, "q35KQuantGemvWgsl batch dentro il ramo K-quant").toBeGreaterThan(0);
+    expect(all.length, "q35KQuantGemvWgsl batch nel file").toBe(inside.length);
   });
 });
 

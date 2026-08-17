@@ -205,7 +205,67 @@ function checkGeom(o: { K: number; N: number; M: number }, who: string): void {
 }
 
 /**
- * IL PREDICATO DI AMMISSIBILITA' NON VIVE QUI: si SONDA il kernel.
+ * IL PREDICATO SULLA SHAPE — la sede unica, dichiarata, dell'ammissibilita' AL
+ * PIANO, e la cosa che il flag `wired` NON sa fare.
+ *
+ * PERCHE' ESISTE, e va scritto per esteso perche' e' una trappola registrata:
+ * `wired` e' un flag PER FORMATO. Accendere un formato lo accende su TUTTI i
+ * suoi siti nello stesso istante — compresi i 48 `ssm_alpha`/`ssm_beta` del 4B,
+ * che sono q8_0 con N=32. La forma split-K produce `PREFILL_GEMM_ROWS_PER_WG`
+ * (64) righe di uscita per workgroup: a N=32 ogni dispatch lavorerebbe a mezzo
+ * workgroup, su una shape dove la forma non e' mai stata misurata. Il q8_0 e'
+ * stato cablato (2026-08-15) SOLO perche' questo controllo esisteva gia'; q2_K
+ * e q3_K arriveranno con lo stesso vincolo. Sul 35B gli stessi tensori di attn
+ * hanno N=4096 e devono passare: l'esclusione giusta e' sulla SHAPE, non sulla
+ * famiglia.
+ *
+ * PERCHE' NEL PIANO E NON ACCANTO AL KERNEL. Il contorno del kernel risponde a
+ * «questa forma si genera?», e su N la risposta e' SI': il kernel guarda
+ * `r < N` e produce il valore giusto anche a N=32 (lo dice il commento di
+ * `PREFILL_GEMM_ROWS_PER_WG` in kernels/wgsl.ts, che rimanda proprio qui).
+ * Quello che N decide e' se la forma CONVIENE, ed e' una domanda del piano.
+ * Metterlo nel kernel romperebbe anche le query di dimensionamento, che si
+ * interrogano a N=1 apposta.
+ *
+ * PERCHE' `kind` E `K` STANNO NELLA FIRMA se la decisione guarda solo N: perche'
+ * la ragione deve poter NOMINARE il sito che rifiuta — «N=32» da solo non dice
+ * su quale formato e con quale K si e' fermato — e perche' il giorno in cui un
+ * formato avesse un pavimento suo (un `DEC_SPLITK_MIN_N` per famiglia), questa
+ * e' la sede in cui aggiungerlo senza aprirne una seconda. Cio' che qui NON si
+ * decide e' la geometria su K: quella e' del kernel (`prefillGemmCheck`), e
+ * ricopiarla qui sarebbe il difetto di it.7 in forma nuova.
+ *
+ * SI LEGGE IN UN POSTO SOLO — `kernelVerdict`, qui sotto, accanto al flag
+ * `wired`. Il gate strutturale sta in tests/engine-prefill-q2k-q3k.test.ts
+ * ([s4]), ed e' la stessa postura del gate [w4] su `prefillGemmWiring`.
+ */
+export function prefillGemmShapeOk(o: { kind: PrefillGemmKind; K: number; N: number }):
+  { ok: boolean; why: string } {
+  if (o.N < PREFILL_GEMM_ROWS_PER_WG) {
+    return {
+      ok: false,
+      // LA RAGIONE NOMINA N. E' il requisito che la rende utile: in telemetria
+      // «shape non ammessa» su 48 siti non direbbe QUALE dimensione li esclude.
+      why: `N=${o.N} sotto le ${PREFILL_GEMM_ROWS_PER_WG} righe di uscita per workgroup della `
+        + `forma split-K: il dispatch lavorerebbe a meno di meta' workgroup e la forma non e' `
+        + `stata misurata a questa shape (${o.kind}, K=${o.K}). Il sito resta sulla via legacy, `
+        + `che e' lenta e giusta`,
+    };
+  }
+  return {
+    ok: true,
+    // Anche l'AMMISSIONE porta la sua ragione (postura di `GemvCaps.why`): un
+    // booleano nudo non e' diagnosticabile a posteriori, e chi legge deve poter
+    // capire che un sito rimasto legacy lo e' per un ALTRO motivo.
+    why: `N=${o.N} >= ${PREFILL_GEMM_ROWS_PER_WG} righe di uscita per workgroup: la forma split-K `
+      + `riempie almeno un workgroup intero, quindi la shape ${o.kind} K=${o.K} N=${o.N} e' `
+      + `instradabile per geometria di uscita. Se questo sito resta legacy lo decide qualcos'altro `
+      + `— il cablaggio del formato, o il contorno del kernel su K — non il suo N`,
+  };
+}
+
+/**
+ * IL PREDICATO DI AMMISSIBILITA' DEL KERNEL NON VIVE QUI: si SONDA il kernel.
  *
  * `prefillPartialFloats` passa per `prefillGemmCheck` (kernels/wgsl.ts), che e'
  * l'unico posto dove sono scritti sia il rifiuto dei kind fuori elenco sia la
@@ -225,20 +285,52 @@ function checkGeom(o: { K: number; N: number; M: number }, who: string): void {
  * scritto per essere letto da un umano, e riscriverlo qui sarebbe la stessa
  * duplicazione, spostata dalle soglie alle parole.
  *
- * DUE DOMANDE, NON UNA (da riga 4 del goal K-quant). «Esiste un kernel per
- * questo formato?» e «quel kernel e' INSTRADATO in produzione?» erano la stessa
- * domanda finche' ogni forma portata veniva anche cablata. Non lo sono piu': i
- * kernel q4_K, q6_K e q8_0 stanno in `PREFILL_GEMM_KINDS` — sono portati,
- * misurati e verificati — ma nessun sito ci passa, e chi lo dice e' il flag
- * `wired` di `PREFILL_GEMM_SPEC`, che si legge QUI e in nessun altro posto.
- * Sta qui e non nel kernel per la ragione di sempre: un secondo predicato di
- * ammissibilita' fuori da questo file e' esattamente il difetto che i gate
- * strutturali sorvegliano.
+ * TRE DOMANDE, NON UNA. «Esiste un kernel per questo formato?», «quel kernel e'
+ * INSTRADATO in produzione?» e «su QUESTA shape conviene?» erano la stessa
+ * domanda finche' ogni forma portata veniva anche cablata e finche' ogni sito di
+ * un formato aveva la stessa geometria. Non lo sono piu':
+ *   - il CABLAGGIO lo dice il flag `wired` di `PREFILL_GEMM_SPEC`, che si legge
+ *     QUI e in nessun altro posto (i kernel q4_K, q6_K, q2_K e q3_K esistono e
+ *     sono portati, e nessun sito ci passa);
+ *   - la SHAPE la dice `prefillGemmShapeOk`, qui sopra, e serve perche' `wired`
+ *     e' per FAMIGLIA: accendere un formato accenderebbe anche i suoi siti a
+ *     N=32 (i 48 `ssm_alpha`/`ssm_beta` del 4B) se non ci fosse.
+ *
+ * L'ORDINE DELLA COLPA NON E' INDIFFERENTE, e resta quello di prima: PRIMA il
+ * cablaggio, POI la shape. Su un formato non cablato la ragione STRUTTURALE e'
+ * il cablaggio — con N buono quel sito resterebbe legacy comunque, quindi
+ * accusare la shape sarebbe una risposta vera e fuorviante. Il caso [6] di
+ * tests/engine-prefillgemm-nmin.test.ts pre-registra quest'ordine.
+ *
+ * MA LE DUE CAUSE SONO INDIPENDENTI, e dal 2026-08-17 il rifiuto del cablaggio
+ * PORTA CON SE' anche quella sulla shape quando c'e'. La ragione non e'
+ * estetica: un sito q2_K a N=32 che dicesse solo «formato non cablato»
+ * suggerirebbe che cablare il formato lo manderebbe sulla via veloce — che e'
+ * FALSO, ed e' esattamente la trappola che il predicato esiste per disinnescare.
+ * Chi legge quella riga in telemetria deve vedere entrambe le cause: la
+ * dominante per prima, la concorrente subito dopo.
+ *
+ * Tutte e tre stanno in questo file per la ragione di sempre: un secondo
+ * predicato di ammissibilita' fuori di qui e' esattamente il difetto che i gate
+ * strutturali sorvegliano ([w4] sul cablaggio, [s4] sulla shape).
  */
 function kernelVerdict(o: {
   kind: PrefillQuantKind; K: number; N: number; M: number;
 }): { splits: number; kind: PrefillGemmKind }
-  | { rejected: string; from: "kernel" | "wiring" } {
+  | { rejected: string; from: "kernel" | "wiring" | "shape" } {
+  // LA SHAPE SI CALCOLA PRIMA DI TUTTO ma NON PARLA PER PRIMA. E' una funzione
+  // pura e senza effetti, quindi calcolarla in anticipo non costa niente e non
+  // cambia l'ordine della colpa: serve qui sopra al ramo del cablaggio, che la
+  // allega come causa concorrente, e qui sotto come causa dominante quando il
+  // cablaggio non ha niente da dire.
+  //
+  // IL CAST, come quello piu' sotto verso il kernel: il predicato dichiara
+  // `PrefillGemmKind` perche' la sua ragione nomina un formato, ma va
+  // interrogato anche sui kind che un kernel non ce l'hanno — la geometria di
+  // uscita non dipende dalla famiglia, e chiederglielo solo per i kind noti
+  // lascerebbe il controllo IRRAGGIUNGIBILE sui formati non ancora in elenco,
+  // cioe' esattamente dove la trappola aspetta.
+  const shape = prefillGemmShapeOk({ kind: o.kind as PrefillGemmKind, K: o.K, N: o.N });
   // IL CABLAGGIO PRIMA DELLA GEOMETRIA, e nello stesso ordine con cui il kernel
   // mette il formato prima del K: su un formato non cablato con K storto la
   // ragione strutturale e' il cablaggio — il K sarebbe una risposta vera e
@@ -248,35 +340,25 @@ function kernelVerdict(o: {
     if (!w.wired) {
       return {
         from: "wiring",
-        rejected: `il formato "${o.kind}" ha il suo moltiplicatore multi-riga in produzione ed e' `
-          + `MISURATO, ma NON e' cablato: il piano instrada solo i kind con \`wired: true\` in `
-          + `PREFILL_GEMM_SPEC (kernels/wgsl.ts), e questo non lo e' — «${w.why}»`,
+        rejected: `il formato "${o.kind}" ha il suo moltiplicatore multi-riga in produzione, ma `
+          + `NON e' cablato: il piano instrada solo i kind con \`wired: true\` in `
+          + `PREFILL_GEMM_SPEC (kernels/wgsl.ts), e questo non lo e' — «${w.why}»`
+          // LA CAUSA CONCORRENTE, quando c'e'. Senza questa coda, cablare il
+          // formato sembrerebbe bastare — e su questi siti non basta.
+          + (shape.ok ? "" : ` — E NON BASTEREBBE CABLARLO: questo sito ha anche una SHAPE che il `
+            + `piano non instrada su NESSUN formato, ${shape.why}`),
       };
     }
   }
-  // N SOTTO LE RIGHE PER WORKGROUP — il predicato che mancava (goal
-  // engine-velocita-decode, riga 2d), e sta QUI perche' qui si decide la rotta.
+  // LA SHAPE SUBITO DOPO IL CABLAGGIO, e prima di ogni domanda al kernel.
   //
-  // La forma split-K produce `PREFILL_GEMM_ROWS_PER_WG` righe di uscita per
-  // workgroup. Con N piu' piccolo il kernel e' comunque CORRETTO — guarda
-  // `r < N` — ma il dispatch lavora a meno di meta' workgroup e la forma non e'
-  // mai stata misurata li'. Non e' il kernel a rifiutare: e' il piano a non
-  // instradare.
-  //
-  // COSA PROTEGGE. I 48 siti `ssm_alpha`/`ssm_beta` del 4B hanno N=32. Fino a
-  // ieri erano esclusi dal flag `wired` del q8_0, cioe' PER FAMIGLIA — e quel
-  // flag e' esattamente cio' che il cablaggio del q8_0 deve girare. Girarlo
-  // senza questo controllo instraderebbe anche quei 48 siti e cambierebbe cio'
-  // che il 4B esegue oggi, in peggio. L'esclusione giusta e' sulla SHAPE: sul
-  // 35B gli stessi tensori di attn hanno N=4096 e devono passare.
-  if (o.N < PREFILL_GEMM_ROWS_PER_WG) {
-    return {
-      from: "kernel",
-      rejected: `N=${o.N} sotto le ${PREFILL_GEMM_ROWS_PER_WG} righe di uscita per workgroup della `
-        + "forma split-K: il dispatch lavorerebbe a meno di meta' workgroup e la forma non e' stata "
-        + "misurata a questa shape. Il sito resta sulla via legacy, che e' lenta e giusta",
-    };
-  }
+  // Il predicato NON vive piu' qui in linea: ha un nome, una firma e una sede
+  // sola — `prefillGemmShapeOk`, sopra — e questo e' il suo UNICO lettore. La
+  // ragione dell'estrazione non e' estetica: un controllo in linea non si puo'
+  // interrogare da un test senza far girare tutto il piano, e non si puo'
+  // sorvegliare con un gate strutturale che pretenda che di predicati sulla
+  // shape ce ne sia uno solo (tests/engine-prefill-q2k-q3k.test.ts, [s4]).
+  if (!shape.ok) return { from: "shape", rejected: shape.why };
   // IL KIND CHE ARRIVA AL KERNEL E' QUELLO VERO. Prima qui c'era `o.kind as
   // "q4_0"`: una bugia innocua finche' il kernel accettava un formato solo, ma
   // appena ne accetta due quel cast fa contare blocchi da 32 dove l'unita' e'
@@ -352,9 +434,10 @@ export function planPrefillGemm(o: {
    * picco, lo split-K arriva al 91,0%. Spezzare il K da' a ogni workgroup un
    * accesso contiguo piu' lungo, e quello paga anche con una riga sola.
    *
-   * Quello che NON e' cambiato: il predicato sulla SHAPE (`kernelVerdict`) vale
-   * in entrambi i regimi. `ssm_alpha`/`ssm_beta` a N=32 restano legacy nel
-   * decode esattamente come nel prefill, su ogni famiglia.
+   * Quello che NON e' cambiato: il predicato sulla SHAPE (`prefillGemmShapeOk`,
+   * letto da `kernelVerdict`) vale in entrambi i regimi. `ssm_alpha`/`ssm_beta`
+   * a N=32 restano legacy nel decode esattamente come nel prefill, su ogni
+   * famiglia.
    */
   regime?: "prefill" | "decode";
 }): PrefillGemmRoute {
@@ -388,22 +471,35 @@ export function planPrefillGemm(o: {
 
   const verdict = kernelVerdict(o);
   if ("rejected" in verdict) {
-    // DUE RIFIUTI DIVERSI, due ragioni diverse. Quello del KERNEL dice «questa
-    // shape non si moltiplica cosi'»; quello del CABLAGGIO dice «questa shape si
-    // moltiplicherebbe benissimo, ma in produzione non ci si passa». Dare a
-    // entrambi la stessa frase manderebbe in telemetria una diagnosi falsa: si
+    // TRE RIFIUTI DIVERSI, tre ragioni diverse. Quello del KERNEL dice «questa
+    // shape non si moltiplica cosi'»; quello della SHAPE dice «si
+    // moltiplicherebbe correttamente, ma non conviene e non e' mai stata
+    // misurata li'»; quello del CABLAGGIO dice «questa forma si
+    // moltiplicherebbe benissimo, ma in produzione non ci si passa». Dare a due
+    // di loro la stessa frase manderebbe in telemetria una diagnosi falsa: si
     // leggerebbe un problema di geometria dove il kernel non c'entra niente.
+    //
+    // IL TERZO RAMO E' NUOVO, e toglie una bugia che c'era prima: il rifiuto su
+    // N usciva marcato `kernel` e la frase mandava a leggere `prefillGemmCheck`
+    // — un file che su N non decide niente e che nel suo commento dice proprio
+    // di NON deciderlo. Chi fosse andato a cercarci la soglia non l'avrebbe
+    // trovata. Ora la frase indica la sede vera: `prefillGemmShapeOk`, qui.
     return {
       via: "legacy",
       reason: verdict.from === "wiring"
         ? `la via veloce di prefill NON e' cablata su questo formato ⇒ si resta su legacy `
           + `(M gemv replicate, riuso pesi zero), che e' cio' che il motore emette oggi. `
           + `Il rifiuto arriva dal FLAG DI CABLAGGIO, non dal contorno del kernel: la forma `
-          + `esiste ed e' misurata, semplicemente nessun sito ci passa — «${verdict.rejected}»`
-        : `il moltiplicatore multi-riga di prefill NON accetta questa shape ⇒ si resta su legacy `
-          + `(M gemv replicate, riuso pesi zero) invece di inventare una forma non misurata. `
-          + `Il rifiuto arriva dal contorno del kernel — kernels/wgsl.ts, prefillGemmCheck, `
-          + `l'unico posto dove kind e geometria sono decisi: «${verdict.rejected}»`,
+          + `esiste, semplicemente nessun sito ci passa — «${verdict.rejected}»`
+        : verdict.from === "shape"
+          ? `la SHAPE di questo sito non e' instradabile ⇒ si resta su legacy (M gemv replicate, `
+            + `riuso pesi zero). Il rifiuto NON arriva dal kernel — a questa shape il kernel e' `
+            + `CORRETTO — ma dal PIANO, che e' l'unico posto dove si decide se una forma CONVIENE: `
+            + `prefillgemmplan.ts, prefillGemmShapeOk — «${verdict.rejected}»`
+          : `il moltiplicatore multi-riga di prefill NON accetta questa shape ⇒ si resta su legacy `
+            + `(M gemv replicate, riuso pesi zero) invece di inventare una forma non misurata. `
+            + `Il rifiuto arriva dal contorno del kernel — kernels/wgsl.ts, prefillGemmCheck, `
+            + `l'unico posto dove kind e geometria sono decisi: «${verdict.rejected}»`,
       splits: 0, partialFloats: 0, wgStorageBytes: 0, xqU32: 0, xscF32: 0,
     };
   }

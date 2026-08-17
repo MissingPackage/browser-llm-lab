@@ -20,6 +20,7 @@ import {
 } from "../src/engine/residency";
 import { SLAB_DOWN_Q4_0, SLAB_DOWN_Q4_1, packExpertSlab } from "../src/engine/moe";
 import { pairGemvSiluFastWgsl, gemvAccumFastWgsl, type ArenaOpts } from "../src/engine/kernels/wgsl";
+import { mkMockDevice } from "./helpers/mock-gpu-device";
 
 const GGUF_PATH = join(homedir(), ".cache/blab-models/GLM-4.7-Flash-Q4_0.gguf");
 
@@ -105,24 +106,10 @@ describe.skipIf(!existsSync(GGUF_PATH))("GgufExpertIndex sul GGUF reale", () => 
 
 // ------------------------- ExpertCache (device mock) -------------------------
 
-interface MockWrite { buf: object; offset: number; bytes: number }
-
-function mkDevice(): { device: GPUDevice; writes: MockWrite[]; buffers: Array<{ size: number }> } {
-  const writes: MockWrite[] = [];
-  const buffers: Array<{ size: number }> = [];
-  const device = {
-    createBuffer: (d: { size: number }) => {
-      const b = { size: d.size, destroy() { /* mock */ } };
-      buffers.push(b);
-      return b;
-    },
-    queue: {
-      writeBuffer: (buf: object, offset: number, data: ArrayBufferView) =>
-        writes.push({ buf, offset, bytes: data.byteLength }),
-    },
-  } as unknown as GPUDevice;
-  return { device, writes, buffers };
-}
+// Il device finto viveva qui; dal 2026-08-17 ha due clienti (anche
+// engine-arena-q2k) e sta in `helpers/mock-gpu-device.ts`. L'alias tiene i
+// venti call site di questo file leggibili senza rinominarli uno per uno.
+const mkDevice = mkMockDevice;
 
 const rawFor = (layer: number) => ({
   gate: new Uint8Array(EXPERT_GATE_UP_BYTES),

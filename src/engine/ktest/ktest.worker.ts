@@ -6,7 +6,8 @@
 // ⇒ confronto a tolleranza relativa+assoluta, per kernel. Le parti intere (nibble,
 // int8, indici argmax) devono essere esatte.
 import {
-  gemvQuantWgsl, gemvF32Wgsl, gemvQ5KWgsl, gemvQ6KWgsl, rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
+  gemvQuantWgsl, gemvF32Wgsl, gemvQ2KWgsl, gemvQ3KWgsl, gemvQ5KWgsl, gemvQ6KWgsl,
+  rmsnormWgsl, ropeNeoxWgsl, kvAppendWgsl,
   attnDecodeWgsl, attnDecodeRefWgsl, attnDecodeCombineWgsl,
   siluMulWgsl, addInPlaceWgsl, argmaxStage1Wgsl, argmaxStage2Wgsl, type KArenaOpts,
   ARGMAX_CHUNK, ropeMlaNormWgsl, gemvQ8HeadsWgsl, mlaAttnDecodeWgsl, stridedCopyWgsl,
@@ -32,7 +33,9 @@ import { ExpertCache, arenaNeeds, expertKey, modelExpertPark, type ExpertRawByte
 import {
   repackQ4_0, repackQ8_0, repackQ4_1, repackKQuant,
   dequantQ4_0, dequantQ8_0, dequantQ4_1, dequantQ4_K, dequantQ5_K, dequantQ6_K,
+  dequantQ2_K, dequantQ3_K,
   Q4_1_BLOCK_BYTES, Q4_K_BLOCK_BYTES, Q5_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES,
+  Q2_K_BLOCK_BYTES, Q3_K_BLOCK_BYTES, Q2_K_BLOCK_WEIGHTS, Q3_K_BLOCK_WEIGHTS,
   Q5_K_BLOCK_WEIGHTS, Q8_0_BLOCK_WEIGHTS, Q4_1_BLOCK_WEIGHTS, Q4_K_BLOCK_WEIGHTS,
   Q6_K_BLOCK_WEIGHTS, Q8_0_BLOCK_BYTES,
 } from "../quant";
@@ -1295,18 +1298,68 @@ function fixScalesAt(src: Uint8Array, blockBytes: number, hiByteOffsets: number[
   }
 }
 
-// GEMV dei formati GLM (goal C2 fase 4): kernel vs dequant CPU di riferimento
-// (a loro volta validate su byte reali del GGUF contro gguf-py, it.2).
-async function testGemvC2(g: Gpu, kind: "q4_1" | "q4_K" | "q5_K" | "q6_K", K: number, N: number): Promise<KResult> {
-  const blockWeights = kind === "q4_1" ? 32 : 256;
-  const blockBytes = kind === "q4_1" ? Q4_1_BLOCK_BYTES : kind === "q4_K" ? Q4_K_BLOCK_BYTES : kind === "q5_K" ? Q5_K_BLOCK_BYTES : Q6_K_BLOCK_BYTES;
+/**
+ * Il descrittore per formato del banco C2. Prima erano QUATTRO catene di
+ * ternari parallele (pesi per blocco, byte per blocco, posizioni degli f16,
+ * dequant, generatore): coi formati saliti a SEI, la catena nasconde proprio
+ * cio' che il lettore cerca — dove stanno gli f16 di QUESTO formato — e
+ * aggiungerne uno vuol dire toccare cinque righe distanti fra loro sperando di
+ * non saltarne una. In tabella la riga di un formato si legge intera, e le
+ * celle vuote (il legacy che non ha generatore K-quant) si vedono.
+ *
+ * Le costanti arrivano da `quant.ts`, che e' dove i layout sono definiti: byte
+ * per blocco ricopiati qui sarebbero una seconda verita' da mantenere.
+ */
+interface C2Fmt {
+  /** pesi per blocco: 32 nei legacy, 256 (QK_K) nei K-quant */
+  blockWeights: number;
+  /** byte per blocco NEL GGUF (prima del repack a parole) */
+  blockBytes: number;
+  /**
+   * Byte ALTO di ogni f16 del blocco (offset dell'f16 + 1, perche' il GGUF e'
+   * little-endian). `fixScalesAt` ci scrive un esponente moderato: su byte
+   * pseudo-casuali le scale uscirebbero inf o denormali, e il confronto
+   * GPU-vs-CPU direbbe qualcosa sul virgola mobile invece che sul kernel.
+   * Le posizioni sono quelle del layout: q4_1/q4_K/q5_K tengono d e dmin IN
+   * TESTA (f16 a 0 e 2), q6_K la sola d in coda (208), q2_K d e dmin in coda
+   * (80 e 82), q3_K la sola d in coda (108) — vedi `dequantQ2_K` e
+   * `dequantQ3_K` in quant.ts, che leggono esattamente quei byte.
+   */
+  hiScaleBytes: number[];
+  /** il riferimento CPU: gia' verificato byte-identico a llama-quantize */
+  dequant: (src: Uint8Array, srcOffset: number, nBlocks: number, dst: Float32Array) => number;
+  /**
+   * Generatore del gemv K-quant (UN binding di superblocchi). `null` = formato
+   * legacy, che passa da `gemvQuantWgsl` con qs e scales su DUE binding.
+   */
+  gemv: ((opts: { K: number; N: number }) => string) | null;
+}
+
+const C2_FMT = {
+  q4_1: { blockWeights: Q4_1_BLOCK_WEIGHTS, blockBytes: Q4_1_BLOCK_BYTES, hiScaleBytes: [1, 3], dequant: dequantQ4_1, gemv: null },
+  q4_K: { blockWeights: Q4_K_BLOCK_WEIGHTS, blockBytes: Q4_K_BLOCK_BYTES, hiScaleBytes: [1, 3], dequant: dequantQ4_K, gemv: gemvQ4KWgsl },
+  q5_K: { blockWeights: Q5_K_BLOCK_WEIGHTS, blockBytes: Q5_K_BLOCK_BYTES, hiScaleBytes: [1, 3], dequant: dequantQ5_K, gemv: gemvQ5KWgsl },
+  q6_K: { blockWeights: Q6_K_BLOCK_WEIGHTS, blockBytes: Q6_K_BLOCK_BYTES, hiScaleBytes: [209], dequant: dequantQ6_K, gemv: gemvQ6KWgsl },
+  // I due formati degli expert nel Q2_K di bartowski (spec 2026-08-17): stessa
+  // preparazione dei byte e STESSA soglia degli altri K-quant — un formato che
+  // non passa a 2e-4/1e-3 e' un kernel da correggere, non una tolleranza da
+  // allargare.
+  q2_K: { blockWeights: Q2_K_BLOCK_WEIGHTS, blockBytes: Q2_K_BLOCK_BYTES, hiScaleBytes: [81, 83], dequant: dequantQ2_K, gemv: gemvQ2KWgsl },
+  q3_K: { blockWeights: Q3_K_BLOCK_WEIGHTS, blockBytes: Q3_K_BLOCK_BYTES, hiScaleBytes: [109], dequant: dequantQ3_K, gemv: gemvQ3KWgsl },
+} satisfies Record<string, C2Fmt>;
+
+type C2Kind = keyof typeof C2_FMT;
+
+// GEMV dei formati GLM (goal C2 fase 4) e dei K-quant del 35B: kernel vs
+// dequant CPU di riferimento (a loro volta validate su byte reali del GGUF
+// contro gguf-py, it.2).
+async function testGemvC2(g: Gpu, kind: C2Kind, K: number, N: number): Promise<KResult> {
+  const { blockWeights, blockBytes } = C2_FMT[kind];
   const nBlocks = (K / blockWeights) * N;
   const src = randBytes(nBlocks * blockBytes, 4321 + K + N);
-  if (kind === "q4_1") fixScalesAt(src, blockBytes, [1, 3]);       // d, m
-  else if (kind === "q4_K" || kind === "q5_K") fixScalesAt(src, blockBytes, [1, 3]);  // d, dmin
-  else fixScalesAt(src, blockBytes, [209]);                        // d in coda
+  fixScalesAt(src, blockBytes, C2_FMT[kind].hiScaleBytes);
   const w = new Float32Array(nBlocks * blockWeights);
-  (kind === "q4_1" ? dequantQ4_1 : kind === "q4_K" ? dequantQ4_K : kind === "q5_K" ? dequantQ5_K : dequantQ6_K)(src, 0, nBlocks, w);
+  C2_FMT[kind].dequant(src, 0, nBlocks, w);
   const x = randF32(K, 77 + K);
   const ref = new Float32Array(N);
   for (let r = 0; r < N; r++) {
@@ -1320,8 +1373,7 @@ async function testGemvC2(g: Gpu, kind: "q4_1" | "q4_K" | "q5_K" | "q6_K", K: nu
     await g.run(gemvQuantWgsl({ kind, K, N, hasBias: false }), [g.buf(qs), g.buf(scales), g.buf(x), y], N);
   } else {
     const blocks = repackKQuant(src, 0, nBlocks, blockBytes);
-    const code = kind === "q4_K" ? gemvQ4KWgsl({ K, N }) : kind === "q5_K" ? gemvQ5KWgsl({ K, N }) : gemvQ6KWgsl({ K, N });
-    await g.run(code, [g.buf(blocks), g.buf(x), y], N);
+    await g.run(C2_FMT[kind].gemv({ K, N }), [g.buf(blocks), g.buf(x), y], N);
   }
   const got = new Float32Array(await g.read(y, N * 4));
   return compare(`gemv-${kind}-${K}x${N}`, got, ref, 2e-4, 1e-3);
@@ -4183,6 +4235,15 @@ async function main(): Promise<void> {
     results.push(await testGemvC2(g, "q5_K", G.dModel, G.dFfnExpert));  // gate/up shexp
     results.push(await testGemvC2(g, "q6_K", G.dFfnExpert, G.dModel));  // down shexp
     results.push(await testGemvC2(g, "q6_K", G.dModel, 1024));          // output head (N ridotto)
+
+    // Q2_K e Q3_K (spec 2026-08-17): sono i DUE formati in cui bartowski tiene
+    // gli expert del 35B, e le shape sono le loro — gate/up leggono K=2048 e
+    // scrivono N=512, il down fa il contrario. Non taglie campione: e' su
+    // queste che il kernel gira quando il parco expert sta tutto nell'arena.
+    results.push(await testGemvC2(g, "q2_K", 2048, 512));               // expert 35B gate/up
+    results.push(await testGemvC2(g, "q2_K", 512, 2048));               // expert 35B down
+    results.push(await testGemvC2(g, "q3_K", 2048, 512));               // expert 35B gate/up
+    results.push(await testGemvC2(g, "q3_K", 512, 2048));               // expert 35B down
 
     // --- MoE (C2 fase 5 slice 1): router, accumulo pesato, blocco completo ---
     results.push(await testGemvF32(g));

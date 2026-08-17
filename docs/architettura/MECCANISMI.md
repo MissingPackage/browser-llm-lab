@@ -61,10 +61,30 @@ coincidevano e niente lo diceva. Ora `model.levers` sta nell'artefatto.
 | meccanismo | dove vive | stato |
 |---|---|---|
 | prefill a chunk (M=16) | `q35gpumodel:gemvB` | attivo con `prefillM` |
-| rotta split-K di prefill | `prefillgemmplan` + `wgsl.ts` | attiva, q4_0/q4_1/q4_K/q5_K/q6_K/q8_0 |
+| rotta split-K di prefill | `prefillgemmplan` + `wgsl.ts` | kernel per **8 formati** (q4_0/q5_K/q4_1/q4_K/q6_K/q8_0/q2_K/q3_K), ma **instradati solo 4** (q4_0/q5_K/q4_1/q8_0): gli altri sono `wired: false` in `PREFILL_GEMM_SPEC` |
 | **spec-dec MTP** | `q35gpumodel:mtpDraft`, `specVerify` | **costruito, solo nel ktest** — accept 50%, proiezione 1,29× · ❌ non nella chat, e serve una testa MTP separata (esiste per il 4B, non per il 35B) |
 
-## 4 · I/O
+⚠️ **«Il kernel c'è» non è «il piano ci passa».** Sono due domande diverse dal
+2026-08-14, e tenerle separate è ciò che permette di portare e verificare una
+forma senza cambiare di una riga ciò che il 4B esegue. Chi vuole il conto vero
+dei formati instradati chiede `PREFILL_GEMM_WIRED_KINDS`, non
+`PREFILL_GEMM_KINDS.length`.
+
+## 4 · Kernel per formato di peso (K-quant)
+
+| meccanismo | dove vive | stato |
+|---|---|---|
+| **nucleo unico dei gemv K-quant** | `wgsl.ts:gemvKQuantWgsl` + `KQUANT_GEMV_DESC` | ✅ tutti e 5 i formati (q2_K/q3_K/q4_K/q5_K/q6_K) escono da UN generatore; i tre preesistenti emettono WGSL **identico carattere per carattere** a prima (fixture in `tests/fixtures/kquant-core/`) |
+| gemv Q4_K / Q5_K / Q6_K | istanze del descrittore | ✅ in produzione (decode 35B, GLM) |
+| **gemv Q2_K / Q3_K** | istanze del descrittore | **instradati nel decode, MAI ESEGUITI SU GPU** — dal 2026-08-17 il ramo expert di `q35gpumodel` li sceglie come gli altri K-quant (selettore unico `q35KQuantGemvWgsl`, kind dal layout dello slab), ma nessun device li ha ancora girati: la conformance contro `dequantQ2_K`/`dequantQ3_K` e una misura sono un task a sé |
+| **selettore unico dei gemv K-quant** | `q35gpumodel.ts:q35KQuantGemvWgsl` + `q35KQuantKindOfGgml` | ✅ la scelta del kernel sta in UN posto (prima: tre catene di ternari); kernel, `blockBytes` e kind chiesto al piano di prefill discendono tutti dal tipo REALE del tensore |
+| **prefill multi-riga Q2_K / Q3_K** | `wgsl.ts:prefillGemmQ2K*`/`Q3K*` | portati per analogia dai gemelli q4_K/q6_K, `wired: false`, **nessuna misura su device** |
+
+Il perché di questi due formati sta nella capienza, non nel kernel: sul file
+`bartowski Q2_K` il parco expert del 35B passa da 17,07 a **10,391 GiB**, cioè
+dentro l'arena da 11,17 — il 100% residente contro il 65% di oggi.
+
+## 5 · I/O
 
 | meccanismo | dove vive | stato |
 |---|---|---|
@@ -74,7 +94,7 @@ coincidevano e niente lo diceva. Ora `model.levers` sta nell'artefatto.
 | raggruppamento richieste | — | **misurato inutile**: continuo vs raffiche 0,98× (it.33) |
 | **prefetch lookahead** | `scripts/q35-looka-run.mjs` (solo misura) | ❌ **non implementato** — recall 91,92% @K=8 |
 
-## 5 · Strumenti di misura già pronti
+## 6 · Strumenti di misura già pronti
 
 Prima di scrivere un banco nuovo, questi esistono:
 
@@ -101,7 +121,13 @@ Prima di scrivere un banco nuovo, questi esistono:
    residenza, con un oracolo già misurato al 91,92%.
 3. **spec-dec non nella chat** → 1,29× proiettato, ma serve una testa MTP per il
    35B che oggi non esiste.
-4. `q35conf` non dichiara il regime di lettura → i suoi numeri non dicono se
+4. **Q2_K/Q3_K: kernel generati e instradati, zero esecuzioni su GPU** → è la
+   cella aperta dal 2026-08-17. Il testo c'è, è verificato sul testo, e dal
+   selettore unico il ramo expert lo sceglierebbe davvero per un GGUF Q2_K; ma
+   finché non passa il ktest contro `dequantQ2_K`/`dequantQ3_K` e una misura,
+   non è un guadagno — è un candidato. Il valore in palio è il 100% di
+   residenza del parco expert.
+5. `q35conf` non dichiara il regime di lettura → i suoi numeri non dicono se
    sono confrontabili, ed è il difetto che è costato il falso allarme del GLM.
 
 ## Cosa NON è una cella vuota, e perché

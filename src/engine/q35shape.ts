@@ -131,6 +131,14 @@ const T = GGML_TYPE;
 const W_QUANT = [T.Q2_K, T.Q3_K, T.Q4_0, T.Q4_1, T.Q4_K, T.Q5_K, T.Q6_K, T.Q8_0]; // pesi matmul
 const W_SMALL = [T.F32, T.Q8_0]; // alpha/beta (Q8_0 su 4B/9B, F32 su 35B)
 const F32_ONLY = [T.F32];
+// I DUE router MoE (`ffn_gate_inp` e `ffn_gate_inp_shexp`) e basta. Il
+// `bartowski Q2_K` li tiene in BF16 (dump 2026-08-17: un tensore da 1 048 576 B
+// = 2048x256x2 e uno da 4 096 B = 2048x2) mentre l'UD-Q4_K_S li tiene in F32:
+// due file, due tipi, stessi tensori. Sono GATE — logit di routing, non pesi di
+// matmul — e per questo BF16 vive SOLO qui e NON entra in W_QUANT: un BF16 dove
+// aspettiamo pesi quantizzati non e' un file nuovo da accogliere, e' un errore
+// da fermare prima che diventi pesi plausibili e sbagliati.
+const ROUTER = [T.F32, T.BF16];
 
 type Expect = { dims: number[]; types: readonly number[] };
 
@@ -191,11 +199,11 @@ export function validateQwen35(f: GgufFile): { shape: Q35Shape; byName: Map<stri
     } else {
       const dE = S.dFfnExpert as number;
       const nE = S.nExpert as number;
-      expect(`${b}ffn_gate_inp.weight`, { dims: [d, nE], types: F32_ONLY });
+      expect(`${b}ffn_gate_inp.weight`, { dims: [d, nE], types: ROUTER });
       expect(`${b}ffn_gate_exps.weight`, { dims: [d, dE, nE], types: W_QUANT });
       expect(`${b}ffn_up_exps.weight`, { dims: [d, dE, nE], types: W_QUANT });
       expect(`${b}ffn_down_exps.weight`, { dims: [dE, d, nE], types: W_QUANT });
-      expect(`${b}ffn_gate_inp_shexp.weight`, { dims: [d], types: F32_ONLY });
+      expect(`${b}ffn_gate_inp_shexp.weight`, { dims: [d], types: ROUTER });
       expect(`${b}ffn_gate_shexp.weight`, { dims: [d, dE], types: W_QUANT });
       expect(`${b}ffn_up_shexp.weight`, { dims: [d, dE], types: W_QUANT });
       expect(`${b}ffn_down_shexp.weight`, { dims: [dE, d], types: W_QUANT });

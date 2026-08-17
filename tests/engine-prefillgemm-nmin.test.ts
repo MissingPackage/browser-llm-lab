@@ -13,6 +13,15 @@
 // che esegue, in peggio, senza che nessun errore lo dica. Sul 35B gli stessi
 // tensori di attn hanno N=4096 e passano.
 //
+// DOVE VIVE IL PREDICATO, dal 2026-08-17 (spec q2k-q3k, task T5): non piu'
+// scritto in linea dentro `kernelVerdict`, ma in `prefillGemmShapeOk`
+// (src/engine/prefillgemmplan.ts), che `kernelVerdict` si limita a leggere. I
+// casi di questo file NON cambiano ed e' il punto: continuano a interrogarlo
+// ATTRAVERSO il piano, perche' la tesi qui e' che un sito a N=32 non venga
+// instradato — non come sia scritto il controllo. I casi che interrogano il
+// predicato NUDO, e il gate strutturale che pretende che di sedi ce ne sia UNA
+// sola, stanno in tests/engine-prefill-q2k-q3k.test.ts.
+//
 // NOTA STORICA, e vale come metodo: quando questo file e' stato scritto (it.14)
 // il q8_0 NON era ancora cablato, quindi il predicato era **irraggiungibile**
 // per lui — il controllo del cablaggio veniva prima. Un guard che nessun test
@@ -85,19 +94,34 @@ describe("piano di prefill — N sotto le righe per workgroup non si instrada", 
 
   it("[6] l'ordine dei rifiuti: prima il cablaggio, poi la shape", () => {
     // su un kind NON cablato con N piccolo la ragione strutturale e' il
-    // cablaggio — la shape sarebbe una risposta vera e inutile, perche' anche
-    // con N buono quel sito resterebbe legacy. E' lo stesso ordine che il
-    // kernel tiene fra formato e geometria.
+    // cablaggio — la shape da sola sarebbe una risposta vera e fuorviante,
+    // perche' anche con N buono quel sito resterebbe legacy. E' lo stesso
+    // ordine che il kernel tiene fra formato e geometria.
     //
     // L'ESEMPIO NON E' PIU' IL q8_0: era il kind non cablato di ieri, ed e'
     // stato cablato oggi (riga 2d). Si prende un non-cablato dall'elenco vero
     // invece di scriverne uno a mano, cosi' il caso non marcisce alla prossima
     // accensione.
+    //
+    // EMENDATO IL 2026-08-17 (spec q2k-q3k, T5), e la modifica e' un'AGGIUNTA,
+    // non un cambio di segno: l'ordine della colpa resta quello di prima — il
+    // cablaggio parla per primo. Cio' che cambia e' che ora la ragione porta
+    // ANCHE la causa concorrente, quando c'e'. Il motivo e' un difetto vero:
+    // «formato non cablato» da solo suggerisce che cablarlo manderebbe il sito
+    // sulla via veloce, e su un sito a N=32 e' FALSO — e' esattamente la
+    // trappola che il predicato sulla shape esiste per disinnescare. Le due
+    // cause sono indipendenti e la telemetria deve vederle entrambe.
     const notWired = PREFILL_GEMM_KINDS.filter((k) => !PREFILL_GEMM_WIRED_KINDS.includes(k));
     expect(notWired.length, "nessun kind non cablato: il caso non prova piu' niente")
       .toBeGreaterThan(0);
     const r = planPrefillGemm({ kind: notWired[0], K: 2048, N: 32, M, idot: true });
     expect(r.via).toBe("legacy");
     expect(r.reason, "la ragione deve accusare il cablaggio, non N").toContain("cablato");
+    // la causa DOMINANTE resta la prima a comparire nel testo
+    expect(r.reason.indexOf("cablato"), "la shape ha parlato prima del cablaggio")
+      .toBeLessThan(r.reason.indexOf("N=32"));
+    // ...e la concorrente c'e', invece di essere taciuta
+    expect(r.reason, "la ragione tace che questo sito non passerebbe nemmeno da cablato")
+      .toContain("N=32");
   });
 });

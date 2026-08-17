@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseGguf, tensorByteSize } from "../src/engine/gguf";
+import { GGML_TYPE, parseGguf, tensorByteSize } from "../src/engine/gguf";
 import { q35IsFullAttn, validateQwen35 } from "../src/engine/q35shape";
 
 // Load test di fase 2 (q1): i 3 GGUF pinnati si aprono, la shape derivata dai
@@ -91,5 +91,39 @@ describe.skipIf(!have)("q35 reader: shape derivata + inventario completo", () =>
     const f = parseHeader(join(DIR, FILES["Qwen3.5-4B"]));
     const rotto = { ...f, metadata: { ...f.metadata, "general.architecture": "qwen2" } };
     expect(() => validateQwen35(rotto)).toThrow(/non è qwen35/);
+  });
+});
+
+// Il file BERSAGLIO di questo giro (Q2_K/Q3_K + BF16). Sta in una cartella
+// diversa dai 3 pinnati perche' e' un candidato in valutazione, non un
+// riferimento; stesso pattern skipIf.
+//
+// Questo caso e' il giudice vero della modifica BF16: la fixture sintetica di
+// engine-bf16.test.ts dice come CREDO sia fatto il file, questo dice com'e'.
+// Nel primo giro le due cose divergevano — la fixture era verde e il file
+// lanciava ancora, perche' i tensori BF16 sono DUE.
+const EVAL_DIR = join(homedir(), ".cache/blab-models/q35-eval");
+const BARTOWSKI_Q2K = join(EVAL_DIR, "Qwen_Qwen3.6-35B-A3B-Q2_K.gguf");
+
+describe.skipIf(!existsSync(BARTOWSKI_Q2K))("q35 reader: bartowski Q2_K (Q2_K/Q3_K + BF16)", () => {
+  it("l'header VALIDA: 41 blocchi = 40 layer + testa MTP, 753 tensori", () => {
+    const f = parseHeader(BARTOWSKI_Q2K);
+    const { shape } = validateQwen35(f);
+    expect(shape.arch).toBe("qwen35moe");
+    expect(shape.nLayer).toBe(40);
+    expect(shape.mtpLayers).toBe(1);
+    expect(shape.nExpert).toBe(256);
+    expect(f.tensors.length).toBe(753);
+  });
+
+  it("i BF16 sono i DUE gate di routing del blocco MTP, e nient'altro", () => {
+    const f = parseHeader(BARTOWSKI_Q2K);
+    const bf16 = f.tensors.filter((t) => t.type === GGML_TYPE.BF16);
+    expect(bf16.map((t) => t.name).sort()).toEqual([
+      "blk.40.ffn_gate_inp.weight",
+      "blk.40.ffn_gate_inp_shexp.weight",
+    ]);
+    // byte del dump committato: 1 048 576 e 4 096 (2 B/elemento, nessun blocco)
+    expect(bf16.map((t) => tensorByteSize(t)).sort((a, b) => a - b)).toEqual([4096, 1048576]);
   });
 });

@@ -31,9 +31,16 @@ export const GGUF_KV_TYPE = {
 // 2026-08-17: 100 tensori expert Q2_K + 20 Q3_K + 3 Q8_0). Servono perche' il
 // parco expert scende da 17,07 a 11,15 GiB — sotto l'arena, cioe' residenza
 // totale — al costo misurato di +0,13 bit/token.
+// BF16: NON e' un quant, e' un float32 troncato a 16 bit (stesso esponente a 8
+// bit, mantissa a 7). Lo stesso file `bartowski Q2_K` ci tiene i DUE router MoE
+// del blocco MTP — `blk.40.ffn_gate_inp` e `blk.40.ffn_gate_inp_shexp` (dump
+// 2026-08-17: `other:BF16` 1 048 576 B + `ffn/shexp:BF16` 4 096 B) — tensori
+// piccoli che non passano dai kernel quantizzati; senza questo id il file non
+// si apre proprio.
 export const GGML_TYPE = {
   F32: 0, F16: 1, Q4_0: 2, Q4_1: 3, Q8_0: 8,
   Q2_K: 10, Q3_K: 11, Q4_K: 12, Q5_K: 13, Q6_K: 14,
+  BF16: 30,
 } as const;
 export type GgmlTypeId = number;
 
@@ -155,6 +162,10 @@ export function tensorByteSize(t: GgufTensorInfo): number {
   switch (t.type) {
     case GGML_TYPE.F32: return elems * 4;
     case GGML_TYPE.F16: return elems * 2;
+    // BF16 e' denso come F16: 2 byte per elemento e NESSUN blocco. Niente
+    // controllo di multiplo qui — quello vale per i quant a superblocco, e
+    // imporlo a un tipo senza blocchi respingerebbe file validi.
+    case GGML_TYPE.BF16: return elems * 2;
     case GGML_TYPE.Q4_0: {
       if (t.dims[0] % 32 !== 0) throw new Error(`gguf: ${t.name} Q4_0 con ne[0]=${t.dims[0]} non multiplo di 32`);
       return (elems / 32) * 18; // blocco Q4_0: 2 B scala f16 + 16 B nibbles

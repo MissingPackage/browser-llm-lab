@@ -23,6 +23,19 @@ export function f16ToF32(bits: number): number {
   return sign * (1 + frac / 1024) * 2 ** (exp - 15);
 }
 
+// bf16 (bits u16) → f32. Sta ACCANTO a f16ToF32 ma NON gli somiglia, ed è
+// esattamente il punto: bf16 è la METÀ ALTA di un float32 (segno 1, esponente 8,
+// mantissa 7 — lo stesso esponente del f32), quindi la conversione è uno SHIFT
+// di 16 bit, non una ricomposizione. Ricomporre a mano esponente e mantissa come
+// per f16 sarebbe più codice e sbaglierebbe i casi limite: così zeri con segno,
+// subnormali, infiniti e NaN vengono trasportati dai bit senza che nessun ramo
+// debba prevederli.
+const bf16View = new DataView(new ArrayBuffer(4));
+export function bf16ToF32(u16: number): number {
+  bf16View.setUint32(0, ((u16 & 0xffff) << 16) >>> 0);
+  return bf16View.getFloat32(0);
+}
+
 // Dequant di `nBlocks` blocchi Q4_0 consecutivi da `src` (offset in byte) in `dst`.
 // Ritorna il numero di float scritti.
 export function dequantQ4_0(

@@ -48,8 +48,14 @@ import type { PrefillQuantKind } from "../src/engine/prefillbytes";
 /** M del prefill in produzione (PREFILL_M = 16). */
 const M = 16;
 
-/** I formati che la riga 4 porta SENZA cablare — erano tre, il q8_0 e' uscito. */
-const NOT_WIRED = ["q4_K", "q6_K"] as const;
+/**
+ * I formati portati SENZA cablare — erano tre della riga 4, il q8_0 e' uscito
+ * (cablato il 2026-08-15) e dal 2026-08-17 ne entrano DUE: `q2_K` e `q3_K`,
+ * i kernel della spec q2k-q3k. Anche loro sono portati e non instradati, e per
+ * una ragione piu' stretta degli altri — non sono ancora stati eseguiti su
+ * GPU, quindi cablarli sarebbe instradare una forma non misurata.
+ */
+const NOT_WIRED = ["q4_K", "q6_K", "q2_K", "q3_K"] as const;
 
 /**
  * Per ognuno, una shape che il CONTORNO DEL KERNEL ACCETTA. E' la condizione
@@ -62,6 +68,8 @@ const ACCEPTED: { kind: PrefillGemmKind; K: number; N: number; what: string }[] 
   { kind: "q4_K", K: 2048, N: 512, what: "35B expert gate/up (117 tensori = 17,67 GB)" },
   { kind: "q4_K", K: 512, N: 2048, what: "35B expert down (DUE superblocchi per riga)" },
   { kind: "q6_K", K: 512, N: 2048, what: "35B expert down di 3 layer" },
+  { kind: "q2_K", K: 2048, N: 512, what: "35B Q2_K expert gate/up" },
+  { kind: "q3_K", K: 512, N: 2048, what: "35B Q2_K expert down" },
 ];
 
 /**
@@ -71,12 +79,14 @@ const ACCEPTED: { kind: PrefillGemmKind; K: number; N: number; what: string }[] 
  */
 const SSM_Q80 = { kind: "q8_0" as const, K: 2560, N: 32 };
 
-describe("[w1] il flag: sei kernel, QUATTRO instradati, e ogni non-cablato dice perche'", () => {
+describe("[w1] il flag: otto kernel, QUATTRO instradati, e ogni non-cablato dice perche'", () => {
   it("PREFILL_GEMM_WIRED_KINDS e' un SOTTOINSIEME PROPRIO dell'elenco dei kernel", () => {
-    expect([...PREFILL_GEMM_KINDS]).toEqual(["q4_0", "q5_K", "q4_1", "q4_K", "q6_K", "q8_0"]);
+    // l'ordine e' parte dell'interfaccia e i kind nuovi stanno IN CODA
+    expect([...PREFILL_GEMM_KINDS])
+      .toEqual(["q4_0", "q5_K", "q4_1", "q4_K", "q6_K", "q8_0", "q2_K", "q3_K"]);
     // il q8_0 e' entrato il 2026-08-15: la shape ora si protegge da sola
     expect([...PREFILL_GEMM_WIRED_KINDS]).toEqual(["q4_0", "q5_K", "q4_1", "q8_0"]);
-    // e i non-cablati sono esattamente i DUE che restano della riga 4
+    // e i non-cablati sono esattamente i QUATTRO dichiarati sopra
     const notWired = PREFILL_GEMM_KINDS.filter((k) => !prefillGemmWiring(k).wired);
     expect([...notWired]).toEqual([...NOT_WIRED]);
   });

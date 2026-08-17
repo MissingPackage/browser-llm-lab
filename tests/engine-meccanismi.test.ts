@@ -18,6 +18,7 @@
 // seconda verita' da aggiornare a ogni run.
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { KQUANT_GEMV_DESC, prefillGemmWiring } from "../src/engine/kernels/wgsl";
 
 const read = (p: string): string => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const MAPPA = read("docs/architettura/MECCANISMI.md");
@@ -82,7 +83,7 @@ describe("la mappa dei meccanismi combacia col sorgente", () => {
     expect(/readRegime/.test(code("src/engine/glmbench/glmbench.worker.ts"))).toBe(true);
     // cella vuota dichiarata: se q35conf lo aggiunge, la mappa va aggiornata
     expect(/readRegime/.test(code("src/engine/q35conf/q35conf.worker.ts")),
-      "se q35conf ora dichiara il regime, aggiorna MECCANISMI.md §4").toBe(false);
+      "se q35conf ora dichiara il regime, aggiorna MECCANISMI.md §5").toBe(false);
     expect(MAPPA).toContain("q35conf non lo dichiara");
   });
 
@@ -92,6 +93,42 @@ describe("la mappa dei meccanismi combacia col sorgente", () => {
       expect(/looka/i.test(code(p)), `${p} sembra implementare il lookahead: aggiorna la mappa`).toBe(false);
     }
     expect(MAPPA).toContain("non implementato");
+  });
+
+  it("i gemv K-quant escono da UN generatore, e la mappa lo dice col nome giusto", () => {
+    // La riga §4 afferma «tutti e 5 i formati escono da UN generatore». Se
+    // qualcuno riscrivesse un gemv a mano, la mappa mentirebbe: qui si prova
+    // che i cinque wrapper delegano davvero e che i descrittori sono cinque.
+    expect(MAPPA).toContain("`wgsl.ts:gemvKQuantWgsl`");
+    expect(Object.keys(KQUANT_GEMV_DESC).sort())
+      .toEqual(["q2_K", "q3_K", "q4_K", "q5_K", "q6_K"]);
+    const w = code("src/engine/kernels/wgsl.ts");
+    for (const fmt of ["q2_K", "q3_K", "q4_K", "q5_K", "q6_K"]) {
+      expect(w, `il wrapper ${fmt} deve delegare al nucleo`)
+        .toContain(`gemvKQuantWgsl(KQUANT_GEMV_DESC.${fmt}, opts)`);
+    }
+  });
+
+  it("Q2_K/Q3_K: instradati nel decode, ancora MAI ESEGUITI SU GPU", () => {
+    // La cella si e' mossa di mezzo passo il 2026-08-17 (spec K-quant, T3): il
+    // ramo expert di q35gpumodel ADESSO li sceglie — e la mappa lo dice — ma
+    // nessun device li ha girati. La riga sotto e' quella che resta vera, ed e'
+    // quella che conta: finche' non c'e' un ktest e una misura, il guadagno e'
+    // un candidato.
+    expect(MAPPA).toContain("MAI ESEGUITI SU GPU");
+    for (const k of ["q2_K", "q3_K"] as const) {
+      expect(prefillGemmWiring(k).wired, `${k} risulta cablato nel prefill: aggiorna MECCANISMI.md §3/§4`)
+        .toBe(false);
+    }
+    // il DECODE invece li instrada: il selettore unico li ha fra i cinque, e la
+    // mappa non deve piu' dire il contrario. Se qualcuno lo smontasse, la mappa
+    // mentirebbe nell'altro verso — quindi si prova la presenza, non l'assenza.
+    const q35 = code("src/engine/q35gpumodel.ts");
+    for (const g of ["gemvQ2KWgsl", "gemvQ3KWgsl"]) {
+      expect(q35, `${g} non piu' instradato: aggiorna MECCANISMI.md §4`).toContain(g);
+    }
+    expect(MAPPA, "il selettore unico dei gemv K-quant deve stare in §4")
+      .toContain("q35KQuantGemvWgsl");
   });
 
   it("ogni strumento di misura elencato esiste davvero", () => {

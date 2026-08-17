@@ -38,8 +38,14 @@
  * (che elencava q4_0|q4_1|q8_0|q6_K|f32). E' un superset — nessun chiamante
  * scritto sull'unione precedente si rompe — ma resta un emendamento, non una
  * scelta di implementazione: e' segnalato, non consegnato in silenzio.
+ * SECONDO EMENDAMENTO, 2026-08-17 (spec q2k-q3k, task T2): `q2_K` e `q3_K`.
+ * Non e' una scelta ma una CONSEGUENZA MECCANICA: `PREFILL_GEMM_KINDS` cresce
+ * di quei due kind, e chi passa un `PrefillGemmKind` a `planPrefillGemm` —
+ * cioe' i test strutturali del piano — non compilerebbe piu' se le due unioni
+ * divergessero. E' un superset, quindi nessun chiamante esistente si rompe.
  */
-export type PrefillQuantKind = "q4_0" | "q4_1" | "q8_0" | "q4_K" | "q5_K" | "q6_K" | "f32";
+export type PrefillQuantKind =
+  "q4_0" | "q4_1" | "q8_0" | "q4_K" | "q5_K" | "q6_K" | "q2_K" | "q3_K" | "f32";
 
 /** Le due forme del GEMM del prefill: v. il commento in testa. */
 export type PrefillGemmForm = "legacy" | "multirow";
@@ -75,6 +81,11 @@ const BLOCK: Record<PrefillQuantKind, { weights: number; device: number }> = {
   q4_K: { weights: 256, device: 144 },
   q5_K: { weights: 256, device: 176 },
   q6_K: { weights: 256, device: 212 },
+  // stessa regola del q6_K, applicata ai due formati nuovi: il repack allinea
+  // il superblocco alla parola. q2_K 84 e' gia' multiplo di 4; q3_K 110 → 112,
+  // e contare 110 sottostimerebbe di ~1,8% ogni riga q3_K.
+  q2_K: { weights: 256, device: 84 },
+  q3_K: { weights: 256, device: 112 },
   f32: { weights: 1, device: 4 },
 };
 
