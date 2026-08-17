@@ -2,19 +2,40 @@
 
 ## 1. Next decidable
 
-**Gli spike economici sullo spec-dec, in questo ordine** — già autorizzati dal PI
-(«prima gli spike, i micro-bench e le prove in chat; la misura intera solo alla
-versione finale, come numero da paper»):
+**SPIKE (1) FATTO il 2026-08-17 — il ginocchio di `cost(M)` è a M=2, e il
+verdetto «spec-dec più lento» è caduto.** Artefatto
+`results/microbench/costm-decode-4090-linux-2026-08-17T21-38-36-738Z.json`,
+prereg e memo in `docs/deep-dive/costm-decode-*-2026-08-17.md`. Costo per riga,
+miglior variante per ogni M, normalizzato a M=1:
 
-1. **curva `cost(M)`** per M ∈ {1,2,4,8,16} sulle shape del decode (K=2048 e
-   K=512 dei gemv expert), celle nuove in `src/microbench/`. **Mezza giornata,
-   zero run di modello.** Decide tutto il resto.
-2. **overlap del router top-8 a distanza 1-4 sul 35B** — mezza giornata, riusa il
-   router esistente. Decide se lo spec-dec paga anche sul MoE o solo sul denso.
+    q4_K 2048x512  gate/up    100 | 60,3 | 35,3 | 22,8 | 16,9
+    q4_K 512x2048  down       100 | 56,8 | 33,5 | 21,4 | 15,8
+    q6_K 512x2048  down       100 | 57,0 | 34,4 | 22,4 | 16,2
+    q8_0 2048x4096 attn       100 | 38,9 | 21,2 |  8,3 |  3,2
 
-Perché contano: «spec-dec più lento» fu misurato **coi kernel vecchi**, dove M era
-quasi ininfluente (1,22x a M=8). Coi nuovi, `wgsl.ts` misura splitk-idot a **M=16
-in 0,0376 ms contro 0,0698 a M=1** — sedici righe costano meno di una.
+**Ricalcolata in modo indipendente dall'artefatto grezzo: riproduce esatta.**
+Il salto grosso è il PRIMO (1→2). Verificare 2 token costa **1,21x** uno solo
+sulla shape peggiore (2 × 60,3%). Il vecchio verdetto era **corretto per i suoi
+kernel** ed è caduto perché la proprietà del kernel è cambiata sotto di esso —
+misura scaduta, non misura sbagliata.
+**Il sorpasso di variante vale per q4_K 2048x512 SOLTANTO** (a M=1 vince
+`base-batch-z`, da M=2 `splitk-idot`); sulle altre tre `splitk-idot` vince già a
+M=1. La frase generale è più forte del dato, ed è quella che verrebbe ricitata.
+
+**PROSSIMO — spike (2), senza ruling del PI**: **overlap del router top-8 a
+distanza 1-4 sul 35B**, mezza giornata, riusa il router esistente. Decide se lo
+spec-dec paga **anche sul MoE o solo sul denso**. Il banco dice che verificare 2
+token è ammortizzabile; **non** dice che lo spec-dec paghi sul MoE.
+
+**Aperte e in attesa di TE**, aggiunte il 2026-08-17: **item 24** — il banco
+copre cinque famiglie ma NON il q2_K, cioè il quant che consegniamo (mezza
+giornata, geometria + kernel gemello) · **item 26** — una cella scartata per
+checksum, `q8_0/splitk-idot@M1` su K=512 N=2048, relDiff 3,489e-2 contro
+tolleranza 2e-2. Non è rotto in generale (stesso kernel a maxRel 5,96e-4 al
+ktest su 2048x200): sballa su QUELLA shape a M=1. Diventa urgente proprio ora,
+perché il ginocchio a M=2 può far entrare quella forma nel decode · **tre
+repliche** per rendere citabile il Firefox (~1 ora di scheda; oggi 9,97 tok/s
+sul 35B contro 34,6 di Chrome = 3,47x, **una run sola, indicativa**).
 
 **Aperte e in attesa di TE** (titoli; il contenuto sta nel docket): item 21
 priorità del subgroup-matrix · item 22 ruling sulla classifica delle
