@@ -19,6 +19,21 @@ fallisce.
 Il diagramma qui sotto mostra come i pezzi si parlano; la tabella mostra chi non
 li usa. Servono a domande diverse.
 
+## Il file da leggere prima di scegliere un modello o scrivere un kernel
+
+`QUANTIZZAZIONE.md` — la spiegazione per intero di come sono fatti i pesi
+quantizzati: le tre famiglie (legacy, K-quant, i-quant), i layout di blocco
+verificati sul nostro `quant.ts`, la differenza fra un **formato** e una
+**ricetta** (`_S`/`_M`/`_L`/`_XL`/`UD`), la tabella dei bit per peso, e cosa
+cambia per un motore che dequantizza dentro lo shader. Non presuppone di sapere
+cosa sia un quant.
+
+Serve a due decisioni ricorrenti: **quale file scaricare** (la taglia del file
+non dice quanto pesa il parco expert, che è l'unica parte che si contende la
+VRAM) e **quanto costa un formato nuovo** (dequant di riferimento, kernel, layout
+di slab, caso di conformance). Chiude con la sezione «cosa NON è verificato in
+casa», che separa ciò che abbiamo misurato da ciò che abbiamo letto.
+
 ## Come si legge
 
 Sette bande, dall'alto: chi entra (**A**), come si leggono i byte (**B**), i due
