@@ -100,7 +100,7 @@ un'arena già calda: servono più turni, o il braccio caldo del banco.
 | contatori del lettore (parallelismo effettivo, latenza) | `ggufrange.ts` | ✅ sempre |
 | **regime di lettura dichiarato** (`disk`/`os-cache`) | `residency.ts:readBandwidth` | ✅ glmbench · ❌ **q35conf non lo dichiara** |
 | raggruppamento richieste | — | **misurato inutile**: continuo vs raffiche 0,98× (it.33) |
-| **prefetch lookahead** | `scripts/q35-looka-run.mjs` (solo misura) | ❌ **non implementato** — recall 91,92% @K=8 |
+| **prefetch lookahead** | `scripts/q35-looka-run.mjs` (solo misura) | ❌ **non implementato** — recall **82,67% @K=8 sul 35B**. Il 91,92% è di **GLM** e non si trasferisce: `direction.md:307` lo spiega (softmax-256 senza bias contro sigmoid+bias-64) |
 
 ## 6 · Strumenti di misura già pronti
 
@@ -125,8 +125,14 @@ Prima di scrivere un banco nuovo, questi esistono:
    erano più veloci di una grande. Il ginocchio della curva è a 2-4 richieste in
    volo (it.33) e `slabFileRange` è già aritmetica: leggere uno slab in 2-4
    sotto-range paralleli è la rifinitura che recupera quei 3,1 s.
-2. **prefetch lookahead non implementato** → attacca i ~76 ms/token di tassa di
-   residenza, con un oracolo già misurato al 91,92%.
+2. **prefetch lookahead non implementato** → oracolo misurato **82,67% @K=8 sul
+   35B** (il 91,92% è di GLM: vedi §5). E la «tassa di residenza da ~76
+   ms/token» **non vale al regime Q2_K**, dove il parco è interamente residente
+   e i miss stanno allo 0,58% al secondo turno: lì la tassa è quasi zero. Il
+   prefetch non compra tok/s sul numero di punta di oggi — compra la
+   possibilità di tenere sopra i 30 tok/s una quant PIÙ RICCA o un modello più
+   grande, cioè non è una leva di velocità ma **di capienza**, che è l'asse
+   dell'intelligenza.
 3. **spec-dec non nella chat** → 1,29× proiettato, ma serve una testa MTP per il
    35B che oggi non esiste.
 4. **prefill multi-riga Q2_K/Q3_K: generato, `wired: false`, mai eseguito** →

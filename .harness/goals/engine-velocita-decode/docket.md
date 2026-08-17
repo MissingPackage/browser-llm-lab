@@ -957,3 +957,198 @@ pratica si ferma sui 7-8B densi.
 riga del README aprono sul 35B nella scheda, NON su «run GGUF in your browser».
 Il rischio di questo progetto non è che qualcuno sia arrivato prima — è essere
 invisibile accanto a 18.567 stelle dicendo la cosa che dicono già in venti.
+
+## item 21 — la mappa delle capability: due browser, due strade disgiunte (io, registrazione)
+
+Misurato il 2026-08-17 sull'adapter REALE (non dalle note, non a memoria).
+Registrato perche' e' il vincolo che decide quali ottimizzazioni sono
+perseguibili, e su quale macchina.
+
+| feature | Chrome 151/Linux/NVIDIA | Firefox 153, stessa scheda | M4 Pro, S22 |
+|---|---|---|---|
+| `shader-f16` | **NO** | **SI** | SI |
+| `subgroups`, `subgroup-size-control` | **SI** | NO | ? |
+| `chromium-experimental-subgroup-matrix` | **SI** | NO | ? |
+| `timestamp-query` | SI | SI | SI |
+| feature totali | 22 | 11 | — |
+
+**`shader-f16` non e' un problema di driver.** Le quattro condizioni che Dawn
+pretende (`PhysicalDeviceVk.cpp:373-378`) sono TUTTE vere qui: `shaderFloat16`,
+`shaderInt16`, `storageBuffer16BitAccess`, `uniformAndStorageBuffer16BitAccess`,
+su NVIDIA 610.57.04. L'adapter risponde comunque `false`, sotto CINQUE
+combinazioni di flag (`allow_unsafe_apis`, `webgpu-developer-features`,
+`disallow_unsafe_apis`, `use_dxc`, baseline). **Il cancello sta sopra Dawn, nel
+build Linux di Chrome.** Nessun flag lo apre.
+
+**Firefox la espone ma non e' una piattaforma di misura**: 9,92 tok/s dove
+Chrome ne fa 89,5 sullo stesso modello — e **identico al 9,91 misurato il
+2026-07-25**, quindi e' stabile e reale, non rumore. Tre settimane non l'hanno
+mosso. (Caveat: il runner non verifica l'adapter su Firefox perche' nasconde il
+vendor; potrebbe essere rendering software. Si accerta solo da `about:support`.)
+
+**Conseguenza che nessuna delle due righe dice da sola**: f16 e subgroup-matrix
+**non sono ottenibili nello stesso browser su questa macchina**. Non e'
+«aggiungiamo f16»: sono DUE strade di ottimizzazione su DUE piattaforme.
+
+### Il subgroup-matrix, e il vincolo che lo lega a f16
+
+Il driver ha `VK_KHR_cooperative_matrix` (rev 2), `VK_NV_cooperative_matrix2` e
+`VK_NV_cooperative_vector`: i tensor core ci sono a livello Vulkan, e Chrome
+espone la feature WebGPU.
+
+**MA** (`PhysicalDeviceVk.cpp:1774-1779`): le configurazioni con componenti
+**F16 richiedono `ShaderF16`**. Su Chrome/Linux, dove f16 non c'e', il
+subgroup-matrix sarebbe utilizzabile **solo con componenti F32** — ammesso che
+esistano config F32 su Lovelace, che NON e' stato verificato.
+
+Cioe': i due vincoli non sono indipendenti. La macchina che ha il
+subgroup-matrix e' la stessa che non ha f16, e senza f16 il subgroup-matrix
+perde la meta' delle sue configurazioni.
+
+**RULING / PRIORITA': _** (il PI ha chiesto di metterlo fra le cose da fare
+«se porta ulteriori possibilita' di ottimizzazione». La condizione e' oggetto
+della consulenza aperta — vedi sotto — perche' i GEMV del decode sono
+memory-bound, e una unita' matriciale non aiuta chi aspetta la memoria.)
+
+### Consulenza aperta (PI, 2026-08-17)
+
+> «Utilizza un agente fable come consulente esperto e consultati con lui per
+> definire il da farsi sulle ottimizzazioni. Non perdere di vista l'obiettivo
+> che e' avere il miglior motore web per llm (possibilmente in formato gguf)
+> al mondo!»
+
+Domande poste: (1) il subgroup-matrix vale, dato che il decode e' memory-bound
+e su questa macchina sarebbe F32-only — e cambia risposta sul prefill, che e'
+compute-bound? (2) una classifica delle ottimizzazioni per impatto sulla
+funzione obiettivo, incluse le 4 di WebLLM e le nostre non sfruttate, con cosa
+NON fare; (3) quanto vale f16 su un motore i cui kernel sono memory-bound su
+pesi gia' a 2-6 bit (f16 tocca attivazioni e KV, non i pesi) — e vale spostare
+lo sviluppo su Mac; (4) cosa stiamo trascurando che decide se questo motore e'
+il migliore al mondo o solo un buon esperimento.
+
+### ESITO DELLA CONSULENZA (agente fable, 2026-08-17) — verificata sui dati prima di essere accolta
+
+**SUL SUBGROUP-MATRIX (la domanda del PI): NON metterlo fra le cose da fare, oggi.**
+
+- *Sul decode, per costruzione*: le cooperative matrix pagano dove c'e' riuso di
+  tile (GEMM, M>=8). A M=1 non c'e' tile — ogni peso serve UNA volta. Non e' che
+  aiuta poco: non c'e' proprio il problema che risolvono.
+- *Sul prefill, che sarebbe il candidato giusto*: il probe gia' committato
+  (`webgpu-subgroup-matrix-probe-2026-08-10.json`) dice che la feature e'
+  inutilizzabile qui — le config u8 non compilano in Tint, le f16 vogliono
+  `shader-f16` che Chrome/Linux non da', e le eventuali f32 su NVIDIA non
+  mappano sui tensor core (che vogliono f16/tf32). Si otterrebbe al piu' cio'
+  che un GEMM a tile in workgroup storage ottiene in WGSL **core**.
+- *E il WGSL core lo copre gia'*: il memo headroom proietta il prefill a 150-300
+  tok/s col GEMM multi-riga PORTABILE.
+- *Ed e' `chromium-experimental`*, un solo browser, dietro flag.
+
+**RIVALUTARE quando**: (a) esce da experimental, (b) il GEMM a tile portabile e'
+in produzione e misurato, (c) `shader-f16` compare su >= 2 piattaforme target.
+**Tenere il probe nel rituale di release di Chrome**: costa 10 minuti.
+
+**DUE PREMESSE CORRETTE, entrambe verificate da me sui file prima di accoglierle:**
+
+1. **«i GEMV del decode sono memory-bound» e' FALSO in senso operativo**, ed era
+   una mia glossa. `micro-bench-matmul.md:63,79`: la banda reale della scheda e'
+   **435 GB/s misurati**, il GEMV **f32 la satura al 100%**, i quantizzati stanno
+   al **20%**. Il collo e' il **costo ALU della dequant** e la forma del kernel
+   (loop scalari per nibble, load u32 scalari, occupancy a M=1) — NON la DRAM.
+   Il 17,2 GB/s contro ~500 non prova che siamo memory-bound: prova il contrario.
+   Riferimento esterno sullo stesso silicio: llama.cpp Vulkan fa ~500 G pesi/s
+   dove noi ne facciamo 133.
+   **Conseguenza**: f16 e subgroup-matrix attaccano la densita' di calcolo, che
+   non e' il vincolo. Il vincolo si attacca con vec4, coalescenza, multi-riga,
+   occupancy.
+
+2. **L'oracolo del prefetch e' 82,67% @K=8 sul 35B, non 91,92%** — quello e' di
+   GLM (`direction.md:307`, spiegato: softmax-256 senza bias contro
+   sigmoid+bias-64). MECCANISMI.md riportava il numero di GLM parlando del 35B
+   in DUE punti, ed e' da li' che l'ho preso io e che l'ha preso l'HANDOFF.
+   **Corretto in MECCANISMI.md §5 e §7.** Miss ridotti ~6x, non ~12x.
+
+**LA CLASSIFICA, per «bit di intelligenza comprabili per iterazione»** — la
+chiave e' che a 34,6 tok/s abbiamo ~13% di margine sopra il pavimento, e ogni ms
+guadagnato non serve a salire di tok/s: serve a essere **speso in bit**.
+
+  0. **micro-bench delle varianti GEMV** (1 giorno, zero run di modello): decide
+     se la pendenza del punto 2 esiste, PRIMA di toccare il motore.
+  1. **prefetch lookahead** — l'unica leva che compra BIT invece di ms. Il
+     Q4_K_S (17,07 GiB, 65% residente) fa ~18 tok/s; il Q2_K ci sta tutto e fa
+     34,6. La differenza fra i due e' fedelta' pagata alla quota VRAM. E'
+     l'unica leva che puo' portare una quant PIU' RICCA sopra i 30. In piu'
+     ripara il transitorio (turno freddo 11,6, 7.930 miss al primo turno). Ed e'
+     la leva che nessun concorrente ha: **WebLLM non ha MoE affatto**.
+  2. **riscrittura dei GEMV quantizzati** (vec4 + subgroupAdd + 2-4 righe/WG +
+     probe `dot4I8Packed`): headroom dimostrato **3,7x** sullo stesso silicio.
+  3. **attenzione a contesto lungo** (split-K sul contesto + KV f16 via
+     `pack2x16float`, che e' **WGSL core e non richiede shader-f16**). Il kernel
+     di scansione KV gira al **1,4% del picco** e a ctx 6333 il 4B crolla da
+     25,9 a **9,95 tok/s**. Vedi rischio (b).
+  4. **i ~11 ms di round-trip non attribuito** — ma con la diagnosi giusta:
+     it.28 ha gia' smontato l'ipotesi CPU (la CPU vera e' 1,94 ms = 4,5%).
+     Sonda prima, costruzione dopo.
+  5. letture slab in sotto-range paralleli (igiene, -3,1 s sul load).
+  6. **spec-dec MTP: PARCHEGGIATA.** Il checkpoint B l'ha misurata piu' LENTA
+     coi kernel attuali, e l'1,29x proiettato e' sotto quello che la leva 2
+     promette da sola.
+
+**LE 4 LEVE DI WEBLLM, giudicate:**
+- **f16** -> marginale sul nostro collo (i pesi sono gia' a 2-6 bit e f16 non li
+  tocca; su NVIDIA l'fp16 scalare non e' piu' veloce dell'fp32). L'unico termine
+  dove dimezzare i byte paga e' la **KV a contesto lungo**, e quella si dimezza
+  con `pack2x16float` **oggi, in WGSL core, ovunque**.
+- **TVM/autotuning** -> **NON adottare**: contraddice l'identita' del motore
+  (zero dipendenze, GGUF in place, nessuna compilazione), che e' meta' del
+  vantaggio. Ma il PROBLEMA che TVM risolve per loro e' il nostro rischio n.1.
+  La risposta zero-dipendenze e' una **fabbrica di kernel parametrica +
+  autotune on-device al primo caricamento**, col microbench harness che abbiamo
+  gia', eseguito sul device dell'utente e persistito.
+  Nota: sul 0.5B denso li battiamo 2,7x — **il loro compilatore non produce
+  kernel migliori dei nostri a mano su questo hardware**. Il confronto che conta
+  non e' WebLLM: e' **llama.cpp nativo**, 3,4x sopra di noi sul 4B.
+- **quattro backend di cache** -> prodotto, non regime. Media priorita'.
+- **service worker** -> accessorio del precedente.
+
+**DA NON FARE, esplicito**: subgroup-matrix ora; migrare lo sviluppo su Mac;
+adottare TVM; vocab ridotto sulla lm_head (rompe il ratchet di fedelta' per 2,1
+ms); inseguire l'ampiezza di catalogo di WebLLM (il fossato e' il MoE
+piu'-grande-della-VRAM, non 231 modelli); e tutto cio' che MECCANISMI.md ha gia'
+seppellito coi numeri (policy tier, raggruppamento I/O, idot nel decode, slab).
+
+**SUL MAC: NO, e la mossa giusta e' l'inversa.** Trasferire lo sviluppo
+perderebbe i probe subgroup-matrix, il confronto con llama.cpp Vulkan sullo
+stesso silicio e tutta la base di misure — per una feature che vale poco sul
+nostro collo. Tenere la 4090 come banco PRIMARIO e aggiungere M4/S22 come
+dispositivi di **verifica**. Piu' due azioni economiche: (a) aprire un crbug su
+`shader-f16` Chrome/Linux/NVIDIA — il dossier e' gia' pronto (le quattro
+condizioni di Dawn sono soddisfatte, il cancello sta sopra); (b) tenere il
+codice **f16-ready** (la KV pack2x16 lo e' per costruzione) cosi' quando il
+gate cade si accende un flag invece di riscrivere un motore.
+
+**I TRE RISCHI STRATEGICI, in ordine di gravita':**
+
+**(a) UN SOLO DISPOSITIVO MISURATO** — ed e' scritto nel nostro stesso
+VALUTAZIONE §10. «Il miglior motore web del mondo» e' un claim di PIATTAFORMA:
+kernel tarati a mano su Ada possono essere mediocri su Apple Silicon e pessimi
+su Adreno. Il fattore 9 fra Chrome e Firefox *sulla stessa macchina* e' la
+misura di quanto poco sappiamo. WebLLM ha costruito TVM esattamente per questo.
+Costo d'ingresso minimo: **far girare ktest + chat-smoke su M4 e S22 questa
+settimana, prima di ottimizzare alcunche' per loro**. E verificare che il motore
+giri su **Chrome stable SENZA `--enable-unsafe-webgpu`**: un motore dietro flag
+non e' un prodotto web.
+
+**(b) IL NUMERO DI PUNTA E' A CONTESTO CORTO**: 34,6 tok/s a ~8k misurati contro
+262k dichiarati dal modello, con un kernel di attenzione all'1,4% del picco. Se
+qualcuno fuori dal progetto rifa' la misura con un prompt da 16k e il regime
+crolla, **il claim non si difende**. Misurare la pendenza del 35B costa UNA run.
+
+**(c) IL PRIMO UTILIZZO NON E' MISURATO NE' RISOLTO** (VALUTAZIONE §10 lo
+ammette). Il fossato — modelli piu' grandi della VRAM — implica strutturalmente
+file enormi: senza una storia di storage, ogni visita e' un pull da 13 GB e
+nessuno torna. E' l'unico punto dove le leve 3-4 di WebLLM sono un vantaggio
+vero. Prima verifica economica: **la quota da 10 GiB e' del disco o dell'origin?**
+Chrome concede tipicamente ~60% del disco libero.
+
+**RULING DEL PI: _** (la classifica e i tre rischi cambiano l'ordine del lavoro
+di rilascio: non li applico senza ruling.)
