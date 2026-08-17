@@ -241,4 +241,11 @@ export const Q35_SHA256 = {
   "Qwen3.5-4B": "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb",
   "Qwen3.5-9B": "17670346b4260ddcb0173965145155885024f3c9a4a24389a3370751edbcde24",
   "Qwen3.6-35B-A3B": "a8138f183e3993f12cdc23afd2babb8cdb084e64088ce4a256d49101d47b949c",
+  // Lo STESSO modello quantizzato piu' aggressivamente (bartowski, imatrix):
+  // expert Q2_K + Q3_K, parco 10,391 GiB contro 17,074 — cioe' l'intero parco
+  // dentro l'arena. Costo misurato il 2026-08-17: +0,13 bit/token.
+  // Due quantizzazioni sono due FILE diversi e due SHA diversi: il pin le tiene
+  // distinte, e leggere lo slab o il golden dell'altra darebbe pesi validi e
+  // sbagliati invece di un errore.
+  "Qwen3.6-35B-A3B-Q2_K": "673142cca6255bbb19774c8d438220d9ecfc3c8b215bc619d5e801bc37a35405",
 } as const;

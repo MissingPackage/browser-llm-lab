@@ -221,6 +221,7 @@ const MODELS = {
   "4b": { url: "/models/Qwen3.5-4B-Q4_0.gguf", file: "Qwen3.5-4B-Q4_0.gguf", sha: "298fcb5fe7a77ccc79745ae24751560c5ac56874caff4bb39b1f2055bd72b8bb" },
   "9b": { url: "/models/Qwen3.5-9B-Q4_0.gguf", file: "Qwen3.5-9B-Q4_0.gguf", sha: "17670346b4260ddcb0173965145155885024f3c9a4a24389a3370751edbcde24" },
   "35b": { url: "/models/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf", file: "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf", sha: "a8138f183e3993f12cdc23afd2babb8cdb084e64088ce4a256d49101d47b949c" },
+  "35b-q2k": { url: "/models/Qwen_Qwen3.6-35B-A3B-Q2_K.gguf", file: "Qwen_Qwen3.6-35B-A3B-Q2_K.gguf", sha: "673142cca6255bbb19774c8d438220d9ecfc3c8b215bc619d5e801bc37a35405" },
 } as const;
 let URL_GGUF: string = MODELS["4b"].url;
 

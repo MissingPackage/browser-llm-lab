@@ -36,6 +36,10 @@ const MODELS = {
   "4b": { url: "/models/Qwen3.5-4B-Q4_0.gguf", file: "Qwen3.5-4B-Q4_0.gguf", sha: Q35_SHA256["Qwen3.5-4B"] },
   "9b": { url: "/models/Qwen3.5-9B-Q4_0.gguf", file: "Qwen3.5-9B-Q4_0.gguf", sha: Q35_SHA256["Qwen3.5-9B"] },
   "35b": { url: "/models/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf", file: "Qwen3.6-35B-A3B-UD-Q4_K_S.gguf", sha: Q35_SHA256["Qwen3.6-35B-A3B"] },
+  // Il 35B col parco che sta TUTTO nell'arena (expert Q2_K + Q3_K). E' il
+  // braccio B del confronto: stesso modello, stesso prompt, quantizzazione
+  // diversa — e i due si distinguono nell'artefatto dallo sha, non dal nome.
+  "35b-q2k": { url: "/models/Qwen_Qwen3.6-35B-A3B-Q2_K.gguf", file: "Qwen_Qwen3.6-35B-A3B-Q2_K.gguf", sha: Q35_SHA256["Qwen3.6-35B-A3B-Q2_K"] },
 } as const;
 export type ModelKey = keyof typeof MODELS;
 

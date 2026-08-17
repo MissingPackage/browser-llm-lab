@@ -109,13 +109,12 @@ describe("la mappa dei meccanismi combacia col sorgente", () => {
     }
   });
 
-  it("Q2_K/Q3_K: instradati nel decode, ancora MAI ESEGUITI SU GPU", () => {
-    // La cella si e' mossa di mezzo passo il 2026-08-17 (spec K-quant, T3): il
-    // ramo expert di q35gpumodel ADESSO li sceglie — e la mappa lo dice — ma
-    // nessun device li ha girati. La riga sotto e' quella che resta vera, ed e'
-    // quella che conta: finche' non c'e' un ktest e una misura, il guadagno e'
-    // un candidato.
-    expect(MAPPA).toContain("MAI ESEGUITI SU GPU");
+  it("Q2_K/Q3_K: instradati nel decode ed ESEGUITI su GPU; il prefill resta non cablato", () => {
+    // La cella si e' chiusa il 2026-08-17: ktest verde su GPU vera (4 casi) e un
+    // turno di chat generato col file bartowski Q2_K. Quello che resta NON fatto
+    // e' il prefill, e la mappa deve continuare a dirlo — e' la distinzione fra
+    // «il kernel esiste» e «il path lo usa».
+    expect(MAPPA).toContain("ESEGUITI SU GPU e in un turno di chat vero");
     for (const k of ["q2_K", "q3_K"] as const) {
       expect(prefillGemmWiring(k).wired, `${k} risulta cablato nel prefill: aggiorna MECCANISMI.md §3/§4`)
         .toBe(false);

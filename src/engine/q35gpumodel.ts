@@ -29,7 +29,7 @@ import { expertArenaBindings } from "./gpulimits";
 import type { QuantKind, SlabTensorLayout } from "./moe";
 import { deltaNetConvWgsl, deltaNetCoreWgsl, deltaNetGatesWgsl } from "./kernels/deltanet";
 import { GGML_TYPE, tensorByteSize, type GgmlTypeId, type GgufTensorInfo } from "./gguf";
-import { dequantQ4_0, dequantQ6_K, dequantQ8_0, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q6_K_BLOCK_BYTES } from "./quant";
+import { dequantQ2_K, dequantQ4_0, dequantQ6_K, dequantQ8_0, repackKQuant, repackQ4_0, repackQ4_1, repackQ8_0, Q2_K_BLOCK_BYTES, Q6_K_BLOCK_BYTES } from "./quant";
 import { q35AttnPartialsFloats, q35AttnSplitPlan } from "./q35attnsplit";
 import { q35IsFullAttn, type Q35Shape } from "./q35shape";
 import { ROUTER_QWEN35MOE, routerSelect, WEIGHTS_SUM_CLAMP_MIN, type RouterConfig } from "./moe";
@@ -133,6 +133,29 @@ const Q35_KQUANT_OF_GGML = new Map<number, KQuantGemvKind>([
 export function q35KQuantKindOfGgml(type: GgmlTypeId): KQuantGemvKind | undefined {
   return Q35_KQUANT_OF_GGML.get(type);
 }
+
+/**
+ * I FORMATI CHE L'EMBEDDING PUO' AVERE, e come si legge una sua riga.
+ *
+ * L'embedding NON sta in VRAM: si tiene il tensore grezzo in RAM e si
+ * dequantizza la SOLA riga del token (d valori) a ogni step. Serve quindi un
+ * dequant CPU per formato, ed e' l'unico posto del motore in cui il formato di
+ * `token_embd` conta.
+ *
+ * I formati osservati: Q6_K (4B, e la head tied), Q4_0 (9B), Q8_0 (35B
+ * UD-Q4_K_S), Q2_K (35B bartowski Q2_K, dump 2026-08-17). Un file con un
+ * formato fuori da qui si ferma al caricamento con la lista attesa, invece di
+ * leggere byte con la geometria sbagliata.
+ */
+const EMBD_ROW = new Map<number, {
+  weightsPerBlock: number; blockBytes: number;
+  dequant: (src: Uint8Array, off: number, nBlocks: number, dst: Float32Array) => void;
+}>([
+  [GGML_TYPE.Q6_K, { weightsPerBlock: 256, blockBytes: Q6_K_BLOCK_BYTES, dequant: dequantQ6_K }],
+  [GGML_TYPE.Q2_K, { weightsPerBlock: 256, blockBytes: Q2_K_BLOCK_BYTES, dequant: dequantQ2_K }],
+  [GGML_TYPE.Q8_0, { weightsPerBlock: 32, blockBytes: 34, dequant: dequantQ8_0 }],
+  [GGML_TYPE.Q4_0, { weightsPerBlock: 32, blockBytes: 18, dequant: dequantQ4_0 }],
+]);
 
 export interface Q35RawReader {
   shape: Q35Shape;
@@ -832,8 +855,11 @@ export async function createQ35GpuModel(
   // embd: Q6_K (4B) o Q4_0 (9B — che tiene invece la HEAD in Q6_K: inverso
   // del 4B, scoperto dal file in it.11)
   const embdInfo = r.info("token_embd.weight");
-  if (embdInfo.type !== GGML_TYPE.Q6_K && embdInfo.type !== GGML_TYPE.Q4_0 && embdInfo.type !== GGML_TYPE.Q8_0) {
-    throw new Error(`q35gpumodel: embd tipo ${embdInfo.type}, atteso Q6_K/Q4_0/Q8_0`);
+  if (!EMBD_ROW.has(embdInfo.type)) {
+    throw new Error(
+      `q35gpumodel: embd tipo ${embdInfo.type}, attesi [${[...EMBD_ROW.keys()].join(", ")}] `
+      + "(ggml type id). Il gather della riga di embedding avviene in CPU: un formato "
+      + "nuovo si aggiunge a EMBD_ROW, che e' il solo posto che lo sa");
   }
   const embdRaw = await r.read("token_embd.weight");
   // head: Q6_K (4B tied) o Q4_0 (9B non-tied, output.weight) — it.11
@@ -1550,9 +1576,18 @@ export async function createQ35GpuModel(
   push(rmsnormWgsl(d, S.rmsEps), [x, outNorm, xn], 1);
   headStep(xn, logits);
 
-  const embdKind = embdInfo.type === GGML_TYPE.Q6_K ? "q6k" : embdInfo.type === GGML_TYPE.Q8_0 ? "q80" : "q40";
-  const rowBlocks = embdKind === "q6k" ? d / 256 : d / 32;
-  const rowBytes = embdKind === "q6k" ? (d / 256) * 210 : (d / 32) * (embdKind === "q80" ? 34 : 18);
+  // LA RIGA DI EMBEDDING, in un posto solo (2026-08-17). Prima erano tre `if`
+  // sul formato ripetuti in DUE siti (`dequantRow` e `step`), e il quarto
+  // formato — il Q2_K di `token_embd` del quant che fa stare il parco
+  // nell'arena — avrebbe fatto la quinta e la sesta copia. La tabella dice
+  // pesi-per-blocco, byte-per-blocco e dequantizzatore; il resto si deriva.
+  const embdSpec = EMBD_ROW.get(embdInfo.type)!;
+  const rowBlocks = d / embdSpec.weightsPerBlock;
+  const rowBytes = rowBlocks * embdSpec.blockBytes;
+  /** dequantizza la riga `token` dell'embedding in `dst` (che deve essere lunga d). */
+  const embdRowInto = (token: number, dst: Float32Array): void => {
+    embdSpec.dequant(embdRaw, token * rowBytes, rowBlocks, dst);
+  };
   const embRow = new Float32Array(d);
   const dispatchesPerToken = steps.length;
 // ====== residenza expert: LA MECCANICA UNICA (goal fase-D fase 1, it.7) ======
@@ -2892,10 +2927,7 @@ export async function createQ35GpuModel(
   const embRowsCpu = new Float32Array(BATCH_MAX * d);
   const uniCpu = new Uint32Array(BATCH_MAX * 4);
   const dequantRow = (token: number, dst: Float32Array, at: number): void => {
-    const sub = dst.subarray(at, at + d);
-    if (embdKind === "q6k") dequantQ6_K(embdRaw, token * rowBytes, rowBlocks, sub);
-    else if (embdKind === "q80") dequantQ8_0(embdRaw, token * rowBytes, rowBlocks, sub);
-    else dequantQ4_0(embdRaw, token * rowBytes, rowBlocks, sub);
+    embdRowInto(token, dst.subarray(at, at + d));
   };
 
   // ====== VERIFICA SPECULATIVA (fase 7, it.54) ======
@@ -3123,9 +3155,7 @@ export async function createQ35GpuModel(
     async step(token: number, pos: number, read = true): Promise<number> {
       const tTok = performance.now();
       const tEmb = performance.now();
-      if (embdKind === "q6k") dequantQ6_K(embdRaw, token * rowBytes, rowBlocks, embRow);
-      else if (embdKind === "q80") dequantQ8_0(embdRaw, token * rowBytes, rowBlocks, embRow);
-      else dequantQ4_0(embdRaw, token * rowBytes, rowBlocks, embRow);
+      embdRowInto(token, embRow);
       device.queue.writeBuffer(x, 0, embRow);
       perfAcc.embedMs += performance.now() - tEmb;
       perfAcc.tokens++;

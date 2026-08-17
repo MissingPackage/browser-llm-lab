@@ -76,13 +76,21 @@ dei formati instradati chiede `PREFILL_GEMM_WIRED_KINDS`, non
 |---|---|---|
 | **nucleo unico dei gemv K-quant** | `wgsl.ts:gemvKQuantWgsl` + `KQUANT_GEMV_DESC` | ✅ tutti e 5 i formati (q2_K/q3_K/q4_K/q5_K/q6_K) escono da UN generatore; i tre preesistenti emettono WGSL **identico carattere per carattere** a prima (fixture in `tests/fixtures/kquant-core/`) |
 | gemv Q4_K / Q5_K / Q6_K | istanze del descrittore | ✅ in produzione (decode 35B, GLM) |
-| **gemv Q2_K / Q3_K** | istanze del descrittore | **instradati nel decode, MAI ESEGUITI SU GPU** — dal 2026-08-17 il ramo expert di `q35gpumodel` li sceglie come gli altri K-quant (selettore unico `q35KQuantGemvWgsl`, kind dal layout dello slab), ma nessun device li ha ancora girati: la conformance contro `dequantQ2_K`/`dequantQ3_K` e una misura sono un task a sé |
+| **gemv Q2_K / Q3_K** | istanze del descrittore | ✅ **ESEGUITI SU GPU e in un turno di chat vero** (2026-08-17): ktest `gemv-q2_K`/`gemv-q3_K` su entrambe le shape degli expert, 4/4 PASS contro `dequantQ2_K`/`dequantQ3_K` (maxRel ≤ 8,1e-5), e il 35B `bartowski Q2_K` genera in chat — 13,44 tok/s al primo turno contro 11,47 del Q4_K_S |
 | **selettore unico dei gemv K-quant** | `q35gpumodel.ts:q35KQuantGemvWgsl` + `q35KQuantKindOfGgml` | ✅ la scelta del kernel sta in UN posto (prima: tre catene di ternari); kernel, `blockBytes` e kind chiesto al piano di prefill discendono tutti dal tipo REALE del tensore |
-| **prefill multi-riga Q2_K / Q3_K** | `wgsl.ts:prefillGemmQ2K*`/`Q3K*` | portati per analogia dai gemelli q4_K/q6_K, `wired: false`, **nessuna misura su device** |
+| **prefill multi-riga Q2_K / Q3_K** | `wgsl.ts:prefillGemmQ2K*`/`Q3K*` | portati per analogia dai gemelli q4_K/q6_K, `wired: false`, **nessuna misura su device** (stessa postura di q4_K: portato e non instradato) |
+| **riga di embedding per formato** | `q35gpumodel.ts:EMBD_ROW` | ✅ Q6_K/Q8_0/Q4_0/**Q2_K**. Era uno switch a 3 rami duplicato in DUE siti; il quarto formato ne avrebbe fatte sei copie. Il `token_embd` del `bartowski Q2_K` è Q2_K, ed è ciò che bloccava il caricamento |
 
 Il perché di questi due formati sta nella capienza, non nel kernel: sul file
 `bartowski Q2_K` il parco expert del 35B passa da 17,07 a **10,391 GiB**, cioè
 dentro l'arena da 11,17 — il 100% residente contro il 65% di oggi.
+
+**Misurato il 2026-08-17, e il regime a zero miss NON è ancora quello della
+chat**: primo turno 13,44 tok/s (era 11,47) con **7.930 miss**, perché l'arena
+si RIEMPIE durante il turno; secondo turno **17,96** con **362 miss** (0,58%
+contro l'1,84% del Q4_K_S) e replay 3.072 layer contro 17.069. La direzione è
+quella giusta e il collo si sta spostando, ma i 40 tok/s del banco pretendono
+un'arena già calda: servono più turni, o il braccio caldo del banco.
 
 ## 5 · I/O
 
