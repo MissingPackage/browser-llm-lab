@@ -1,0 +1,39 @@
+{
+ "kind": "chat-quality-blind-judgment",
+ "date": "2026-08-17",
+ "giudice": "agente fable, in cieco (etichette A/B/C, mappa non fornita)",
+ "materiale": "results/chat/tre-bracci-10turni-materiale-2026-08-17.md",
+ "mappa": {
+  "A": {
+   "arm": "motore browser · bartowski Q2_K",
+   "artefatto": "results/chat/chat-35b-q2k-10turni-2026-08-17.json",
+   "regimeTokS": 34.97,
+   "hw": "GPU"
+  },
+  "B": {
+   "arm": "llama.cpp CPU · UD-Q4_K_S",
+   "artefatto": "results/chat/chat-llamacpp-q4ks-10turni-2026-08-17.json",
+   "regimeTokS": 12.39,
+   "hw": "CPU 20 thread"
+  },
+  "C": {
+   "arm": "motore browser · UD-Q4_K_S",
+   "artefatto": "results/chat/chat-35b-q4ks-10turni-2026-08-17.json",
+   "regimeTokS": 11.86,
+   "hw": "GPU"
+  }
+ },
+ "punteggi": {
+  "A": 32,
+  "B": 45,
+  "C": 24,
+  "scala": "somma dei voti 1-5 su 10 turni"
+ },
+ "classifica": [
+  "B",
+  "A",
+  "C"
+ ],
+ "riserva_metodologica": "I tre bracci CONDIVIDONO il contesto solo al turno 1 e divergono dopo ~67 caratteri (~15 token): a greedy, con un accordo top-1 del 98,83% contro l'oracolo, la divergenza e' attesa e documentata. Dal turno 2 in poi ogni braccio ha in contesto le PROPRIE risposte precedenti, quindi il giudizio classifica TRAIETTORIE, non implementazioni, e la differenza non e' attribuibile in modo pulito al quant o al motore. La misura pulita del costo in intelligenza resta quella teacher-forced appaiata del 2026-08-17 (+0,13 bit/token).",
+ "reperto_da_indagare": "I due bracci del NOSTRO motore chiudono i turni tardivi con eos molto presto (Q4_K_S: 70/87/99/64 token) mentre llama.cpp sullo STESSO file arriva a 400. Puo' essere fortuna di traiettoria o un comportamento sistematico del motore a contesto lungo: n=1 per braccio, non basta a dirlo."
+}
