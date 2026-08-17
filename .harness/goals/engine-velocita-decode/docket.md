@@ -1325,8 +1325,14 @@ Costo PER RIGA, miglior variante per ogni M, normalizzato a M=1:
 **IL GINOCCHIO E' A M=2**, cioe' esattamente nel regime dello spec-dec. Il
 modello pre-registrato `(4+M)/5M` prevedeva 60,0%: misurato 56,8-60,3%.
 
-**E il sorpasso di variante e' AL ginocchio**: a M=1 vince `base-batch-z`, da
-M=2 in poi vince `splitk-idot`.
+**Il sorpasso di variante al ginocchio vale per UNA shape su quattro** — e la
+prima stesura di questo item diceva il contrario. Su **`q4_K 2048x512` soltanto**
+a M=1 vince `base-batch-z` e da M=2 in poi `splitk-idot`; su `q4_K 512x2048`,
+`q6_K 512x2048` e `q8_0 2048x4096` **`splitk-idot` vince gia' a M=1**. Corretto
+dopo il ricalcolo indipendente del peer `browser-llm-lab-fc`, che ha rifatto la
+tabella dall'artefatto GREZZO (identica cifra per cifra) e ha notato che la mia
+frase era piu' forte del dato. Registrato perche' era la frase MEMORABILE, cioe'
+quella che sarebbe stata ricitata.
 
 **IL CONTO CHE RIBALTA IL VERDETTO** — costo totale di verificare 2 token contro
 1, sulla shape PEGGIORE (gate/up): 0,0075/0,0062 = **1,21x**. Con accept 50%
@@ -1354,3 +1360,33 @@ ammortamento. L'oracolo dice 82,67% di recall, quindi la correlazione c'e' — m
 QUANTA e' lo spike (2), ed e' il prossimo.
 
 **RULING: _** (se il PI vuole, lo spike 2 e' mezza giornata e chiude la domanda.)
+
+## item 26 — `q8_0/splitk-idot` a M=1 su N=2048 sballa il checksum (io → PI, causa ignota)
+
+Trovato dal peer `browser-llm-lab-fc` rileggendo l'artefatto della curva cost(M),
+in una cella che io avevo lasciato implicita nel memo. Registrato perche' la fase
+0 di `engine-kquant` aveva **zero** celle scartate e questa ne ha una.
+
+    gemm-kquant-multirow  q8_0/splitk-idot@M1  K=512 N=2048
+    checksum fuori tolleranza 2e-2: relDiff 3,489e-2
+    (base 37,68974959850311 · variante 36,37463292479515)
+
+**Non tocca il verdetto dell'item 25**: e' un'altra shape (le quattro del
+verdetto sono q4_K 2048x512, q4_K 512x2048, q6_K 512x2048, q8_0 2048x4096), ed e'
+gestita correttamente — la cella esclusa non entra nel minimo, e su quella shape
+il baseline a M=1 finisce infatti su `splitk-f32`.
+
+**Ma non e' un pelo fuori: e' 1,7x la tolleranza.** E il contesto dal goal
+`kquant` lo rende piu' interessante, non meno: **lo stesso kernel e' passato al
+ktest su GPU vera a maxRel 5,96e-4 sulla shape 2048x200**. Quindi non e' rotto in
+generale — sballa su QUESTA shape a M=1, e nessuno sa perche'.
+
+**PERCHE' DIVENTA URGENTE ADESSO, e prima non lo era**: l'item 25 ha appena
+mostrato che il ginocchio e' a M=2, cioe' che `splitk-idot` e' la forma che
+vorremmo far entrare nel decode. **Se ci entra, quella cella diventa
+produzione.** Un errore relativo del 3,5% su un GEMV di attenzione non e' rumore
+numerico: e' la classe di difetto che produce testo plausibile e sbagliato, che
+e' esattamente cio' contro cui `gemvcaps.ts` mette le sue guardie.
+
+**RULING: _** — se il PI vuole, la diagnosi e' delimitata: la shape e' nota, il
+braccio di confronto pure, e il ktest ha gia' il caso su un'altra shape.
