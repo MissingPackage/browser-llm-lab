@@ -129,7 +129,17 @@ describe("[b2] cosa si cabla e cosa si misura soltanto — la decisione, resa me
   it("il done-when copre M = 1, 8, 16 su TUTTE le famiglie", () => {
     // Anche questa era stata ristretta a M=16 sulle tre ereditate, e anche
     // questa e' testo del contratto («a M = 1, 8, 16»).
-    for (const s of KQUANT_SHAPES) expect([...s.Ms].sort((a, b) => a - b), s.family).toEqual([1, 8, 16]);
+    //
+    // CONTENIMENTO, NON UGUAGLIANZA (corretto il 2026-08-17). Il ratchet esiste
+    // per impedire che qualcuno RESTRINGA la griglia — e' quello che era gia'
+    // successo (ristretta a M=16) ed e' cio' che il contratto vieta. Ma
+    // `toEqual` vietava anche di ALLARGARLA, che il contratto non dice da
+    // nessuna parte: aggiungere M=2 e M=4 non toglie niente al done-when, lo
+    // soddisfa e misura in piu'. Un ratchet che blocca i miglioramenti oltre ai
+    // peggioramenti e' un ratchet mal scritto, e questo lo era.
+    for (const s of KQUANT_SHAPES) {
+      for (const m of [1, 8, 16]) expect(s.Ms, `${s.family} K${s.K} deve ancora coprire M=${m}`).toContain(m);
+    }
   });
 
   it("le famiglie cablate sono ESATTAMENTE quelle che il 4B ha sul percorso vecchio", () => {

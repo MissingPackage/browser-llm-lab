@@ -1062,10 +1062,27 @@ export const KQUANT_SHAPES: readonly KQuantShape[] = [
   //     it.2 le aveva ristrette a M=16 e il done-when del contratto dice
   //     esplicitamente «a M = 1, 8, 16, su TUTTE le famiglie». Restringere un
   //     done-when e' del PI, non mio (rilievo del verificatore, it.2).
-  { family: "q4_K", K: 2048, N: 512, label: "35B expert gate/up (117 tensori Q4_K = 17,67 GB, il modello quasi tutto)", Ms: [1, 8, 16] },
-  { family: "q4_K", K: 512, N: 2048, label: "35B expert down — DUE superblocchi per riga, split-K a 2 fette (C0-4)", Ms: [1, 8, 16] },
-  { family: "q6_K", K: 512, N: 2048, label: "35B expert down di 3 layer (860.160 B per expert, verificato sull'header)", Ms: [1, 8, 16] },
-  { family: "q8_0", K: 2048, N: 4096, label: "35B attn q-proj (100 tensori Q8_0 = 1,09 GB) — e' anche attn_gate del DECODE, 33,16% dei pesi dei quattro (it.17)", Ms: [1, 8, 16] },
+  //
+  // M=2 e M=4 AGGIUNTI il 2026-08-17 (PI: «prima gli spike e i micro-bench»).
+  // Non sono un raffinamento della griglia: sono LA domanda. Lo spec-dec
+  // realistico verifica 2-4 token per passata, e la griglia [1, 8, 16] salta
+  // esattamente quell'intervallo — misurava se la forma multi-riga esiste, non
+  // se paga nel regime in cui la useremmo.
+  //
+  // COSA DECIDONO. Il verdetto «spec-dec piu' lento» (checkpoint B) fu misurato
+  // COI KERNEL VECCHI, dove M era quasi ininfluente (1,22x a M=8): li' la riga
+  // marginale costava ~0,85 di un pass intero e 1,5 token accettati su 1,8 di
+  // costo davano 0,83x, cioe' perdente. Sui kernel di oggi `wgsl.ts:4609` misura
+  // splitk-idot a M=16 in 0,0376 ms contro 0,0698 a M=1 — SEDICI righe costano
+  // meno di UNA. Se la curva mostra il ginocchio gia' a M=2, quel verdetto e'
+  // ribaltato e una riga parcheggiata torna in gioco.
+  //
+  // ATTESO A M=1, e non e' un difetto: la forma multi-riga PERDE (0,91x sul
+  // q4_K in fase 0). E' il motivo per cui il piano non la offre mai al decode.
+  { family: "q4_K", K: 2048, N: 512, label: "35B expert gate/up (117 tensori Q4_K = 17,67 GB, il modello quasi tutto)", Ms: [1, 2, 4, 8, 16] },
+  { family: "q4_K", K: 512, N: 2048, label: "35B expert down — DUE superblocchi per riga, split-K a 2 fette (C0-4)", Ms: [1, 2, 4, 8, 16] },
+  { family: "q6_K", K: 512, N: 2048, label: "35B expert down di 3 layer (860.160 B per expert, verificato sull'header)", Ms: [1, 2, 4, 8, 16] },
+  { family: "q8_0", K: 2048, N: 4096, label: "35B attn q-proj (100 tensori Q8_0 = 1,09 GB) — e' anche attn_gate del DECODE, 33,16% dei pesi dei quattro (it.17)", Ms: [1, 2, 4, 8, 16] },
   // La shape che mancava, ed e' la PIU' GRANDE dei quattro tensori di `ssmGemv`:
   // N = (2*group_count + time_step_rank)*state_size = (2*16+32)*128 = 8192,
   // K = dModel = 2048 (q35shape.ts:86-89 + meta dell'header, it.17). Da sola il
