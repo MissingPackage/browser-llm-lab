@@ -18,10 +18,25 @@ Costo **per riga**, migliore variante per ogni M, normalizzato a M=1:
 
 ## Le previsioni, giudicate una a una
 
-1. **«A M=1 la forma multi-riga perde»** — **CONFERMATA**, e più nettamente di
-   come l'avevo scritta: a M=1 la variante migliore su gate/up è `base-batch-z`,
-   e **da M=2 in poi vince `splitk-idot`**. Il sorpasso è esattamente al
-   ginocchio.
+1. **«A M=1 la forma multi-riga perde»** — **CONFERMATA SU UNA SHAPE SU
+   QUATTRO**, e la prima stesura di questo memo la generalizzava a torto. Solo
+   su **`q4_K 2048×512`** a M=1 vince `base-batch-z` e da M=2 in poi
+   `splitk-idot`, col sorpasso esattamente al ginocchio. Sulle altre tre —
+   `q4_K 512×2048`, `q6_K 512×2048`, `q8_0 2048×4096` — **`splitk-idot` vince
+   già a M=1**. La correzione viene dal ricalcolo indipendente del peer
+   `browser-llm-lab-fc`, che ha rifatto la tabella dall'artefatto grezzo
+   (identica cifra per cifra) e ha notato che la frase era più forte del dato.
+
+### Una cella è stata scartata, e non va lasciata implicita
+
+`q8_0/splitk-idot@M1` su K=512 N=2048: **checksum fuori tolleranza, relDiff
+3,489e-2 contro 2e-2** — 1,7× fuori, non un pelo. Non tocca le quattro shape del
+verdetto ed è gestita correttamente (la cella esclusa non entra nel minimo, e lì
+il baseline a M=1 finisce su `splitk-f32`). Ma la fase 0 di `engine-kquant` ne
+aveva **zero**, e lo stesso kernel passa il ktest su GPU vera a maxRel 5,96e-4
+su un'altra shape: non è rotto in generale, sballa su questa. **Docket item 26**,
+e diventa urgente proprio ora — se il ginocchio a M=2 fa entrare `splitk-idot`
+nel decode, quella cella diventa produzione.
 2. **«Il ginocchio è a M=2, sotto il 70% del costo/riga di M=1»** —
    **CONFERMATA**: 56,8-60,3% sulle tre shape expert. Il modello aritmetico
    pre-registrato `(4+M)/5M` (dequant ≈ 4 FMA) prevedeva **60,0%**. Non era una
