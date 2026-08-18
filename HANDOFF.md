@@ -1,22 +1,35 @@
 # HANDOFF — browser-llm-lab   (aggiornato 2026-08-18)
 
+> ## ⚠️ IL MOTORE NON SI SVILUPPA PIÙ QUI
+> **Fonte di verità dal 2026-08-18: `~/Projects/webgguf`** (`MissingPackage/webgguf`,
+> privato) — docket **item 30**. Qui restano il **bench**, il **paper** e il
+> **processo**. `filter-repo` **non si rilancia più** sul motore: la ri-estrazione
+> del 2026-08-18 è l'ultima, e rigenerare cancellerebbe il lavoro fatto lì.
+> *Debito dichiarato*: le zone condivise (`src/{metrics,probe,quality,
+> qualityPrompts,schema}.ts`, `scripts/lib/hoststate.mjs`) ora sono in due copie
+> che possono divergere, senza meccanismo che le allinei.
+>
+> **Se stai lavorando in `webgguf` e ti serve una mano** — progettare il goal, o
+> un documento che non trovi — cerca in `ListAgents` una sessione
+> `browser-llm-lab-*` e scrivile. ⚠️ Gli **agenti fable** consultati per questa
+> ricerca (kernel, strategia) sono **subagenti in-processo di quella sessione**:
+> non compaiono nel tuo `ListAgents` e non puoi indirizzarli. Passa da lei.
+
 ## 1. Next decidable
 
 **SPIKE (1) E (2) FATTI: il GEMM multi-riga in arena vale — ma per il PREFILL
 (2,11× sul segmento expert), NON per lo spec-dec**, che a M=2 costa 1,68× per
-1,5 token utili e quindi *perde* l'11%. Break-even α ≥ 0,68 contro un'acceptance
-misurata di 0,50. Documenti (con grafici):
+1,5 token utili e quindi *perde* l'11% (break-even α ≥ 0,68 contro un'acceptance
+misurata di 0,50). Documenti con grafici:
 `docs/deep-dive/{costm-ricerca,router-overlap}-2026-08-18.md`, docket item 25-29.
 
 **LA DECISIONE CHE ASPETTA TE**: si scrive quel kernel? Il divieto
 `batch && arena` (`wgsl.ts:2176-2190`) è per costruzione. Se sì, la politica
 giusta è **per-expert** (`m_e ≥ 2` → multi-riga), non per-layer — la multiplicity
-è già nota all'encode in `pinUnion`/`encodeExperts`.
-
-Per decidere lo **spec-dec** mancano due misure: l'**overlap nel DECODE** (~10
-min, stesso script, i 128 token golden teacher-forced — finora è misurato solo il
-prefill) e l'**acceptance della testa MTP del 35B**, mai misurata (quella del 4B
-non si trasferisce: stessa lezione del 91,92% di GLM).
+è già nota all'encode in `pinUnion`/`encodeExperts`. Per decidere lo **spec-dec**
+mancano l'**overlap nel DECODE** (~10 min, stesso script, i 128 token golden
+teacher-forced: finora è misurato solo il prefill) e l'**acceptance della testa
+MTP del 35B**, mai misurata (quella del 4B non si trasferisce).
 
 ### ⚠️ IN UNA SESSIONE FRESCA: APRI UN GOAL E FAI PARTIRE IL LOOP NOTTURNO
 
@@ -58,12 +71,12 @@ lab) · 19 matrice dispositivi · 20 nome **`webgguf`** · 22 obiettivo a tre as
 Cosa va in quale repo: `docs/publishing/split-manifest.md`.
 
 **Nebbia**: regime di Firefox su una run sola · traduzione mai dimensionata ·
-primo utilizzo (12,6 GB) mai cronometrato · contesto lungo del 35B (8k misurati
-contro 262k) · generalizzazione dell'overlap a code/json (~20 min).
+primo utilizzo (12,6 GB) mai cronometrato · contesto lungo del 35B (8k contro
+262k) · overlap su code/json (~20 min) · zone condivise che divergono (item 30).
 
 **Fuori scope**: subgroup-matrix · TVM · sviluppo su Mac · policy `tier` ·
 raggruppamento I/O · `idot` nel decode · slab · vocab ridotto · **M oltre 16 per
-il decode** (residuo 1,6×, non un altro 30×).
+il decode** (residuo 1,6×).
 
 ## 3. Landmines
 
