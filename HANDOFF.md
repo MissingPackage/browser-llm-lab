@@ -41,8 +41,12 @@ classifica completa, col ragionamento e cosa NON fare, sta nel docket **item 21*
    quant più ricca sopra i 30 tok/s. Nessun concorrente ce l'ha.
 2. **riscrittura GEMV quantizzati** — vec4 + `subgroupAdd` + 2-4 righe/WG +
    `dot4I8Packed`: headroom **3,7×** dimostrato.
-3. **attenzione a contesto lungo** — il kernel KV gira all'**1,4% del picco**; a
-   ctx 6333 il 4B crolla 25,9 → 9,95. KV f16 (`pack2x16float`) è WGSL core.
+3. **contesto lungo — RI-SCOPATA il 2026-08-18**: lo split sul contesto è **già in
+   produzione** (`wgsl.ts:462`, commit `26f11c3` del 13/08) e la barra è **4B ≥
+   45,5 tok/s a ctx 6333**. Il «crolla a 9,95» veniva da `headroom-2026-08-12`,
+   misurato il giorno PRIMA della correzione, e l'ho propagato stantio. Restano:
+   **KV a 16 bit** (`pack2x16float`, WGSL core, mai fatto) e la **pendenza del
+   35B a ctx lungo**, che è una misura da una run — 8k contro 262k dichiarati.
 4. **GEMM multi-riga in arena** (2,11× sul prefill) · 5. **i ~11 ms fuori dai
    pass** (sonda prima) · 6. **selezione kernel per tier** (item 28).
 7. slab in sotto-range · storage/cache (leve 3-4 di WebLLM): prodotto, non regime.

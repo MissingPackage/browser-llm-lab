@@ -1768,3 +1768,50 @@ dello scopo. Ma il file e' **in italiano** e cita numeri interni del progetto:
 **alla pubblicazione va deciso se resta, se si traduce, o se si gitignora.**
 
 **RULING: _**
+
+## item 32 — LA RIGA 3 POGGIAVA SU UN NUMERO STANTIO, e l'ho propagato io
+
+Trovato da `kernel-analyst` disegnando l'ordine del goal nuovo, e verificato da
+me sul sorgente prima di accoglierlo. **E' l'errore piu' grave di questa
+sessione**, perche' e' l'unico che si propaga IN AVANTI: stava per far spendere
+a un'altra sessione una riga di goal per riscrivere una cosa gia' fatta.
+
+**IL FATTO.** Lo split sul contesto nel decode **e' in produzione dal
+2026-08-13**:
+
+    wgsl.ts:462  «Il decode e' `attnDecodeWgsl` senza `batch`: split sul
+                  contesto + softmax in STREAMING»
+    commit 26f11c3 (2026-08-13) «fase 1 (T1): il kernel di attenzione passa a
+                  softmax in streaming — memoria di gruppo costante»
+    kquant-riga2-spec.md:116  «Non-regressione: decode 4B >= 45,5 tok/s a
+                  ctx 6333»
+
+**IL NUMERO CHE HO PROPAGATO**: «il kernel KV gira all'1,4% del picco; a ctx 6333
+il 4B crolla 25,9 -> 9,95 tok/s». Viene da `headroom-2026-08-12.md`, cioe' e'
+stato misurato **il giorno PRIMA che la correzione atterrasse**. E' passato dalla
+consulenza dell'item 21 (2026-08-17) al mio HANDOFF, e da li' alla sessione che
+sta scrivendo il goal.
+
+**La barra che il progetto verifica A OGNI MERGE e' 4,6 volte il numero che
+citavo come il problema.** Non era «un dato vecchio»: era un dato **contraddetto
+da un gate attivo**, e non me ne sono accorto perche' ho ereditato il numero
+invece di verificarlo.
+
+**LA RIGA 3 RI-SCOPATA.** Non e' una riscrittura da 33x — quella e' incassata.
+Restano due cose, ed entrambe sono vere:
+- **KV a 16 bit via `pack2x16float`**: WGSL core, nessuna feature richiesta,
+  dimezza i byte della KV a contesto lungo. **Mai fatto.**
+- **la pendenza us/posizione del 35B a contesto lungo**: e' una MISURA da una
+  run, non una costruzione. Il 35B ha 8 layer full-attn su 40 e potrebbe
+  comportarsi diversamente dal 4B. E' il rischio (b) dell'item 21 — «il numero di
+  punta e' a contesto corto», 8k misurati contro 262k dichiarati — che resta
+  valido e non e' stato toccato da nulla.
+
+### La lezione, e vale oltre questo item
+
+Un numero che viene da un documento datato **non e' verificato dal fatto che il
+documento sia autorevole**. `headroom-2026-08-12.md` e' un ottimo documento: il
+problema e' che il codice si e' mosso il giorno dopo. **Prima di mettere un
+numero in un HANDOFF — che e' cio' che un'altra sessione legge come stato
+attuale — si controlla la data del documento contro il log del file che
+descrive.** Costava un `git log -S`.
