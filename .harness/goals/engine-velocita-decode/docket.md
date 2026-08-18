@@ -1815,3 +1815,55 @@ problema e' che il codice si e' mosso il giorno dopo. **Prima di mettere un
 numero in un HANDOFF — che e' cio' che un'altra sessione legge come stato
 attuale — si controlla la data del documento contro il log del file che
 descrive.** Costava un `git log -S`.
+
+## item 33 — IL GOAL NASCE IN webgguf, GITIGNORATO, E LE VECCHIE BARRE NON SONO UNA GABBIA (PI, deciso)
+
+> «E' ovvio che il goal puo' farlo nascere in webgguf. Ed e' ovvio che resti
+> gitignorato. Sono cartelle di lavoro non materiale di consegna su github.
+> Inoltre, non fissatevi troppo sulle vecchie barre. Ma comunque i nuovi kernel
+> sicuramente le crusheranno, non c'e' da preoccuparsi. Non tarparle le ali.
+> Deve fare tanto lavoro stanotte.»
+
+**Chiude tre punti che io e la sessione `webgguf-96` avevamo lasciato aperti, e
+su due di essi eravamo troppo cauti.**
+
+1. **Il goal nasce in `webgguf/.harness/goals/engine-ottimizzazioni/` come
+   ORIGINALE.** Non serviva un ruling separato: l'item 30 ne chiedeva uno perche'
+   avevo letto lo spostamento come un cambio di dove vivono i ruling. Il PI lo
+   inquadra diversamente e meglio: **`.harness/` e' una CARTELLA DI LAVORO, non
+   materiale di consegna.** Dove sta non e' una decisione di governance.
+2. **Resta gitignorato, e va bene cosi'.** La domanda che avevo sollevato — «il
+   goal non entra nella storia, serve un ruling sul versionamento?» — e' chiusa:
+   non e' materiale da GitHub. Nessun ruling da chiedere.
+3. **LE VECCHIE BARRE NON SONO UNA GABBIA.** «Non tarparle le ali» e' rivolto a
+   me: nell'ultimo scambio ho passato alla sessione nuova sette barre di
+   non-regressione come se fossero il perimetro del lavoro.
+
+### La distinzione che questo ruling NON cancella, e che vale scriverla
+
+Il PI parla di barre di **PRESTAZIONE**, e su quelle ha ragione: sono pavimenti
+di goal CHIUSI, i nuovi kernel le supereranno, e trattarle come vincoli fa
+progettare al ribasso. Quelle sono:
+
+    decode 4B >= 45,5 tok/s a ctx 6333 · prefill+firstMs < 22.500 ms
+    gemm:deltanet-out <= 2.000 ms · gemm:ffn-down <= 2.000 ms
+    GLM b12 optimistic entro +-5% · 9B non sotto i 30
+
+**NON sono la stessa cosa dei gate di CORRETTEZZA**, che restano secchi e non
+sono in discussione (ruling permanente 2026-07-31, «gate di correttezza secchi»):
+
+    ktest tutti PASS (col ratchet KTEST_MIN_PASS)
+    top-1 contro l'oracolo llama.cpp >= 1012/1024
+    sequenze generate 8/8 IDENTICHE
+    npx vitest run verde · npx tsc --noEmit pulito
+
+La ragione e' scritta in `gemvcaps.ts` e vale come principio: su un percorso non
+verificato il kernel **compila, gira e produce testo plausibile e sbagliato**. Un
+motore la cui reputazione poggia su `VALUTAZIONE.md` non puo' permettersi una
+sola segnalazione di output silenziosamente corrotto — e' il danno che dieci
+benchmark vinti non ripagano. **Le prestazioni si possono superare; la
+correttezza si verifica.**
+
+Cioe': se una barra di prestazione si muove al ribasso e la sessione ha una
+spiegazione misurata, e' un risultato da registrare, non un fallimento. Se un
+gate di correttezza si muove, e' un difetto.
