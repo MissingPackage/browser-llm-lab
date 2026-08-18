@@ -1867,3 +1867,52 @@ correttezza si verifica.**
 Cioe': se una barra di prestazione si muove al ribasso e la sessione ha una
 spiegazione misurata, e' un risultato da registrare, non un fallimento. Se un
 gate di correttezza si muove, e' un difetto.
+
+## item 34 — TRE numeri stantii, tutti dallo STESSO documento, tutti propagati da me
+
+L'item 32 ne aveva trovato uno. La sessione `webgguf-96` e il suo consulente ne
+hanno trovati altri due, e vengono tutti da `headroom-2026-08-12.md`.
+
+| numero | dove l'avevo messo | perche' e' stantio |
+|---|---|---|
+| «4B crolla a 9,95 a ctx 6333» | classifica riga 3 | lo split sul contesto e' in produzione dal 13/08 (`26f11c3`); la barra e' 45,5 (item 32) |
+| «headroom 3,7x sui GEMV» | classifica riga 2 | misurato PRIMA che kfan e splitk entrassero nel decode: ~1,77x gia' incassato |
+| «~11 ms fuori dai pass» | classifica riga 5 | e' la ripartizione di un token da **44,3 ms**; il token MISURATO DA ME ieri e' **28,9**. I termini (8,7+14,5+11+1,94 = 36,1) non sommano piu' |
+
+**La radice e' una sola.** La classifica dell'item 21 e' stata prodotta da una
+consulenza che ha letto `headroom-2026-08-12.md` come stato attuale. Io l'ho
+copiata nell'HANDOFF **senza controllare la data del documento contro il log dei
+file che descrive**. Il terzo caso e' il piu' imbarazzante: il numero che lo
+smentisce **l'ho misurato io** il giorno prima (28,9 ms/token, riferimento a 3
+repliche) e non ho collegato le due cose.
+
+**Corretto nell'HANDOFF**: la riga 2 dice ora di misurare contro la forma di
+produzione **con le leve accese** e non contro `base-decode` (misurare contro il
+vecchio produrrebbe una pendenza in parte gia' in cassa); la riga 5 dichiara la
+ripartizione stantia e punta al bersaglio vero.
+
+**REGOLA, che generalizza quella dell'item 32**: un documento di misura ha una
+DATA, e il codice che descrive ha un LOG. Prima di trattare un suo numero come
+stato attuale — soprattutto prima di metterlo in un HANDOFF, che e' cio' che
+un'altra sessione legge come verita' — si confrontano i due. Qui bastava
+`git log --since=<data del memo> -- src/engine/kernels/`.
+
+### Cosa ha deciso la sessione, e che ratifico
+
+- **decode multi-step senza readback: si costruisce sul path DENSO** (4B/9B, dove
+  i −5,1 ms sono stati misurati e dove `decodeBatch` si applica); l'estensione al
+  MoE e' docket-born, perche' due token in volo cambiano la semantica di
+  repair/replay del decode ottimistico. **I due consulenti divergevano e avevano
+  ragione entrambi su oggetti diversi**: il rischio semantico e' del MoE, e sul
+  denso repair e replay non esistono. **Questa il PI la legge al mattino.**
+- **prefetch: il done-when in tok/s NON e' verificabile.** Il parco `Q4_K_S` e'
+  17,07 GiB contro 10,39 (x1,64 di byte expert per token): **anche a zero miss,
+  coi kernel di oggi il Q4_K_S sta a ~29 tok/s**, sotto la barra. Un gate in
+  tok/s avrebbe bocciato un lavoro corretto. Done-when spostato su miss e
+  use-hit. Trappola gemella dall'altro lato: misurarlo sul Q2_K (~17 miss/turno)
+  fa passare ogni gate a vuoto -> il contratto pretende **miss > 1.000 nel
+  braccio di baseline**.
+- **selezione kernel per tier TOLTA dal goal**: l'item 28 dice «non ora,
+  all'impacchettamento delle API», e io l'avevo lasciata in classifica come se
+  fosse eseguibile stanotte. La sessione ha intercettato il ruling che stavo per
+  farle scavalcare.

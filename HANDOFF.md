@@ -39,17 +39,26 @@ classifica completa, col ragionamento e cosa NON fare, sta nel docket **item 21*
 
 1. **prefetch lookahead** — l'unica che compra **bit** invece di ms: porta una
    quant più ricca sopra i 30 tok/s. Nessun concorrente ce l'ha.
-2. **riscrittura GEMV quantizzati** — vec4 + `subgroupAdd` + 2-4 righe/WG +
-   `dot4I8Packed`: headroom **3,7×** dimostrato.
+2. **riscrittura GEMV quantizzati** — vec4 + `subgroupAdd` + 2-4 righe/WG.
+   ⚠️ **il «3,7×» è STANTIO** (`headroom-2026-08-12`, prima che kfan e splitk
+   entrassero nel decode: ~1,77× già incassato). Si misura contro la forma di
+   produzione **con le leve accese**, non contro `base-decode`. Il probe
+   `dot4I8Packed` è già fatto (`kdGemv.ts`, 13/08: `vec4-rows2-sg` 4,00×).
 3. **contesto lungo — RI-SCOPATA il 2026-08-18**: lo split sul contesto è **già in
    produzione** (`wgsl.ts:462`, commit `26f11c3` del 13/08) e la barra è **4B ≥
    45,5 tok/s a ctx 6333**. Il «crolla a 9,95» veniva da `headroom-2026-08-12`,
    misurato il giorno PRIMA della correzione, e l'ho propagato stantio. Restano:
    **KV a 16 bit** (`pack2x16float`, WGSL core, mai fatto) e la **pendenza del
    35B a ctx lungo**, che è una misura da una run — 8k contro 262k dichiarati.
-4. **GEMM multi-riga in arena** (2,11× sul prefill) · 5. **i ~11 ms fuori dai
-   pass** (sonda prima) · 6. **selezione kernel per tier** (item 28).
-7. slab in sotto-range · storage/cache (leve 3-4 di WebLLM): prodotto, non regime.
+4. **GEMM multi-riga in arena** (2,11× sul prefill — ⚠️ muore col rifit della 2).
+5. **il fuori-pass** — ⚠️ **gli «~11 ms» sono STANTI**: la ripartizione (expert
+   8,7 · statici 14,5 · fuori-pass 11 · CPU 1,94 = 36,1) descrive un token da
+   **44,3 ms**, e il token misurato ieri è **28,9**. Non sommano più. Bersaglio
+   di costruzione: **decode multi-step senza readback** (`ideas-ledger §I`,
+   −5,1 ms/token misurati, `decodeBatch` già in casa) — sul path **denso**: sul
+   MoE due token in volo cambiano la semantica di repair/replay.
+6. selezione kernel per tier — **NON ORA**: item 28 la colloca all'impacchettamento.
+7. slab in sotto-range · storage/cache: prodotto, non regime.
 8. **LoRA-over-GGUF hot-swap** — terzo asse dell'obiettivo, gap verificato.
 
 **Aperte e in attesa di TE**: item 24 il banco non copre `q2_K` · item 26 tre
