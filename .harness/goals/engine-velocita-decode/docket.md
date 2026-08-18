@@ -1291,7 +1291,11 @@ q4_K/q6_K/q8_0, sul quant che consegniamo resta un'INFERENZA.
 **Il costo**: ~mezza giornata, delimitata (geometria + gemello + una cella di
 conformita' contro `dequantQ2_K`, che esiste gia').
 
-**RULING: _**
+### RULING PI 2026-08-18: APPROVATO. **Item 24 CHIUSO come decisione, aperto come lavoro.**
+
+«Ok su tutti gli item» — detto in chat rispondendo alla terna (spike 2, item 24,
+item 26). Il banco K-quant si estende a `q2_K`: geometria + kernel gemello +
+una cella di conformita' contro `dequantQ2_K`. ~mezza giornata.
 
 ### Nota di metodo che vale oltre questo item
 
@@ -1388,8 +1392,13 @@ produzione.** Un errore relativo del 3,5% su un GEMV di attenzione non e' rumore
 numerico: e' la classe di difetto che produce testo plausibile e sbagliato, che
 e' esattamente cio' contro cui `gemvcaps.ts` mette le sue guardie.
 
-**RULING: _** — se il PI vuole, la diagnosi e' delimitata: la shape e' nota, il
-braccio di confronto pure, e il ktest ha gia' il caso su un'altra shape.
+### RULING PI 2026-08-18: APPROVATO. **Item 26 CHIUSO come decisione, aperto come lavoro.**
+
+«Ok su tutti gli item». E lo sweep esteso del 2026-08-18 l'ha reso PIU' urgente,
+non meno: le celle fuori tolleranza sono **TRE**, non una, e l'errore **cresce
+con M** (3,489e-2 a M=1 · 3,075e-2 a M=64 · 7,909e-2 a M=128, tolleranza 2e-2).
+La diagnosi resta delimitata: shape nota, braccio di confronto noto, e il ktest
+ha gia' il caso su un'altra shape dove PASSA a maxRel 5,96e-4.
 
 ## item 27 — «SI PUO' SALIRE ANCORA?»: NO, e la curva media mentiva per costruzione
 
