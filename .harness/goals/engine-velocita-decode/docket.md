@@ -1715,3 +1715,47 @@ indirizzarli con `SendMessage`, non compaiono nel suo `ListAgents`. Il percorso
 funzionante e': la sessione nuova contatta **questa sessione** (che compare come
 `browser-llm-lab-*` nel suo `ListAgents`), e questa fa da tramite col consulente,
 che ha il contesto della ricerca ancora caldo.
+
+## item 31 — `kernel-analyst` registrato come agente di progetto (io, con una domanda al PI)
+
+> «Registra il subagent fable specialista nei kernel sotto .claude/agents sia del
+> lab che di webgguf. Cosi' entrambi i progetti possono richiamarlo.»
+
+Fatto: `.claude/agents/kernel-analyst.md` in **entrambi** i progetti, `model:
+fable`, `tools: Read, Bash, Grep, Glob` (read-only, come `scout` e
+`adversarial-reviewer`).
+
+**Cosa ci ho messo dentro, e perche' non e' un elenco di nozioni sulle GPU.**
+Quello che ha reso efficace il consulente in questa ricerca non e' che sapesse di
+micro-architettura: e' il METODO. Le nove regole del prompt sono la
+generalizzazione di quello che ha fatto davvero:
+
+1. **correggere le premesse PRIMA di rispondere** — ne ha corrette QUATTRO su
+   quattro consulenze, e due erano mie;
+2. **leggere l'artefatto GREZZO, non il riassunto** — il dato che ha ribaltato lo
+   spike (1) (un M=32 sul q4_0 col costo per riga in risalita) era nel JSON dal
+   primo run e nessuno l'aveva letto;
+3. **distinguere media e marginale, col FIT** — «la curva non ha saturato» era
+   ammortamento dell'intercetta, non capacita' nuova;
+4. **chiedere se il REGIME della misura e' quello di produzione** — le celle a
+   785 GB/s contro un tetto VRAM di 435 dicevano che i pesi stavano in L2;
+5. **separare domanda e offerta e NON moltiplicarle** — il doppio conteggio
+   1,19 x 1,23 che avevo commesso;
+6. verificare che la metrica risponda alla domanda (il break-even
+   dell'accettazione);
+7. quantificare i vincoli STRUTTURALI prima di quelli hardware (top-K su E);
+8. proporre il **kill-check** da cinque minuti;
+9. dire cosa NON fare.
+
+Piu' l'ordine dei muri (ammortamento e issue prima, registri poi, memoria di
+gruppo come limite di OCCUPANCY molto prima che come limite duro) e la regola
+del minimo di spec come PAVIMENTO (item 28).
+
+**DOMANDA AL PI, non risolta.** In `webgguf` l'ho **committato**, e non e'
+scontato: il manifest §4 elenca `.claude/` fra le cose che restano private.
+L'ho fatto perche' gitignorarlo significherebbe che un clone fresco — per
+esempio sul Mac, come prescrive `RESUMING.md` — non l'avrebbe, cioe' l'opposto
+dello scopo. Ma il file e' **in italiano** e cita numeri interni del progetto:
+**alla pubblicazione va deciso se resta, se si traduce, o se si gitignora.**
+
+**RULING: _**
